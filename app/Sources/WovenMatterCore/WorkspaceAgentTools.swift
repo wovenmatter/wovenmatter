@@ -100,6 +100,8 @@ public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendabl
   public var model: String?
   public var thinking: String?
   public var permission: String?
+  /// Missing in older reservations/tasks: their chosen permission stays explicit.
+  public var usesProductPermissionDefault: Bool?
   public var selectionWorkspace: String?
   public var nativeWorkingDirectory: String?
   public var nativeWorkspaceID: String?
@@ -107,10 +109,11 @@ public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendabl
 
   public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, folderID: String? = nil,
               title: String, model: String? = nil, thinking: String? = nil, permission: String? = nil,
-              selectionWorkspace: String? = nil, nativeWorkingDirectory: String? = nil, nativeWorkspaceID: String? = nil, tools: WorkspaceSessionTools = .init()) {
+              usesProductPermissionDefault: Bool? = nil, selectionWorkspace: String? = nil, nativeWorkingDirectory: String? = nil, nativeWorkspaceID: String? = nil, tools: WorkspaceSessionTools = .init()) {
     self.runtimeKind = runtimeKind; self.workspaceID = workspaceID; self.folderID = folderID
     self.title = title; self.model = model; self.thinking = thinking
-    self.permission = permission; self.selectionWorkspace = selectionWorkspace
+    self.permission = permission; self.usesProductPermissionDefault = usesProductPermissionDefault
+    self.selectionWorkspace = selectionWorkspace
     self.nativeWorkingDirectory = nativeWorkingDirectory; self.tools = tools
     self.nativeWorkspaceID = nativeWorkspaceID
   }

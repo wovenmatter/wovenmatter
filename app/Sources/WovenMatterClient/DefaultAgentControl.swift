@@ -5,7 +5,7 @@ public enum DefaultAgentControl {
     public static func run(_ request: Data) async throws -> Data {
         try await Task.detached(priority: .utility) {
             guard let launch = DefaultAgentSupport.resolution().launchConfiguration else {
-                throw DefaultAgentError.message("The bundled Built-in helper is unavailable.")
+                throw DefaultAgentError.message("The bundled Pi Durable helper is unavailable.")
             }
             let child = Process()
             let input = Pipe()
@@ -36,7 +36,7 @@ public enum DefaultAgentControl {
                 let result = object["result"]
             else {
                 throw DefaultAgentError.message(
-                    "Built-in credential refresh could not complete. Existing credentials were retained.")
+                    "Pi Durable credential refresh could not complete. Existing credentials were retained.")
             }
             return try JSONSerialization.data(withJSONObject: result)
         }.value
@@ -48,7 +48,7 @@ public enum DefaultAgentControl {
         var response = Data()
         while let chunk = try handle.read(upToCount: min(65_536, maximumBytes - response.count + 1)), !chunk.isEmpty {
             guard chunk.count <= maximumBytes - response.count else {
-                throw DefaultAgentError.message("The Built-in helper returned too much data.")
+                throw DefaultAgentError.message("The Pi Durable helper returned too much data.")
             }
             response.append(chunk)
         }

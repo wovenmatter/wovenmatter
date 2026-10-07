@@ -87,7 +87,7 @@ struct SettingsDefaultAgentSDKView: View {
 
     private func sdkLabel(_ sdk: DefaultAgentSDKStatus.SDK) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(sdk.name).font(.callout.weight(.medium))
+            Text(sdk.displayName).font(.callout.weight(.medium))
             Text(sdk.installedVersion.map { "Version \($0)" } ?? "Not installed").font(.caption).monospacedDigit().foregroundStyle(.secondary)
             if sdk.updateAvailable, let latest = sdk.latestVersion {
                 Text("Version \(latest) available").font(.caption).foregroundStyle(.secondary)
@@ -103,13 +103,13 @@ struct SettingsDefaultAgentSDKView: View {
             Button("Check for updates") { perform(.check, id: sdk.id, in: workspace) }
             if sdk.updateAvailable, let latest = sdk.latestVersion {
                 Button("Update") { perform(.update, id: sdk.id, version: latest, in: workspace) }
-                    .accessibilityLabel("Update \(sdk.name) in \(workspace.name)")
+                    .accessibilityLabel("Update \(sdk.displayName) in \(workspace.name)")
             }
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(state.busy).fixedSize()
     }
 
     private func progress(_ request: DefaultAgentSDKRequest) -> String {
-        let name = request.id == "claude" ? "Claude SDK" : request.id == "pi" ? "Pi SDK" : "SDKs"
+        let name = request.id == "claude" ? "Claude SDK" : request.id == "pi" ? "Pi Durable SDK" : "SDKs"
         switch request.action {
         case .status: return "Loading SDK versions…"
         case .check: return "Checking \(name) for updates…"

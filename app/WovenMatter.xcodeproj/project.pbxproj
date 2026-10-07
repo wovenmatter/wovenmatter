@@ -35,6 +35,7 @@
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
 		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
+		A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */; };
 		0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */; };
 		0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000004 /* OpenClawSessionView.swift */; };
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
@@ -55,6 +56,7 @@
 		D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49100000000000000000003 /* ConversationMarkdownDocument.swift */; };
 		D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49300000000000000000003 /* ConversationMessageLayout.swift */; };
 		D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49200000000000000000003 /* ConversationWorkTranscript.swift */; };
+		A10500000000000000000004 /* ConversationSubagentRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000003 /* ConversationSubagentRow.swift */; };
 		A12000000000000000000005 /* remote-workspace.sh in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000006 /* remote-workspace.sh */; };
 		A12000000000000000000007 /* remote in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000008 /* remote */; };
 		A12000000000000000000009 /* harnesses in Resources */ = {isa = PBXBuildFile; fileRef = A1200000000000000000000A /* harnesses */; };
@@ -147,6 +149,7 @@
 		5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModel.swift; sourceTree = "<group>"; };
 		624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterApp.swift; sourceTree = "<group>"; };
 		C49C2130B0B0B01A795C7504 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAgentDefaultsSection.swift; sourceTree = "<group>"; };
 		0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewaySettingsView.swift; sourceTree = "<group>"; };
 		0C1A00000000000000000004 /* OpenClawSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawSessionView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
@@ -163,6 +166,7 @@
 		D49100000000000000000003 /* ConversationMarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdownDocument.swift; sourceTree = "<group>"; };
 		D49300000000000000000003 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
 		D49200000000000000000003 /* ConversationWorkTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkTranscript.swift; sourceTree = "<group>"; };
+		A10500000000000000000003 /* ConversationSubagentRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSubagentRow.swift; sourceTree = "<group>"; };
 		A12000000000000000000006 /* remote-workspace.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "../../../scripts/remote-workspace.sh"; sourceTree = "<group>"; };
 		A12000000000000000000008 /* remote */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../remote"; sourceTree = "<group>"; };
 		A1200000000000000000000A /* harnesses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../harnesses"; sourceTree = "<group>"; };
@@ -349,6 +353,7 @@
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
 				D49400000000000000000003 /* ConversationResponse.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
+				A10500000000000000000003 /* ConversationSubagentRow.swift */,
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
 				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
 				C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */,
@@ -362,6 +367,7 @@
 				0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */,
 				0C1A00000000000000000004 /* OpenClawSessionView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
+				A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */,
 				5E7A00000000000000000002 /* SettingsComponents.swift */,
 				D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */,
 				D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */,
@@ -595,6 +601,7 @@
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
 				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
+				A10500000000000000000004 /* ConversationSubagentRow.swift in Sources */,
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
 				22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */,
 				C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */,
@@ -606,6 +613,7 @@
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
+				A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */,
 				0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */,
 				0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */,
 				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,

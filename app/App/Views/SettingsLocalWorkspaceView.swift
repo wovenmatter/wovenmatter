@@ -231,8 +231,8 @@ struct SettingsLocalWorkspaceView: View {
                     SettingsInset {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Built-in").font(.system(size: 13, weight: .medium))
-                                Text("Built into Woven Matter.").font(.callout).foregroundStyle(.secondary)
+                                Text(AgentRuntimeKind.defaultAgent.displayName).font(.system(size: 13, weight: .medium))
+                                Text("Included with Woven Matter.").font(.callout).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Button("Settings") { onMore(.defaultAgent) }.buttonStyle(SettingsQuietButtonStyle())

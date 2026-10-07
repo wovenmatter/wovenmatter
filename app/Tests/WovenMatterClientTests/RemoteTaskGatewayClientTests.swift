@@ -30,6 +30,17 @@ struct RemoteTaskGatewayClientTests {
         #expect(direct.launch.arguments.last?.contains("durable-acp") == false)
     }
 
+    @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild, .cursor, .pi, .hermes])
+    func nativeArchiveScopeIdentifiesRemoteExecutionHost(runtimeKind: AgentRuntimeKind) throws {
+        let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
+        let launch = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtimeKind,
+            processWorkingDirectory: URL(fileURLWithPath: "/tmp"), durableChannelID: UUID().uuidString).launch
+        #expect(launch.environment["WOVEN_EXECUTION_SCOPE"] == configuration.id.uuidString.lowercased())
+        if runtimeKind == .defaultAgent {
+            #expect(launch.environment["WOVEN_DEFAULT_AGENT_SCOPE"] == configuration.id.uuidString.lowercased())
+        }
+    }
+
     @Test func durablePiLaunchKeepsSessionArgumentsInsideSSHAndProbesDirect() throws {
         let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
         let channel = UUID().uuidString

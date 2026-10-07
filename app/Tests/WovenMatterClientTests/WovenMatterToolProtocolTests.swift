@@ -11,6 +11,16 @@ struct WovenMatterToolProtocolTests {
     #expect(throws: (any Error).self) { try WovenMatterToolCommand(["context", "--note-id", "other"]) }
   }
 
+  @Test func nativeArchiveIdentitiesAreExactHistoryFilters() throws {
+    let command = try WovenMatterToolCommand(["history", "events", "--harness", "defaultAgent",
+      "--source-id", "remote:host:store", "--native-session-id", "7", "--native-record-id", "native-record:checksum:chunk"])
+    #expect(command.options["source-id"] == "remote:host:store")
+    #expect(command.options["native-session-id"] == "7")
+    #expect(command.options["native-record-id"] == "native-record:checksum:chunk")
+    #expect(throws: (any Error).self) {
+      try WovenMatterToolCommand(["sessions", "list", "--native-session-id", "7"])
+    }
+  }
   @Test func oversizedArgumentArraysAreRejectedBeforeParsing() {
     #expect(throws: WorkspaceToolError.invalid("A tool command must contain at most 1,024 arguments.")) {
       try WovenMatterToolCommand(["notes", "list"] + Array(repeating: "", count: 1_023))

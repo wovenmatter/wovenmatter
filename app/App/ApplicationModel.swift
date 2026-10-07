@@ -2697,6 +2697,52 @@ final class ApplicationModel {
         }
     }
 
+    /// Read one child's existing archive without contacting its execution host.
+    func builtInSubagentHistory(_ request: BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue {
+        if isBackendFrontend {
+            guard let history = try await sendBackendCommand(.subagentHistory(request)).history else {
+                throw BackendRPCError.remote("Subagent history is unavailable.")
+            }
+            return history
+        }
+        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let descriptor = try await database.localACPSession(conversationID: request.conversationID)
+        let sourcePrefix = "builtin-pi-durable:"
+        guard descriptor.runtimeKind == .defaultAgent,
+              request.after >= 0, request.offset >= 0, request.offset <= Int.max - 65536,
+              request.sourceID.hasPrefix(sourcePrefix),
+              UUID(uuidString: String(request.sourceID.dropFirst(sourcePrefix.count))) != nil,
+              UUID(uuidString: request.nativeSessionID) != nil,
+              let childID = Int(request.nativeConversationID), childID > 0 else {
+            throw BackendRPCError.remote("Invalid subagent archive identity.")
+        }
+        let hostPrefix = descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() + ":" } ?? "local:"
+        let sourceID = hostPrefix + request.sourceID
+        var query = WorkspaceHistoryQuery(command: "events", conversationID: request.conversationID,
+            after: request.after, limit: 30, sourceID: sourceID,
+            nativeSessionID: request.nativeSessionID, nativeConversationID: request.nativeConversationID)
+        if let eventID = request.eventID {
+            var eventQuery = WorkspaceHistoryQuery(command: "event", id: eventID, limit: 1)
+            eventQuery.offset = request.offset
+            let page = try await database.queryHistory(eventQuery)
+            guard let row = page.objectValue?["rows"]?.arrayValue?.first?.objectValue,
+                  row["conversation_id"]?.stringValue == request.conversationID,
+                  row["source_id"]?.stringValue == sourceID,
+                  row["native_session_id"]?.stringValue == request.nativeSessionID,
+                  let sequence = row["sequence"]?.intValue, sequence > 0 else {
+                throw BackendRPCError.remote("The archive event belongs to a different conversation.")
+            }
+            query.after = Int64(sequence - 1)
+            query.limit = 1
+            let membership = try await database.queryHistory(query)
+            guard membership.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == eventID else {
+                throw BackendRPCError.remote("The archive event belongs to a different subagent.")
+            }
+            return page
+        }
+        return try await database.queryHistory(query)
+    }
+
     /// Reads the retained usage index without refreshing providers or credentials.
     func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
         try await usage.recordedUsageSamples(from: start, to: end, limit: limit, offset: offset)
@@ -2766,8 +2812,10 @@ final class ApplicationModel {
             localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue,
-            workspace: "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path)
+        let selectionWorkspace = "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: runtimeKind.rawValue, workspace: selectionWorkspace)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2795,7 +2843,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -2835,8 +2884,10 @@ final class ApplicationModel {
             localRunError = "This remote harness is not ready. Refresh it in Settings and try again."
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue,
-            workspace: "remote:" + target.configuration.id.uuidString.lowercased())
+        let selectionWorkspace = "remote:" + target.configuration.id.uuidString.lowercased()
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         do {
             if target.harness.id == .opencode {
                 await synchronizeRemoteOpenCodeInstances()
@@ -2879,7 +2930,8 @@ final class ApplicationModel {
                     unlinkedOpenClawAgentID = agentID
                 }
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -2970,8 +3022,11 @@ final class ApplicationModel {
             localRunError = "The selected Buzz agent is not available from its linked workspace."
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier,
-            workspace: "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased())
+        let selectionHarness = enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier
+        let selectionWorkspace = "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased()
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: selectionHarness, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: selectionHarness, workspace: selectionWorkspace)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2990,7 +3045,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()

@@ -31,10 +31,10 @@ struct ACPSessionRoutingTests {
         await client.shutdown()
     }
 
-    @Test @MainActor func builtInReconnectDeliversApprovalWhileLoadingHistory() async throws {
+    @Test @MainActor func durableRemoteReconnectDeliversNativeApprovalWhileLoadingHistory() async throws {
         let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
         defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
+        let client = try fixture.client(durableRemoteACP: true)
         defer { Task { await client.shutdown() } }
         let approvals = RoutingPermissions()
         await client.setResumePermissionHandler { request in
@@ -49,12 +49,20 @@ struct ACPSessionRoutingTests {
         await client.shutdown()
     }
 
-    @Test @MainActor func disconnectDismissesAnApprovalDuringBuiltInResume() async throws {
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
+    @Test @MainActor func disconnectDismissesAnApprovalDuringNativeResume() async throws {
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [
+            permission(id: "resumed-approval"), update("agent_message_chunk", text: "queued after approval"),
+        ])
         defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
-        defer { Task { await client.shutdown() } }
         let events = AsyncStream<String>.makeStream()
+        let client = try fixture.client(historyRecorder: { direction, data in
+            // The load response follows both notifications on the reader. This
+            // proves shutdown cancels the queued tail while an earlier dialog waits.
+            if direction == "in", String(decoding: data, as: UTF8.self).contains(#""result":{"sessionId":"parent"}"#) {
+                events.continuation.yield("queued")
+            }
+        }, durableRemoteACP: true)
+        defer { Task { await client.shutdown() } }
         await client.setResumePermissionHandler { _ in
             events.continuation.yield("opened")
             try? await Task.sleep(for: .seconds(30))
@@ -63,34 +71,12 @@ struct ACPSessionRoutingTests {
         }
         let loading = Task { try await client.initializeSession(
             workingDirectory: fixture.root, existingSessionID: "parent", title: nil) }
-        var iterator = events.stream.makeAsyncIterator()
-        #expect(await iterator.next() == "opened")
+        var iterator = events.stream.makeAsyncIterator(), observed = Set<String>()
+        while observed != ["opened", "queued"] { observed.insert(try #require(await iterator.next())) }
         await client.shutdown()
         #expect(await iterator.next() == "closed")
         _ = try? await loading.value
         events.continuation.finish()
-    }
-
-    @Test @MainActor func builtInRemoteApprovalCancellationBypassesTheNotificationBarrier() async throws {
-        let fixture = try SessionRoutingFixture(promptFrames: [
-            permission(id: "remote-approval"),
-            ["jsonrpc": "2.0", "method": "woven/permission_cancel", "params": ["requestID": "remote-approval"]],
-            update("agent_message_chunk", text: "settled elsewhere"),
-        ], permissionResponseCount: 1)
-        defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
-        defer { Task { await client.shutdown() } }
-        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        let events = RoutingEvents()
-        let result = try await client.prompt("fixture", onEvent: { await events.record($0) }, onPermission: { _ in
-            // A cancelled handler must not hold later updates behind its barrier.
-            try? await Task.sleep(for: .seconds(30))
-            return nil
-        })
-        #expect(result == .endTurn)
-        #expect(await events.values() == [.assistantChunk("settled elsewhere")])
-        #expect(try fixture.permissionResponses().first?["result"] != nil)
-        await client.shutdown()
     }
 
     @Test func childSessionsDoNotInterruptParentTextReasoningToolsOrConfiguration() async throws {
@@ -326,7 +312,7 @@ private func permission(id: Any, session: String? = "parent") -> [String: Any] {
     return ["jsonrpc": "2.0", "id": id, "method": "session/request_permission", "params": params]
 }
 
-private actor RoutingEvents {
+actor RoutingEvents {
     private var recorded: [LocalACPEvent] = []
     func record(_ event: LocalACPEvent) { recorded.append(event) }
     func values() -> [LocalACPEvent] { recorded }
@@ -344,12 +330,14 @@ private actor RoutingPermissions {
     func values() -> [LocalACPPermissionRequest] { recorded }
 }
 
-private struct SessionRoutingFixture {
+struct SessionRoutingFixture {
     let root: URL
     let executable: URL
     let logURL: URL
 
-    init(bootstrapFrames: [[String: Any]] = [], promptFrames: [[String: Any]] = [], permissionResponseCount: Int = 0, missingLoadedSession: Bool = false) throws {
+    init(bootstrapFrames: [[String: Any]] = [], promptFrames: [[String: Any]] = [], permissionResponseCount: Int = 0,
+         missingLoadedSession: Bool = false, historyPages: [String] = [], idleFrames: [[String: Any]] = [],
+         idleResult: String? = nil) throws {
         root = FileManager.default.temporaryDirectory.appending(path: "acp-session-routing-\(UUID().uuidString)")
         executable = root.appending(path: "adapter")
         logURL = root.appending(path: "requests.jsonl")
@@ -364,6 +352,7 @@ private struct SessionRoutingFixture {
         let initialize = #"{"protocolVersion":2,"agentCapabilities":{"loadSession":true}}"#
         let script = """
         #!/bin/sh
+        page=0
         respond() { printf '{"jsonrpc":"2.0","id":%s,"result":%s}\\n' "$1" "$2"; }
         while IFS= read -r request; do
           printf '%s\\n' "$request" >> \(quoted(logURL.path))
@@ -385,6 +374,12 @@ private struct SessionRoutingFixture {
                 remaining=$((remaining - 1))
               done
               respond "$id" '{"stopReason":"end_turn"}' ;;
+            *'"method":"woven/history"'*)
+              if [ "$page" -eq 0 ]; then respond "$id" \(quoted(historyPages.first ?? "{}")); else respond "$id" \(quoted(historyPages.last ?? "{}")); fi
+              page=$((page + 1)) ;;
+            *'"method":"woven/idle"'*)
+              \(try emit(idleFrames))
+              \(idleResult.map { "respond \"$id\" " + quoted($0) } ?? "printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32601,\"message\":\"Unsupported fixture method\"}}\\n' \"$id\"") ;;
           esac
         done
         """
@@ -392,8 +387,12 @@ private struct SessionRoutingFixture {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
     }
 
-    func client(runtimeKind: AgentRuntimeKind = .grokBuild, accountCoordinator: ProviderAccountCoordinator? = nil) throws -> LocalACPClient {
-        try LocalACPClient.start(launch: .init(runtimeKind: runtimeKind, executableURL: executable, arguments: []), workingDirectory: root, accountCoordinator: accountCoordinator)
+    func client(runtimeKind: AgentRuntimeKind = .grokBuild, accountCoordinator: ProviderAccountCoordinator? = nil,
+                historyRecorder: WorkspaceWireRecorder? = nil, durableRemoteACP: Bool = false) throws -> LocalACPClient {
+        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtimeKind, executableURL: executable, arguments: [],
+            environment: durableRemoteACP ? ["WOVEN_DURABLE_REMOTE_ACP": "1"] : [:])
+        launch.historyRecorder = historyRecorder
+        return try LocalACPClient.start(launch: launch, workingDirectory: root, accountCoordinator: accountCoordinator)
     }
 
     func permissionResponses() throws -> [[String: Any]] {

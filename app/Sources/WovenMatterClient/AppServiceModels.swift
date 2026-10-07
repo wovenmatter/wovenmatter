@@ -30,7 +30,7 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
         if let name = metadata?.modelName {
             return modelLabel(id: id, metadata: Self(name: name))
         }
-        // Old Built-in sessions predate modelName. Recognize only their exact
+        // Old Pi Durable sessions predate modelName. Recognize only their exact
         // provider-qualified IDs and corresponding emitted suffix, never split
         // arbitrary provider-supplied names on a separator.
         if let separator = id.firstIndex(of: "/"), let name = metadata?.name {

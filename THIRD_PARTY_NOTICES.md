@@ -34,6 +34,21 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Pi Durable runtime
+
+Pi Durable bundles `@earendil-works/pi-durable` 1.0.3 from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.0.3/packages/durable)
+for native execution and persistence. Its
+[upstream license](https://github.com/earendil-works/pi/blob/v1.0.3/LICENSE)
+is MIT, with `Copyright (c) 2025 Mario Zechner`.
+
+Native store ownership uses `proper-lockfile` 4.1.2 from
+[Made With MOXY](https://github.com/moxystudio/node-proper-lockfile).
+It is MIT licensed, with
+`Copyright (c) 2018 Made With MOXY Lda <hello@moxy.studio>`.
+The MIT permission and disclaimer terms reproduced above apply to both packages.
+Bundled dependencies retain their own upstream licenses and notices.
+
 ## Lucide
 
 The dashboard icon assets are derived from `lucide-react` 0.563.0.

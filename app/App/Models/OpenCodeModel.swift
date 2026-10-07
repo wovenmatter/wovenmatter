@@ -80,6 +80,7 @@ final class OpenCodeModel {
         let workspace: String
         let nativeDirectory: String
         let selections: SessionSelections
+        let usesProductPermissionDefault: Bool?
     }
 
     private var connectionID: String {
@@ -367,7 +368,9 @@ final class OpenCodeModel {
             captured = PendingCreationPreferences(nativeSessionID: id, workspace: scope,
                 nativeDirectory: workspace.standardizedFileURL.path,
                 selections: reserved?.desiredSelections
-                    ?? sessionPreferences.defaults(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
+                    ?? sessionPreferences.defaults(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope),
+                usesProductPermissionDefault: reserved?.usesProductPermissionDefault
+                    ?? sessionPreferences.usesProductPermissionDefault(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
             defaults.set(try JSONEncoder().encode(captured), forKey: selectionKey)
         }
         defaults.set(id, forKey: pendingKey)
@@ -438,7 +441,8 @@ final class OpenCodeModel {
         if let captured = creationPreferences {
             sessionPreferences.captureConversation(id: conversationID,
                 harness: AgentRuntimeKind.opencode.rawValue, workspace: captured.workspace,
-                nativeFallback: nativeSelections(conversationID), capturedDefaults: captured.selections)
+                nativeFallback: nativeSelections(conversationID), capturedDefaults: captured.selections,
+                usesProductPermissionDefault: captured.usesProductPermissionDefault ?? false)
         }
         if creationPreferences != nil, let captured = sessionPreferences.conversation(id: conversationID), captured.requiresApplication {
             try await applySessionSelections(conversationID, selections: captured.desiredSelections)
@@ -517,7 +521,7 @@ final class OpenCodeModel {
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [], approvalMode: snapshot.approvalMode ?? "normal")
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
     }
 
     @discardableResult
@@ -543,7 +547,8 @@ final class OpenCodeModel {
             if let pending {
                 // Preserve each repair even if another field still fails, so a
                 // later correction or relaunch cannot restore the rejected value.
-                self.sessionPreferences.updateConversation(id: id, selections: desired)
+                self.sessionPreferences.updateConversation(id: id, selections: desired,
+                    permissionIsExplicit: correction.permission != nil)
                 if pending.desiredSelections.thinking != nil, desired.thinking == nil {
                     self.sessionPreferences.updateConversation(id: id, field: .thinking, from: desired)
                 }
@@ -603,8 +608,13 @@ final class OpenCodeModel {
             try await setNativeModel(id, model: model, thinking: thinking)
         }
         if let permission = selections.permission {
-            let confirmed = try await coordinator.setSessionPermission(conversationID: id, permission: permission)
-            snapshots[id]?.approvalMode = confirmed
+            _ = try await coordinator.setSessionPermission(conversationID: id, permission: permission)
+            // The update stream is asynchronous. Read the coordinator's saved
+            // native rules before projecting Full Access for Executor/app calls;
+            // a previous native ask/deny snapshot must not mask this selection.
+            if let canonical = try await store.database.openCodeSnapshot(conversationID: id) {
+                snapshots[id]?.info = canonical.info
+            }
         }
         if let tools = selections.tools { try await applyInitialSessionTools?(id, tools) }
         // Read back the native result; changing models can remove an old variant.

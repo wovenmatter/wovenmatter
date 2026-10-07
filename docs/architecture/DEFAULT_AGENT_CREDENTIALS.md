@@ -1,7 +1,7 @@
 # Shared provider credential ownership
 
-The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Built-in, Usage, and Dictation. Connections is the shared account-management page.
-App-wide consumers use global accounts; Built-in can use workspace
+The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Pi Durable, Usage, and Dictation. Connections is the shared account-management page.
+App-wide consumers use global accounts; Pi Durable can use workspace
 overrides. Subscription credentials and separately billed API keys stay distinct.
 Local SDK conversation helpers
 receive access-only credentials over private JSON-RPC pipes; refresh helpers
@@ -29,7 +29,7 @@ back to plaintext. Independent sign-ins take precedence over shared credentials.
 Configuration, operation journals and wire histories do not contain credential
 payloads. App-managed OAuth tokens are not launch arguments or tool environment
 variables. Claude API mode supplies its selected API key to the native runtime
-through its process environment, never command arguments. Built-in credential IPC is excluded from wire recording.
+through its process environment, never command arguments. Pi Durable credential IPC is excluded from wire recording.
 
 A credential update changes the store without replacing SDK sessions. The next
 model/search request reads current credentials. A remote run whose borrowed token
@@ -44,7 +44,7 @@ an unlock snapshot from the Mac before retrying admission. Durable operation IDs
 prevent replay of an already accepted run. Workspace request identities fence
 late desktop responses when a destination or credential consent changes.
 
-Read-only status checks are separate from synchronization and login. Built-in reports credential presence/expiry, not provider validation. External
+Read-only status checks are separate from synchronization and login. Pi Durable reports credential presence/expiry, not provider validation. External
 harness status commands have deadlines and bounded captured output; raw output
 is never returned to the UI. Ambiguous failures remain unknown. No test consumes
 provider inference, OAuth, or search services.

@@ -1,12 +1,16 @@
 import AppKit
 import SwiftUI
 
-// Only the palette is stubbed; exercise the production renderer and native view.
+// Stub app chrome; exercise the production renderer and native view.
 enum DashboardPalette {
     static let foreground = Color(red: 0.039, green: 0.122, blue: 0.086)
     static let primary = Color(red: 0, green: 0.259, blue: 0.145)
     static let success = Color(red: 0.051, green: 0.561, blue: 0.353)
     static let mutedForeground = Color.gray
+}
+
+struct DashboardIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
 @main @MainActor

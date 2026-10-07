@@ -17,7 +17,7 @@ process.on('message', async message => {
   } catch (error) {
     // Preserve existing service error semantics without serializing stack or
     // arbitrary thrown objects into the remote response.
-    send({ id: message.id, error: { message: String(error.message ?? 'Built-in runtime operation failed.'), statusCode: error.statusCode } });
+    send({ id: message.id, error: { message: String(error.message ?? 'Pi Durable runtime operation failed.'), statusCode: error.statusCode } });
   }
 });
 process.on('disconnect', async () => {

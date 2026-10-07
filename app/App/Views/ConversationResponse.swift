@@ -20,11 +20,12 @@ struct ConversationResponse: View {
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(content, forType: .string)
             } label: {
-                Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .buttonStyle(DashboardIconButtonStyle())
             .help("Copy complete response")
             .accessibilityLabel(copied ? "Response copied" : "Copy response")
         }

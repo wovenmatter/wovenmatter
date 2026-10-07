@@ -748,7 +748,7 @@ struct DashboardPillButtonStyle: ButtonStyle {
 
 func dashboardAgentPresentation(_ agent: WorkspaceAgent) -> DashboardAgentPresentation {
     DashboardAgentPresentation(
-        displayName: agent.runtimeKind == .defaultAgent ? "Built-in" : agent.displayName,
+        displayName: agent.runtimeKind == .defaultAgent ? agent.runtimeKind.displayName : agent.displayName,
         iconKey: agent.iconKey
     )
 }

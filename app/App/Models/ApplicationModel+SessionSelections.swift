@@ -4,6 +4,42 @@ import WovenMatterCore
 import WovenMatterDashboardStore
 
 extension ApplicationModel {
+    /// Settings edits belong to the execution owner, which also captures defaults
+    /// for scheduled and tool-created sessions. Conversation controls never call this.
+    func agentSelectionDefaults(runtime: AgentRuntimeKind, workspace: String?) async throws
+        -> (stored: SessionSelections, resolved: SessionSelections) {
+        if isBackendFrontend {
+            let result = try await sendBackendCommand(.loadAgentDefaults(runtime: runtime, workspace: workspace))
+            guard let stored = result.selections, let resolved = result.resolvedSelections else {
+                throw ApplicationModelError.dashboardStoreUnavailable
+            }
+            return (stored, resolved)
+        }
+        return (sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace),
+            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace))
+    }
+
+    func saveAgentSelectionDefault(runtime: AgentRuntimeKind, workspace: String?,
+        field: SessionSelectionField, selections: SessionSelections) async throws
+        -> (stored: SessionSelections, resolved: SessionSelections) {
+        if isBackendFrontend {
+            let result = try await sendBackendCommand(.saveAgentDefault(runtime: runtime, workspace: workspace,
+                field: field, selections: selections))
+            guard let stored = result.selections, let resolved = result.resolvedSelections else {
+                throw ApplicationModelError.dashboardStoreUnavailable
+            }
+            return (stored, resolved)
+        }
+        if field == .tools, let tools = selections.tools { _ = try WorkspaceSessionTools(identifiers: tools) }
+        sessionSelectionPreferences.saveDefault(field, from: selections, harness: runtime.rawValue, workspace: workspace)
+        if field == .model {
+            // The two writes are serialized in the execution owner's actor turn,
+            // before a scheduled/new conversation can capture these defaults.
+            sessionSelectionPreferences.removeDefault(.thinking, harness: runtime.rawValue, workspace: workspace)
+        }
+        return try await agentSelectionDefaults(runtime: runtime, workspace: workspace)
+    }
+
     /// Workspace identity includes its host. Local folders and remote paths must
     /// never accidentally share a permissions or model default.
     func sessionSelectionContext(conversationID: String) async throws -> (harness: String, workspace: String) {
@@ -30,9 +66,11 @@ extension ApplicationModel {
 
     /// Called only by explicit new-chat creation. Capturing before applying the
     /// values makes retries independent of subsequent edits to defaults.
-    func prepareNewSessionSelections(conversationID: String, capturedDefaults: SessionSelections? = nil) async throws {
+    func prepareNewSessionSelections(conversationID: String, capturedDefaults: SessionSelections? = nil,
+        usesProductPermissionDefault: Bool? = nil) async throws {
         if isBackendFrontend {
-            _ = try await sendBackendCommand(.prepareSelections(conversationID: conversationID, defaults: capturedDefaults))
+            _ = try await sendBackendCommand(.prepareSelections(conversationID: conversationID, defaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault))
             return
         }
 
@@ -44,7 +82,7 @@ extension ApplicationModel {
             selections: SessionSelections(),
             nativeFallback: SessionSelections(model: native.model, thinking: native.thinking,
                 permission: native.permission, tools: currentSessionToolIDs?(conversationID)),
-            capturedDefaults: capturedDefaults
+            capturedDefaults: capturedDefaults, usesProductPermissionDefault: usesProductPermissionDefault
         )
         try await applyPendingSessionSelections(conversationID: conversationID)
     }
@@ -75,7 +113,7 @@ extension ApplicationModel {
         guard let saved = sessionSelectionPreferences.conversation(id: conversationID),
               saved.requiresApplication else { return }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let desired = saved.desiredSelections
+        var desired = saved.desiredSelections
         let openCode = openCodeModel(for: conversationID)
         if openCode == nil, desired.tools != nil, applyInitialSessionToolIDs == nil {
             throw ApplicationModelError.unavailableSessionTools
@@ -105,11 +143,18 @@ extension ApplicationModel {
                 }
                 let context = try await directACPLaunchContext(conversation: conversation,
                     runtimeKind: native.runtimeKind, isBuzzWorkspaceSession: native.buzzWorkspaceLinkID != nil)
+                if saved.usesProductPermissionDefault {
+                    let available = try await dashboardStore.localACPSessionConfiguration(conversationID: conversationID,
+                        launch: context?.launch, workspace: context?.workspace)
+                    desired = sessionSelectionPreferences.reconcileProductPermissionDefault(id: conversationID,
+                        options: available.permissionOptions, nativePermission: available.permission)?.desiredSelections ?? desired
+                }
                 // Configure the actual session, including a retained native client.
                 // A DB seed alone cannot prove that its next prompt uses these values.
                 let configuration = try await dashboardStore.updateLocalACPSessionConfiguration(
                     conversationID: conversationID, model: desired.model, thinking: desired.thinking,
-                    permission: permission, launch: context?.launch, workspace: context?.workspace)
+                    permission: native.runtimeKind == .pi ? nil : desired.permission,
+                    launch: context?.launch, workspace: context?.workspace)
                 let metadata = LocalACPSessionMetadata(sessionKey: conversationID,
                     model: configuration.model, thinking: configuration.thinking,
                     modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
@@ -156,7 +201,8 @@ extension ApplicationModel {
               !updatingLocalACPSessionIDs.contains(conversationID),
               applyingSessionSelectionTasks[conversationID] == nil else { return true }
         let desired = pending.desiredSelections.applyingPendingCorrection(selections)
-        sessionSelectionPreferences.updateConversation(id: conversationID, selections: desired)
+        sessionSelectionPreferences.updateConversation(id: conversationID, selections: desired,
+            permissionIsExplicit: selections.permission != nil)
         if pending.desiredSelections.thinking != nil, desired.thinking == nil {
             sessionSelectionPreferences.updateConversation(id: conversationID, field: .thinking, from: desired)
         }

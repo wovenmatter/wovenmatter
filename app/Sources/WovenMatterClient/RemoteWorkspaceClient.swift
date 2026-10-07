@@ -176,13 +176,18 @@ public enum RemoteHarnessLaunchResolver {
         let sshArguments = [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
         ]
+        var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
+        if runtimeKind == .defaultAgent {
+            launchEnvironment["WOVEN_DEFAULT_AGENT_SCOPE"] = configuration.id.uuidString.lowercased()
+        } else if usesDurableRelay {
+            launchEnvironment["WOVEN_DURABLE_REMOTE_ACP"] = "1"
+        }
         return RemoteHarnessLaunchContext(
             launch: LocalACPRuntimeLaunchConfiguration(
                 runtimeKind: runtimeKind,
                 executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
                 arguments: sshArguments,
-                environment: runtimeKind == .defaultAgent ? ["WOVEN_DEFAULT_AGENT_SCOPE": configuration.id.uuidString.lowercased()]
-                    : (usesDurableRelay ? ["WOVEN_DURABLE_REMOTE_ACP": "1"] : [:]),
+                environment: launchEnvironment,
                 processWorkingDirectoryURL: processWorkingDirectory,
                 wrappedCommand: LocalACPRuntimeWrappedCommand(
                     argumentIndex: sshArguments.count - 1,
@@ -268,6 +273,9 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public let transportError: String?
     public let setupMethods: [RemoteHarnessSetupMethod]
     public let detectedProviders: [String]
+
+    /// Older workspace services may still report the previous agent name.
+    public var presentationName: String { id == .defaultAgent ? id.displayName : displayName }
 
     /// Lifecycle responses are newer than the harness inventory fetched before launch.
     /// Reconcile only the native OpenCode instance; ACP authentication stays authoritative.
@@ -1023,13 +1031,17 @@ public struct RemoteTaskGatewayResult: Codable, Equatable, Sendable {
     public let run: WorkspaceCalendarRun
     public let nativeSessionID: String?
     public let updates: [GatewayJSONValue]
+    public let updateOffset: Int
+    public let complete: Bool
     public let result: GatewayJSONValue?
     public let error: String?
     public let completedAt: Date
     public let eventRevision: Int?
     public init(id: String, run: WorkspaceCalendarRun, nativeSessionID: String? = nil,
-                updates: [GatewayJSONValue] = [], result: GatewayJSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
+                updates: [GatewayJSONValue] = [], updateOffset: Int = 0, complete: Bool = true,
+                result: GatewayJSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
         self.id = id; self.run = run; self.nativeSessionID = nativeSessionID; self.updates = updates
+        self.updateOffset = updateOffset; self.complete = complete
         self.result = result; self.error = error; self.completedAt = completedAt; self.eventRevision = eventRevision
     }
 }
@@ -1316,7 +1328,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         else {
             if path == "v1/default-agent/sdks" {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
-                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage its Built-in SDKs.")
+                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")

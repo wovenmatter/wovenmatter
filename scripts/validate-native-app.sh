@@ -41,6 +41,8 @@ test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
 test -f "${resources}/default-agent/src/executor/broker.mjs"
 test -f "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json"
+test -f "${resources}/default-agent/node_modules/@earendil-works/pi-durable/package.json"
+test -f "${resources}/default-agent/src/durable-session.mjs"
 pi_dependency_root() {
   "${resources}/default-agent/bin/node" --input-type=module --eval \
     'import { createRequire } from "node:module"; import { dirname } from "node:path";
@@ -53,7 +55,7 @@ chord_root="$(pi_dependency_root @earendil-works/chord)"
 test -f "$tui_root/dist/index.js"
 test ! -e "$tui_root/native"
 test -f "$chord_root/package.json"
-for modules in "${resources}/default-agent/node_modules" "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/node_modules"; do
+for modules in "${resources}/default-agent/node_modules" "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/node_modules" "${resources}/default-agent/node_modules/@earendil-works/pi-durable/node_modules"; do
   test ! -e "$modules/esbuild"
   test ! -e "$modules/@esbuild"
   test ! -e "$modules/.bin/esbuild"

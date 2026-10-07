@@ -78,7 +78,7 @@ struct ACPSessionPermissionTests {
             let value = initialized.configuration
             #expect(value.permission == "agent")
             #expect(value.permissionOptions == ["read-only", "agent", "agent-full-access", "future-policy"])
-            #expect(value.permissionOptionMetadata["read-only"]?.name == "Ask for approval")
+            #expect(value.permissionOptionMetadata["read-only"]?.name == "Read only")
             #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
             #expect(value.permissionOptionMetadata["agent-full-access"]?.name == "Full access")
             #expect(value.permissionOptionMetadata["future-policy"]?.name == "Native future mode")
@@ -119,7 +119,7 @@ struct ACPSessionPermissionTests {
     }
 
     @Test(arguments: ["plan", "dontAsk"])
-    func claudeLegacyPoliciesStayReadableWithoutAppearingAsApprovalPresets(current: String) async throws {
+    func claudeAdvertisedPoliciesRemainSelectable(current: String) async throws {
         let options = ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"].map {
             ["value": $0, "name": "Native " + $0]
         }
@@ -128,15 +128,15 @@ struct ACPSessionPermissionTests {
         ]]]
         try await withClient(kind: .claudeCode, state: state, requestedPermission: current) { client, fixture, initialized async throws in
             #expect(initialized.configuration.permission == current)
-            #expect(initialized.configuration.permissionOptionMetadata[current]?.name == "Native " + current)
+            #expect(initialized.configuration.permissionOptionMetadata[current]?.name == (current == "plan" ? "Plan" : "Don't ask"))
             #expect(try await client.setSessionPermission(current).permission == current)
-            #expect(initialized.configuration.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions"])
+            #expect(initialized.configuration.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"])
             #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
         }
     }
 
     @Test(arguments: [true, false], ["plan", "dontAsk"])
-    func claudeSavedLegacyPolicyCanBeRestoredWithoutAppearingInPicker(modern: Bool, saved: String) async throws {
+    func claudeSavedNativePolicyCanBeRestored(modern: Bool, saved: String) async throws {
         let options = ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"].map {
             [modern ? "value" : "id": $0, "name": "Native " + $0]
         }
@@ -151,7 +151,7 @@ struct ACPSessionPermissionTests {
             #expect(initialized.configuration.permission == "default")
             let restored = try await client.setSessionPermission(saved)
             #expect(restored.permission == saved)
-            #expect(restored.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions"])
+            #expect(restored.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"])
             #expect(try await client.setSessionPermission(saved).permission == saved)
             #expect(try fixture.requests(method: modern ? "session/set_config_option" : "session/set_mode").count == 1)
         }
@@ -317,21 +317,12 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func claudeExplicitPreferenceSuppressesLegacyFreshAutoDefault() async throws {
-        try await withClient(kind: .claudeCode, state: claudeState(), requestedPermission: "default") { _, fixture, initialized async throws in
+    @Test(arguments: [String?.none, "default"])
+    func claudeFreshSessionLeavesSelectionToConversationDefaults(preference: String?) async throws {
+        try await withClient(kind: .claudeCode, state: claudeState(), requestedPermission: preference) { _, fixture, initialized async throws in
             #expect(initialized.configuration.permission == "default")
+            #expect(initialized.configuration.permissionOptions == ["default", "auto"])
             #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-        }
-    }
-
-    @Test func claudeFreshSessionRetainsNativeAutoDefaultWithoutPreference() async throws {
-        var selected = claudeState()
-        var options = try #require(selected["configOptions"] as? [[String: Any]])
-        options[0]["currentValue"] = "auto"
-        selected["configOptions"] = options
-        try await withClient(kind: .claudeCode, state: claudeState(), handlers: ["session/set_config_option": respond(selected)]) { _, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == "auto")
-            #expect(try fixture.requests(method: "session/set_config_option").count == 1)
         }
     }
 
@@ -340,10 +331,9 @@ struct ACPSessionPermissionTests {
             "modes": ["currentModeId": "agent", "availableModes": [["id": "agent", "name": "Agent"]]],
             "configOptions": [["id": "mode", "category": "mode", "currentValue": "agent", "options": [["value": "agent"], ["value": "ask"], ["value": "plan"]]]],
         ]) { client, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == "normal")
-            #expect(initialized.configuration.permissionOptions == ["normal", "auto"])
-            #expect(initialized.configuration.permissionOptionMetadata["normal"]?.name == "Ask for approval")
-            #expect(initialized.configuration.permissionOptionMetadata["auto"]?.name == "Full access")
+            #expect(initialized.configuration.permission == "native-default")
+            #expect(initialized.configuration.permissionOptions == ["native-default", "force"])
+            #expect(initialized.configuration.permissionOptionMetadata["force"]?.name == "Full access")
             do {
                 _ = try await client.setSessionPermission("agent")
                 Issue.record("Cursor execution mode was treated as a permission policy")
@@ -352,43 +342,44 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test(arguments: [String?.none, "normal", "auto"])
-    func cursorApprovalsAreScopedToTheClientAndSwitchWithoutNativeModeChanges(permission: String?) async throws {
+    @Test(arguments: ["--force", "--yolo", "-f"])
+    func cursorExplicitNativeFlagsProjectFullAccess(flag: String) throws {
+        let local = LocalACPRuntimeLaunchConfiguration(runtimeKind: .cursor,
+            executableURL: URL(filePath: "/fixture/cursor"), arguments: [flag])
+        #expect(try LocalACPSessionPermissions.prepareLaunch(local).explicitPermission == "force")
+        let wrapped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .cursor,
+            executableURL: URL(filePath: "/usr/bin/ssh"), arguments: ["-T", "fixture.invalid", "unused"],
+            wrappedCommand: .init(argumentIndex: 2, command: ["/fixture/cursor", flag], harnessArgumentsStartIndex: 1))
+        #expect(try LocalACPSessionPermissions.prepareLaunch(wrapped).explicitPermission == "force")
+    }
+
+    @Test(arguments: ["force", "native-default"])
+    func cursorNativePolicyUsesLaunchFlagAndRequiresRestart(permission: String) async throws {
         try await withClient(kind: .cursor, state: [:], handlers: [
             "session/prompt": permissionRequest() + "\n" + respond(["stopReason": "end_turn"]),
         ], requestedPermission: permission) { client, fixture, initialized async throws in
-            let manual = PermissionHandlerCalls()
-            #expect(initialized.configuration.permission == (permission ?? "normal"))
-            let handler: LocalACPClient.PermissionHandler = { request in
-                await manual.append(request.title)
-                return "reject-this-request"
-            }
-            _ = try await client.prompt("fixture", onPermission: handler)
-            #expect(await manual.count() == (permission == "auto" ? 0 : 1))
-            let initial = try fixture.responses().first?["result"] as? [String: Any]
-            let initialOutcome = initial?["outcome"] as? [String: Any]
-            #expect(initialOutcome?["optionId"] as? String == (permission == "auto" ? "native-once-id" : "reject-this-request"))
-            _ = try await client.setSessionPermission("auto")
-            _ = try await client.prompt("fixture", onPermission: handler)
-            _ = try await client.setSessionPermission("normal")
-            _ = try await client.prompt("fixture", onPermission: handler)
-            #expect(await manual.count() == (permission == "auto" ? 1 : 2))
-            #expect(try fixture.responses().count == 3)
+            #expect(initialized.configuration.permission == permission)
+            #expect(try fixture.launchArguments() == (permission == "force" ? ["--force"] : []))
+            let calls = PermissionHandlerCalls()
+            _ = try await client.prompt("fixture", onPermission: { _ in await calls.append("manual"); return "reject-this-request" })
+            #expect(await calls.count() == 1)
+            do {
+                _ = try await client.setSessionPermission(permission == "force" ? "native-default" : "force")
+                Issue.record("A native process policy changed without restarting Cursor")
+            } catch LocalACPClientError.permissionChangeRequiresRestart { }
             #expect(try fixture.requests(method: "session/set_mode").isEmpty)
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            #expect(try fixture.launchArguments().isEmpty)
         }
     }
 
     @Test(arguments: [String?.none, "child-session", "permission-session"])
-    func cursorFullAccessRequiresExactSessionAndNativeAllowOnce(session: String?) async throws {
+    func cursorNativeRequestsRemainSessionFenced(session: String?) async throws {
         // The parent's request omits allow_once; the child advertises it but
         // belongs elsewhere; the missing-session request is kept manual.
         let offersOnce = session != "permission-session"
         try await withClient(kind: .cursor, state: [:], handlers: [
             "session/prompt": permissionRequest(session: session, offersOnce: offersOnce)
                 + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: "auto") { client, fixture, _ async throws in
+        ], requestedPermission: "force") { client, fixture, _ async throws in
             let manual = PermissionHandlerCalls()
             _ = try await client.prompt("fixture", onPermission: { request in
                 await manual.append(request.title)
@@ -411,7 +402,7 @@ struct ACPSessionPermissionTests {
         ]]
         try await withClient(kind: .cursor, state: [:], handlers: [
             "session/prompt": receiveResponse(to: question) + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: "auto") { client, fixture, _ async throws in
+        ], requestedPermission: "force") { client, fixture, _ async throws in
             let calls = PermissionHandlerCalls()
             _ = try await client.prompt("fixture", onInteraction: { request in
                 if case .questions(let value) = request {
@@ -437,7 +428,7 @@ struct ACPSessionPermissionTests {
         ]]
         try await withClient(kind: .cursor, state: [:], handlers: [
             "session/prompt": receiveResponse(to: frame) + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: "auto") { client, fixture, _ async throws in
+        ], requestedPermission: "force") { client, fixture, _ async throws in
             let manual = PermissionHandlerCalls()
             _ = try await client.prompt("fixture", onPermission: { request in
                 await manual.append(request.title)
@@ -476,7 +467,7 @@ struct ACPSessionPermissionTests {
     }
 
     @Test func grokKeepsLegacyDontAskOnlyWhileSelected() async throws {
-        #expect(LocalACPSessionPermissions.grokOptions == ["default", "acceptEdits", "auto", "bypassPermissions"])
+        #expect(LocalACPSessionPermissions.grokOptions == ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions"])
         #expect(LocalACPSessionPermissions.grokMetadata["default"]?.name == "Ask for approval")
         #expect(LocalACPSessionPermissions.grokMetadata["bypassPermissions"]?.name == "Full access")
         try await withClient(kind: .grokBuild, state: [:], requestedPermission: "dontAsk") { client, fixture, initialized async throws in
@@ -493,7 +484,9 @@ struct ACPSessionPermissionTests {
             ["--permission-mode", "default", "--no-auto-update", "agent", "--no-leader", "stdio"])
         #expect(try LocalACPSessionPermissions.launchArguments(["--permission-mode", "auto", "agent", "--no-leader", "stdio"], runtimeKind: .grokBuild, permission: "dontAsk") ==
             ["--permission-mode", "dontAsk", "agent", "--no-leader", "stdio"])
-        #expect(try LocalACPSessionPermissions.launchArguments(arguments, runtimeKind: .cursor, permission: "normal") == arguments)
+        #expect(throws: LocalACPClientError.self) {
+            try LocalACPSessionPermissions.launchArguments(arguments, runtimeKind: .cursor, permission: "normal")
+        }
         #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["agent", "--always-approve", "stdio"]) == "bypassPermissions")
         #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["--permission-mode", "auto", "agent", "stdio"]) == "auto")
         #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["--permission-mode=default", "agent", "stdio"]) == "default")

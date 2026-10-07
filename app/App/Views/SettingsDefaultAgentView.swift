@@ -16,17 +16,38 @@ struct SettingsDefaultAgentView: View {
     }
     private var editable: Bool { !agent.inherits }
     var body: some View {
-        SettingsPage(title: "Built-in Agent", detail: "A built-in agent for every workspace.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             scopeSection
             SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
+            SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope)
             connectionsSection
-            SettingsCard(title: "Pi code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
+            SettingsCard(title: "Code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
                 Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
                     var config = agent.configuration; config.codeMode = $0; agent.configuration = config
                 })) {
                     ForEach(BuiltInCodeMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.disabled(!editable)
                 Text("On adds code mode as a tool alongside the agent’s other tools. Only routes all tool calls through code mode. Off disables code mode and uses standard tool calls. Changes apply between turns.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            SettingsCard(title: "Subagents", detail: "Pi Durable can delegate tasks when useful.") {
+                HStack {
+                    Text("Maximum active subagents per conversation")
+                    Spacer(minLength: 12)
+                    Picker("Maximum active subagents per conversation", selection: Binding(
+                        get: { agent.configuration.resolvedSubagentConcurrency },
+                        set: {
+                            var config = agent.configuration
+                            config.subagentConcurrency = $0
+                            agent.configuration = config
+                        }
+                    )) {
+                        ForEach(DefaultAgentSettings.subagentConcurrencyRange, id: \.self) {
+                            Text(String($0)).tag($0)
+                        }
+                    }.labelsHidden().frame(width: 78).disabled(!editable)
+                }.font(.system(size: 13)).foregroundStyle(DashboardPalette.foreground)
+                Text("Choose 2–24. This setting applies to new conversations. The parent agent does not count toward the limit.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             searchSection
@@ -513,7 +534,7 @@ struct SettingsSignInStatusCard: View {
     var scope = "global"
     let refresh: () -> Void
     var body: some View {
-        SettingsCard(title: "Sign-in status", detail: "Check Built-in connections and independently installed harnesses.") {
+        SettingsCard(title: "Sign-in status", detail: "Check Pi Durable connections and independently installed harnesses.") {
             HStack {
                 Button(checking ? "Checking sign-in status…" : "Refresh sign-in status", action: refresh)
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(checking)
@@ -523,7 +544,7 @@ struct SettingsSignInStatusCard: View {
             ForEach(statuses) { status in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(status.name).font(.callout)
+                        Text(status.displayName).font(.callout)
                         Spacer()
                         if ProviderConnectionID(rawValue: status.id) != nil || status.id.hasPrefix("local-server-") {
                             ConnectionsLink(title: status.label, scope: scope)

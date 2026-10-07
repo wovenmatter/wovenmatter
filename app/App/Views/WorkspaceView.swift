@@ -240,7 +240,7 @@ struct WorkspaceView: View {
                     }
                 }
                 .background(theme.palette.workspace)
-                .alert("Built-in switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
+                .alert("Pi Durable switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
                     Button("OK") { model.defaultAgentFallbackNotice = nil }
                 } message: { Text(model.defaultAgentFallbackNotice ?? "") }
 
@@ -257,10 +257,6 @@ struct WorkspaceView: View {
                     DashboardNewChatDrawer(
                         model: model,
                         onClose: closeNewChatChooser,
-                        onOpenSettings: {
-                            closeNewChatChooser()
-                            openUtility(.settings)
-                        },
                         onSelect: startNewChat
                     )
                     .frame(width: min(440, max(360, geometry.size.width - 32)))

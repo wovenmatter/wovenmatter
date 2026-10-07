@@ -90,6 +90,8 @@ struct SettingsHermesView: View {
     var body: some View {
         SettingsPage(title: "Hermes",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsAgentDefaultsSection(model: model, runtime: .hermes,
+                fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
                     if agents.isEmpty {

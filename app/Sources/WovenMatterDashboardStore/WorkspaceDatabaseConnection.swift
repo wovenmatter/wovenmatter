@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import WovenMatterCore
 
 public enum WorkspaceDatabaseError: Error, Equatable {
   case open(String)
@@ -48,6 +49,7 @@ final class WorkspaceDatabaseConnection {
       try migrateAgentTools()
       try migrateCalendar()
       try migrateLibrary()
+      try createNativeRunArchive()
     } catch {
       sqlite3_close(database)
       connection = nil
@@ -223,12 +225,26 @@ private final class WorkspaceTimestampCodec: @unchecked Sendable {
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 
-/// SQLite's built-in TEXT length/substr stop at embedded NUL. History windows
-/// count UTF-8 scalar boundaries instead, without constructing the entire Swift
-/// String or allocating its UTF-16 representation just to return a small slice.
-private enum WorkspaceSQLiteTextFunctions {
+/// Register on every connection that reads or writes the workspace database.
+/// Archive triggers share the privacy and text-window functions with history
+/// queries. Registration is connection-local and safe to repeat, including for
+/// synthetic SQL writers that bypass the async database facade in tests.
+/// SQLite's built-in TEXT length/substr stop at embedded NUL; these windows count
+/// UTF-8 scalar boundaries without allocating a whole String for a small slice.
+enum WorkspaceSQLiteTextFunctions {
   static func register(on database: OpaquePointer) throws {
     let flags = SQLITE_UTF8 | SQLITE_DETERMINISTIC
+    let redactStatus = sqlite3_create_function_v2(database, "woven_history_redact", 1, flags, nil,
+      { context, _, arguments in
+        guard let context, let value = arguments?[0] else { return }
+        guard sqlite3_value_type(value) != SQLITE_NULL else { sqlite3_result_null(context); return }
+        guard let bytes = sqlite3_value_text(value) else { sqlite3_result_error_nomem(context); return }
+        let count = Int(sqlite3_value_bytes(value))
+        let original = String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
+        let safe = WorkspaceHistoryPrivacy.redactingToolEndpoints(original)
+        safe.withCString { sqlite3_result_text(context, $0, Int32(safe.utf8.count), SQLITE_TRANSIENT) }
+      }, nil, nil, nil)
+    guard redactStatus == SQLITE_OK else { throw WorkspaceDatabaseError.open("Unable to register history privacy filter") }
     let lengthStatus = sqlite3_create_function_v2(database, "woven_text_length", 1, flags, nil,
       { context, _, arguments in
         guard let context, let value = arguments?[0] else { return }

@@ -32,7 +32,7 @@ struct GatewaySessionPermissionTests {
     @Test func hermesReportsNativeInheritedModesWithoutInventingDowngrades() {
         let smart = HermesSessionPermissions.configuration(info: ["yolo": .bool(false), "approval_mode": "smart"], inheritedMode: nil)
         #expect(smart.permission == "default")
-        #expect(smart.permissionOptionMetadata["default"]?.name == "Ask for approval")
+        #expect(smart.permissionOptionMetadata["default"]?.name == "Smart approvals")
         #expect(smart.permissionOptionMetadata["default"]?.description?.contains("Smart approvals from Settings") == true)
         let off = HermesSessionPermissions.configuration(info: ["yolo": .bool(true), "approval_mode": "off"], inheritedMode: nil)
         #expect(off.permission == "full")
@@ -96,7 +96,7 @@ struct GatewaySessionPermissionTests {
         await transport.setApprovalMode("smart")
         let restored = try await client.setSessionPermission("default")
         #expect(restored.permission == "default")
-        #expect(restored.permissionOptionMetadata["default"]?.name == "Ask for approval")
+        #expect(restored.permissionOptionMetadata["default"]?.name == "Smart approvals")
         #expect(restored.permissionOptionMetadata["default"]?.description?.contains("Smart approvals") == true)
         #expect(await transport.calls.filter { $0.0 == "config.set" }.allSatisfy { $0.1["key"] == "yolo" && $0.1["scope"] == "session" })
         await client.shutdown()

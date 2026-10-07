@@ -727,10 +727,16 @@ public actor DashboardStore {
   }
 
   public func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
-    let data = try await database.conversationExport(id: id, format: format)
     let stagedURL = FileManager.default.temporaryDirectory
       .appending(path: "wovenmatter-export-" + UUID().uuidString + "." + format.fileExtension)
     try Task.checkCancellation()
+    if format == .fullRun {
+      try await database.exportConversationArchive(id: id, to: stagedURL)
+      do { try Task.checkCancellation() }
+      catch { try? FileManager.default.removeItem(at: stagedURL); throw error }
+      return stagedURL
+    }
+    let data = try await database.conversationExport(id: id, format: format)
     // SQL and encoding ran on the reader worker. File I/O also stays off the
     // cooperative executor, and only the staging URL crosses backend IPC.
     do {

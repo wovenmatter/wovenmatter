@@ -56,10 +56,10 @@ an explicit migration.
 The app uses [remote-workspace.sh](../../scripts/remote-workspace.sh) to manage
 several independently named workspaces.
 
-## Built-in SDK updates
+## Pi Durable SDK updates
 
-Each workspace service owns its Built-in Pi SDK and Claude SDK installation.
-The Built-in Agent settings page groups their installed versions and update
+Each workspace service owns its Pi Durable SDK and Claude SDK installation.
+The Pi Durable settings page groups their installed versions and update
 controls beneath expandable workspace rows. **All workspaces** lists the local
 installation and each configured remote workspace; choosing one workspace
 limits the list to that workspace.

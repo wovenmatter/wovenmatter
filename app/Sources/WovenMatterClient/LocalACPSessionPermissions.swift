@@ -17,21 +17,24 @@ enum LocalACPSessionPermissions {
             let command = Array(wrapped.command.prefix(wrapped.harnessArgumentsStartIndex)) + harnessArguments
             var arguments = launch.arguments
             arguments[wrapped.argumentIndex] = command.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
-            return (arguments, launch.requestedPermission ?? (launch.runtimeKind == .grokBuild ? explicitGrokPermission(in: harnessArguments) : nil))
+            return (arguments, launch.requestedPermission ?? explicitPermission(runtimeKind: launch.runtimeKind, arguments: harnessArguments))
         }
         let arguments = try launchArguments(launch.arguments, runtimeKind: launch.runtimeKind, permission: launch.requestedPermission)
-        return (arguments, launch.requestedPermission ?? (launch.runtimeKind == .grokBuild ? explicitGrokPermission(in: arguments) : nil))
+        return (arguments, launch.requestedPermission ?? explicitPermission(runtimeKind: launch.runtimeKind, arguments: arguments))
     }
 
-    // `auto` is the existing persisted wire value for one-time approvals. Keep
-    // its authority unchanged; it is Full access, not Cursor's smart Auto-review.
-    static let cursorOptions = ["normal", "auto"]
+    private static func explicitPermission(runtimeKind: AgentRuntimeKind, arguments: [String]) -> String? {
+        if runtimeKind == .cursor, arguments.contains(where: ["--force", "--yolo", "-f"].contains) { return "force" }
+        return runtimeKind == .grokBuild ? explicitGrokPermission(in: arguments) : nil
+    }
+
+    // Cursor permission choices control its native process flag.
+    static let cursorOptions = ["native-default", "force"]
     static let cursorMetadata: [String: SessionOptionMetadata] = [
-        "normal": .init(name: "Ask for approval", description: "Show the approval requests Cursor sends. Native allow and deny rules still apply."),
-        "auto": .init(name: "Full access", description: "Allow commands and edits without ordinary approval prompts in this conversation. Native deny rules still apply."),
+        "native-default": .init(name: "Native defaults", description: "Launch Cursor without --force. Cursor’s saved session and native allow/deny policies remain in effect."),
+        "force": .init(name: "Full access", description: "Launch Cursor with its native --force flag. Explicit native deny rules and required input remain in effect."),
     ]
-    static let grokOptions = ["default", "acceptEdits", "auto", "bypassPermissions"]
-    private static let supportedGrokOptions = grokOptions + ["dontAsk"]
+    static let grokOptions = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
 
     static let grokMetadata: [String: SessionOptionMetadata] = [
         "default": .init(name: "Ask for approval", description: "Grok asks for approval beyond its built-in read-only and preapproved actions."),
@@ -40,19 +43,6 @@ enum LocalACPSessionPermissions {
         "dontAsk": .init(name: "Don't ask", description: "Grok denies actions that are not already approved instead of asking."),
         "bypassPermissions": .init(name: "Full access", description: "Allow commands and edits without ordinary approval prompts. Native deny rules, hooks, and administrator policies still apply."),
     ]
-
-    /// Keep a saved native deny-without-asking policy selectable while it is
-    /// active, without offering it as a new approval preset.
-    static func grokOptions(currentPermission: String?) -> [String] {
-        currentPermission == "dontAsk" ? grokOptions + ["dontAsk"] : grokOptions
-    }
-
-    static func nativeOptions(runtimeKind: AgentRuntimeKind, options: [String]) -> [String] {
-        guard runtimeKind == .claudeCode else { return options }
-        // Keep any active legacy value and metadata readable, but don't offer
-        // planning or deny-without-asking as an approval preset for new choices.
-        return options.filter { $0 != "plan" && $0 != "dontAsk" }
-    }
 
     /// Normalize known native policies without changing their identifiers or
     /// mistaking older Codex workspace presets for classifier-based review.
@@ -69,7 +59,10 @@ enum LocalACPSessionPermissions {
             var name = option["name"]?.stringValue
             var description = option["description"]?.stringValue
             switch (runtimeKind, id) {
-            case (.codex, "read-only"), (.claudeCode, "default"):
+            case (.codex, "read-only"):
+                name = "Read only"
+                description = description ?? "Codex's native read-only sandbox and approval policy."
+            case (.claudeCode, "default"):
                 name = "Ask for approval"
             case (.codex, "agent"):
                 if option["_meta"]?["kind"]?.stringValue == "auto_review" {
@@ -86,6 +79,12 @@ enum LocalACPSessionPermissions {
                 description = "Claude's model classifier decides which actions may run automatically."
             case (.claudeCode, "acceptEdits"):
                 name = "Auto-accept edits"
+            case (.claudeCode, "plan"):
+                name = "Plan"
+                description = description ?? "Plan without executing commands or editing files."
+            case (.claudeCode, "dontAsk"):
+                name = "Don't ask"
+                description = description ?? "Deny actions requiring permission instead of asking for approval."
             default:
                 break
             }
@@ -104,7 +103,7 @@ enum LocalACPSessionPermissions {
                 permission = String(argument.dropFirst("--permission-mode=".count))
             }
         }
-        return permission.flatMap { supportedGrokOptions.contains($0) ? $0 : nil }
+        return permission.flatMap { grokOptions.contains($0) ? $0 : nil }
     }
 
     static func launchArguments(
@@ -113,8 +112,13 @@ enum LocalACPSessionPermissions {
         if runtimeKind == .cursor, let permission, !cursorOptions.contains(permission) {
             throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
+        if runtimeKind == .cursor, let permission, cursorOptions.contains(permission) {
+            let flags = Set(["--force", "--yolo", "-f"])
+            let clean = arguments.filter { !flags.contains($0) }
+            return permission == "force" ? ["--force"] + clean : clean
+        }
         guard runtimeKind == .grokBuild, let permission else { return arguments }
-        guard supportedGrokOptions.contains(permission) else {
+        guard grokOptions.contains(permission) else {
             throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
         // Isolate the process policy from Grok's optional shared leader, and

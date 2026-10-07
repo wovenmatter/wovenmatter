@@ -56,7 +56,8 @@ extension ApplicationModel {
                 harness: configuration.runtimeKind.rawValue, workspace: scope, selections: selections)
         } else {
             sessionSelectionPreferences.captureConversation(id: id, harness: configuration.runtimeKind.rawValue,
-                workspace: scope, selections: selections, capturedDefaults: SessionSelections())
+                workspace: scope, selections: selections, capturedDefaults: SessionSelections(),
+                usesProductPermissionDefault: configuration.usesProductPermissionDefault ?? false)
         }
     }
 
@@ -435,7 +436,9 @@ extension ApplicationModel {
         tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
             title: title, model: resolved.model, thinking: resolved.thinking,
-            permission: runtime == .pi ? nil : resolved.permission, selectionWorkspace: scope,
+            permission: runtime == .pi ? nil : resolved.permission,
+            usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
+            selectionWorkspace: scope,
             nativeWorkingDirectory: directory,
             nativeWorkspaceID: runtime == .opencode && sameWorkspace && command.options["directory"] == nil
                 ? nativeLocation?["workspaceID"].string : nil, tools: tools)

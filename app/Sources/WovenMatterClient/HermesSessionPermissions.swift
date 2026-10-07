@@ -89,7 +89,7 @@ enum HermesSessionPermissions {
             permission: current,
             permissionOptions: inheritedFull ? ["full"] : ["default", "full"],
             permissionOptionMetadata: [
-                "default": .init(name: "Ask for approval", description: inheritedDescription),
+                "default": .init(name: mode == "smart" ? "Smart approvals" : "Profile default", description: inheritedDescription),
                 "full": .init(name: "Full access", description: inheritedFull
                     ? "Full access is enabled by the Hermes profile or process policy."
                     : "Enable Hermes full access for this conversation only.")

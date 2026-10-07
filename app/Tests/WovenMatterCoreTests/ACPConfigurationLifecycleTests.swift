@@ -365,7 +365,7 @@ private final class ConfigurationLifecycleState: @unchecked Sendable {
   }
 }
 
-private final class ConfigurationTestProcessLease: LocalACPProcessLeasing, @unchecked Sendable {
+final class ConfigurationTestProcessLease: LocalACPProcessLeasing, @unchecked Sendable {
   struct Snapshot: Equatable {
     let acquisitions: Int
     let releases: Int

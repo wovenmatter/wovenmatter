@@ -261,6 +261,9 @@ struct DashboardCloudConversation: View {
                     await scrollToLibraryMessage(using: proxy)
                 }
                 .onDisappear { model.agentTools?.observeSessionFromUI(nil, token: toolObservationToken) }
+                .environment(\.conversationSubagentHistory) { request in
+                    try await model.builtInSubagentHistory(request)
+                }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -451,8 +454,8 @@ struct DashboardCloudConversation: View {
                     } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
                         DashboardPanelControlButton(
                             glyph: .settings,
-                            accessibilityLabel: "Built-in Agent settings",
-                            help: "Built-in Agent settings"
+                            accessibilityLabel: "Pi Durable settings",
+                            help: "Pi Durable settings"
                         ) {
                             model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                         }

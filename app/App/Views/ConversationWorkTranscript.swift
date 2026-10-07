@@ -156,6 +156,7 @@ struct ConversationWorkTranscript: View {
                                 }
                             }
                         }
+                        .environment(\.conversationArchiveConversationID, run.conversationID)
                         .padding(.top, 14)
                         .padding(.leading, 18)
                         .transition(reduceMotion ? .identity : .opacity)
@@ -369,6 +370,11 @@ private struct ConversationActivityRow: View {
 
     private var activityDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let subagents = activity.subagents {
+                ForEach(subagents) { child in
+                    ConversationSubagentRow(child: child)
+                }
+            }
             if let expandedContent {
                 Text(String(expandedContent.prefix(120_000)) + (expandedContent.count > 120_000 ? "\n… (display truncated)" : ""))
                     .font(activity.kind == .thought
@@ -437,11 +443,13 @@ private struct ConversationActivityRow: View {
     }
 
     private var isExpandable: Bool {
-        hasRawDetails || (activity.kind != .activity && (activity.content?.nonempty?.count ?? 0) > 140)
+        activity.subagents?.isEmpty == false || hasRawDetails
+            || (activity.kind != .activity && (activity.content?.nonempty?.count ?? 0) > 140)
     }
 
     private var systemImage: String {
-        switch activity.kind {
+        if activity.subagents != nil { return "person.2" }
+        return switch activity.kind {
         case .assistant: "text.bubble"
         case .thought: "sparkles"
         case .tool: ConversationToolCategory(activity).systemImage

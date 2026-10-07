@@ -92,23 +92,23 @@ than continuing under a different policy. Stop uses the normal conversation
 cancellation path. Cancellation is best effort for actions already dispatched;
 check their external effects before starting a replacement program.
 
-## Pi code mode
+## Code mode
 
-In **Settings → Built-in Agent → Pi code mode**, select:
+In **Settings → Pi Durable → Code mode**, select:
 
-- **On** (default): Pi code mode alongside the ordinary file, shell and web tools.
+- **On** (default): code mode alongside the ordinary file, shell and web tools.
 - **Only:** Pi presents ordinary tools through code mode.
 - **Off:** the code mode tool is unavailable.
 
 Code mode calls the same guarded tools, so nested shell and write calls retain
 normal conversation approval. Woven still disables user Pi extensions and
-supplies its own tool list. This setting applies to Built-in's Pi SDK and follows
+supplies its own tool list. This setting applies to Pi Durable's Pi Durable SDK and follows
 its global/workspace inheritance; changes apply to subsequent turns. It does not
 control Executor Execute, which belongs to the Executor conversation switch.
 
 ## CLI and recovery
 
-Agents receive the same session-bound CLI across built-in and external harnesses,
+Agents receive the same session-bound CLI across Pi Durable and external harnesses,
 including remote agent workspaces. Use `wovenmatter executor help` for commands.
 A typical sequence is:
 

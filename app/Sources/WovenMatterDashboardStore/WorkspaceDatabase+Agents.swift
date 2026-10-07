@@ -323,7 +323,7 @@ extension WorkspaceDatabaseConnection {
             id: id,
             userID: try text(statement, column: 1),
             codename: try text(statement, column: 2),
-            displayName: try text(statement, column: 3),
+            displayName: runtime == .defaultAgent ? runtime.displayName : try text(statement, column: 3),
             iconKey: try text(statement, column: 4),
             executionLocation: location,
             governingPlane: governingPlane,

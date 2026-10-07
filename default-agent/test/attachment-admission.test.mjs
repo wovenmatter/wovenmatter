@@ -34,7 +34,7 @@ async function fixture(t, { holdAdmission = false } = {}) {
   const service = createDefaultAgentService({ cwd: directory, directory, engineFactory: async () => engine,
     writeState: async (path, value) => {
       writing.release();
-      if (holdAdmission && value.sessionID === 'native') await written.promise;
+      if (holdAdmission) await written.promise;
       return writePrivateJSON(path, value);
     } });
   const load = token => service.invoke({ method: 'session/load', attachmentProtocol: 1, attachmentToken: token, params: { sessionId: 'native' } });
@@ -43,7 +43,7 @@ async function fixture(t, { holdAdmission = false } = {}) {
   return { service, load, prompt, calls, writing, written, execution, directory };
 }
 
-test('fenced load follows queued admission and waits for its native terminal outcome', async t => {
+test('replacement load follows queued admission and fences the previous attachment', async t => {
   const f = await fixture(t, { holdAdmission: true });
   const old = (await f.load()).result._meta.attachmentToken;
   const request = f.prompt(old);
@@ -52,22 +52,17 @@ test('fenced load follows queued admission and waits for its native terminal out
   const replacing = f.load();
   // Another session has its own queue, even while this journal write waits.
   const other = await f.service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId: 'other' } });
-  assert.equal(other.result._meta.recoveryComplete, true);
+  assert.ok(other.result._meta.attachmentToken);
   f.written.release();
   await accepted;
   const loading = await replacing;
-  assert.equal(loading.operationID, request.operationID);
-  assert.equal(loading.result, undefined);
-  assert.notEqual(loading.attachmentToken, old);
+  assert.equal(loading.result.sessionId, 'native');
+  assert.notEqual(loading.result._meta.attachmentToken, old);
   const late = f.prompt(old);
   await assert.rejects(f.service.invoke(late), /attachment was replaced/);
   await assert.rejects(access(join(f.directory, `accepted-${late.operationID}.json`)));
   f.execution.release();
   while (!(await f.service.poll(request.operationID)).done) await new Promise(resolve => setImmediate(resolve));
-  const recovered = (await f.load(loading.attachmentToken)).result._meta;
-  assert.equal(recovered.recoveryComplete, true);
-  assert.equal(recovered.recoverySessionID, 'native');
-  assert.equal(recovered.recoveredRuns[0].content, 'finished');
   assert.equal(f.calls.filter(call => call.method === 'session/prompt').length, 1);
 });
 
@@ -80,7 +75,7 @@ test('stale prompt, steering, cancel and selection cannot mutate the replacement
     await assert.rejects(f.service.invoke({ ...f.prompt(undefined), method }), /attachment was replaced/);
   }
   assert.equal(f.calls.some(call => call.method !== 'session/load'), false);
-  assert.equal((await f.load(current)).result._meta.recoveryComplete, true);
+  assert.ok((await f.load(current)).result._meta.attachmentToken);
 });
 
 for (const trusted of [false, true]) test(`Stop during admission prevents a later native prompt (trusted=${trusted})`, async t => {
@@ -94,33 +89,7 @@ for (const trusted of [false, true]) test(`Stop during admission prevents a late
   f.written.release();
   await rejected;
   assert.equal(f.calls.some(call => call.method === 'session/prompt'), false);
-  assert.equal((await f.load()).result._meta.recoveryComplete, true);
-});
-
-test('replaced approval authority cannot be reused or redirected through another session', async t => {
-  const directory = await mkdtemp('/tmp/woven-permission-attachment-');
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const controller = new AbortController();
-  t.after(() => controller.abort());
-  const engine = { create: async () => ({}), configuration: () => ({}), sessions: new Map(),
-    handle: async (method, params, emit, permission) => {
-      if (method !== 'session/prompt') return { sessionId: params.sessionId };
-      const allowed = await permission({ title: 'Fixture approval' }, controller.signal);
-      return { stopReason: allowed ? 'end_turn' : 'cancelled' };
-    } };
-  const service = createDefaultAgentService({ cwd: directory, directory, engineFactory: async () => engine });
-  const first = await service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId: 'native' } });
-  const operationID = crypto.randomUUID();
-  await service.invoke({ method: 'session/prompt', operationID, attachmentToken: first.result._meta.attachmentToken, params: { sessionId: 'native' } });
-  const id = (await service.poll(operationID)).pendingPermissions[0];
-  const replacement = await service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId: 'native' } });
-  const reply = (attachmentToken, sessionId) => service.invoke({ method: 'woven/permission', attachmentToken,
-    params: { sessionId, id, result: { outcome: { outcome: 'selected', optionId: 'allow' } } } });
-  await assert.rejects(reply(first.result._meta.attachmentToken, 'native'), /attachment was replaced/);
-  await assert.rejects(reply(replacement.attachmentToken, 'another-session'), /another session/);
-  assert.equal((await service.poll(operationID)).done, false);
-  await reply(replacement.attachmentToken, 'native');
-  while (!(await service.poll(operationID)).done) await new Promise(resolve => setImmediate(resolve));
+  assert.ok((await f.load()).result._meta.attachmentToken);
 });
 
 for (const failure of ['receipt', 'poll', 'terminal']) test(`Built-in adapter distinguishes remote ${failure} outcome`, { timeout: 10000 }, async t => {

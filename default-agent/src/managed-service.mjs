@@ -12,7 +12,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     let timer;
     try {
       return await Promise.race([operation, new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new SDKMaintenanceError('The Built-in runtime did not respond. Reconnect this workspace.')), milliseconds);
+        timer = setTimeout(() => reject(new SDKMaintenanceError('The Pi Durable runtime did not respond. Reconnect this workspace.')), milliseconds);
         timer.unref();
       })]);
     } finally { clearTimeout(timer); }
@@ -28,12 +28,12 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     let exited = false;
     const value = { child, generation: runtime.generation, pending,
       call(method, ...args) {
-        if (exited || !child.connected) return Promise.reject(new SDKMaintenanceError('The Built-in runtime stopped. Reconnect this workspace.'));
+        if (exited || !child.connected) return Promise.reject(new SDKMaintenanceError('The Pi Durable runtime stopped. Reconnect this workspace.'));
         const id = ++sequence;
         return new Promise((resolve, reject) => {
           pending.set(id, { resolve, reject });
           child.send({ id, method, args }, error => {
-            if (error) { pending.delete(id); reject(new SDKMaintenanceError('The Built-in runtime could not receive this operation.')); }
+            if (error) { pending.delete(id); reject(new SDKMaintenanceError('The Pi Durable runtime could not receive this operation.')); }
           });
         });
       } };
@@ -45,7 +45,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     });
     const lost = () => {
       exited = true;
-      for (const request of pending.values()) request.reject(new SDKMaintenanceError('The Built-in runtime stopped. Reconnect this workspace.'));
+      for (const request of pending.values()) request.reject(new SDKMaintenanceError('The Pi Durable runtime stopped. Reconnect this workspace.'));
       pending.clear(); if (worker === value) worker = undefined;
     };
     child.once('error', lost); child.once('exit', lost);

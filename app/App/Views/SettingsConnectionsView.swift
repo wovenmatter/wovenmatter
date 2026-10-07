@@ -18,7 +18,7 @@ struct SettingsConnectionsView: View {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     var body: some View {
-        SettingsPage(title: "Connections", detail: "Shared accounts for Built-in, Usage, and Dictation.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable, Usage, and Dictation.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
                 keyDrafts.removeAll()
                 answer = ""
@@ -35,7 +35,7 @@ struct SettingsConnectionsView: View {
                     agent.setInherits($0)
                     agent.loadAccounts()
                 }))
-                Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Built-in.").font(.callout).foregroundStyle(.secondary)
+                Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Pi Durable.").font(.callout).foregroundStyle(.secondary)
             }
             connectionsSection
                 .transaction { transaction in
@@ -63,14 +63,14 @@ struct SettingsConnectionsView: View {
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .task { agent.changeScope(initialScope); agent.loadAccounts() }
         .onDisappear { agent.cancel() }
-        .confirmationDialog("Reset Built-in credentials in this workspace?", isPresented: $confirmingCredentialReset) {
+        .confirmationDialog("Reset Pi Durable credentials in this workspace?", isPresented: $confirmingCredentialReset) {
             Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
         } message: {
             Text("Encrypted workspace credentials will be reset and shared connections restored. Claude’s separate native sign-in, files, and conversations are kept.")
         }
     }
     private var connectionsSection: some View {
-        SettingsCard(title: "Model providers", detail: "Connect accounts for Built-in and Usage. Choose a preferred account and arrange backups for sign-in or usage exhaustion.") {
+        SettingsCard(title: "Model providers", detail: "Connect accounts for Pi Durable and Usage. Choose a preferred account and arrange backups for sign-in or usage exhaustion.") {
             DisclosureGroup("OpenAI") {
                 connectionGroup("openai-codex", title: "ChatGPT subscriptions", subscription: true)
                 connectionGroup("openai", title: "API keys")
@@ -89,7 +89,7 @@ struct SettingsConnectionsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                 Text(agent.cursorAccountStatus).font(.callout).foregroundStyle(.secondary)
                 Button("Refresh status") { Task { await agent.refreshCursorStatus() } }.buttonStyle(SettingsQuietButtonStyle())
-                Text("Usage limits only. Not available to Built-in.").font(.callout).foregroundStyle(.secondary)
+                Text("Usage limits only. Not available to Pi Durable.").font(.callout).foregroundStyle(.secondary)
                 Text("One account on this Mac. Signing in replaces the current account.").font(.caption).foregroundStyle(.secondary)
                 Button("Sign in to Cursor") { agent.signInCursor() }
                     .buttonStyle(SettingsQuietButtonStyle())

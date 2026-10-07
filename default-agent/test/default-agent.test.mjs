@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 import { accessFailure, DefaultAgentError, operationErrorMessage, validateConfig, writePrivateJSON } from '../src/config.mjs';
 import { searchTools } from '../src/search.mjs';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { Credentials } from '../src/credentials.mjs';
@@ -17,6 +18,7 @@ async function temporary(t) {
   return directory;
 }
 test('fallback classifies unavailable credentials and exhausted allowances, not ordinary throttling', () => {
+  for (const message of ['The connection has exhausted its available usage.', 'The connection needs sign-in or a valid API key.']) assert.equal(accessFailure(message), message);
   for (const message of ['401 Unauthorized', 'invalid_api_key', 'invalid_grant', 'Authentication required', 'insufficient_quota', 'usage_limit_reached', '402 Payment Required', 'insufficient credits']) assert.ok(accessFailure(message), message);
   for (const message of ['429 Too Many Requests', '500 server error', 'fetch failed', '403 forbidden', 'cancelled']) assert.equal(accessFailure(message), null, message);
 });
@@ -62,21 +64,37 @@ test('real SDK loads the complete selected tool set and resumes an empty draft w
   }
   const engine = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const record = await engine.create();
-  assert.deepEqual(new Set(record.session.getActiveToolNames()), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', 'codemode']));
-  assert.deepEqual(new Set(record.session.getAllTools().map(tool => tool.name)), new Set(record.session.getActiveToolNames()));
+  const selected = (await record.conversation.agent(BACKGROUND_CONTEXT)).tools.map(tool => tool.name);
+  assert.deepEqual(new Set(selected), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', 'subagent', 'codemode']));
+  assert.deepEqual(new Set(record.registry.snapshot().tools().map(({ tool }) => tool.name)), new Set(selected));
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   const second = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
+  await assert.rejects(engine.prompt(record, 'No provider should be consumed', () => {}), /No configured connection/);
+  await record.session.dispose();
   const resumed = await second.create(record.session.sessionId);
   assert.equal(resumed.session.sessionId, record.session.sessionId);
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
-  t.after(() => { record.session.dispose(); resumed.session.dispose(); });
-  await assert.rejects(engine.prompt(record, 'No provider should be consumed', () => {}), /No configured connection/);
+  t.after(() => resumed.session.dispose());
 });
 function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter'], visible = false, streamEvents = [] } = {}) {
   const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', models: ['openrouter/fallback'], fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
-  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], refreshContext() {}, agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { for (const event of streamEvents) listener(event); if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
+  const record = {
+    selected: 'openai-codex/primary', busy: false,
+    manifest: { storeID: 'fixture' }, subagents: { async beginGroup() {} },
+    contextLeaf: () => 'before', rewind() {}, saveOptions() {},
+    subscribe(fn) { listener = fn; return () => {}; },
+    session: {
+      messages: [], refreshContext() {},
+      async setModel(model) { selected.push(model.provider); record.selected = model.provider + '/' + model.id; },
+      async prompt() {
+        for (const update of streamEvents) listener({ update });
+        if (visible) listener({ update: { sessionUpdate: 'tool_call', toolCallId: 't', title: 'bash' } });
+        if (errors.length) throw new Error(errors.shift());
+      },
+    },
+  };
   engine.resolveModel = ref => { const [provider, id] = ref.split('/'); return { provider, id, name: id }; };
   engine.credentials = new Credentials(Object.fromEntries(connected.map(p => [p, { type: 'api_key', key: 'fixture' }])));
   engine.runtime = { getAuth: async () => ({}), getModels: () => [{ provider: 'openai-codex', id: 'primary', name: 'Primary' }, { provider: 'openrouter', id: 'fallback', name: 'Fallback' }] };
@@ -104,6 +122,16 @@ test('a failed turn that already ran tools is never silently replayed', async ()
   await assert.rejects(engine.prompt(record, 'change files', () => {}));
   assert.deepEqual(selected, ['openai-codex']);
 });
+test('a failed native context read releases ownership for the next prompt', async () => {
+  const { engine, record, selected } = fixtureEngine();
+  record.contextLeaf = async () => { throw new Error('Native context unavailable'); };
+  await assert.rejects(engine.prompt(record, 'First', () => {}), /Native context unavailable/);
+  assert.equal(record.busy, false);
+  assert.deepEqual(selected, []);
+  record.contextLeaf = () => undefined;
+  assert.equal((await engine.prompt(record, 'Retry', () => {})).stopReason, 'end_turn');
+  assert.deepEqual(selected, ['openai-codex']);
+});
 test('cancel during credential preparation never starts a model turn or fallback', async () => {
   const { engine, record, selected } = fixtureEngine();
   let release;
@@ -116,9 +144,8 @@ test('cancel during credential preparation never starts a model turn or fallback
   };
   let prompts = 0;
   record.session.prompt = async () => { prompts++; };
-  record.session.abort = async () => {};
-  let cleared = false;
-  record.session.clearQueue = () => { cleared = true; };
+  let aborted = false;
+  record.session.abort = async () => { aborted = true; };
   engine.sessions.set('fixture', record);
   const prompt = engine.prompt(record, 'do not send', () => {});
   await preparing;
@@ -126,7 +153,7 @@ test('cancel during credential preparation never starts a model turn or fallback
   release();
   assert.equal((await prompt).stopReason, 'cancelled');
   assert.equal(prompts, 0);
-  assert.equal(cleared, true);
+  assert.equal(aborted, true);
   assert.deepEqual(selected, []);
   assert.equal(record.busy, false);
 });
@@ -162,65 +189,35 @@ test('credentials migrate to encrypted storage and refresh ownership remains sep
   const borrowed = await new Credentials({ xai: { type: 'oauth', access: 'fixture', refresh: '', borrowed: true, expires: 0 } }).initialize();
   await assert.rejects(borrowed.modify('xai', async c => c), /Authentication required/);
 });
-test('remote service owns an accepted run and completion can be recovered without resubmission', async t => {
+test('remote admission deduplicates current output and fences uncertain prior acceptance', async t => {
   const directory = await temporary(t);
-  const service = createDefaultAgentService({ cwd: directory, directory });
-  await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {}, revision: '1' });
-  // Inject a provider-free fake session at the SDK boundary, retain real service journaling.
-  const engine = await service.engine();
-  let release;
-  let calls = 0;
-  const sessionID = crypto.randomUUID();
-  engine.handle = async (method, params, emit) => {
-    if (method === 'session/prompt') { calls++; emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'finished remotely' } }); await new Promise(resolve => { release = resolve; }); return { stopReason: 'end_turn' }; }
-    return { sessionId: sessionID };
-  };
-  const operationID = crypto.randomUUID();
-  const request = { method: 'session/prompt', operationID, params: { sessionId: sessionID, _meta: { wovenRunID: operationID } } };
-  await Promise.all(Array.from({ length: 12 }, () => service.invoke(request)));
-  assert.equal(calls, 1);
-  assert.equal((await service.poll(operationID)).done, false);
-  // No reader is attached while the task finishes.
-  release();
-  let page;
-  do { await new Promise(resolve => setTimeout(resolve, 5)); page = await service.poll(operationID); } while (!page.done);
-  assert.equal(page.updates[0].content.text, 'finished remotely');
-  // Completed runs use their durable record, without retaining every streamed
-  // update in the service for the rest of its lifetime.
-  assert.equal(page.snapshot.runID, operationID);
-  assert.equal((await service.poll(operationID, 1)).updates.length, 0);
-  const recovered = createDefaultAgentService({ cwd: directory, directory });
-  const restored = await recovered.poll(operationID);
-  assert.equal(restored.done, true);
-  assert.equal(restored.result.stopReason, 'end_turn');
-  assert.equal(JSON.parse(await readFile(join(directory, `run-${operationID}.json`))).snapshot.runID, operationID);
-});
-
-test('remote run identity rejects conflicting requests during admission, execution and after restart', async t => {
-  const directory = await temporary(t);
-  const configuration = { workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {} };
-  const service = createDefaultAgentService({ cwd: directory, directory });
-  await service.configure(configuration);
-  const engine = await service.engine();
-  let calls = 0, release;
-  engine.handle = async () => { calls++; await new Promise(resolve => { release = resolve; }); return { stopReason: 'end_turn' }; };
-  const operationID = crypto.randomUUID();
-  const request = { method: 'session/prompt', operationID, params: { sessionId: crypto.randomUUID(), prompt: [{ type: 'text', text: 'Original' }] } };
+  let release, calls = 0;
+  const sessionID = crypto.randomUUID(), operationID = crypto.randomUUID();
+  const engine = { handle: async (method, params, emit) => {
+    calls++; await emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'finished remotely' } });
+    await new Promise(resolve => { release = resolve; }); return { stopReason: 'end_turn' };
+  } };
+  const service = createDefaultAgentService({ cwd: directory, directory, engineFactory: async () => engine });
+  const request = { method: 'session/prompt', operationID, params: { sessionId: sessionID, prompt: [{ type: 'text', text: 'Original' }] } };
   const changed = { ...request, params: { ...request.params, prompt: [{ type: 'text', text: 'Different' }] } };
   const first = service.invoke(request);
   await assert.rejects(service.invoke(changed), /different request/);
   await first;
-  await assert.rejects(service.invoke({ ...request, params: { ...request.params, sessionId: crypto.randomUUID() } }), /different request/);
-  // Semantically identical JSON remains a valid retry despite key ordering.
-  await service.invoke({ ...request, params: { prompt: [{ text: 'Original', type: 'text' }], sessionId: request.params.sessionId } });
-  assert.equal(calls, 1);
+  await Promise.all(Array.from({ length: 12 }, () => service.invoke(request)));
+  await service.invoke({ ...request, params: { prompt: [{ text: 'Original', type: 'text' }], sessionId: sessionID } });
+  assert.equal(calls, 1); assert.equal((await service.poll(operationID)).done, false);
   release();
-  while (!(await service.poll(operationID)).done) await new Promise(resolve => setTimeout(resolve, 5));
+  let page;
+  do { await new Promise(resolve => setImmediate(resolve)); page = await service.poll(operationID); } while (!page.done);
+  assert.equal(page.updates[0].content.text, 'finished remotely'); assert.equal(page.result.stopReason, 'end_turn');
+  assert.equal((await service.poll(operationID, 1)).updates.length, 0);
   await assert.rejects(service.invoke(changed), /different request/);
-  const recovered = createDefaultAgentService({ cwd: directory, directory });
-  await recovered.configure(configuration);
-  await assert.rejects(recovered.invoke(changed), /different request/);
-  assert.deepEqual(await recovered.invoke(request), { operationID });
+  const tombstone = JSON.parse(await readFile(join(directory, `accepted-${operationID}.json`)));
+  assert.deepEqual(Object.keys(tombstone), ['fingerprint']);
+  const restarted = createDefaultAgentService({ cwd: directory, directory, engineFactory: async () => engine });
+  await assert.rejects(restarted.invoke(changed), /different request/);
+  await assert.rejects(restarted.invoke(request), /uncertain.*not be replayed/);
+  await assert.rejects(restarted.poll(operationID), /no longer available/); assert.equal(calls, 1);
 });
 
 test('independent remote sign-in takes priority over updates and is encrypted across helpers', async t => {
@@ -253,21 +250,6 @@ test('HTTP failure inspection stops at its byte limit and leaves the SDK body in
   const response = await request('https://example.test');
   assert.equal(record.httpAccessFailure, null);
   assert.equal(await response.text(), body);
-});
-
-test('reasoning block identity survives interleaved answer prefixes and changes for the next message', async () => {
-  const delta = (type, text) => ({ type: 'message_update', assistantMessageEvent: { type, contentIndex: type === 'thinking_delta' ? 0 : 1, delta: text } });
-  const { engine, record } = fixtureEngine({ streamEvents: [
-    { type: 'message_start' }, delta('thinking_delta', 'Reason'), delta('text_delta', 'T'),
-    delta('thinking_delta', 'ing'), delta('text_delta', 'iananmen'),
-    { type: 'message_start' }, delta('thinking_delta', 'Next tool step'),
-  ] });
-  const events = [];
-  await engine.prompt(record, 'fixture', event => events.push(event));
-  const thoughts = events.filter(event => event.sessionUpdate === 'agent_thought_chunk');
-  assert.equal(thoughts[0]._meta.wovenThoughtID, thoughts[1]._meta.wovenThoughtID);
-  assert.notEqual(thoughts[1]._meta.wovenThoughtID, thoughts[2]._meta.wovenThoughtID);
-  assert.equal(events.filter(event => event.sessionUpdate === 'agent_message_chunk').map(event => event.content.text).join(''), 'Tiananmen');
 });
 
 test('account fallback follows priority without changing another session credential', async () => {
@@ -351,22 +333,4 @@ test('native profile sharing includes only an identifier, never native credentia
     { 'claude-subscription': { type: 'native', accountId: 'profile-1' } });
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
   assert.deepEqual(sharedAccounts({ 'claude-subscription': [{ id: 'fixture', label: 'Invalid', credential: { type: 'native', accountId: '../outside' } }] }), { 'claude-subscription': [] });
-});
-
-test('remote recovery combines late continuation operations in submission order', async t => {
-  const directory = await temporary(t);
-  const service = createDefaultAgentService({ cwd: directory, directory });
-  await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {}, revision: '1' });
-  const engine = await service.engine();
-  engine.handle = async () => ({});
-  engine.create = async () => ({});
-  engine.configuration = () => ({});
-  for (const [id, startedAt, content] of [
-    ['ffffffff-ffff-4fff-afff-ffffffffffff', 1, 'before '],
-    ['aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 2, 'after'],
-  ]) await writePrivateJSON(join(directory, `run-${id}.json`), {
-    sessionID: 'native', startedAt, snapshot: { runID: 'logical-run', content, error: null },
-  });
-  const loaded = await service.invoke({ method: 'session/load', params: { sessionId: 'native' } });
-  assert.deepEqual(loaded.result._meta.recoveredRuns, [{ runID: 'logical-run', content: 'before after', error: null }]);
 });

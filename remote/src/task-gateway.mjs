@@ -1,4 +1,4 @@
-import { readFileSync, mkdirSync, appendFileSync, openSync, fsyncSync, closeSync } from 'node:fs'
+import { readFileSync, mkdirSync, appendFileSync, openSync, fsyncSync, closeSync, readSync, fstatSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { durableJSON } from './openclaw-results/store.mjs'
@@ -64,7 +64,7 @@ function validateSchedule(value) {
   return structuredClone(value)
 }
 
-export function createTaskGateway({ directory, execute, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, maximumOutputBytes = 64 * 1024 * 1024, syncJournal = fsyncSync }) {
+export function createTaskGateway({ directory, execute, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, syncJournal = fsyncSync }) {
   mkdirSync(directory, { recursive:true, mode:0o700 })
   const path = resolve(directory, 'state.json')
   let state = read(path, { enabled:true, schedules:[], knownRuns:[], results:[], claims:{}, publicationIDs:[] })
@@ -81,21 +81,11 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     } else {
       claim.completedAt = iso(now()); claim.error = 'The workspace restarted during this task. Check its session before retrying.'
       claim.run.status = 'uncertain'; claim.run.error = claim.error
-      durableJSON(resolve(directory, `result-${claim.id}.json`), {...claim,updates:readJournal(claim.id)})
+      durableJSON(resolve(directory, `result-${claim.id}.json`), claim)
     }
     if (!state.results.includes(claim.id)) state.results.push(claim.id)
   }
   save()
-  function readJournal(id) {
-    try {
-      const lines = readFileSync(resolve(directory, `run-${id}.jsonl`), 'utf8').split('\n')
-      // A crash can tear the final append. Keep complete records while the
-      // durable claim marks the run uncertain; never resubmit its prompt.
-      lines.pop()
-      return lines.filter(Boolean).map(JSON.parse)
-    }
-    catch (e) { if (e.code === 'ENOENT') return []; throw e }
-  }
   function status() { return { enabled:state.enabled, epoch, activeRuns:active.size, scheduleCount:state.schedules.length, waitingTasks:state.schedules.filter(s=>s.waitingReason).map(s=>({eventID:s.id,reason:s.waitingReason,retryAfter:s.retryAfter})) } }
   async function configure(body) {
     if (typeof body.enabled !== 'boolean') throw fail(400,'Choose whether background execution is enabled.')
@@ -156,8 +146,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     schedule.nextFireAt = nextAfter(schedule, now())
     save()
     const controller = new AbortController()
-    const updates = []
-    let journalLines = [], journalBytes = 0, outputBytes = 0, journalTimer
+    let journalLines = [], journalBytes = 0, journalTimer
     const flushJournal = () => {
       clearTimeout(journalTimer); journalTimer = null
       if (!journalLines.length) return
@@ -168,10 +157,10 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     const publishUpdate = update => {
       const line = JSON.stringify(update)+'\n'
       const bytes = Buffer.byteLength(line)
-      if (outputBytes + bytes > maximumOutputBytes) throw new Error('The task exceeded its response limit.')
-      outputBytes += bytes
+      // Native producers archive full payloads in bounded chunks and render
+      // bounded previews. Reject a malformed atomic envelope, not a whole run.
+      if (bytes > 2 * 1024 * 1024) throw new Error('The task supplied an oversized update envelope.')
       journalLines.push(line); journalBytes += bytes
-      updates.push(update)
       if (journalBytes >= 65536) flushJournal()
       else if (!journalTimer) {
         journalTimer = setTimeout(() => {
@@ -209,7 +198,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
         flushJournal()
         if (!deferred) {
           claim.completedAt = iso(now())
-          durableJSON(resolve(directory, `result-${id}.json`), {...claim,updates})
+          durableJSON(resolve(directory, `result-${id}.json`), claim)
           state.results.push(id)
         }
         save(); active.delete(id)
@@ -231,12 +220,50 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
       void run(schedule,index,at).catch(() => { /* fail closed: durable claim prevents replay */ })
     }
   }
+  // Read stored output by byte offset without loading or copying an entire run.
+  // A trailing incomplete append is left untouched; it is not a saved update.
+  function updatePage(id, offset, budget) {
+    const file = resolve(directory, `run-${id}.jsonl`)
+    let fd
+    try { fd = openSync(file, 'r') } catch (error) { if (error.code === 'ENOENT' && offset === 0) return {updates:[],offset:0,complete:true}; throw error }
+    try {
+      const size = fstatSync(fd).size
+      if (offset > size) throw fail(400,'Invalid result output cursor.')
+      const buffer = Buffer.alloc(65536), updates = []
+      let position = offset, nextOffset = offset, pieces = [], length = 0, used = 0
+      while (position < size) {
+        const count = readSync(fd, buffer, 0, Math.min(buffer.length,size-position), position)
+        if (!count) throw fail(503,'A task output could not be read; its cursor was not advanced.')
+        let start = 0
+        for (let i = 0; i < count; i++) if (buffer[i] === 10) {
+          pieces.push(Buffer.from(buffer.subarray(start,i))); length += i-start
+          if (updates.length && used+length > budget) return {updates,offset:nextOffset,complete:false}
+          updates.push(JSON.parse(Buffer.concat(pieces,length).toString('utf8')))
+          used += length; nextOffset = position+i+1; pieces = []; length = 0; start = i+1
+          if (updates.length >= 200 || used >= budget) return {updates,offset:nextOffset,complete:nextOffset===size}
+        }
+        if (start < count) { pieces.push(Buffer.from(buffer.subarray(start,count))); length += count-start }
+        position += count
+      }
+      return {updates,offset:size,complete:true}
+    } finally { closeSync(fd) }
+  }
   function results(after = '0') {
-    const cursor = Number(after)
-    if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > state.results.length) throw fail(400,'Invalid result cursor.')
-    const entries = state.results.slice(cursor,cursor+20).map(id => read(resolve(directory, `result-${id}.json`), null))
-    if (entries.some(x => !x)) throw fail(503,'A task result could not be read; its cursor was not advanced.')
-    return { entries:structuredClone(entries),cursor:String(cursor+entries.length) }
+    if (!/^(0|[1-9][0-9]*)(:[0-9]+:[0-9]+)?$/.test(after)) throw fail(400,'Invalid result cursor.')
+    let [cursor,offset=0,ordinal=0] = after.split(':').map(Number)
+    if (![cursor,offset,ordinal].every(Number.isSafeInteger) || cursor > state.results.length || (cursor===state.results.length && (offset||ordinal))) throw fail(400,'Invalid result cursor.')
+    const entries = []; let budget = 1048576
+    while (cursor < state.results.length && entries.length < 20) {
+      const id = state.results[cursor], result = read(resolve(directory, `result-${id}.json`), null)
+      if (!result) throw fail(503,'A task result could not be read; its cursor was not advanced.')
+      const page = updatePage(id,offset,budget)
+      entries.push({...result,updates:page.updates,updateOffset:ordinal,complete:page.complete})
+      budget -= Buffer.byteLength(JSON.stringify(entries.at(-1)))
+      if (!page.complete) return {entries,cursor:`${cursor}:${page.offset}:${ordinal+page.updates.length}`}
+      cursor++; offset=0; ordinal=0
+      if (budget<=0) break
+    }
+    return {entries,cursor:String(cursor)}
   }
   return { status,configure,publish,tick,results,schedules:() => ({ schedules:structuredClone(state.schedules), ...status() }),
     enabled:() => state.enabled && !disabling,

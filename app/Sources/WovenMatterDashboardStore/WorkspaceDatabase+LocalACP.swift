@@ -241,6 +241,14 @@ extension WorkspaceDatabaseConnection {
       }
       if let imported = hermesImport {
         try markSessionImportedUnlocked(conversationID: conversationID)
+        var nativeBatch = try imported.nativeArchiveBatch()
+        let nativeHome = HermesGatewayClient.parseIdentity(imported.identity).home ?? ""
+        let homeParts = nativeHome.split(separator: "/")
+        let sourceScope = homeParts.count > 1 && homeParts[0] == "remote-workspaces"
+          && UUID(uuidString: String(homeParts[1])) != nil
+          ? "remote:" + String(homeParts[1]).lowercased() : "local"
+        nativeBatch.sourceID = sourceScope + ":" + nativeBatch.sourceID
+        try recordNativeRunRecordsUnlocked(nativeBatch, conversationID: conversationID, agentID: agentID, harness: "hermes")
         let touch = try prepareUnlocked("UPDATE dashboard_conversations SET last_message_at = MAX(last_message_at, (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = ?)), updated_at = ? WHERE id = ?")
         defer { sqlite3_finalize(touch) }
         try bind(conversationID, at: 1, to: touch); try bind(Self.timestamp(Date()), at: 2, to: touch)
@@ -1721,8 +1729,8 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// The attachment ended without proving that the durable native run ended.
-  /// Keep its identity and a nonterminal status until authoritative recovery.
+  /// The attachment ended without proving the native outcome. Preserve its
+  /// identity and block automatic resubmission while that outcome is unknown.
   func markLocalACPRunUncertain(runID: String, detail: String) throws {
     try transaction { try markLocalACPRunUncertainUnlocked(runID: runID, detail: detail) }
   }
@@ -1751,7 +1759,9 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("""
         UPDATE dashboard_runs SET status='uncertain',error=?,completed_at=NULL,updated_at=?
         WHERE id=? AND desktop_owned=1 AND status='running'
-          AND id IN (SELECT run_id FROM desktop_local_acp_durable_runs)
+          AND (id IN (SELECT run_id FROM desktop_local_acp_durable_runs)
+            OR conversation_id IN (SELECT conversation_id FROM desktop_local_acp_sessions
+              WHERE runtime_kind='default_agent'))
         """, [detail, now, runID])
       guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
       try toolsExecuteUnlocked("""
@@ -1801,16 +1811,6 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(recoveredAt)
-      // Older remote Built-in sessions always used the service. Other legacy
-      // remote harnesses could be foreground SSH; their route is not inferable.
-      try toolsExecuteUnlocked("""
-        INSERT OR IGNORE INTO desktop_local_acp_durable_runs(run_id,remote_workspace_id,native_session_id)
-        SELECT r.id,s.remote_workspace_id,s.acp_session_id FROM dashboard_runs r
-        JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
-        WHERE r.desktop_owned=1 AND r.status='running' AND s.runtime_kind='default_agent'
-          AND s.remote_workspace_id IS NOT NULL AND s.acp_session_id IS NOT NULL
-          AND s.acp_session_id!='' AND r.openclaw_session_key=s.acp_session_id
-        """)
       // Losing this process ends a local CLI, but only detaches a service-owned
       // native run. Do not manufacture terminal truth for the latter.
       let durable = try historyRowsUnlocked("""

@@ -26,8 +26,12 @@ when an intentional design change is accepted.
   styles in `DashboardDesign.swift`, and the page/row patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
-- **Built-in SDK settings:** place SDK management directly below the workspace
-  scope controls. The local workspace uses a fixed heading with Pi SDK and Claude
+- **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
+  conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
+  in technical descriptions and version/update controls. Keep the agent name
+  stable across model and provider changes.
+- **Pi Durable SDK settings:** place SDK management directly below the workspace
+  scope controls. The local workspace uses a fixed heading with Pi Durable SDK and Claude
   SDK versions and explicit check/update actions always visible. Remote workspaces
   use full-width disclosure buttons, collapsed by default, for the same controls.
   All workspaces lists the local location and configured remote workspaces; an

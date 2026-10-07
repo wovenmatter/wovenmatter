@@ -3,36 +3,41 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { validateConfig } from '../src/config.mjs';
 
-test('code mode defaults on, supports only/off and retains guards on nested tools', async t => {
+function response(model, content) {
+  const stream = createAssistantMessageEventStream();
+  const message = { role: 'assistant', api: model.api, provider: model.provider, model: model.id,
+    content, timestamp: Date.now(), stopReason: content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop',
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+  stream.push({ type: 'start', partial: message }); stream.push({ type: 'done', reason: message.stopReason, message }); stream.end(message); return stream;
+}
+
+test('Durable code mode retains sandbox tools, persisted store, and nested unsafe task receipts', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-code-mode-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   assert.equal(validateConfig({}).codeMode, 'on');
   for (const mode of ['on', 'only', 'off']) assert.equal(validateConfig({ codeMode: mode }).codeMode, mode);
-  const engine = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'], codeMode: 'only' } }).initialize();
+  const claude = { models: [{ value: 'sonnet', displayName: 'Fixture' }], loadModels: async () => {}, environment: async () => ({}), status: async () => ({ connected: true }), sdkQuery: async () => ({ accountInfo: async () => ({ email: 'fixture@example.invalid', organization: 'fixture-org', apiProvider: 'firstParty' }), close() {} }) };
+  const engine = await new DefaultAgentEngine({ cwd: directory, directory, claude, config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', codeMode: 'only' } }).initialize();
   const record = await engine.create();
-  t.after(() => record.session.dispose());
-  assert.ok(record.session.getActiveToolNames().includes('codemode'));
-  assert.ok(record.session.getCallableToolNames().includes('write'));
-  const mode = record.session.agent.state.tools.find(tool => tool.name === 'codemode');
-  assert.ok(mode);
-  record.session.agent.state.messages.push({ role: "assistant", content: [{ type: "toolCall", id: "test-code", name: "codemode", arguments: {} }], timestamp: Date.now(), stopReason: "toolUse" });
-  // SDK nested execution goes through the guarded custom tool, including Only.
-  let approvals = 0;
-  record.requestPermission = async () => { approvals++; return false; };
-  const rejected = await mode.execute('test-code', { code: 'return await tools.write({path: "blocked.txt", content: "no"});' }, new AbortController().signal);
-  assert.equal(approvals, 1, JSON.stringify(rejected));
-  assert.match(JSON.stringify(rejected), /declined|reject|error/i);
-  await assert.rejects(readFile(join(directory, 'blocked.txt')), { code: 'ENOENT' });
-  record.permission = 'full';
-  await mode.execute('test-full', { code: 'return await tools.write({path: "allowed.txt", content: "yes"});' }, new AbortController().signal);
+  t.after(async () => { await record.session.dispose(); await rm(directory, { recursive: true, force: true }); });
+  assert.ok(record.registry.snapshot().tools().some(({ tool }) => tool.name === 'write'));
+  let calls = 0;
+  record.streamFunction = (model, input) => {
+    const nativeTools = input.messages.filter(m => m.role === 'system').flatMap(m => m.toolsAdded ?? []);
+    assert.deepEqual([...new Set(nativeTools.map(t => t.name))], ['codemode']);
+    return response(model, ++calls === 1 ? [{ type: 'toolCall', id: 'code-write', name: 'codemode', arguments: { code: 'store("fixture", "remembered"); return await tools.write({path: "allowed.txt", content: "yes"});' } }] : [{ type: 'text', text: 'Finished' }]);
+  };
+  assert.equal((await engine.prompt(record, 'Write', () => {})).stopReason, 'end_turn');
   assert.equal(await readFile(join(directory, 'allowed.txt'), 'utf8'), 'yes');
-  assert.equal(approvals, 1);
-  await engine.apply({ config: { providers: ['openai'], codeMode: 'off' } });
-  assert.ok(!record.session.getActiveToolNames().includes('codemode'));
-  await assert.rejects(async () => mode.execute('test-off', { code: 'return 1;' }, new AbortController().signal), /disabled/);
-  await engine.apply({ config: { providers: ['openai'], codeMode: 'on' } });
-  assert.ok(record.session.getActiveToolNames().includes('codemode'));
+  const context = (await import('@earendil-works/chord/context')).BACKGROUND_CONTEXT;
+  const records = (await record.storage.scanTasks({ conversationId: record.conversation.id, kind: 'pi.tool' }, 200, undefined, context)).items;
+  assert.equal(records.length, 2);
+  assert.ok(records.some(task => task.owner));
+  assert.ok((await record.conversation.context(context)).entries.some(entry => entry.kind === 'woven.codemode-store'));
+  await engine.apply({ config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', codeMode: 'off' } });
+  await record.configurationQueue;
+  assert.ok((await record.conversation.agent(context)).tools.every(tool => tool.name !== 'codemode'));
 });

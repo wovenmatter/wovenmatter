@@ -100,7 +100,7 @@ enum ProviderLimitCollector {
           if sharedCredentials != nil, provider == .claude {
             return UsageLimitAccount(provider: .claude, accountScopeID: choice.map { "wovenmatter.shared." + $0.id }, accountLabel: claudeStatus?.account ?? choice?.label ?? "Claude subscription",
               status: claudeStatus?.connected == true ? .signedIn : (claudeStatus?.state == "sign_in_required" ? .needsCredential : .unavailable),
-              source: "Built-in Claude runtime", detail: claudeStatus?.connected == true
+              source: "Pi Durable · Claude SDK", detail: claudeStatus?.connected == true
                 ? "Claude manages this sign-in. Check subscription limits and extra usage in your Claude account. API keys are billed separately."
                 : "Manage Claude subscription sign-in and API keys in Settings → Connections.", observedAt: now,
               dashboardURL: ProviderDashboardURL.claude)

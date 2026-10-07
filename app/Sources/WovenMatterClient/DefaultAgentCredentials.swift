@@ -63,6 +63,15 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
     public let name: String
     public let state: String
     public let detail: String
+    public var displayName: String {
+        if id == AgentRuntimeKind.defaultAgent.rawValue { return AgentRuntimeKind.defaultAgent.displayName }
+        // Normalize provider labels returned by older workspace services.
+        let legacyPrefix = "Built-in · "
+        if name.hasPrefix(legacyPrefix) {
+            return AgentRuntimeKind.defaultAgent.displayName + " · " + name.dropFirst(legacyPrefix.count)
+        }
+        return name
+    }
     public var label: String {
         switch state {
         case "verified": "Signed in"

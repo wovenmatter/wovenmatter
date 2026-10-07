@@ -27,6 +27,7 @@ extension ApplicationModel {
                 let defaults = calendarTaskDefaults(runtime: config.runtimeKind, workspaceID: config.workspaceID).configuration
                 config.model = defaults.model; config.thinking = defaults.thinking
                 config.permission = defaults.permission; config.tools = defaults.tools
+                config.usesProductPermissionDefault = defaults.usesProductPermissionDefault
                 config.nativeWorkingDirectory = defaults.nativeWorkingDirectory; config.selectionWorkspace = defaults.selectionWorkspace
                 config.nativeWorkspaceID = nil
             }
@@ -103,6 +104,7 @@ extension ApplicationModel {
         tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(prompt: "", configuration: .init(runtimeKind: runtime, workspaceID: workspaceID, title: title,
             model: selections.model, thinking: selections.thinking, permission: runtime == .pi ? nil : selections.permission,
+            usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
             selectionWorkspace: scope, nativeWorkingDirectory: directory, tools: tools))
     }
 
@@ -196,7 +198,8 @@ extension ApplicationModel {
         let selections = SessionSelections(model: config.model, thinking: config.thinking,
             permission: config.runtimeKind == .pi ? nil : config.permission, tools: config.tools.enabled.map(\.rawValue).sorted())
         sessionSelectionPreferences.stageCalendarSelections(id: run.sessionID, harness: config.runtimeKind.rawValue,
-            workspace: scope, selections: selections)
+            workspace: scope, selections: selections,
+            usesProductPermissionDefault: config.usesProductPermissionDefault ?? false)
         let existing = try await store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID })
         try dispatchFence.check()
         if existing == nil {
@@ -394,7 +397,8 @@ extension ApplicationModel {
                 try await store.database.importRemoteCalendarTranscript(receiptID: entry.id, run: entry.run,
                     workspaceID: configuration.id, workspaceName: configuration.name, ownerDeviceID: owner,
                     nativeSessionID: entry.nativeSessionID, updates: entry.updates,
-                    error: entry.error, completedAt: entry.completedAt)
+                    error: entry.error, completedAt: entry.completedAt,
+                    updateOffset: entry.updateOffset, complete: entry.complete)
                 try requireCurrentRemoteCalendarConfiguration(configuration)
             }
             remoteCalendarResultCursors[configuration.id] = page.cursor

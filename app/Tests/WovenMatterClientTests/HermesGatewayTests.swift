@@ -300,7 +300,7 @@ struct HermesGatewayTests {
     }
 }
 
-private actor HermesTransportFixture: HermesGatewayTransport {
+actor HermesTransportFixture: HermesGatewayTransport {
     var epoch: String? = "first"
     var isConnected = false
     var calls: [(String, HermesValue)] = []
@@ -314,6 +314,16 @@ private actor HermesTransportFixture: HermesGatewayTransport {
     private var sequence = 0
     private var replay: HermesValue?
 
+    private let archiveGate: NativeArchiveGate?
+    init(archiveGate: NativeArchiveGate? = nil) { self.archiveGate = archiveGate }
+    func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder,
+                        afterMessageID: Int64?, runID: String?) async throws -> Int64? {
+        // Initial reconciliation establishes the high-water mark before submit.
+        // Block only the final archive that this fixture exercises.
+        guard let archiveGate, calls.contains(where: { $0.0 == "prompt.submit" }) else { return 0 }
+        try await archiveGate.pause()
+        return 0
+    }
     func setHandlers(event: HermesGatewayRPC.EventHandler?, disconnected: (@Sendable () async -> Void)?, request: HermesGatewayRPC.EventHandler?) {
         onEvent = event; onRequest = request; onDisconnect = disconnected
     }

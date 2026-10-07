@@ -77,6 +77,41 @@ public struct AgentRunPlanEntry: Codable, Equatable, Identifiable, Sendable {
   }
 }
 
+/// A display projection of a native child conversation. Its complete native
+/// records remain in the parent run's archive.
+public struct AgentRunSubagent: Codable, Equatable, Identifiable, Sendable {
+  public let id: String
+  public let name: String?
+  public let task: String?
+  public let modelID: String?
+  public let provider: String?
+  public let connectionID: String?
+  public let connectionLabel: String?
+  public let accessKind: String?
+  public let thinking: String?
+  public let state: String?
+  public let result: String?
+  public let detail: String?
+  public let activity: [AgentRunSubagentActivity]?
+  public let history: [AgentRunSubagentActivity]?
+  public let sourceID: String?
+  public let nativeSessionID: String?
+  public let nativeConversationID: String?
+
+  public var isActive: Bool {
+    !["idle", "completed", "done", "succeeded", "failed", "error", "cancelled", "canceled", "stopped", "aborted"]
+      .contains(state?.lowercased() ?? "")
+  }
+}
+
+public struct AgentRunSubagentActivity: Codable, Equatable, Identifiable, Sendable {
+  public let id: String
+  public let kind: String?
+  public let title: String?
+  public let content: String?
+  public let status: String?
+}
+
 public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public enum Kind: String, Codable, Sendable {
     case assistant
@@ -110,6 +145,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public let rawInputJSON: String?
   public let rawOutputJSON: String?
   public let rawPayloadJSON: String?
+  public let subagents: [AgentRunSubagent]?
 
   public init(
     id: String,
@@ -129,7 +165,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     planEntries: [AgentRunPlanEntry] = [],
     rawInputJSON: String? = nil,
     rawOutputJSON: String? = nil,
-    rawPayloadJSON: String? = nil
+    rawPayloadJSON: String? = nil,
+    subagents: [AgentRunSubagent]? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -149,6 +186,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.rawInputJSON = rawInputJSON
     self.rawOutputJSON = rawOutputJSON
     self.rawPayloadJSON = rawPayloadJSON
+    self.subagents = subagents
   }
 
   public func scoped(to runID: String) -> Self {
@@ -156,7 +194,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       status: status, toolName: toolName, content: content, contentIsDelta: contentIsDelta,
       assistantMessageID: assistantMessageID, assistantCheckpoint: assistantCheckpoint, position: position, locations: locations, changes: changes,
       planEntries: planEntries, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON,
-      rawPayloadJSON: rawPayloadJSON)
+      rawPayloadJSON: rawPayloadJSON, subagents: subagents)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -186,8 +224,20 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       planEntries: update.phase == "clear" ? [] : update.planEntries.isEmpty ? planEntries : update.planEntries,
       rawInputJSON: update.rawInputJSON ?? rawInputJSON,
       rawOutputJSON: update.rawOutputJSON ?? rawOutputJSON,
-      rawPayloadJSON: update.rawPayloadJSON ?? rawPayloadJSON
+      rawPayloadJSON: update.rawPayloadJSON ?? rawPayloadJSON,
+      subagents: update.subagents ?? subagents
     )
+  }
+
+  public static func builtInSubagentSnapshot(rawPayloadJSON: String) -> Self? {
+    struct Snapshot: Decodable { let subagents: [AgentRunSubagent] }
+    guard let snapshot = try? JSONDecoder().decode(Snapshot.self, from: Data(rawPayloadJSON.utf8)) else {
+      return nil
+    }
+    let active = snapshot.subagents.filter(\.isActive).count
+    return Self(id: "built-in-subagents", kind: .activity, phase: "update",
+      title: "Subagents", detail: "\(active) active · \(snapshot.subagents.count) total",
+      status: active > 0 ? "running" : "completed", subagents: snapshot.subagents)
   }
 }
 
