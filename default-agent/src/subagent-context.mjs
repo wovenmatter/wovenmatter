@@ -17,21 +17,16 @@ export function createSubagentContext(parent, engine, {
     throw new DefaultAgentError('Invalid native subagent scope.');
   }
   const child = {
-    harness: parent.harness, storage: parent.storage, registry: parent.registry,
+    harness: parent.harness, storage: parent.storage,
     manifest: parent.manifest, cwd: parent.cwd, conversation,
     nativeRoot: join(parent.nativeRoot, 'native-children', String(conversation.id)),
     parentSessionID: parent.manifest.sessionID,
     providerSessionID: providerSessionID ?? sessionID,
     cli: cli ?? parent.cli.fork(), busy: true,
     selected: `${model.provider}/${model.id}`, accountID,
-    permission: parent.permission,
-    ordinaryTools: [...parent.ordinaryTools],
     codeModeState: { value: parent.codeModeState.value },
-    options: { selected: `${model.provider}/${model.id}`, thinking: thinkingLevel, permission: parent.permission },
     session: { sessionId: sessionID, model, thinkingLevel, messages: [] },
     nativePrepared: undefined, nativeContextFailure: undefined,
-    nativeVisible: false, httpAccessFailure: undefined, lastError: undefined,
-    pendingStoreWrites: [],
     reportUsage: reportUsage ?? parent.reportUsage,
   };
   Object.defineProperties(child, {

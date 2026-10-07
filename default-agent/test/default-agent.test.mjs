@@ -65,7 +65,7 @@ test('real SDK loads the complete selected tool set and resumes an empty draft w
   const engine = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const record = await engine.create();
   const selected = (await record.conversation.agent(BACKGROUND_CONTEXT)).tools.map(tool => tool.name);
-  assert.deepEqual(new Set(selected), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', 'codemode']));
+  assert.deepEqual(new Set(selected), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', 'subagent', 'codemode']));
   assert.deepEqual(new Set(record.registry.snapshot().tools().map(({ tool }) => tool.name)), new Set(selected));
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   const second = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
@@ -82,6 +82,7 @@ function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter']
   let listener;
   const record = {
     selected: 'openai-codex/primary', busy: false,
+    manifest: { storeID: 'fixture' }, subagents: { async beginGroup() {} },
     contextLeaf: () => 'before', rewind() {}, saveOptions() {},
     subscribe(fn) { listener = fn; return () => {}; },
     session: {

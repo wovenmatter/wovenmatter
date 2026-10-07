@@ -125,8 +125,7 @@ export class DefaultAgentEngine {
       options: this.modelOptions().map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
-      { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full Access', description: 'Native Durable workspace tools run without approval prompts.' }] },
-      { id: 'subagent_concurrency', name: 'Active Subagents', type: 'select', currentValue: String(record.subagentConcurrency), options: Array.from({ length: 23 }, (_, index) => ({ value: String(index + 2), name: String(index + 2) })) }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
+      { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full Access', description: 'Native Durable workspace tools run without approval prompts.' }] }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
   }
   persistOptions(record) {
     record.saveOptions({ selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
@@ -157,7 +156,6 @@ export class DefaultAgentEngine {
     const record = await openDurableSession(this, id, requested);
     try {
       const options = record.options;
-      record.subagentConcurrency = options.subagentConcurrency ?? this.config.subagentConcurrency;
       const native = await record.harness.inspect(record.nativeContext);
       if (native.tasks.length || native.submissions.length) {
         // Reinstall the host around committed native work without replacing the
@@ -203,10 +201,6 @@ export class DefaultAgentEngine {
     if (record.busy) throw new Error('Wait for the current response before changing models.');
     const native = await record.harness.inspect(record.nativeContext);
     if (record.busy || native.tasks.length || native.submissions.length) throw new DefaultAgentError('Wait for the native run and its attached subagents before changing session options.');
-    if (option === 'subagent_concurrency') {
-      if (!/^(?:[2-9]|1[0-9]|2[0-4])$/.test(reference)) throw new DefaultAgentError('Choose a subagent limit from 2 through 24.');
-      record.subagentConcurrency = Number(reference); this.persistOptions(record); await record.configurationQueue; return this.configuration(record);
-    }
     if (option === 'thinking') {
       if (!this.thinkingLevels(record).includes(reference)) throw new DefaultAgentError('This thinking level is unavailable for the selected model.');
       await record.session.setThinkingLevel(reference);

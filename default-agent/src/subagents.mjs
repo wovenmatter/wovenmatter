@@ -334,8 +334,10 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
           Object.assign(await tx.doc(ChildContext, conversation.id), saved);
           await configure(tx, conversation.id, { model: { provider: chosen.provider, modelId: chosen.modelId }, thinkingLevel: chosen.thinking,
             tools: childTools, cwd: record.cwd, instructions: `You are attached subagent ${JSON.stringify(args.name)}. Work only on your assigned focused task and the selected context. Your model, thinking and exact connection are pinned. Do not delegate to other agents. Return your useful result to the parent.` });
-          child = { name: args.name, conversationId: conversation.id, anchorID, reporterIDs: [], stopEpoch: 0, stopping: false };
-          state.children[args.name] = child;
+          state.children[args.name] = { name: args.name, conversationId: conversation.id, anchorID, reporterIDs: [], stopEpoch: 0, stopping: false };
+          // Durable copies assigned values. Keep mutating its tracked document
+          // so the first reporter remains attached through parent completion.
+          child = state.children[args.name];
           metadata.set(conversation.id, saved);
           // Capture the parent's current CLI authority before a reporter can be
           // scheduled. This callback must not read/commit the Harness or persist

@@ -671,6 +671,7 @@ public actor OpenClawGatewayClient {
 
   private func resumePending(id: String, with result: Result<GatewayJSONValue, any Error>) {
     guard let continuation = pending.removeValue(forKey: id) else { return }
+    observationMethods.removeValue(forKey: id)
     requestTimeouts.removeValue(forKey: id)?.cancel()
     continuation.resume(with: result)
   }

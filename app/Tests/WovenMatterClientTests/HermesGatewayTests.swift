@@ -318,7 +318,9 @@ actor HermesTransportFixture: HermesGatewayTransport {
     init(archiveGate: NativeArchiveGate? = nil) { self.archiveGate = archiveGate }
     func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder,
                         afterMessageID: Int64?, runID: String?) async throws -> Int64? {
-        guard let archiveGate else { return nil }
+        // Initial reconciliation establishes the high-water mark before submit.
+        // Block only the final archive that this fixture exercises.
+        guard let archiveGate, calls.contains(where: { $0.0 == "prompt.submit" }) else { return 0 }
         try await archiveGate.pause()
         return 0
     }

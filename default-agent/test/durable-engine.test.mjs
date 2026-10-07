@@ -9,6 +9,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { defineExtension } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { DefaultAgentEngine } from '../src/engine.mjs';
+import { Subagents } from '../src/subagents.mjs';
 
 function stream(model, content, overrides = {}) {
   const result = { role: 'assistant', content, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, ...overrides };
@@ -36,6 +37,48 @@ test('native owner lock excludes a second runtime and released identities can re
   const reopened = await other.create(record.session.sessionId);
   assert.equal(reopened.manifest.storeID, record.manifest.storeID);
   assert.equal(reopened.conversation.id, record.conversation.id);
+});
+
+test('attached completion includes child reports and children spawned during parent follow-up', { timeout: 15000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-attached-engine-'));
+  const engine = await new DefaultAgentEngine({ cwd: root, directory: root,
+    config: { providers: ['openai'], defaultModel: 'openai/gpt-4.1' },
+    credentials: { openai: { type: 'api_key', key: 'fixture-only' } },
+  }).initialize();
+  t.after(async () => {
+    for (const record of [...engine.sessions.values()]) await record.session.dispose();
+    await rm(root, { recursive: true, force: true });
+  });
+  const record = await engine.create();
+  let parentCalls = 0, childCalls = 0;
+  engine.runtime.streamSimple = (model, _input, options) => {
+    if (options.wovenNativeContext.sessionID !== record.session.sessionId) {
+      childCalls++;
+      return stream(model, [{ type: 'text', text: `Child result ${childCalls}` }]);
+    }
+    parentCalls++;
+    const name = parentCalls === 1 ? 'first' : parentCalls === 3 ? 'followup' : undefined;
+    return stream(model, name
+      ? [{ type: 'toolCall', id: name, name: 'subagent', arguments: { action: 'spawn', name, task: 'Return a short result.' } }]
+      : [{ type: 'text', text: `Parent response ${parentCalls}` }]);
+  };
+  const result = await engine.handle('session/prompt', {
+    sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Complete the attached work.' }],
+    _meta: { wovenRunID: randomUUID(), wovenInputID: randomUUID() },
+  });
+  assert.equal(result.stopReason, 'end_turn');
+  assert.equal(childCalls, 2);
+  assert.equal(parentCalls, 5);
+  assert.equal(record.session.messages.at(-1).content[0].text, 'Parent response 5');
+  const group = await record.harness.snapshot(Subagents, record.conversation.id, BACKGROUND_CONTEXT);
+  for (const child of Object.values(group.children)) {
+    assert.equal(child.reporterIDs.length, 1);
+    const conversation = await record.harness.conversation(child.conversationId, BACKGROUND_CONTEXT);
+    assert.ok(!(await conversation.agent(BACKGROUND_CONTEXT)).tools.some(tool => tool.name === 'subagent'));
+  }
+  const inspection = await record.harness.inspect(BACKGROUND_CONTEXT);
+  assert.equal(inspection.tasks.length, 0);
+  assert.equal(inspection.submissions.length, 0);
 });
 
 test('stable logical input receipts survive account reorder and conflicting payloads are rejected', async t => {
@@ -95,7 +138,7 @@ test('native messages and exposed thinking reach display and the live archive wi
   const source = page.recordBatch.sourceID;
   const captured = page.recordBatch.records.find(r => r.projectionJSON?.includes('Visible reply'));
   assert.equal(JSON.parse(captured.payload).type, 'entry');
-  assert.equal(JSON.parse(captured.projectionJSON)[0].content[0].thinking, 'Exposed summary');
+  assert.equal(JSON.parse(captured.projectionJSON).content[0].content[0].thinking, 'Exposed summary');
   await record.session.dispose();
   const second = await open(), reopened = await second.create(record.session.sessionId);
   const again = await reopened.history(0, 200);
