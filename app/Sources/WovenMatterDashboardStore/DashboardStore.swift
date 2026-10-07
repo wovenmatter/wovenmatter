@@ -45,6 +45,9 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
   public let activitiesAreDelta: Bool
   public let removedActivityIDs: [String]
   public let activityReadMetrics: ConversationActivityReadMetrics
+  public let retainedMessages: [WorkspaceMessageRecord]
+  /// A complete, lightweight existence check for the previously loaded window.
+  public let retainedMessageIDs: [String]?
 
   public var oldestMessageCursor: WorkspaceConversationHistoryCursor? {
     messages.first.map {
@@ -63,7 +66,9 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
     activityRevision: Int64? = nil,
     activitiesAreDelta: Bool = false,
     removedActivityIDs: [String] = [],
-    activityReadMetrics: ConversationActivityReadMetrics = .init()
+    activityReadMetrics: ConversationActivityReadMetrics = .init(),
+    retainedMessages: [WorkspaceMessageRecord] = [],
+    retainedMessageIDs: [String]? = nil
   ) {
     self.conversationID = conversationID
     self.messages = messages
@@ -76,6 +81,8 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
     self.activitiesAreDelta = activitiesAreDelta
     self.removedActivityIDs = removedActivityIDs
     self.activityReadMetrics = activityReadMetrics
+    self.retainedMessages = retainedMessages
+    self.retainedMessageIDs = retainedMessageIDs
   }
 }
 
@@ -783,10 +790,11 @@ public actor DashboardStore {
     limit: Int,
     compactActivities: Bool = false,
     activityCursor: Int64? = nil,
-    knownActivityRunIDs: [String] = []
+    knownActivityRunIDs: [String] = [],
+    knownMessageIDs: [String] = []
   ) async throws -> WorkspaceConversationHistoryPage {
     try await database.conversationHistoryPage(id: id, before: cursor, limit: limit,
-      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs)
+      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs, knownMessageIDs: knownMessageIDs)
   }
 
   @discardableResult

@@ -660,9 +660,12 @@ extension WorkspaceDatabaseConnection {
               let entries = object["entries"]?.arrayValue?.compactMap { entry -> AgentRunPlanEntry? in
                 guard let fields = entry.objectValue, let content = fields["content"]?.stringValue,
                       let status = fields["status"]?.stringValue else { return nil }
-                return .init(content: content, priority: fields["priority"]?.stringValue, status: status)
+                return .init(content: content, priority: fields["priority"]?.stringValue, status: status,
+                  nativeID: fields["id"]?.stringValue)
               } ?? []
-              activity = .init(id: "plan", kind: .plan, title: "Plan", planEntries: entries, rawPayloadJSON: raw)
+              activity = .init(id: "plan", kind: .plan, phase: entries.isEmpty ? "clear" : "update",
+                title: "Plan", planEntries: entries, rawPayloadJSON: raw,
+                planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace")
             }
           }
           if let activity {

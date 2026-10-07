@@ -1181,7 +1181,9 @@ final class ApplicationModel {
                 limit: Self.initialConversationMessageLimit,
                 compactActivities: true,
                 activityCursor: state.activityRevision,
-                knownActivityRunIDs: state.presentation?.window.runs.map(\.id) ?? []
+                knownActivityRunIDs: state.presentation?.window.runs.map(\.id) ?? [],
+                knownMessageIDs: state.presentation?.window.loadedOlderMessages == true
+                    ? state.presentation?.window.messages.map(\.id) ?? [] : []
             )
             guard !Task.isCancelled, page.conversationID == id else { return }
             let previous = state.presentation

@@ -29,7 +29,23 @@ extension WorkspaceDatabaseConnection {
           ON desktop_activity_index(conversation_id,revision);
         CREATE INDEX IF NOT EXISTS activity_index_run ON desktop_activity_index(run_id);
         CREATE TABLE IF NOT EXISTS desktop_activity_index_schema(version INTEGER PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS desktop_message_revisions (
+          id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
         """)
+      // Reconciliation may replace a completed message or remove an earlier
+      // steering reply. Track mutations without copying its potentially large text.
+      for operation in ["INSERT", "UPDATE", "DELETE"] {
+        let row = operation == "DELETE" ? "old" : "new"
+        try executeUnlocked("""
+          CREATE TRIGGER IF NOT EXISTS conversation_message_\(operation.lowercased())
+          AFTER \(operation) ON dashboard_messages BEGIN
+            UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1;
+            INSERT INTO desktop_message_revisions(id,revision)
+              VALUES(\(row).id,(SELECT revision FROM desktop_activity_revision WHERE singleton=1))
+              ON CONFLICT(id) DO UPDATE SET revision=excluded.revision;
+          END;
+          """)
+      }
       let backfillQuery = try prepareUnlocked("SELECT 1 FROM desktop_activity_index_schema WHERE version=1")
       let needsBackfill = sqlite3_step(backfillQuery) != SQLITE_ROW
       sqlite3_finalize(backfillQuery)
@@ -43,7 +59,7 @@ extension WorkspaceDatabaseConnection {
           let condition = operation == "UPDATE"
             ? (kind == "event"
               ? "WHEN old.content IS NOT new.content OR old.event_type IS NOT new.event_type OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id"
-              : "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.content IS NOT new.content OR old.is_visible IS NOT new.is_visible OR old.event_type IS NOT new.event_type OR old.event_name IS NOT new.event_name OR old.event_phase IS NOT new.event_phase OR old.tool_name IS NOT new.tool_name")
+              : "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.content IS NOT new.content OR old.is_visible IS NOT new.is_visible OR old.event_type IS NOT new.event_type OR old.event_name IS NOT new.event_name OR old.event_phase IS NOT new.event_phase OR old.tool_name IS NOT new.tool_name OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id")
             : ""
           try executeUnlocked("""
             CREATE TRIGGER IF NOT EXISTS activity_index_\(kind)_\(operation.lowercased()) AFTER \(operation) ON \(table) \(condition) BEGIN
@@ -93,6 +109,7 @@ extension WorkspaceDatabaseConnection {
     defer { sqlite3_finalize(clock) }
     guard sqlite3_step(clock) == SQLITE_ROW else { throw stepError() }
     let revision = sqlite3_column_int64(clock, 0)
+    let after = after.flatMap { $0 <= revision ? $0 : nil }
     let allowed = Array(Set(runIDs + knownRunIDs))
     guard !allowed.isEmpty else { return ([], [], revision, .init()) }
     let allowedJSON = String(decoding: try JSONEncoder().encode(allowed), as: UTF8.self)
@@ -163,7 +180,7 @@ extension WorkspaceDatabaseConnection {
       .init(summaryRows: summaries.count, fullRowsDecoded: pendingEvents.count + pendingTraces.count))
   }
 
-    public func conversationActivityDetails(conversationID: String, runID: String,
+  public func conversationActivityDetails(conversationID: String, runID: String,
     activityID: String) throws -> AgentRunActivity? {
     try withLock {
       guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else { return nil }
@@ -171,6 +188,7 @@ extension WorkspaceDatabaseConnection {
         SELECT 1 FROM dashboard_runs r JOIN dashboard_conversations c ON c.id=r.conversation_id
         WHERE r.id=? AND c.id=? AND (c.user_id=? OR c.desktop_owned=1)
           AND c.deleted_at IS NULL AND c.is_archived=0
+          AND c.governing_plane='wovenmatter_macos'
         """)
       defer { sqlite3_finalize(access) }
       for (i, value) in [runID, conversationID, operatorID].enumerated() { try bind(value, at: Int32(i + 1), to: access) }

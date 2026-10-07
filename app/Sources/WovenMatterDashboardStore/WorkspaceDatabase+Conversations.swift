@@ -196,7 +196,8 @@ extension WorkspaceDatabaseConnection {
     limit: Int,
     compactActivities: Bool = false,
     activityCursor: Int64? = nil,
-    knownActivityRunIDs: [String] = []
+    knownActivityRunIDs: [String] = [],
+    knownMessageIDs: [String] = []
   ) throws -> WorkspaceConversationHistoryPage {
     try withLock {
       guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
@@ -221,6 +222,50 @@ extension WorkspaceDatabaseConnection {
       } else {
         cursorPredicate = ""
       }
+      let knownJSON = String(decoding: try JSONEncoder().encode(knownMessageIDs), as: UTF8.self)
+      var retainedIDs: [String] = [], changedIDs: [String] = []
+      if !knownMessageIDs.isEmpty {
+        let metadata = try prepareUnlocked("""
+          SELECT message.id, coalesce(revision.revision,0)
+          FROM dashboard_messages message
+          JOIN dashboard_conversations conversation ON conversation.id=message.conversation_id
+          LEFT JOIN desktop_message_revisions revision ON revision.id=message.id
+          WHERE message.conversation_id=? AND message.id IN (SELECT value FROM json_each(?))
+            AND (conversation.user_id=? OR conversation.desktop_owned=1)
+            AND conversation.deleted_at IS NULL AND conversation.is_archived=0
+            AND conversation.governing_plane='wovenmatter_macos'
+          """)
+        defer { sqlite3_finalize(metadata) }
+        for (i, value) in [id, knownJSON, operatorID].enumerated() { try bind(value, at: Int32(i+1), to: metadata) }
+        while true {
+          let code = sqlite3_step(metadata)
+          if code == SQLITE_DONE { break }
+          guard code == SQLITE_ROW else { throw stepError() }
+          let messageID = try text(metadata, column: 0)
+          retainedIDs.append(messageID)
+          if activityCursor == nil || sqlite3_column_int64(metadata,1) > activityCursor! { changedIDs.append(messageID) }
+        }
+      }
+      let changedJSON = String(decoding: try JSONEncoder().encode(changedIDs), as: UTF8.self)
+      let retainedMessages: [WorkspaceMessageRecord] = changedIDs.isEmpty ? [] : try decodeCanonicalRowsUnlocked(
+        """
+        SELECT json_object(
+          'id', message.id, 'conversation_id', message.conversation_id,
+          'client_message_id', message.client_message_id,
+          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
+          'run_id', message.run_id, 'role', message.role,
+          'governing_plane', message.governing_plane,
+          'authority_device_id', message.authority_device_id,
+          'content', message.content, 'status', message.status,
+          'created_at', message.created_at, 'updated_at', message.updated_at
+        )
+        FROM dashboard_messages AS message
+        WHERE message.id IN (SELECT value FROM json_each(?)) AND message.conversation_id=?
+        ORDER BY message.created_at,message.id
+        """, bindings: [changedJSON,id], as: WorkspaceMessageRecord.self)
       var newestFirst = try decodeCanonicalRowsUnlocked(
         """
         SELECT json_object(
@@ -255,7 +300,7 @@ extension WorkspaceDatabaseConnection {
         newestFirst.removeLast(newestFirst.count - boundedLimit)
       }
       let messages = Array(newestFirst.reversed())
-      let messageIDs = messages.map(\.id)
+      let messageIDs = Array(Set(messages.map(\.id) + retainedIDs))
       let runs: [WorkspaceRunRecord]
       let activities: [WorkspaceRunActivityRecord]
       let attachments: [WorkspaceMessageAttachmentRecord]
@@ -321,9 +366,11 @@ extension WorkspaceDatabaseConnection {
         references: references,
         hasOlderMessages: hasOlderMessages,
         activityRevision: activityRevision,
-        activitiesAreDelta: compactActivities && activityCursor != nil,
+        activitiesAreDelta: compactActivities && activityCursor != nil && activityCursor! <= (activityRevision ?? -1),
         removedActivityIDs: removedActivityIDs,
-        activityReadMetrics: activityReadMetrics
+        activityReadMetrics: activityReadMetrics,
+        retainedMessages: retainedMessages,
+        retainedMessageIDs: knownMessageIDs.isEmpty ? nil : retainedIDs
       )
     }
   }
@@ -667,9 +714,10 @@ extension WorkspaceDatabase {
     limit: Int,
     compactActivities: Bool = false,
     activityCursor: Int64? = nil,
-    knownActivityRunIDs: [String] = []
+    knownActivityRunIDs: [String] = [],
+    knownMessageIDs: [String] = []
   ) async throws -> WorkspaceConversationHistoryPage {
     try await read { try $0.conversationHistoryPage(id: id, before: cursor, limit: limit,
-      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs) }
+      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs, knownMessageIDs: knownMessageIDs) }
   }
 }

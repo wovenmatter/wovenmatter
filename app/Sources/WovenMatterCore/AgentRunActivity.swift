@@ -67,13 +67,15 @@ public struct AgentRunPlanEntry: Codable, Equatable, Identifiable, Sendable {
   public let content: String
   public let priority: String?
   public let status: String
+  public let nativeID: String?
 
-  public var id: String { content }
+  public var id: String { nativeID ?? content }
 
-  public init(content: String, priority: String? = nil, status: String) {
+  public init(content: String, priority: String? = nil, status: String, nativeID: String? = nil) {
     self.content = content
     self.priority = priority
     self.status = status
+    self.nativeID = nativeID
   }
 }
 
@@ -149,6 +151,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   /// store and are loaded only when a disclosure is opened.
   public let detailsAvailable: Bool?
   public let detailVersion: Int64?
+  /// A proposed plan is visible in history but does not represent execution progress.
+  public let planKind: String?
+  public let planOperation: String?
   public let subagents: [AgentRunSubagent]?
 
   public init(
@@ -172,7 +177,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     rawPayloadJSON: String? = nil,
     subagents: [AgentRunSubagent]? = nil,
     detailsAvailable: Bool? = nil,
-    detailVersion: Int64? = nil
+    detailVersion: Int64? = nil,
+    planKind: String? = nil,
+    planOperation: String? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -194,6 +201,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.rawPayloadJSON = rawPayloadJSON
     self.detailsAvailable = detailsAvailable
     self.detailVersion = detailVersion
+    self.planKind = planKind
+    self.planOperation = planOperation
     self.subagents = subagents
   }
 
@@ -203,7 +212,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       assistantMessageID: assistantMessageID, assistantCheckpoint: assistantCheckpoint, position: position, locations: locations, changes: changes,
       planEntries: planEntries, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON,
       rawPayloadJSON: rawPayloadJSON, subagents: subagents,
-      detailsAvailable: detailsAvailable, detailVersion: detailVersion)
+      detailsAvailable: detailsAvailable, detailVersion: detailVersion,
+      planKind: planKind, planOperation: planOperation)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -215,6 +225,19 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     } else {
       mergedContent = update.content ?? content
     }
+    let mergedPlan: [AgentRunPlanEntry]
+    if update.phase == "clear" || update.planOperation == "clear" {
+      mergedPlan = []
+    } else if update.planOperation == "merge" {
+      var entries = planEntries
+      for entry in update.planEntries {
+        if let index = entries.firstIndex(where: { $0.id == entry.id }) { entries[index] = entry }
+        else { entries.append(entry) }
+      }
+      mergedPlan = entries
+    } else if update.planOperation == "replace" || !update.planEntries.isEmpty {
+      mergedPlan = update.planEntries
+    } else { mergedPlan = planEntries }
     return Self(
       id: id,
       kind: update.kind,
@@ -230,13 +253,15 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       position: update.position ?? position,
       locations: update.locations.isEmpty ? locations : update.locations,
       changes: update.changes.isEmpty ? changes : update.changes,
-      planEntries: update.phase == "clear" ? [] : update.planEntries.isEmpty ? planEntries : update.planEntries,
+      planEntries: mergedPlan,
       rawInputJSON: update.rawInputJSON ?? rawInputJSON,
       rawOutputJSON: update.rawOutputJSON ?? rawOutputJSON,
       rawPayloadJSON: update.rawPayloadJSON ?? rawPayloadJSON,
       subagents: update.subagents ?? subagents,
       detailsAvailable: update.detailsAvailable ?? detailsAvailable,
-      detailVersion: update.detailVersion ?? detailVersion
+      detailVersion: update.detailVersion ?? detailVersion,
+      planKind: update.planKind ?? planKind,
+      planOperation: update.planOperation ?? planOperation
     )
   }
 

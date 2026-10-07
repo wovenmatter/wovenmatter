@@ -47,14 +47,12 @@ struct DashboardConversationWindow: Equatable, Sendable {
               let tailStart = page.oldestMessageCursor else {
             return DashboardConversationWindow(page: page, previousActivities: activities)
         }
-        // Completed history outside the live tail is product-defined as immutable.
-        // Preserve the already paged prefix instead of requerying it on every refresh;
-        // if sent-message editing or deletion is added, revalidate this prefix here.
-        let retainedMessages = messages.filter {
-            Self.cursor(for: $0).precedes(tailStart)
-        }
+        let validIDs = page.retainedMessageIDs.map(Set.init)
+        let retainedMessages = Self.merged(messages: messages.filter {
+            Self.cursor(for: $0).precedes(tailStart) && (validIDs?.contains($0.id) ?? true)
+        }, with: page.retainedMessages.filter { Self.cursor(for: $0).precedes(tailStart) })
         let retainedMessageIDs = Set(retainedMessages.map(\.id))
-        let retainedRuns = runs.filter {
+        let retainedRuns = page.runs.filter {
             $0.userMessageID.map(retainedMessageIDs.contains) == true
                 || $0.assistantMessageID.map(retainedMessageIDs.contains) == true
         }
@@ -65,8 +63,8 @@ struct DashboardConversationWindow: Equatable, Sendable {
             .filter { !removed.contains($0.id) }
         let retainedActivities = latestActivities.filter { retainedRunIDs.contains($0.runID) }
         let pageRunIDs = Set(page.runs.map(\.id))
-        let retainedAttachments = attachments.filter { retainedMessageIDs.contains($0.messageID) }
-        let retainedReferences = references.filter { retainedMessageIDs.contains($0.messageID) }
+        let retainedAttachments = (page.retainedMessageIDs == nil ? attachments : page.attachments).filter { retainedMessageIDs.contains($0.messageID) }
+        let retainedReferences = (page.retainedMessageIDs == nil ? references : page.references).filter { retainedMessageIDs.contains($0.messageID) }
         return DashboardConversationWindow(
             conversationID: conversationID,
             messages: Self.merged(messages: retainedMessages, with: page.messages),

@@ -18,6 +18,7 @@ extension AgentRunActivity {
       subagents: nil,
       detailsAvailable: detailsAvailable == true || rawInputJSON != nil || rawOutputJSON != nil
         || rawPayloadJSON != nil || subagents?.isEmpty == false || preview != content,
-      detailVersion: version ?? detailVersion)
+      detailVersion: version ?? detailVersion,
+      planKind: planKind, planOperation: planOperation)
   }
 }

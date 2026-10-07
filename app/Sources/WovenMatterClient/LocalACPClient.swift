@@ -2636,7 +2636,8 @@ public actor LocalACPClient {
                 return AgentRunPlanEntry(
                     content: content,
                     priority: value["priority"]?.stringValue,
-                    status: status
+                    status: status,
+                    nativeID: value["id"]?.stringValue
                 )
             } ?? []
             return .activity(
@@ -2647,7 +2648,8 @@ public actor LocalACPClient {
                     title: "Plan",
                     status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
                     planEntries: entries,
-                    rawPayloadJSON: Self.jsonString(update)
+                    rawPayloadJSON: Self.jsonString(update),
+                    planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace"
                 ),
                 appendsContent: false
             )
@@ -2659,20 +2661,21 @@ public actor LocalACPClient {
     private static func cursorTodoEvent(from envelope: ACPEnvelope) -> LocalACPEvent? {
         guard let params = envelope.params,
               let toolCallID = params["toolCallId"]?.stringValue,
-              params["merge"]?.boolValue != nil,
+              let merge = params["merge"]?.boolValue,
               let rawTodos = params["todos"]?.arrayValue else { return nil }
         let entries = rawTodos.compactMap(cursorPlanEntry)
         return .activity(
             AgentRunActivity(
-                id: toolCallID,
+                id: "cursor-todos",
                 kind: .plan,
-                phase: "update",
+                phase: !merge && entries.isEmpty ? "clear" : "update",
                 title: "Plan",
                 status: entries.allSatisfy { $0.status == "completed" }
                     ? "completed"
                     : "running",
                 planEntries: entries,
-                rawPayloadJSON: jsonString(params)
+                rawPayloadJSON: jsonString(params),
+                planKind: "checklist", planOperation: merge ? "merge" : "replace"
             ),
             appendsContent: false
         )
@@ -2693,7 +2696,8 @@ public actor LocalACPClient {
                 status: "completed",
                 content: markdown.nilIfEmpty,
                 planEntries: entries,
-                rawPayloadJSON: jsonString(params)
+                rawPayloadJSON: jsonString(params),
+                planKind: "proposal", planOperation: "replace"
             ),
             appendsContent: false
         )
@@ -2715,7 +2719,7 @@ public actor LocalACPClient {
         case "cancelled", "canceled": "cancelled"
         default: "pending"
         }
-        return AgentRunPlanEntry(content: step, status: status)
+        return AgentRunPlanEntry(content: step, status: status, nativeID: value["id"]?.stringValue)
     }
 
     private static func toolActivity(
