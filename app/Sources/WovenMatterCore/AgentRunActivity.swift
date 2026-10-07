@@ -145,6 +145,10 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public let rawInputJSON: String?
   public let rawOutputJSON: String?
   public let rawPayloadJSON: String?
+  /// Presentation-only metadata. Complete values remain in the current-item
+  /// store and are loaded only when a disclosure is opened.
+  public let detailsAvailable: Bool?
+  public let detailVersion: Int64?
   public let subagents: [AgentRunSubagent]?
 
   public init(
@@ -166,7 +170,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     rawInputJSON: String? = nil,
     rawOutputJSON: String? = nil,
     rawPayloadJSON: String? = nil,
-    subagents: [AgentRunSubagent]? = nil
+    subagents: [AgentRunSubagent]? = nil,
+    detailsAvailable: Bool? = nil,
+    detailVersion: Int64? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -186,6 +192,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.rawInputJSON = rawInputJSON
     self.rawOutputJSON = rawOutputJSON
     self.rawPayloadJSON = rawPayloadJSON
+    self.detailsAvailable = detailsAvailable
+    self.detailVersion = detailVersion
     self.subagents = subagents
   }
 
@@ -194,7 +202,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       status: status, toolName: toolName, content: content, contentIsDelta: contentIsDelta,
       assistantMessageID: assistantMessageID, assistantCheckpoint: assistantCheckpoint, position: position, locations: locations, changes: changes,
       planEntries: planEntries, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON,
-      rawPayloadJSON: rawPayloadJSON, subagents: subagents)
+      rawPayloadJSON: rawPayloadJSON, subagents: subagents,
+      detailsAvailable: detailsAvailable, detailVersion: detailVersion)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -225,7 +234,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       rawInputJSON: update.rawInputJSON ?? rawInputJSON,
       rawOutputJSON: update.rawOutputJSON ?? rawOutputJSON,
       rawPayloadJSON: update.rawPayloadJSON ?? rawPayloadJSON,
-      subagents: update.subagents ?? subagents
+      subagents: update.subagents ?? subagents,
+      detailsAvailable: update.detailsAvailable ?? detailsAvailable,
+      detailVersion: update.detailVersion ?? detailVersion
     )
   }
 

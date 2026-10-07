@@ -41,6 +41,10 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
   public let attachments: [WorkspaceMessageAttachmentRecord]
   public let references: [WorkspaceMessageReferenceRecord]
   public let hasOlderMessages: Bool
+  public let activityRevision: Int64?
+  public let activitiesAreDelta: Bool
+  public let removedActivityIDs: [String]
+  public let activityReadMetrics: ConversationActivityReadMetrics
 
   public var oldestMessageCursor: WorkspaceConversationHistoryCursor? {
     messages.first.map {
@@ -55,7 +59,11 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
     activities: [WorkspaceRunActivityRecord] = [],
     attachments: [WorkspaceMessageAttachmentRecord] = [],
     references: [WorkspaceMessageReferenceRecord] = [],
-    hasOlderMessages: Bool
+    hasOlderMessages: Bool,
+    activityRevision: Int64? = nil,
+    activitiesAreDelta: Bool = false,
+    removedActivityIDs: [String] = [],
+    activityReadMetrics: ConversationActivityReadMetrics = .init()
   ) {
     self.conversationID = conversationID
     self.messages = messages
@@ -64,6 +72,10 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
     self.attachments = attachments
     self.references = references
     self.hasOlderMessages = hasOlderMessages
+    self.activityRevision = activityRevision
+    self.activitiesAreDelta = activitiesAreDelta
+    self.removedActivityIDs = removedActivityIDs
+    self.activityReadMetrics = activityReadMetrics
   }
 }
 
@@ -768,9 +780,13 @@ public actor DashboardStore {
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
+    limit: Int,
+    compactActivities: Bool = false,
+    activityCursor: Int64? = nil,
+    knownActivityRunIDs: [String] = []
   ) async throws -> WorkspaceConversationHistoryPage {
-    try await database.conversationHistoryPage(id: id, before: cursor, limit: limit)
+    try await database.conversationHistoryPage(id: id, before: cursor, limit: limit,
+      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs)
   }
 
   @discardableResult

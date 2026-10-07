@@ -27,10 +27,14 @@ struct DashboardConversationWindow: Equatable, Sendable {
     let hasOlderMessages: Bool
     let loadedOlderMessages: Bool
 
-    init(page: WorkspaceConversationHistoryPage) {
+    init(page: WorkspaceConversationHistoryPage, previousActivities: [WorkspaceRunActivityRecord] = []) {
         conversationID = page.conversationID
         runs = page.runs
-        activities = page.activities
+        let runIDs = Set(page.runs.map(\.id))
+        let removed = Set(page.removedActivityIDs)
+        activities = (page.activitiesAreDelta
+            ? Self.merged(activities: previousActivities, with: page.activities) : page.activities)
+            .filter { runIDs.contains($0.runID) && !removed.contains($0.id) }
         attachments = page.attachments
         references = page.references
         messages = Self.ordered(messages: page.messages, runs: page.runs)
@@ -41,7 +45,7 @@ struct DashboardConversationWindow: Equatable, Sendable {
     func refreshing(with page: WorkspaceConversationHistoryPage) -> DashboardConversationWindow {
         guard page.conversationID == conversationID, loadedOlderMessages,
               let tailStart = page.oldestMessageCursor else {
-            return DashboardConversationWindow(page: page)
+            return DashboardConversationWindow(page: page, previousActivities: activities)
         }
         // Completed history outside the live tail is product-defined as immutable.
         // Preserve the already paged prefix instead of requerying it on every refresh;
@@ -55,14 +59,20 @@ struct DashboardConversationWindow: Equatable, Sendable {
                 || $0.assistantMessageID.map(retainedMessageIDs.contains) == true
         }
         let retainedRunIDs = Set(retainedRuns.map(\.id))
-        let retainedActivities = activities.filter { retainedRunIDs.contains($0.runID) }
+        let removed = Set(page.removedActivityIDs)
+        let latestActivities = (page.activitiesAreDelta
+            ? Self.merged(activities: activities, with: page.activities) : page.activities)
+            .filter { !removed.contains($0.id) }
+        let retainedActivities = latestActivities.filter { retainedRunIDs.contains($0.runID) }
+        let pageRunIDs = Set(page.runs.map(\.id))
         let retainedAttachments = attachments.filter { retainedMessageIDs.contains($0.messageID) }
         let retainedReferences = references.filter { retainedMessageIDs.contains($0.messageID) }
         return DashboardConversationWindow(
             conversationID: conversationID,
             messages: Self.merged(messages: retainedMessages, with: page.messages),
             runs: Self.merged(runs: retainedRuns, with: page.runs),
-            activities: Self.merged(activities: retainedActivities, with: page.activities),
+            activities: Self.merged(activities: retainedActivities,
+                with: latestActivities.filter { pageRunIDs.contains($0.runID) }),
             attachments: Self.merged(attachments: retainedAttachments, with: page.attachments),
             references: Self.merged(references: retainedReferences, with: page.references),
             hasOlderMessages: retainedMessages.isEmpty ? page.hasOlderMessages : hasOlderMessages,
@@ -269,6 +279,7 @@ final class DashboardConversationState {
     private(set) var error: String?
     @ObservationIgnored var presentation: DashboardConversationPresentation?
     @ObservationIgnored var lastAccessSequence: UInt64 = 0
+    @ObservationIgnored var activityRevision: Int64?
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
 
     init(conversationID: String) {

@@ -193,7 +193,10 @@ extension WorkspaceDatabaseConnection {
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
+    limit: Int,
+    compactActivities: Bool = false,
+    activityCursor: Int64? = nil,
+    knownActivityRunIDs: [String] = []
   ) throws -> WorkspaceConversationHistoryPage {
     try withLock {
       guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
@@ -257,6 +260,9 @@ extension WorkspaceDatabaseConnection {
       let activities: [WorkspaceRunActivityRecord]
       let attachments: [WorkspaceMessageAttachmentRecord]
       let references: [WorkspaceMessageReferenceRecord]
+      var activityRevision: Int64?
+      var removedActivityIDs: [String] = []
+      var activityReadMetrics = ConversationActivityReadMetrics()
       if messageIDs.isEmpty {
         runs = []
         activities = []
@@ -293,7 +299,16 @@ extension WorkspaceDatabaseConnection {
           bindings: [operatorID, id] + messageIDs + messageIDs,
           as: WorkspaceRunRecord.self
         )
-        activities = try runActivityRecordsUnlocked(runIDs: runs.map(\.id))
+        if compactActivities {
+          let page = try compactRunActivitiesUnlocked(conversationID: id,
+            runIDs: runs.map(\.id), after: activityCursor, knownRunIDs: knownActivityRunIDs)
+          activities = page.records
+          activityRevision = page.revision
+          removedActivityIDs = page.removed
+          activityReadMetrics = page.metrics
+        } else {
+          activities = try runActivityRecordsUnlocked(runIDs: runs.map(\.id))
+        }
         attachments = try messageAttachmentRecordsUnlocked(messageIDs: messageIDs)
         references = try messageReferenceRecordsUnlocked(messageIDs: messageIDs)
       }
@@ -304,7 +319,11 @@ extension WorkspaceDatabaseConnection {
         activities: activities,
         attachments: attachments,
         references: references,
-        hasOlderMessages: hasOlderMessages
+        hasOlderMessages: hasOlderMessages,
+        activityRevision: activityRevision,
+        activitiesAreDelta: compactActivities && activityCursor != nil,
+        removedActivityIDs: removedActivityIDs,
+        activityReadMetrics: activityReadMetrics
       )
     }
   }
@@ -368,24 +387,35 @@ extension WorkspaceDatabaseConnection {
   func runActivityRecordsUnlocked(
     runIDs: [String] = [],
     assistantOnly: Bool = false,
-    conversationID: String? = nil
+    conversationID: String? = nil,
+    eventRecordIDs: [String]? = nil,
+    traceRecordIDs: [String]? = nil
   ) throws -> [WorkspaceRunActivityRecord] {
     guard conversationID != nil || !runIDs.isEmpty else { return [] }
     let placeholders = conversationID != nil
       ? "SELECT id FROM dashboard_runs WHERE conversation_id = ?"
       : Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
     let bindings = conversationID.map { [$0] } ?? runIDs
+    func filter(_ ids: [String]?) throws -> String {
+      guard let ids else { return "" }
+      // The JSON array is bound separately, avoiding SQLite's parameter limit.
+      return ids.isEmpty ? "AND 0" : "AND id IN (SELECT value FROM json_each(?))"
+    }
     var records: [WorkspaceRunActivityRecord] = []
     let events = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, content, created_at, rowid
       FROM dashboard_run_events
       WHERE run_id IN (\(placeholders))
         \(assistantOnly ? "AND event_type = 'assistant'" : "")
+        \(try filter(eventRecordIDs))
       ORDER BY created_at, rowid
       """)
     defer { sqlite3_finalize(events) }
     for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: events)
+    }
+    if let eventRecordIDs, !eventRecordIDs.isEmpty {
+      try bind(String(decoding: try JSONEncoder().encode(eventRecordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: events)
     }
     while true {
       let code = sqlite3_step(events)
@@ -425,11 +455,15 @@ extension WorkspaceDatabaseConnection {
       WHERE run_id IN (\(placeholders))
         AND is_visible = 1
         AND event_type NOT IN ('assistant_delta', 'assistant_replace', 'done')
+        \(try filter(traceRecordIDs))
       ORDER BY created_at, seq, id
       """)
     defer { sqlite3_finalize(traces) }
     for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: traces)
+    }
+    if let traceRecordIDs, !traceRecordIDs.isEmpty {
+      try bind(String(decoding: try JSONEncoder().encode(traceRecordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: traces)
     }
     while true {
       let code = sqlite3_step(traces)
@@ -630,8 +664,12 @@ extension WorkspaceDatabase {
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
+    limit: Int,
+    compactActivities: Bool = false,
+    activityCursor: Int64? = nil,
+    knownActivityRunIDs: [String] = []
   ) async throws -> WorkspaceConversationHistoryPage {
-    try await read { try $0.conversationHistoryPage(id: id, before: cursor, limit: limit) }
+    try await read { try $0.conversationHistoryPage(id: id, before: cursor, limit: limit,
+      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs) }
   }
 }

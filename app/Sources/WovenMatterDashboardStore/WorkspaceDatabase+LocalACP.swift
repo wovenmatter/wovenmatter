@@ -1611,6 +1611,7 @@ extension WorkspaceDatabaseConnection {
       guard changedRowCountUnlocked == 1 else {
         throw LocalACPSessionDatabaseError.runNotFound
       }
+      try storeActivitySummaryUnlocked(recordID: recordID, activity: activity)
   }
 
   /// Reconcile only the exact remote run identities that this Mac submitted.

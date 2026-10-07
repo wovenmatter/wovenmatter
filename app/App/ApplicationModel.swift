@@ -1178,7 +1178,10 @@ final class ApplicationModel {
             guard let dashboardStore else { return }
             let page = try await dashboardStore.conversationHistoryPage(
                 id: id,
-                limit: Self.initialConversationMessageLimit
+                limit: Self.initialConversationMessageLimit,
+                compactActivities: true,
+                activityCursor: state.activityRevision,
+                knownActivityRunIDs: state.presentation?.window.runs.map(\.id) ?? []
             )
             guard !Task.isCancelled, page.conversationID == id else { return }
             let previous = state.presentation
@@ -1186,19 +1189,11 @@ final class ApplicationModel {
                 let window = previous?.window.refreshing(with: page)
                     ?? DashboardConversationWindow(page: page)
                 guard previous?.window != window else { return nil }
-                let messagesByID: [String: DashboardMessagePresentation]
+                let messagesByID = Self.renderMessagePresentations(window.messages,
+                    activities: window.activities, runs: window.runs,
+                    reusing: previous?.messagesByID ?? [:])
                 let runsByID: [String: DashboardRunPresentation]
                 if let previous, previous.window.loadedOlderMessages {
-                    var nextMessages = previous.messagesByID
-                    for (messageID, presentation) in Self.renderMessagePresentations(
-                        page.messages,
-                        activities: page.activities,
-                        runs: page.runs,
-                        reusing: previous.messagesByID
-                    ) {
-                        nextMessages[messageID] = presentation
-                    }
-                    messagesByID = nextMessages
                     var nextRuns = previous.runsByID
                     for (runID, presentation) in Self.renderRunPresentations(
                         page.runs,
@@ -1208,12 +1203,6 @@ final class ApplicationModel {
                     }
                     runsByID = nextRuns
                 } else {
-                    messagesByID = Self.renderMessagePresentations(
-                        page.messages,
-                        activities: page.activities,
-                        runs: page.runs,
-                        reusing: previous?.messagesByID ?? [:]
-                    )
                     runsByID = Self.renderRunPresentations(
                         page.runs,
                         reusing: previous?.runsByID ?? [:]
@@ -1233,6 +1222,7 @@ final class ApplicationModel {
             guard !Task.isCancelled else { return }
             guard conversationStatesByID[id] === state,
                   state.isCurrentRefresh(generation) else { return }
+            state.activityRevision = page.activityRevision
             if let presentation { state.apply(presentation) }
             touchConversationState(state)
             // Reloading saved messages must not erase a current execution error
@@ -1270,7 +1260,8 @@ final class ApplicationModel {
             let page = try await dashboardStore.conversationHistoryPage(
                 id: id,
                 before: cursor,
-                limit: Self.olderConversationMessageLimit
+                limit: Self.olderConversationMessageLimit,
+                compactActivities: true
             )
             guard !Task.isCancelled,
                   conversationStatesByID[id] === state else {
