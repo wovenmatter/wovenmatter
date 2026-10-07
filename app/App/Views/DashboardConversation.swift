@@ -422,57 +422,33 @@ struct DashboardCloudConversation: View {
                     )
                     .id(interaction.id)
                 }
-                if let conversation,
-                   model.localRunningConversationIDs.contains(conversation.id) {
-                    HStack(spacing: 9) {
-                        Image(systemName: "bolt")
-                            .foregroundStyle(DashboardPalette.primary)
-                        Text(localPermission != nil ? "Waiting for approval"
-                            : localInteraction != nil ? "Waiting for your answer" : "Agent is working")
-                            .font(.system(size: 12.5, weight: .medium))
-                        Spacer()
-                        Button("Stop") {
-                            if model.isOpenClawGatewayConversation(
-                                conversation.id
+                // Side buttons sit on the composer's bottom control row; the
+                // composer grows upward with its draft and Tasks badge.
+                HStack(alignment: .bottom, spacing: 8) {
+                    Group {
+                        if showsClosePanel {
+                            DashboardPanelControlButton(
+                                glyph: .panelRightOpen,
+                                accessibilityLabel: "Remove panel",
+                                help: "Remove panel",
+                                action: onClosePanel
+                            )
+                        } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                            DashboardPanelControlButton(
+                                glyph: .settings,
+                                accessibilityLabel: "Pi Durable settings",
+                                help: "Pi Durable settings"
                             ) {
-                                model.cancelOpenClawGatewayPrompt(
-                                    conversationID: conversation.id
-                                )
-                            } else {
-                                model.cancelLocalACPPrompt(
-                                    conversationID: conversation.id
-                                )
+                                model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                             }
+                        } else if showsAddPanel {
+                            Color.clear
+                                .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                         }
-                        .buttonStyle(DashboardQuietButtonStyle())
                     }
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: 768, minHeight: 38)
-                    .background(theme.palette.themeWhisper)
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                }
-                HStack(alignment: .center, spacing: 8) {
-                    if showsClosePanel {
-                        DashboardPanelControlButton(
-                            glyph: .panelRightOpen,
-                            accessibilityLabel: "Remove panel",
-                            help: "Remove panel",
-                            action: onClosePanel
-                        )
-                    } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
-                        DashboardPanelControlButton(
-                            glyph: .settings,
-                            accessibilityLabel: "Pi Durable settings",
-                            help: "Pi Durable settings"
-                        ) {
-                            model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-                        }
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
+                    .padding(.bottom, DashboardComposer.verticalPadding)
                     DashboardComposer(
                         placeholder: dashboardComposerPlaceholder(
                             agent: agent,
@@ -597,21 +573,35 @@ struct DashboardCloudConversation: View {
                         onDropFiles: onDropFiles,
                         onUnavailableAction: onUnavailableComposerAction,
                         onCommandNavigation: onCommandNavigation,
-                        onSend: onSend
+                        onSend: {
+                            transcriptOwnsScroll = false
+                            isUserScrolling = false
+                            scrollInteractionRevision += 1
+                            scrollState.setNearBottom(true)
+                            scrollPositionID = chatEndID
+                            onSend()
+                        },
+                        onStop: conversation.flatMap { current in
+                            guard model.localRunningConversationIDs.contains(current.id) else { return nil }
+                            return { model.cancelLocalACPPrompt(conversationID: current.id) }
+                        }
                     )
-                    if showsAddPanel {
-                        DashboardPanelControlButton(
-                            glyph: .panelLeftOpen,
-                            accessibilityLabel: "Add panel",
-                            help: "Add panel",
-                            action: onAddPanel
-                        )
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                    Group {
+                        if showsAddPanel {
+                            DashboardPanelControlButton(
+                                glyph: .panelLeftOpen,
+                                accessibilityLabel: "Add panel",
+                                help: "Add panel",
+                                action: onAddPanel
+                            )
+                        } else if showsClosePanel {
+                            Color.clear
+                                .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
                     }
+                    .padding(.bottom, DashboardComposer.verticalPadding)
                 }
                 // Animate the whole row so the outside buttons follow the
                 // composer height in the same layout transaction.
@@ -1125,9 +1115,12 @@ struct DashboardMessageRow: View {
 
     private var assistantBody: String { displayedBody ?? transcript.body }
 
-    private var transcript: AssistantTranscriptProjection {
-        AssistantTranscriptProjection(messageID: message.id, content: message.content,
-            activities: activities.map(\.activity))
+    /// Fallback for a row without a prepared presentation.
+    private var transcript: (body: String, commentaryIDs: Set<String>) {
+        let work = activities.map(\.activity)
+        return ConversationWorkTimeline.displayPartition(
+            AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
+            activities: work, isLive: message.status == "streaming")
     }
 
     var body: some View {
@@ -1160,7 +1153,7 @@ struct DashboardMessageRow: View {
                             run: run,
                             presentation: runPresentation,
                             records: activities,
-                            commentaryIDs: commentaryIDs ?? Set(transcript.commentary.map(\.id)),
+                            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
                             hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             timeline: projectedTimeline
                         )
@@ -1203,7 +1196,7 @@ struct DashboardMessageRow: View {
 
     private var projectedTimeline: ConversationWorkTimeline {
         workTimeline ?? ConversationWorkTimeline(records: activities,
-            commentaryIDs: commentaryIDs ?? Set(transcript.commentary.map(\.id)))
+            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs)
     }
 }
 

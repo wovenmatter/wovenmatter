@@ -25,6 +25,30 @@ private func groups(_ timeline: ConversationWorkTimeline) -> [ConversationWorkGr
 
 @Suite("Conversation work timeline")
 struct ConversationWorkTimelineTests {
+  @Test("a merged detail version includes every contributing trace")
+  func mergedDetailVersions() {
+    let start = record(AgentRunActivity(id: "a", kind: .tool, content: "first", detailVersion: 1), at: "1")
+    let end = record(AgentRunActivity(id: "a", kind: .tool, status: "completed", detailVersion: 2), at: "2")
+    let corrected = record(AgentRunActivity(id: "a", kind: .tool, content: "corrected", detailVersion: 3), at: "1")
+    let version = { (records: [WorkspaceRunActivityRecord]) in
+      ConversationWorkTimeline.mergedActivities(in: records, commentaryIDs: []).first?.detailVersion
+    }
+    #expect(version([start, end]) == version([start, end]))
+    #expect(version([start, end]) != version([corrected, end]))
+    #expect(version([start, end]) != version([end]))
+  }
+
+  @Test("checklist controls hide only when replaced, and failures stay visible")
+  func checklistControlVisibility() {
+    let successful = record(tool("todo", "todowrite"), at: "1")
+    let failed = record(tool("bad", "update_checklist", status: "failed"), at: "2")
+    let plan = record(AgentRunActivity(id: "p", kind: .plan, planKind: "checklist"), at: "3")
+    #expect(groups(ConversationWorkTimeline(records: [successful], commentaryIDs: []))[0].activities.map(\.id) == ["todo"])
+    let supported = ConversationWorkTimeline(records: [successful, failed, plan], commentaryIDs: [])
+    #expect(groups(supported)[0].activities.map(\.id) == ["bad"])
+    #expect(supported.foldedEntries.count == 1)
+  }
+
   @Test("commentary splits work groups that keep their first member's identity")
   func chronologicalGrouping() {
     let records = [
@@ -94,15 +118,61 @@ struct ConversationWorkTimelineTests {
 
     let settled = ConversationWorkGroup(id: "g", activities: [
       AgentRunActivity(id: "t", kind: .thought, status: "in_progress", content: "plain"),
-    ])
+    ], endsTimeline: true)
     #expect(settled.liveLabel(runIsActive: true) == "Thinking")
+  }
+
+  @Test("only a status-less thought that ends the timeline is live; generic empty thoughts are hidden")
+  func thoughtLiveness() {
+    let thought = { (id: String) in AgentRunActivity(id: id, kind: .thought, phase: "start", content: "**\(id)**") }
+    let records = [
+      record(thought("t1"), at: "1"),
+      record(tool("a", "bash"), at: "2"),
+      record(AgentRunActivity(id: "generic", kind: .thought, title: "Thinking"), at: "3"),
+      record(thought("t2"), at: "4"),
+    ]
+    let tail = groups(ConversationWorkTimeline(records: records, commentaryIDs: []))[0]
+    #expect(tail.activities.map(\.id) == ["t1", "a", "t2"])
+    #expect(tail.activeActivityIDs == ["t2"])
+    #expect(tail.liveLabel(runIsActive: true) == "t2")
+
+    let followed = ConversationWorkTimeline(records: records + [
+      record(AgentRunActivity(id: "c", kind: .assistant, content: "Next"), at: "5"),
+    ], commentaryIDs: ["c"])
+    #expect(groups(followed)[0].activeActivityIDs.isEmpty)
+  }
+
+  @Test("the latest segment stays before later visible work, even after a stop")
+  func liveCommentaryPartition() {
+    let segment = AgentRunActivity(id: "s", kind: .assistant, content: "Let me check.", assistantMessageID: "m")
+    let records = [record(segment, at: "1"), record(tool("a", "bash", status: "running"), at: "2")]
+    let activities = records.map(\.activity)
+    let transcript = AssistantTranscriptProjection(messageID: "m", content: "Let me check.\n", activities: activities)
+
+    let live = ConversationWorkTimeline.displayPartition(transcript, activities: activities, isLive: true)
+    #expect(live.commentaryIDs == ["s"])
+    #expect(live.body.allSatisfy { $0.isWhitespace })
+    #expect(ConversationWorkTimeline(records: records, commentaryIDs: live.commentaryIDs).entries.map(\.id)
+      == ["commentary:s", "group:a"])
+
+    let settled = ConversationWorkTimeline.displayPartition(transcript, activities: activities, isLive: false)
+    #expect(settled.commentaryIDs == ["s"])
+    #expect(settled.body.allSatisfy { $0.isWhitespace })
+
+    let unfollowed = ConversationWorkTimeline.displayPartition(transcript, activities: [segment], isLive: true)
+    #expect(unfollowed.commentaryIDs.isEmpty)
+    let checklistOnly = ConversationWorkTimeline.displayPartition(transcript,
+      activities: [segment, AgentRunActivity(id: "p", kind: .plan, planKind: "checklist"),
+        tool("update", "update_plan")], isLive: true)
+    #expect(checklistOnly.commentaryIDs.isEmpty)
+    #expect(checklistOnly.body == transcript.body)
   }
 
   @Test("clear removes an activity and a later update restores it from the clear")
   func clearRemoval() {
     let entries = [AgentRunPlanEntry(content: "Step", status: "pending")]
     let plan = { (phase: String, entries: [AgentRunPlanEntry]) in
-      AgentRunActivity(id: "plan", kind: .plan, phase: phase, planEntries: entries)
+      AgentRunActivity(id: "plan", kind: .plan, phase: phase, planEntries: entries, planKind: "proposal")
     }
     let cleared = ConversationWorkTimeline(records: [
       record(plan("update", entries), at: "1"),

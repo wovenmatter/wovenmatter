@@ -15,6 +15,9 @@ public struct AgentRunFileChange: Codable, Equatable, Identifiable, Sendable {
   public let oldText: String?
   public let newText: String
   public let unifiedDiff: String?
+  /// Materialized by the compact projection; absent in older/canonical records.
+  public let additionCount: Int?
+  public let deletionCount: Int?
 
   public var id: String { path }
 
@@ -22,23 +25,28 @@ public struct AgentRunFileChange: Codable, Equatable, Identifiable, Sendable {
     path: String,
     oldText: String? = nil,
     newText: String,
-    unifiedDiff: String? = nil
+    unifiedDiff: String? = nil,
+    additionCount: Int? = nil,
+    deletionCount: Int? = nil
   ) {
     self.path = path
     self.oldText = oldText
     self.newText = newText
     self.unifiedDiff = unifiedDiff
+    self.additionCount = additionCount
+    self.deletionCount = deletionCount
   }
 
   public var additions: Int {
-    changedLineCounts.additions
+    additionCount ?? changedLineCounts.additions
   }
 
   public var deletions: Int {
-    changedLineCounts.deletions
+    deletionCount ?? changedLineCounts.deletions
   }
 
-  private var changedLineCounts: (additions: Int, deletions: Int) {
+  var changedLineCounts: (additions: Int, deletions: Int) {
+    if let additionCount, let deletionCount { return (additionCount, deletionCount) }
     if let unifiedDiff, !unifiedDiff.isEmpty {
       var additions = 0
       var deletions = 0
@@ -47,7 +55,7 @@ public struct AgentRunFileChange: Codable, Equatable, Identifiable, Sendable {
         if line.hasPrefix("+") { additions += 1 }
         if line.hasPrefix("-") { deletions += 1 }
       }
-      return (additions, deletions)
+      return (additionCount ?? additions, deletionCount ?? deletions)
     }
     let oldLines = (oldText ?? "").split(separator: "\n", omittingEmptySubsequences: false)
     let newLines = newText.split(separator: "\n", omittingEmptySubsequences: false)
@@ -59,7 +67,7 @@ public struct AgentRunFileChange: Codable, Equatable, Identifiable, Sendable {
       case .remove: deletions += 1
       }
     }
-    return (additions, deletions)
+    return (additionCount ?? additions, deletionCount ?? deletions)
   }
 }
 

@@ -66,23 +66,34 @@ public struct ConversationTaskProgress: Equatable, Sendable {
     currentStep = current
   }
 
+  /// The checklist a merged plan activity shows, shared by the Tasks badge and
+  /// the inline transcript. A proposed or cleared plan is not a checklist.
+  public static func checklist(_ plan: AgentRunActivity, runID: String) -> Self? {
+    guard plan.kind == .plan, plan.planKind != "proposal", plan.phase != "clear" else { return nil }
+    return Self(runID: runID, planID: plan.id, entries: plan.planEntries)
+  }
+
   /// The latest checklist belonging to `activeRunID`, or nil when that run has
   /// none or its latest checklist update cleared it.
   public static func latest(in records: [WorkspaceRunActivityRecord], activeRunID: String) -> Self? {
     var merged: [String: AgentRunActivity] = [:]
     var latestID: String?
-    for record in records.lazy.filter({ $0.runID == activeRunID && $0.activity.kind == .plan && $0.activity.planKind != "proposal" })
+    for record in records.lazy.filter({ $0.runID == activeRunID && $0.activity.kind == .plan })
       .sorted(by: { left, right in
-        if let a = left.activity.detailVersion, let b = right.activity.detailVersion, a != b { return a < b }
+        let a = left.activity.detailVersion ?? Int64.min
+        let b = right.activity.detailVersion ?? Int64.min
+        if a != b { return a < b }
         return WorkspaceRunActivityRecord.precedes(left, right)
       }) {
       let update = record.activity
-      merged[update.id] = merged[update.id].map { $0.merging(update) } ?? update
-      // Content-only updates, such as a proposed Markdown plan, are not
-      // checklist updates and do not select their plan.
+      let plan = merged[update.id].map { $0.merging(update) } ?? update
+      merged[update.id] = plan
+      // A proposal (marked on any of its updates) and content-only updates,
+      // such as a proposed Markdown plan, are not checklist updates and do
+      // not select their plan.
+      guard plan.planKind != "proposal" else { continue }
       if update.phase == "clear" || !update.planEntries.isEmpty { latestID = update.id }
     }
-    guard let latestID, let plan = merged[latestID], plan.phase != "clear" else { return nil }
-    return Self(runID: activeRunID, planID: latestID, entries: plan.planEntries)
+    return latestID.flatMap { merged[$0] }.flatMap { checklist($0, runID: activeRunID) }
   }
 }

@@ -4,11 +4,62 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct ACPHarnessStreamingReviewTests {
+  @Test("Cursor child checklists and proposals cannot replace their parent")
+  func cursorChecklistOwnership() async throws {
+    let fixture = try ACPHarnessFixture(kind: .cursor,
+      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"parent"}"#,
+      extras: ["authenticate": "{}", "cursor/list_available_models": "{}"], promptOverride: """
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"parent","update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"Parent thinking"}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"cursor/update_todos","params":{"sessionId":"child","toolCallId":"child","merge":false,"todos":[{"id":"c","content":"Child","status":"in_progress"}]}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","id":"child-plan","method":"cursor/create_plan","params":{"sessionId":"child","toolCallId":"child-proposal","plan":"Child plan","todos":[]}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"cursor/update_todos","params":{"sessionId":"parent","toolCallId":"parent-todo","merge":false,"todos":[{"id":"p","content":"Parent","status":"in_progress"}]}}'
+        respond "$id" '{"stopReason":"end_turn"}'; continue
+        """)
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let events = ACPReviewEvents()
+    _ = try await client.prompt("Parent work") { await events.record($0) }
+    await client.shutdown()
+    let activities = await events.values().compactMap { event -> AgentRunActivity? in
+      if case .activity(let activity, _) = event { return activity }; return nil
+    }
+    #expect(activities.map(\.kind) == [.thought, .thought, .plan])
+    #expect(activities[1].id == activities[0].id)
+    #expect(activities[1].status == "completed")
+    #expect(activities.last?.planEntries.map(\.content) == ["Parent"])
+    #expect(try fixture.log().contains(#""accepted":false"#))
+  }
+
+  @Test("Codex terminal metadata deltas remain readable and append exactly once")
+  func terminalOutputDeltas() async throws {
+    let fixture = try ACPHarnessFixture(kind: .codex,
+      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"terminal"}"#, extras: [:], promptOverride: """
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call","toolCallId":"exec","kind":"execute","title":"python3"}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","_meta":{"terminal_output_delta":{"data":"wait"}}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","status":"completed","_meta":{"terminal_output_delta":{"data":"ing\\n"},"terminal_exit":{"exit_code":0}}}}}'
+        respond "$id" '{"stopReason":"end_turn"}'; continue
+        """)
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let events = ACPReviewEvents()
+    _ = try await client.prompt("Read output") { await events.record($0) }
+    await client.shutdown()
+    let tools = await events.values().compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, _) = event, activity.kind == .tool else { return nil }
+      return activity
+    }
+    let merged = try #require(tools.first).merging(tools[1]).merging(tools[2])
+    #expect(merged.content == "waiting\n")
+    #expect(merged.status == "completed")
+    #expect(merged.rawPayloadJSON?.contains("terminal_exit") == true)
+  }
 
   @Test("built-in replacement chunks are assembled before admission and preserve boundaries")
   func builtInSnapshotWireReplay() async throws {
     let fixture = try ACPHarnessFixture(kind: .defaultAgent,
-      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"snapshots"}"#, extras: [:], promptOverride: """
+      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"snapshots"}"#, extras: ["woven/configure": "{}"], promptOverride: """
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"abc"}}}}'
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"x"},"_meta":{"wovenAssistantSnapshot":true,"wovenSnapshotStart":true,"wovenSnapshotEnd":false}}}}'
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"yz"},"_meta":{"wovenAssistantSnapshot":true,"wovenSnapshotStart":false,"wovenSnapshotEnd":true}}}}'
@@ -18,7 +69,7 @@ struct ACPHarnessStreamingReviewTests {
         respond "$id" '{"stopReason":"end_turn"}'; continue
         """)
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
       title: nil, systemPrompt: nil)
     let events = ACPReviewEvents()
@@ -33,10 +84,12 @@ struct ACPHarnessStreamingReviewTests {
     let thoughts = values.compactMap { event -> AgentRunActivity? in
       if case .activity(let activity, _) = event, activity.kind == .thought { return activity }; return nil
     }
-    #expect(thoughts.count == 2)
-    #expect(thoughts.last?.content == "")
-    #expect(thoughts.last?.contentIsDelta == false)
-    #expect(thoughts.first?.merging(try #require(thoughts.last)).content == "")
+    #expect(thoughts.count == 3)
+    #expect(thoughts[1].content == "")
+    #expect(thoughts[1].contentIsDelta == false)
+    #expect(thoughts.first?.merging(thoughts[1]).content == "")
+    #expect(thoughts.last?.status == "completed")
+    #expect(thoughts.last?.id == thoughts.first?.id)
   }
 
   @Test("wire plans replace, clear, and do not reappear on a later prompt", arguments: [false, true])
@@ -55,7 +108,7 @@ struct ACPHarnessStreamingReviewTests {
         continue
         """)
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root,
       existingSessionID: existingSession ? "plan-replay" : nil, title: nil)
     let events = ACPReviewEvents()
@@ -95,7 +148,7 @@ struct ACPHarnessStreamingReviewTests {
         esac
         """)
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
       title: nil, systemPrompt: "Agent instructions")
     let input = "/native keep  spacing\nand this line"
@@ -138,7 +191,7 @@ struct ACPHarnessStreamingReviewTests {
     let entered = AsyncStream<Void>.makeStream()
     let release = AsyncStream<Void>.makeStream()
     defer { release.continuation.finish() }
-    let client = try fixture.client { direction, data in
+    let client = try await fixture.client { direction, data in
       guard direction == "out",
             let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             value["method"] as? String == "session/prompt" else { return }
@@ -179,7 +232,7 @@ struct ACPHarnessStreamingReviewTests {
       session: #"{"sessionId":"stopped"}"#, extras: [:])
     defer { fixture.remove() }
     let fence = AgentDispatchFence()
-    let client = try fixture.client { direction, data in
+    let client = try await fixture.client { direction, data in
       guard direction == "out",
         let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
         value["method"] as? String == "session/prompt" else { return }
@@ -212,7 +265,7 @@ struct ACPHarnessStreamingReviewTests {
       session: #"{"sessionId":"retry"}"#, extras: [:])
     defer { fixture.remove() }
     let recorder = Recorder()
-    let client = try fixture.client { try await recorder.record($0, $1) }
+    let client = try await fixture.client { try await recorder.record($0, $1) }
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
       title: nil, systemPrompt: "Retry instructions")
     await #expect(throws: Failure.expected) { try await client.prompt("rejected") }
@@ -228,7 +281,7 @@ struct ACPHarnessStreamingReviewTests {
       session: #"{"sessionId":"configuration-session","models":{"currentModelId":"fixture-model","availableModels":[{"modelId":"fixture-model"}]}}"#,
       extras: [:])
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
     let snapshots = ACPReviewConfigurations()
     await client.setConfigurationHandler { snapshots.record($0) }
@@ -264,7 +317,7 @@ struct ACPHarnessStreamingReviewTests {
         esac
         """, initialConfiguration: withEffort)
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
     let noEffort = try await client.setSessionConfiguration(model: "no-effort")
     #expect(noEffort.model == "no-effort")
@@ -334,7 +387,7 @@ struct ACPHarnessStreamingReviewTests {
       let fixture = try ACPHarnessFixture(kind: runtime, initialize: #"{"protocolVersion":2}"#,
         session: session, extras: [:])
       defer { fixture.remove() }
-      let client = try fixture.client()
+      let client = try await fixture.client()
       let initialized = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
       let config = initialized.configuration
       #expect(config.model == "opus[1m]")
@@ -408,7 +461,7 @@ struct ACPHarnessStreamingReviewTests {
       extras: [:], holdPromptForInterjection: true
     )
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     let initialized = try await client.initializeSession(workingDirectory: fixture.root,
                                                            existingSessionID: nil, title: nil)
     #expect(initialized.configuration.model == "grok")
@@ -431,7 +484,7 @@ struct ACPHarnessStreamingReviewTests {
     let fixture = try ACPHarnessFixture(kind: kind, initialize: initialize,
                                         session: session, extras: extras)
     defer { fixture.remove() }
-    let client = try fixture.client()
+    let client = try await fixture.client()
     let initialized = try await client.initializeSession(
       workingDirectory: fixture.root, existingSessionID: existingSessionID,
       title: "Fixture", systemPrompt: "System fixture"
@@ -451,8 +504,10 @@ struct ACPHarnessStreamingReviewTests {
       guard case .activity(let activity, _) = event, activity.kind == .thought else { return nil }
       return activity
     }
-    #expect(thoughts.map(\.content) == ["first ", "second"])
-    #expect(thoughts.count == 2 && thoughts[0].id != thoughts[1].id)
+    let chunks = thoughts.filter { $0.phase != "end" }
+    #expect(chunks.map(\.content) == ["first ", "second"])
+    #expect(chunks.count == 2 && chunks[0].id != chunks[1].id)
+    #expect(Set(thoughts.filter { $0.phase == "end" }.map(\.id)) == Set(chunks.map(\.id)))
     let tools = values.compactMap { event -> AgentRunActivity? in
       guard case .activity(let activity, _) = event, activity.kind == .tool else { return nil }
       return activity
@@ -537,10 +592,15 @@ private struct ACPHarnessFixture {
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
   }
 
-  func client(historyRecorder: WorkspaceWireRecorder? = nil) throws -> LocalACPClient {
+  @MainActor func client(historyRecorder: WorkspaceWireRecorder? = nil) throws -> LocalACPClient {
     var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: kind, executableURL: executable, arguments: [])
     launch.historyRecorder = historyRecorder
-    return try LocalACPClient.start(launch: launch, workingDirectory: root)
+    let accounts = ProviderAccountCoordinator(refresh: { scopes in
+      Dictionary(uniqueKeysWithValues: scopes.map {
+        ($0, DefaultAgentPayload(config: .init(), credentials: [:], workspace: $0))
+      })
+    }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
+    return try LocalACPClient.start(launch: launch, workingDirectory: root, accountCoordinator: accounts)
   }
   func log() throws -> String {
     try String(contentsOf: logURL, encoding: .utf8)

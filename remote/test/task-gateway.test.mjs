@@ -117,6 +117,45 @@ test('ACP executor confirms settings, binds recurring session before one prompt,
  assert.equal(messages.find(m=>m.method==='session/prompt').params.prompt[0].text,task().task.prompt)
 })
 
+test('scheduled Cursor retains owning todo notifications and publishes full native replace/merge/clear payloads',async()=>{
+ const {EventEmitter}=await import('node:events')
+ const {PassThrough,Writable}=await import('node:stream')
+ const {createTaskExecutor}=await import('../src/task-gateway-runner.mjs')
+ const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
+ child.kill=()=>{queueMicrotask(()=>child.emit('exit',0));return true}
+ const reply=message=>child.stdout.write(JSON.stringify(message)+'\n')
+ const todos=Array.from({length:140},(_,index)=>({id:`todo-${index}`,content:'Same label',status:'pending'}))
+ const params={sessionId:'native',toolCallId:'first',merge:false,todos}
+ const notifications=[params,{...params,toolCallId:'merge',merge:true,todos:[{id:'todo-0',content:'Same label',status:'completed'}]},
+   {...params,toolCallId:'clear',todos:[]}]
+ child.stdin=new Writable({write(bytes,_encoding,done){
+   const message=JSON.parse(String(bytes))
+   queueMicrotask(()=>{
+     if(message.method==='initialize')reply({id:message.id,result:{protocolVersion:1}})
+     if(message.method==='session/new'){
+       reply({method:'cursor/update_todos',params}) // Setup history is not this task's progress.
+       reply({id:message.id,result:{sessionId:'native'}})
+     }
+     if(message.method==='session/prompt'){
+       reply({method:'cursor/update_todos',params:{...params,sessionId:'child'}})
+       reply({method:'cursor/update_todos',params:{...params,sessionId:undefined}})
+       for(const params of notifications)reply({method:'cursor/update_todos',params})
+       reply({id:message.id,result:{stopReason:'end_turn'}})
+       reply({method:'cursor/update_todos',params}) // Late native event remains archived only.
+     }
+   });done()
+ }})
+ const updates=[]
+ const execute=createTaskExecutor({catalog:new Map([['cursor',{id:'cursor',transport:'acp',command:'fixture',arguments:[]}]]),workspaceRoot:'/tmp',environment:()=>({}),launch:()=>child})
+ await execute({run:{id:'run',title:'Fixture',task:{prompt:'fixture',configuration:{runtimeKind:'cursor'}}},
+   signal:new AbortController().signal,publish:update=>updates.push(update),bindSession:()=>{}})
+ const projected=updates.filter(update=>update.sessionUpdate==='woven_cursor_todos')
+ assert.deepEqual(projected.map(update=>update.payload),notifications)
+ assert.ok(projected.every(update=>update.nativeSessionID==='native'))
+ const records=updates.flatMap(update=>update.recordBatch?.records??[]).filter(record=>record.kind==='cursor/update_todos')
+ assert.deepEqual(records.map(record=>JSON.parse(record.payload)),[...notifications,params].map(params=>({method:'cursor/update_todos',params})))
+})
+
 test('re-enabling cannot run stale schedules until a fresh publication fences local edits',async t=>{
  let count=0
  const {gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:async()=>{count++}})

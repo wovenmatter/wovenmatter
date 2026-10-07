@@ -183,6 +183,28 @@ test('Hermes captures native events/export with exact bound identity while exclu
   assert.equal(fixture.exports.length,2)
 })
 
+test('scheduled Hermes forwards paired checklist writes losslessly only from the owning session and retains native events',async()=>{
+  const todos=Array.from({length:140},(_,index)=>({id:`todo-${index}`,content:'Same label',status:'pending'}))
+  const payload={tool_id:'write',name:'todo_list',args:{todos:[{id:'todo-0',status:'completed'}],merge:true},result:{revision:2,todos},unknown:'retained'}
+  const fixture=hermesFixture({events:[
+    {type:'tool.complete',session_id:'child',payload},
+    {type:'tool.complete',payload},
+    {type:'tool.complete',payload:{...payload,name:'subagent'}},
+    {type:'message.complete',payload:{text:'done',status:'success'}},
+    {type:'tool.complete',payload}, // Retained, but outside the completed task.
+  ]}),updates=[],bound=[]
+  fixture.context.publish=update=>updates.push(update)
+  fixture.context.bindSession=id=>bound.push(id)
+  await fixture.execute(fixture.context)
+  const projected=updates.filter(update=>update.sessionUpdate==='woven_hermes_tool_complete')
+  assert.equal(projected.length,1)
+  assert.equal(projected[0].nativeSessionID,bound[0])
+  assert.deepEqual(projected[0].payload,{name:payload.name,args:payload.args,result:payload.result})
+  const records=nativeRecords(updates).filter(record=>record.kind==='tool.complete')
+  assert.equal(records.length,3)
+  assert.deepEqual(JSON.parse(records[0].payload).payload,payload)
+})
+
 test('Hermes rejects a different native export before dispatch',async()=>{
   const fixture=hermesFixture({snapshot:{id:'other',messages:[]}})
   await assert.rejects(fixture.execute(fixture.context),/different or incomplete/)

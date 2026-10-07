@@ -197,9 +197,35 @@ struct RuntimeBoundaryTests {
         guard case .activity(let activity, _) = event, activity.kind == .thought else { return nil }
         return activity
       }
-      #expect(thoughts.map(\.content) == [" first\n", " second "])
-      #expect(thoughts.count == 2 && thoughts[0].id != thoughts[1].id)
+      #expect(thoughts.map(\.id) == ["thought-1", "thought-1", "thought-2"])
+      #expect(thoughts.map(\.content) == [" first\n", nil, " second "])
+      #expect(thoughts.map(\.phase) == ["update", "end", "update"])
+      #expect(thoughts.map(\.status) == ["running", "completed", "running"])
+      #expect(values.compactMap { event -> Bool? in
+        guard case .activity(let activity, let appendsContent) = event,
+              activity.kind == .thought else { return nil }
+        return appendsContent
+      } == [true, false, true])
+      #expect(values.map { event in
+        switch event {
+        case .activity(let activity, _): "\(activity.kind.rawValue):\(activity.id):\(activity.phase ?? "")"
+        case .assistantChunk(let text): "assistant:\(text)"
+        default: "unexpected"
+        }
+      } == [
+        "thought:thought-1:update", "thought:thought-1:end",
+        "assistant:  Hello from fake ACP ", "thought:thought-2:update",
+      ])
       #expect(await events.text() == "  Hello from fake ACP ")
+      // A prompt reply can precede other admitted inputs. Only run settlement
+      // closes the trailing phase, once, without replacing its streamed text.
+      let settled = values + [.activity(AgentRunActivity(
+        id: "thought-2", kind: .thought, phase: "end", title: "Thinking", status: "completed"
+      ), appendsContent: false)]
+      await client.finishRun()
+      #expect(await events.values() == settled)
+      await client.finishRun()
+      #expect(await events.values() == settled)
       await client.shutdown()
     }
   }

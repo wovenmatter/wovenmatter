@@ -184,6 +184,23 @@ struct ACPPermissionLifecycleTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test func unchangedPermissionAllowsReplacingAMissingCodexDraftHint() async throws {
+    let fixture = try await PermissionLifecycleFixture(runtime: .codex, forkedLaunchPermission: "default")
+    defer { fixture.cleanUp() }
+    try await fixture.database.updateLocalACPSessionID(conversationID: fixture.id, sessionID: "unmaterialized-draft")
+    try await fixture.database.updateLocalACPSessionConfiguration(
+      conversationID: fixture.id, model: nil, thinking: nil, permission: "default"
+    )
+    let changed = try await fixture.coordinator.updateConfiguration(
+      conversationID: fixture.id, model: "selected-model", permission: "default",
+      launch: fixture.launch, workspace: fixture.workspace
+    )
+    #expect(changed.model == "selected-model")
+    #expect(changed.permission == "default")
+    #expect(fixture.factory.drivers.first?.promptCount == 0)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func permissionsCannotChangeDuringAnActivePrompt() async throws {
     let gate = PermissionLifecycleGate()

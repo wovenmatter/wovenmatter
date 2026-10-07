@@ -73,7 +73,7 @@ extension WorkspaceDatabaseConnection {
         try executeUnlocked("UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1")
         let invalidate = try prepareUnlocked("""
           UPDATE desktop_activity_index SET deleted=1,revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
-          WHERE run_id=? AND conversation_id=?
+          WHERE run_id=? AND conversation_id=? AND deleted=0
           """)
         defer { sqlite3_finalize(invalidate) }
         try bind(messageID + ":run", at: 1, to: invalidate)
@@ -155,6 +155,29 @@ extension WorkspaceDatabaseConnection {
             try bind(activityID, at: Int32(offset + 2), to: obsolete)
           }
           try stepDone(obsolete)
+          // An identical surviving part need not fire the source UPDATE trigger.
+          // Restore from current source rows, including tombstones left by an older
+          // build that already removed the message's hidden marker.
+          let revival = try prepareUnlocked("""
+            UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1
+              AND EXISTS(SELECT 1 FROM desktop_activity_index i
+                JOIN dashboard_run_events e ON e.id=i.source_id
+                WHERE i.run_id=? AND i.conversation_id=? AND i.source_kind='event' AND i.deleted=1)
+            """)
+          defer { sqlite3_finalize(revival) }
+          try bind(runID, at: 1, to: revival)
+          try bind(conversationID, at: 2, to: revival); try stepDone(revival)
+          if changedRowCountUnlocked > 0 {
+            let restore = try prepareUnlocked("""
+              UPDATE desktop_activity_index SET deleted=0,
+                revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
+              WHERE run_id=? AND conversation_id=? AND source_kind='event' AND deleted=1
+                AND EXISTS(SELECT 1 FROM dashboard_run_events e WHERE e.id=source_id)
+              """)
+            defer { sqlite3_finalize(restore) }
+            try bind(runID, at: 1, to: restore)
+            try bind(conversationID, at: 2, to: restore); try stepDone(restore)
+          }
           for activity in activities {
             try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: Date(), replacingActivity: true)
           }

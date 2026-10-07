@@ -36,7 +36,8 @@ struct PersistenceBehaviorTests {
         SELECT 'unrelated-' || n, 'other-' || n, '2026-01-01T00:00:00.000Z' FROM numbers;
         """)
     }
-    // Activities retain insertion order; attachments and references retain ID tie order.
+    // Event ties retain insertion order. Trace ties use their sequence, then ID;
+    // attachments and references retain ID tie order.
     for suffix in ["b", "a"] {
       try sql.execute("""
         INSERT INTO dashboard_message_attachments
@@ -57,7 +58,20 @@ struct PersistenceBehaviorTests {
           'progress', 1, '2026-01-01T00:00:00.000Z');
         """)
     }
+    let eventBSequence = try sql.scalar("SELECT rowid FROM dashboard_run_events WHERE id = 'event-b'")
+    let eventASequence = try sql.scalar("SELECT rowid FROM dashboard_run_events WHERE id = 'event-a'")
+    #expect(eventBSequence < eventASequence)
     try sql.execute("""
+      INSERT INTO dashboard_run_trace_events
+        (id, conversation_id, run_id, event_type, is_visible, created_at, seq)
+      VALUES ('ordered-a', '\(conversationID)', '\(run.runID)', 'progress', 1,
+          '2026-01-01T00:00:00.000Z', \(eventASequence + 1)),
+        ('ordered-z', '\(conversationID)', '\(run.runID)', 'progress', 1,
+          '2026-01-01T00:00:00.000Z', 1),
+        ('earlier', '\(conversationID)', '\(run.runID)', 'progress', 1,
+          '2025-12-31T23:59:59.000Z', \(eventASequence + 2)),
+        ('later', '\(conversationID)', '\(run.runID)', 'progress', 1,
+          '2026-01-01T00:00:01.000Z', 0);
       INSERT INTO dashboard_run_trace_events
         (id, conversation_id, run_id, event_type, is_visible, created_at)
       VALUES ('invisible', '\(conversationID)', '\(run.runID)', 'progress', 0, ''),
@@ -68,7 +82,16 @@ struct PersistenceBehaviorTests {
     #expect(before.runs.map(\.id) == [run.runID])
     #expect(before.attachments.map(\.id) == ["attachment-a", "attachment-b"])
     #expect(before.references.map(\.id) == ["reference-a", "reference-b"])
-    #expect(before.activities.map(\.id) == ["event-b", "event-a", "trace-trace-a", "trace-trace-b"])
+    // Timestamp wins first; tied event and trace rows share sequence ordering.
+    // The default trace sequence is zero, so its ID ties precede event rowids.
+    #expect(before.activities.map(\.id) == [
+      "trace-earlier", "trace-trace-a", "trace-trace-b", "trace-ordered-z",
+      "event-b", "event-a", "trace-ordered-a", "trace-later",
+    ])
+    #expect(before.activities.map(\.sequence) == [
+      Int64(eventASequence + 2), 0, 0, 1,
+      Int64(eventBSequence), Int64(eventASequence), Int64(eventASequence + 1), 0,
+    ])
     let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
     let after = try await reopened.conversationHistoryPage(id: conversationID, limit: 2)
     #expect(after == before)

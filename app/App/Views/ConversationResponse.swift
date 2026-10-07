@@ -6,6 +6,7 @@ struct ConversationResponse: View {
     let content: String
     var document: ConversationMarkdownDocument? = nil
     let isStreaming: Bool
+    var showsCopyButton = true
     @State private var copied = false
     @State private var pendingExternalURL: URL?
 
@@ -16,7 +17,7 @@ struct ConversationResponse: View {
             }
             .frame(maxWidth: 680, alignment: .leading)
 
-            Button {
+            if showsCopyButton { Button {
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(content, forType: .string)
             } label: {
@@ -28,6 +29,7 @@ struct ConversationResponse: View {
             .buttonStyle(DashboardIconButtonStyle())
             .help("Copy complete response")
             .accessibilityLabel(copied ? "Response copied" : "Copy response")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: content) { copied = false }
@@ -165,6 +167,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool) -> Bool {
         guard appliedContent != content || appliedStreaming != isStreaming else { return false }
         let selection = selectedRange()
+        let previous = selection.length > 0 ? NSString(string: string) : nil
         let rendered = ConversationResponseAttributedText.render(
             document ?? ConversationMarkdownDocument(content), isStreaming: isStreaming
         )
@@ -176,8 +179,13 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
                 if value != nil { decorations.append((key, range)) }
             }
         }
-        let location = min(selection.location, rendered.length)
-        setSelectedRange(NSRange(location: location, length: min(selection.length, rendered.length - location)))
+        // Streaming appends keep the selection; once the selected text itself
+        // changes (a replacement, or a rerendered prefix), it no longer
+        // identifies what the user chose.
+        let end = NSMaxRange(selection)
+        let selectionUnchanged = previous.map { end <= $0.length && end <= rendered.length
+            && $0.substring(to: end) == (rendered.string as NSString).substring(to: end) } ?? false
+        setSelectedRange(selectionUnchanged ? selection : NSRange(location: 0, length: 0))
         appliedContent = content
         appliedStreaming = isStreaming
         return true

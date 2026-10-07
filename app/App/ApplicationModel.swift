@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Observation
+import OSLog
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -46,6 +47,11 @@ struct DashboardWorkspaceOverview: Equatable, Sendable {
 @MainActor
 @Observable
 final class ApplicationModel {
+    #if DEBUG
+    private static let conversationPerformanceLog = Logger(
+        subsystem: "wovenmatter.desktop.dev", category: "ConversationPerformance"
+    )
+    #endif
     enum State: Equatable {
         case starting
         case ready
@@ -1176,56 +1182,78 @@ final class ApplicationModel {
         let generation = state.beginRefresh()
         do {
             guard let dashboardStore else { return }
+            let requestedWindow = state.presentation?.window
+            let knownMessageIDs = requestedWindow?.loadedOlderMessages == true
+                ? requestedWindow?.messages.map(\.id) ?? [] : []
+            #if DEBUG
+            let readStarted = ProcessInfo.processInfo.systemUptime
+            #endif
             let page = try await dashboardStore.conversationHistoryPage(
                 id: id,
                 limit: Self.initialConversationMessageLimit,
                 compactActivities: true,
                 activityCursor: state.activityRevision,
-                knownActivityRunIDs: state.presentation?.window.runs.map(\.id) ?? [],
-                knownMessageIDs: state.presentation?.window.loadedOlderMessages == true
-                    ? state.presentation?.window.messages.map(\.id) ?? [] : []
+                knownActivityRunIDs: requestedWindow?.runs.map(\.id) ?? [],
+                knownMessageIDs: knownMessageIDs
             )
+            #if DEBUG
+            let readMS = (ProcessInfo.processInfo.systemUptime - readStarted) * 1_000
+            let preparationStarted = ProcessInfo.processInfo.systemUptime
+            #endif
             guard !Task.isCancelled, page.conversationID == id else { return }
-            let previous = state.presentation
-            let renderTask = Task.detached(priority: .userInitiated) { () -> DashboardConversationPresentation? in
-                let window = previous?.window.refreshing(with: page)
-                    ?? DashboardConversationWindow(page: page)
-                guard previous?.window != window else { return nil }
-                let messagesByID = Self.renderMessagePresentations(window.messages,
-                    activities: window.activities, runs: window.runs,
-                    reusing: previous?.messagesByID ?? [:])
-                let runsByID: [String: DashboardRunPresentation]
-                if let previous, previous.window.loadedOlderMessages {
-                    var nextRuns = previous.runsByID
-                    for (runID, presentation) in Self.renderRunPresentations(
-                        page.runs,
-                        reusing: previous.runsByID
-                    ) {
-                        nextRuns[runID] = presentation
+            let known = Set(knownMessageIDs)
+            var presentation: DashboardConversationPresentation?
+            var renderedRevision: UInt64
+            // An older page can land while the page loads or renders. Render
+            // from the latest presentation, again if one landed meanwhile, so
+            // applying this refresh never drops it.
+            repeat {
+                renderedRevision = state.presentationRevision
+                let previous = state.presentation
+                let renderTask = Task.detached(priority: .userInitiated) { () -> DashboardConversationPresentation? in
+                    let window = previous?.window.refreshing(with: page, knownMessageIDs: known)
+                        ?? DashboardConversationWindow(page: page)
+                    guard previous?.window != window else { return nil }
+                    let messagesByID = Self.renderMessagePresentations(window.messages,
+                        activities: window.activities, runs: window.runs,
+                        reusing: previous?.messagesByID ?? [:])
+                    let runsByID: [String: DashboardRunPresentation]
+                    if let previous, previous.window.loadedOlderMessages {
+                        var nextRuns = previous.runsByID
+                        for (runID, presentation) in Self.renderRunPresentations(
+                            page.runs,
+                            reusing: previous.runsByID
+                        ) {
+                            nextRuns[runID] = presentation
+                        }
+                        runsByID = nextRuns
+                    } else {
+                        runsByID = Self.renderRunPresentations(
+                            page.runs,
+                            reusing: previous?.runsByID ?? [:]
+                        )
                     }
-                    runsByID = nextRuns
-                } else {
-                    runsByID = Self.renderRunPresentations(
-                        page.runs,
-                        reusing: previous?.runsByID ?? [:]
+                    return DashboardConversationPresentation(
+                        window: window,
+                        messagesByID: messagesByID,
+                        runsByID: runsByID
                     )
                 }
-                return DashboardConversationPresentation(
-                    window: window,
-                    messagesByID: messagesByID,
-                    runsByID: runsByID
-                )
-            }
-            let presentation = await withTaskCancellationHandler {
-                await renderTask.value
-            } onCancel: {
-                renderTask.cancel()
-            }
-            guard !Task.isCancelled else { return }
-            guard conversationStatesByID[id] === state,
-                  state.isCurrentRefresh(generation) else { return }
+                presentation = await withTaskCancellationHandler {
+                    await renderTask.value
+                } onCancel: {
+                    renderTask.cancel()
+                }
+                guard !Task.isCancelled else { return }
+                guard conversationStatesByID[id] === state,
+                      state.isCurrentRefresh(generation) else { return }
+            } while state.presentationRevision != renderedRevision
             state.activityRevision = page.activityRevision
             if let presentation { state.apply(presentation) }
+            #if DEBUG
+            let preparationMS = (ProcessInfo.processInfo.systemUptime - preparationStarted) * 1_000
+            Self.conversationPerformanceLog.debug("Refresh read_ms=\(readMS, privacy: .public) prepare_apply_ms=\(preparationMS, privacy: .public) summaries=\(page.activityReadMetrics.summaryRows, privacy: .public) full_decoded=\(page.activityReadMetrics.fullRowsDecoded, privacy: .public) activities=\(state.presentation?.window.activities.count ?? 0, privacy: .public)")
+            #endif
             touchConversationState(state)
             // Reloading saved messages must not erase a current execution error
             // projected by the backend; its next state snapshot owns clearing it.
@@ -1269,50 +1297,32 @@ final class ApplicationModel {
                   conversationStatesByID[id] === state else {
                 return false
             }
-            let renderTask = Task.detached(priority: .userInitiated) {
-                let messagesByID = Self.renderMessagePresentations(
-                    page.messages,
-                    activities: page.activities,
-                    runs: page.runs,
-                    reusing: current.messagesByID
-                )
-                let runsByID = Self.renderRunPresentations(
-                    page.runs,
-                    reusing: current.runsByID
-                )
-                return (messages: messagesByID, runs: runsByID)
-            }
-            let renderedPage = await withTaskCancellationHandler {
-                await renderTask.value
-            } onCancel: {
-                renderTask.cancel()
-            }
-            guard !Task.isCancelled,
-                  let latest = state.presentation,
-                  latest.window.conversationID == id else {
-                return false
-            }
-            var messagesByID = renderedPage.messages
-            for (messageID, presentation) in current.messagesByID {
-                messagesByID[messageID] = presentation
-            }
-            for (messageID, presentation) in latest.messagesByID {
-                messagesByID[messageID] = presentation
-            }
-            var runsByID = renderedPage.runs
-            for (runID, presentation) in current.runsByID {
-                runsByID[runID] = presentation
-            }
-            for (runID, presentation) in latest.runsByID {
-                runsByID[runID] = presentation
-            }
-            let expandedWindow = current.window.prepending(page)
-            state.apply(DashboardConversationPresentation(
-                window: expandedWindow.mergingNewer(latest.window),
-                messagesByID: messagesByID,
-                runsByID: runsByID
-            ))
+            var presentation: DashboardConversationPresentation
+            var renderedRevision: UInt64
+            repeat {
+                guard let latest = state.presentation else { return false }
+                renderedRevision = state.presentationRevision
+                let renderTask = Task.detached(priority: .userInitiated) {
+                    let window = latest.window.prepending(page, requestedFrom: current.window)
+                    return DashboardConversationPresentation(
+                        window: window,
+                        messagesByID: Self.renderMessagePresentations(window.messages,
+                            activities: window.activities, runs: window.runs, reusing: latest.messagesByID),
+                        runsByID: Self.renderRunPresentations(window.runs, reusing: latest.runsByID))
+                }
+                presentation = await withTaskCancellationHandler {
+                    await renderTask.value
+                } onCancel: { renderTask.cancel() }
+                guard !Task.isCancelled, conversationStatesByID[id] === state else { return false }
+            } while state.presentationRevision != renderedRevision
+            // A concurrent tail read may have advanced its cursor before this
+            // older run became known. Invalidate that read and catch every
+            // retained run up once, using cached compact summaries.
+            _ = state.beginRefresh()
+            state.activityRevision = nil
+            state.apply(presentation)
             touchConversationState(state)
+            await refreshConversation(id: id)
             workspaceError = nil
             return page.messages.isEmpty == false
         } catch is CancellationError {
@@ -1379,18 +1389,19 @@ final class ApplicationModel {
             }
             // Earlier steering replies retain canonical text. Only the owning
             // reply partitions commentary from the final/live response.
-            let transcript = AssistantTranscriptProjection(messageID: message.id,
-                content: message.content, activities: work.map(\.activity))
-            let now = Date()
+            let workActivities = work.map(\.activity)
+            let partition = ConversationWorkTimeline.displayPartition(
+                AssistantTranscriptProjection(messageID: message.id,
+                    content: message.content, activities: workActivities),
+                activities: workActivities, isLive: message.status == "streaming")
             let candidateBody = message.status == "streaming"
-                ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
+                ? AssistantStreamingText.readyPrefix(of: partition.body) : partition.body
             let existing = previous[message.id]
-            let coalescesAppend = message.status == "streaming"
-                && existing.map { candidateBody.hasPrefix($0.displayedBody)
-                    && !$0.displayedBody.isEmpty
-                    && now.timeIntervalSince($0.textDeliveredAt) < 0.4 } == true
-            let displayedBody = coalescesAppend ? existing!.displayedBody : candidateBody
-            let commentaryIDs = Set(transcript.commentary.map(\.id))
+            // The persistence invalidation stream already coalesces updates.
+            // Dropping a final append here without a trailing delivery leaves
+            // text stale until another provider event happens to arrive.
+            let displayedBody = candidateBody
+            let commentaryIDs = partition.commentaryIDs
             result[message.id] = DashboardMessagePresentation(
                 source: message.content,
                 displayedBody: displayedBody,
@@ -1404,7 +1415,7 @@ final class ApplicationModel {
                 activities: work,
                 commentaryIDs: commentaryIDs,
                 workTimeline: ConversationWorkTimeline(records: work, commentaryIDs: commentaryIDs),
-                textDeliveredAt: displayedBody == existing?.displayedBody ? existing!.textDeliveredAt : now
+                textDeliveredAt: displayedBody == existing?.displayedBody ? existing!.textDeliveredAt : Date()
             )
         }
         return result

@@ -3,17 +3,6 @@ import SwiftUI
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-func conversationActivityShowsProgress(
-    runStatus: String,
-    activityStatus: String?,
-    activityPhase: String?
-) -> Bool {
-    guard runStatus.lowercased() == "running" else { return false }
-    return ["pending", "in_progress", "running", "started"].contains(
-        activityStatus?.lowercased() ?? activityPhase?.lowercased() ?? ""
-    )
-}
-
 private struct ConversationTranscriptInteractionKey: EnvironmentKey {
     static let defaultValue: @MainActor () -> Void = {}
 }
@@ -147,7 +136,8 @@ struct ConversationWorkTranscript: View {
                                 case .commentary(let activity):
                                     ConversationResponse(
                                         content: RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? ""),
-                                        isStreaming: false
+                                        isStreaming: false,
+                                        showsCopyButton: false
                                     )
                                 case .group(let group):
                                     ConversationWorkGroupRow(
@@ -157,7 +147,12 @@ struct ConversationWorkTranscript: View {
                                         isTail: entry.id == tailID
                                     )
                                 case .activity(let activity):
-                                    ConversationActivityRow(activity: activity, runID: run.id, runStatus: run.status)
+                                    ConversationActivityRow(
+                                        activity: activity,
+                                        runID: run.id,
+                                        runStatus: run.status,
+                                        showsProgress: activity.workTimelineShowsProgress
+                                    )
                                 }
                             }
                         }
@@ -286,7 +281,12 @@ private struct ConversationWorkGroupRow: View {
             ? group.liveLabel(runIsActive: true)
             : nil
         if liveLabel == nil, let single = group.singleActivity {
-            ConversationActivityRow(activity: single, runID: runID, runStatus: runStatus)
+            ConversationActivityRow(
+                activity: single,
+                runID: runID,
+                runStatus: runStatus,
+                showsProgress: group.showsProgress(single)
+            )
         } else {
             let expanded = conversationDisclosure(
                 transcriptState,
@@ -307,7 +307,7 @@ private struct ConversationWorkGroupRow: View {
                 // Rows exist only while expanded; collapsed groups build nothing.
                 if expanded.wrappedValue {
                     ConversationBoundedWorkList(
-                        activities: group.activities,
+                        group: group,
                         runID: runID,
                         runStatus: runStatus,
                         followsAppends: liveLabel != nil
@@ -358,7 +358,7 @@ private struct ConversationWorkGroupRow: View {
 private struct ConversationBoundedWorkList: View {
     static let maximumHeight: CGFloat = 320
 
-    let activities: [AgentRunActivity]
+    let group: ConversationWorkGroup
     let runID: String
     let runStatus: String
     let followsAppends: Bool
@@ -367,8 +367,13 @@ private struct ConversationBoundedWorkList: View {
     var body: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(activities) { activity in
-                    ConversationActivityRow(activity: activity, runID: runID, runStatus: runStatus)
+                ForEach(group.activities) { activity in
+                    ConversationActivityRow(
+                        activity: activity,
+                        runID: runID,
+                        runStatus: runStatus,
+                        showsProgress: group.showsProgress(activity)
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -385,13 +390,15 @@ private struct ConversationActivityRow: View {
     let activity: AgentRunActivity
     let runID: String
     let runStatus: String
+    /// The activity is unsettled, as its timeline decides; the run gates it.
+    let showsProgress: Bool
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
     @State private var localExpanded = false
 
     var body: some View {
-        if activity.kind == .plan, !activity.planEntries.isEmpty {
-            ConversationPlanProgress(activity: activity)
+        if activity.kind == .plan, activity.planKind == "proposal" {
+            ConversationProposedPlan(activity: activity)
         } else if activity.kind != .fileChange {
             if isExpandable {
                 let expanded = conversationDisclosure(
@@ -413,7 +420,7 @@ private struct ConversationActivityRow: View {
                         ConversationActivityDetails(
                             activity: activity,
                             runID: runID,
-                            runStatus: runStatus,
+                            isLive: isLive,
                             summary: secondaryLabel
                         )
                     }
@@ -478,11 +485,7 @@ private struct ConversationActivityRow: View {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.red.opacity(0.8))
                 .frame(width: 17)
-        } else if conversationActivityShowsProgress(
-            runStatus: runStatus,
-            activityStatus: activity.status,
-            activityPhase: activity.phase
-        ) {
+        } else if isLive {
             ProgressView()
                 .controlSize(.mini)
                 .frame(width: 17)
@@ -497,7 +500,7 @@ private struct ConversationActivityRow: View {
     private var primaryLabel: String {
         switch activity.kind {
         case .thought, .tool:
-            return activity.workTimelineLabel(active: runStatus == "running" && activity.workTimelineShowsProgress)
+            return activity.workTimelineLabel(active: isLive)
         case .assistant: return activity.title?.nonempty ?? "Commentary"
         case .plan: return activity.title?.nonempty ?? "Updated the plan"
         case .fileChange: return activity.title?.nonempty ?? "Changed files"
@@ -520,6 +523,8 @@ private struct ConversationActivityRow: View {
     }
 
     private var isFailure: Bool { activity.workTimelineIsFailure }
+
+    private var isLive: Bool { runStatus == "running" && showsProgress }
 
     /// Expandable when anything is not already fully shown in the label.
     private var isExpandable: Bool {
@@ -553,38 +558,75 @@ private struct ConversationActivityRow: View {
     }
 }
 
+/// Complete records of settled activities, keyed by run, activity, and detail
+/// version, so re-expanding a row or scrolling it back into view does not
+/// refetch. Live records are never cached.
+@MainActor
+private enum ConversationActivityDetailCache {
+    private final class Entry {
+        let activity: AgentRunActivity
+        init(_ activity: AgentRunActivity) { self.activity = activity }
+    }
+
+    private static let entries: NSCache<NSString, Entry> = {
+        let cache = NSCache<NSString, Entry>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 16 * 1_024 * 1_024
+        return cache
+    }()
+
+    static func key(runID: String, activity: AgentRunActivity) -> NSString {
+        "\(runID)\u{1F}\(activity.id)\u{1F}\(activity.detailVersion.map(String.init) ?? "")" as NSString
+    }
+
+    static subscript(key: NSString) -> AgentRunActivity? {
+        get { entries.object(forKey: key)?.activity }
+        set {
+            if let newValue {
+                let cost = [newValue.content, newValue.rawInputJSON, newValue.rawOutputJSON, newValue.rawPayloadJSON]
+                    .compactMap { $0 }.reduce(0) { $0 + $1.utf8.count }
+                entries.setObject(Entry(newValue), forKey: key, cost: cost)
+            } else { entries.removeObject(forKey: key) }
+        }
+    }
+}
+
 /// Expanded details. Compact activity records may omit raw fields and bound
-/// long content; the complete record then loads on expansion, again once the
-/// activity settles or its settled detail version changes, and is discarded
-/// when the row collapses.
+/// long content; the complete record then loads on expansion and again once
+/// the activity settles or its settled detail version changes. While the
+/// activity is live, its streamed fields stay current and the loaded record
+/// only supplies what the compact record omits.
 private struct ConversationActivityDetails: View {
     let activity: AgentRunActivity
     let runID: String
-    let runStatus: String
+    let isLive: Bool
     /// Text already shown in the row label.
     let summary: String?
     @Environment(\.conversationActivityDetails) private var loadDetails
     @State private var loaded: AgentRunActivity?
-    @State private var loading = false
+    @State private var loadToken: UUID?
     @State private var error: String?
     @State private var attempt = 0
+    @State private var isVisible = false
 
     private struct LoadKey: Hashable {
+        let visible: Bool
         let settled: Bool
         let version: Int64?
         let attempt: Int
     }
 
     var body: some View {
-        let content = loaded?.content ?? activity.content
+        let complete = self.complete
+        let content = field(\.content)
         VStack(alignment: .leading, spacing: 8) {
-            if let title = loaded?.title, title != activity.title {
+            if !isLive, let title = complete?.title, title != activity.title {
                 ConversationPagedText(text: title, style: .prose)
             }
-            if let detail = loaded?.detail, detail != activity.detail {
+            if !isLive, let detail = complete?.detail, detail != activity.detail {
                 ConversationPagedText(text: detail, style: .prose)
             }
-            if let subagents = loaded?.subagents ?? activity.subagents {
+            if let subagents = field(\.subagents) {
                 ForEach(subagents) { child in
                     ConversationSubagentRow(child: child)
                 }
@@ -592,10 +634,10 @@ private struct ConversationActivityDetails: View {
             if activity.kind != .activity, let content = content?.nonempty, content != summary {
                 ConversationPagedText(text: content, style: activity.kind == .thought ? .prose : .code)
             }
-            rawBlock("Input", loaded?.rawInputJSON ?? activity.rawInputJSON)
-            rawBlock("Output", loaded?.rawOutputJSON ?? activity.rawOutputJSON)
-            rawBlock("Event", loaded?.rawPayloadJSON ?? activity.rawPayloadJSON)
-            if loading {
+            rawBlock("Input", field(\.rawInputJSON))
+            rawBlock("Output", field(\.rawOutputJSON))
+            rawBlock("Event", field(\.rawPayloadJSON))
+            if loadToken != nil {
                 HStack(spacing: 7) {
                     ProgressView().controlSize(.small)
                     Text("Loading details…")
@@ -617,25 +659,69 @@ private struct ConversationActivityDetails: View {
         }
         .padding(.top, 7)
         .padding(.leading, 26)
-        .task(id: loadKey) { await load() }
+        .onScrollVisibilityChange(threshold: 0.01) { visible in
+            isVisible = visible
+            if !visible { loaded = nil }
+        }
+        .task(id: loadKey) {
+            let key = loadKey
+            guard key.visible else { return }
+            repeat {
+                await load(key)
+                guard isLive, !Task.isCancelled else { break }
+                // Only expanded, on-screen live details poll. Collapsed rows
+                // never decode payloads, and settlement delivers a final read.
+                do { try await Task.sleep(for: error == nil ? .milliseconds(500) : .seconds(2)) }
+                catch { break }
+            } while !Task.isCancelled
+        }
     }
 
-    /// Streaming deltas do not refetch: only expansion, settling, a settled
-    /// version change, or a retry does.
+    /// Per-token revisions do not restart the visible detail task.
     private var loadKey: LoadKey {
-        let settled = runStatus != "running" || !activity.workTimelineShowsProgress
-        return LoadKey(settled: settled, version: settled ? activity.detailVersion : nil, attempt: attempt)
+        LoadKey(visible: isVisible, settled: !isLive, version: isLive ? nil : activity.detailVersion, attempt: attempt)
     }
 
-    private func load() async {
+    private var cacheKey: NSString { ConversationActivityDetailCache.key(runID: runID, activity: activity) }
+
+    private var complete: AgentRunActivity? {
+        isLive ? loaded : ConversationActivityDetailCache[cacheKey] ?? loaded
+    }
+
+    /// The bounded live preview can be shorter than the loaded detail. Keep
+    /// the full value until the next visible-only refresh, but use a corrected
+    /// preview immediately if it is no longer a prefix of that value.
+    private func field<Value>(_ path: KeyPath<AgentRunActivity, Value?>) -> Value? {
+        let complete = self.complete
+        if isLive, path == \AgentRunActivity.content,
+           let preview = activity.content, let full = complete?.content,
+           !full.hasPrefix(preview) {
+            return activity[keyPath: path]
+        }
+        if isLive, path != \AgentRunActivity.content {
+            return activity[keyPath: path] ?? complete?[keyPath: path]
+        }
+        return complete?[keyPath: path] ?? activity[keyPath: path]
+    }
+
+    private func load(_ key: LoadKey) async {
         guard activity.detailsAvailable == true, let loadDetails else { return }
-        loading = true
-        error = nil
-        defer { loading = false }
+        let cacheKey = self.cacheKey
+        if key.settled, let cached = ConversationActivityDetailCache[cacheKey] {
+            loaded = cached
+            error = nil
+            return
+        }
+        let token = UUID()
+        if loaded == nil { loadToken = token }
+        // A superseded load must not clear the indicator of its replacement.
+        defer { if loadToken == token { loadToken = nil } }
         do {
             let value = try await loadDetails(runID, activity.id)
             guard !Task.isCancelled else { return }
             loaded = value
+            error = nil
+            if key.settled { ConversationActivityDetailCache[cacheKey] = value }
             if value == nil { error = "Details for this activity are no longer available." }
         } catch is CancellationError {
         } catch {
@@ -723,58 +809,33 @@ private extension ConversationToolAction {
     }
 }
 
-private struct ConversationPlanProgress: View {
+/// A proposed plan is history, not execution progress: no counts or checks.
+private struct ConversationProposedPlan: View {
     let activity: AgentRunActivity
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                HStack(spacing: 3) {
-                    ForEach(activity.planEntries.indices, id: \.self) { index in
-                        Capsule()
-                            .fill(isComplete(activity.planEntries[index])
-                                ? DashboardPalette.primary
-                                : DashboardPalette.foreground.opacity(0.12))
-                            .frame(width: 18, height: 4)
-                    }
-                }
-                Text(activity.title?.nonempty ?? currentStep?.content ?? "Plan")
-                    .lineLimit(1)
-                Text("\(completedCount)/\(activity.planEntries.count)")
-                    .monospacedDigit()
+            HStack(spacing: 9) {
+                Image(systemName: "list.bullet.clipboard")
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(DashboardPalette.mutedForeground)
+                    .frame(width: 17)
+                Text(activity.title?.nonempty ?? "Proposed plan")
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
             }
-            .font(.system(size: 13.5, weight: .medium))
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(activity.planEntries) { entry in
-                    HStack(alignment: .top, spacing: 9) {
-                        Image(systemName: isComplete(entry) ? "checkmark" : "circle")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(isComplete(entry)
-                                ? DashboardPalette.primary
-                                : DashboardPalette.mutedForeground)
-                            .frame(width: 14, height: 18)
-                        Text(entry.content)
-                            .font(.system(size: 13))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .padding(.leading, 4)
-            if let content = activity.content, !content.isEmpty {
+            if let content = activity.content?.nonempty {
                 ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
+            } else {
+                ForEach(activity.planEntries.indices, id: \.self) { index in
+                    Text("• \(activity.planEntries[index].content)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 26)
+                }
             }
         }
-    }
-
-    private var completedCount: Int { activity.planEntries.filter(isComplete).count }
-    private var currentStep: AgentRunPlanEntry? {
-        activity.planEntries.first { !isComplete($0) } ?? activity.planEntries.last
-    }
-    private func isComplete(_ entry: AgentRunPlanEntry) -> Bool {
-        ["completed", "complete", "done"].contains(entry.status.lowercased())
     }
 }
 
@@ -785,7 +846,7 @@ struct ConversationChangedFilesCard: View {
     var topSpacing: () -> CGFloat = { 0 }
     @State private var expanded = true
     @State private var expandedDirectories: Set<String> = []
-    @State private var selectedChange: AgentRunFileChange?
+    @State private var selectedChange: ConversationChangedFile?
 
     var body: some View {
         let changes = self.changes
@@ -888,25 +949,46 @@ struct ConversationChangedFilesCard: View {
                     .stroke(DashboardPalette.foreground.opacity(0.10), lineWidth: 1)
             }
             .sheet(item: $selectedChange) { change in
-                ConversationDiffSheet(change: change)
+                // Resolve the current owner/revision while the sheet is open.
+                ConversationDiffSheet(path: change.path, file: changes.first { $0.path == change.path })
             }
             .padding(.top, topSpacing())
         }
     }
 
-    private var changes: [AgentRunFileChange] {
-        var result: [String: AgentRunFileChange] = [:]
-        for change in records.flatMap(\.activity.changes) { result[change.path] = change }
+    private var changes: [ConversationChangedFile] {
+        var result: [String: ConversationChangedFile] = [:]
+        for record in records {
+            for change in record.activity.changes {
+                result[change.path] = ConversationChangedFile(
+                    path: change.path, runID: record.runID, activityID: record.activity.id,
+                    version: record.activity.detailVersion,
+                    additions: change.additionCount ?? 0, deletions: change.deletionCount ?? 0
+                )
+            }
+        }
         return result.values.sorted { $0.path < $1.path }
     }
 
+}
+
+/// Tree and selection state carry metadata only, even if a caller supplies a
+/// full record. Counts are materialized on the database worker, never in body.
+private struct ConversationChangedFile: Identifiable, Hashable {
+    let path: String
+    let runID: String
+    let activityID: String
+    let version: Int64?
+    let additions: Int
+    let deletions: Int
+    var id: String { path }
 }
 
 private struct ConversationChangedFileTreeNode: Identifiable {
     let id: String
     let path: String
     let name: String
-    let change: AgentRunFileChange?
+    let change: ConversationChangedFile?
     let children: [Self]
 
     var isDirectory: Bool { change == nil }
@@ -920,7 +1002,7 @@ private struct ConversationChangedFileTreeNode: Identifiable {
         (isDirectory ? [path] : []) + children.flatMap(\.allDirectoryPaths)
     }
 
-    static func build(_ changes: [AgentRunFileChange]) -> [Self] {
+    static func build(_ changes: [ConversationChangedFile]) -> [Self] {
         nodes(
             changes.map {
                 ($0.path.split(separator: "/").map(String.init), $0)
@@ -930,7 +1012,7 @@ private struct ConversationChangedFileTreeNode: Identifiable {
     }
 
     private static func nodes(
-        _ entries: [([String], AgentRunFileChange)],
+        _ entries: [([String], ConversationChangedFile)],
         prefix: String
     ) -> [Self] {
         let groups = Dictionary(grouping: entries) { $0.0.first ?? $0.1.path }
@@ -983,36 +1065,121 @@ private struct ConversationChangedFileTreeRow: Identifiable {
 }
 
 private struct ConversationDiffSheet: View {
-    let change: AgentRunFileChange
+    let path: String
+    let file: ConversationChangedFile?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.conversationActivityDetails) private var loadDetails
+    @State private var state = LoadState.loading
+    @State private var stateKey: LoadKey?
+    @State private var loadToken: UUID?
+    @State private var attempt = 0
+
+    private enum LoadState {
+        case loading
+        case loaded(AgentRunFileChange)
+        case failed(String)
+    }
+
+    private struct LoadKey: Hashable {
+        let file: ConversationChangedFile?
+        let attempt: Int
+    }
+
+    private var loadKey: LoadKey { LoadKey(file: file, attempt: attempt) }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(change.path).font(.system(size: 13, weight: .semibold))
+                Text(path).font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(16)
             Divider()
-            if let unifiedDiff = change.unifiedDiff, !unifiedDiff.isEmpty {
-                unifiedDiffPane(unifiedDiff)
-            } else if change.oldText != nil || !change.newText.isEmpty {
-                HStack(spacing: 0) {
-                    diffPane(title: "Before", text: change.oldText ?? "", color: .red)
-                    Divider()
-                    diffPane(title: "After", text: change.newText, color: .green)
-                }
+            if stateKey != loadKey {
+                loading
             } else {
-                ContentUnavailableView(
-                    "Diff unavailable",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text("The agent reported the changed path but did not supply diff content.")
-                )
+                switch state {
+                case .loading:
+                    loading
+                case .loaded(let change):
+                    diffContent(change)
+                case .failed(let error):
+                    VStack(spacing: 12) {
+                        Text(error)
+                            .foregroundStyle(DashboardPalette.danger)
+                            .textSelection(.enabled)
+                        Button("Retry") { attempt += 1 }
+                            .buttonStyle(DashboardQuietButtonStyle())
+                    }
+                    .font(.system(size: 13))
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .frame(minWidth: 780, idealWidth: 1040, minHeight: 520, idealHeight: 700)
+        .task(id: loadKey) { await load(loadKey) }
+        .onDisappear {
+            loadToken = nil
+            state = .loading
+            stateKey = nil
+        }
+    }
+
+    private var loading: some View {
+        ProgressView("Loading diff…")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func load(_ key: LoadKey) async {
+        guard !Task.isCancelled else { return }
+        let token = UUID()
+        loadToken = token
+        stateKey = key
+        state = .loading
+        defer { if loadToken == token { loadToken = nil } }
+        guard let file = key.file else {
+            state = .failed("This file change is no longer available.")
+            return
+        }
+        guard let loadDetails else {
+            state = .failed("Diff details are unavailable in this conversation.")
+            return
+        }
+        do {
+            let activity = try await loadDetails(file.runID, file.activityID)
+            guard !Task.isCancelled, loadToken == token else { return }
+            guard let change = activity?.changes.last(where: { $0.path == file.path }) else {
+                state = .failed("This file change is no longer available.")
+                return
+            }
+            // Retain only the selected file for this sheet's lifetime.
+            state = .loaded(change)
+        } catch {
+            guard !Task.isCancelled, loadToken == token else { return }
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    @ViewBuilder
+    private func diffContent(_ change: AgentRunFileChange) -> some View {
+        if let unifiedDiff = change.unifiedDiff, !unifiedDiff.isEmpty {
+            unifiedDiffPane(unifiedDiff)
+        } else if change.oldText != nil || !change.newText.isEmpty {
+            HStack(spacing: 0) {
+                diffPane(title: "Before", text: change.oldText ?? "", color: .red)
+                Divider()
+                diffPane(title: "After", text: change.newText, color: .green)
+            }
+        } else {
+            ContentUnavailableView(
+                "Diff unavailable",
+                systemImage: "doc.text.magnifyingglass",
+                description: Text("The agent reported the changed path but did not supply diff content.")
+            )
+        }
     }
 
     private func diffPane(title: String, text: String, color: Color) -> some View {

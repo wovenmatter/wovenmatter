@@ -48,20 +48,27 @@ extension WorkspaceDatabaseConnection {
           END;
           """)
       }
-      let backfillQuery = try prepareUnlocked("SELECT 1 FROM desktop_activity_index_schema WHERE version=1")
-      let needsBackfill = sqlite3_step(backfillQuery) != SQLITE_ROW
+      let backfillQuery = try prepareUnlocked("SELECT COALESCE(MAX(version),0) FROM desktop_activity_index_schema")
+      guard sqlite3_step(backfillQuery) == SQLITE_ROW else { throw stepError() }
+      let schemaVersion = sqlite3_column_int(backfillQuery, 0)
+      let needsBackfill = schemaVersion == 0
       sqlite3_finalize(backfillQuery)
       for (table, kind, prefix) in [
         ("dashboard_run_events", "event", ""),
         ("dashboard_run_trace_events", "trace", "trace-")
       ] {
+        if schemaVersion < 2 {
+          for operation in ["insert", "update", "delete"] {
+            try executeUnlocked("DROP TRIGGER IF EXISTS activity_index_\(kind)_\(operation)")
+          }
+        }
         let hidden = kind == "trace"
           ? "new.is_visible=0 OR new.event_type IN ('assistant_delta','assistant_replace','done')" : "0"
         for operation in ["INSERT", "UPDATE"] {
           let condition = operation == "UPDATE"
             ? (kind == "event"
               ? "WHEN old.content IS NOT new.content OR old.event_type IS NOT new.event_type OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id OR old.created_at IS NOT new.created_at"
-              : "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.content IS NOT new.content OR old.is_visible IS NOT new.is_visible OR old.event_type IS NOT new.event_type OR old.event_name IS NOT new.event_name OR old.event_phase IS NOT new.event_phase OR old.tool_name IS NOT new.tool_name OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id OR old.created_at IS NOT new.created_at")
+              : "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.content IS NOT new.content OR old.is_visible IS NOT new.is_visible OR old.event_type IS NOT new.event_type OR old.event_name IS NOT new.event_name OR old.event_phase IS NOT new.event_phase OR old.tool_name IS NOT new.tool_name OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id OR old.created_at IS NOT new.created_at OR old.seq IS NOT new.seq")
             : ""
           try executeUnlocked("""
             CREATE TRIGGER IF NOT EXISTS activity_index_\(kind)_\(operation.lowercased()) AFTER \(operation) ON \(table) \(condition) BEGIN
@@ -90,7 +97,16 @@ extension WorkspaceDatabaseConnection {
             CASE WHEN \(historicalHidden) THEN 1 ELSE 0 END FROM \(table);
           """) }
       }
-      try executeUnlocked("INSERT OR IGNORE INTO desktop_activity_index_schema VALUES(1)")
+      if schemaVersion > 0 && schemaVersion < 2 {
+        // Earlier development triggers missed chronology-only corrections.
+        // Refresh existing readers without resurrecting hidden/deleted records.
+        try executeUnlocked("""
+          UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1;
+          UPDATE desktop_activity_index SET summary=NULL,activity_id=NULL,
+            revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1);
+          """)
+      }
+      try executeUnlocked("INSERT OR IGNORE INTO desktop_activity_index_schema VALUES(2)")
     }
   }
 

@@ -25,6 +25,9 @@ struct DashboardPanelControlButton: View {
 }
 
 struct DashboardComposer: View {
+    /// Inset above and below the content; the bottom control row ends here.
+    static let verticalPadding: CGFloat = 10
+
     let placeholder: String
     @Binding var draft: String
     let attachedNoteTitle: String?
@@ -51,6 +54,7 @@ struct DashboardComposer: View {
     let onUnavailableAction: (String) -> Void
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
+    var onStop: (() -> Void)? = nil
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTaskProgress) private var taskProgress
@@ -147,7 +151,7 @@ struct DashboardComposer: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, Self.verticalPadding)
         .glassEffect(
             .regular.interactive(),
             in: RoundedRectangle(
@@ -563,20 +567,24 @@ struct DashboardComposer: View {
     }
 
     private var sendControl: some View {
-        Button {
+        let showsStop = onStop != nil && !canSend
+        return Button {
             onActivate()
-            onSend()
+            if showsStop { onStop?() } else { onSend() }
         } label: {
-            DashboardLucideIcon(glyph: .arrowUp, size: 16)
+            Group {
+                if showsStop { Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold)) }
+                else { DashboardLucideIcon(glyph: .arrowUp, size: 16) }
+            }
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(DashboardPalette.primary)
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!canSend)
-        .opacity(canSend ? 1 : 0.4)
-        .accessibilityLabel("Send")
+        .disabled(!canSend && !showsStop)
+        .opacity(canSend || showsStop ? 1 : 0.4)
+        .accessibilityLabel(showsStop ? "Stop" : "Send")
     }
 
     private var permissionTitle: String {

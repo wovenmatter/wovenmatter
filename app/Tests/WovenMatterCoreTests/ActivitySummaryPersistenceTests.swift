@@ -56,8 +56,9 @@ struct ActivitySummaryPersistenceTests {
     #expect(compact.activities.first { $0.activity.id == "thought" }?.activity.content == "first second")
     #expect(compact.activities.first { $0.activity.id == "plan" }?.activity.planEntries == entries)
     #expect(compact.activities.first { $0.activity.id == "plan" }?.activity.content == large)
-    #expect(compact.activities.first { $0.activity.id == "change" }?.activity.changes == changes)
-    #expect(compact.activities.first { $0.activity.id == "change" }?.activity.content == large)
+    #expect(compact.activities.first { $0.activity.id == "change" }?.activity.changes
+      == [.init(path: "fixture.swift", newText: "", additionCount: 1, deletionCount: 1)])
+    #expect(compact.activities.first { $0.activity.id == "change" }?.activity.content == String(large.prefix(280)))
     let childSummary = try #require(compact.activities.first { $0.activity.id == children.id }?.activity)
     #expect(childSummary.subagents == nil && childSummary.detailsAvailable == true)
     #expect(compact.activities.filter { $0.activity.kind == .plan }.count == 1)

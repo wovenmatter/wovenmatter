@@ -508,7 +508,7 @@ extension WorkspaceDatabaseConnection {
     if assistantOnly { return records.sorted(by: WorkspaceRunActivityRecord.precedes) }
     let traces = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, event_name,
-        event_phase, tool_name, content, raw_event_json, created_at
+        event_phase, tool_name, content, raw_event_json, created_at, seq
       FROM dashboard_run_trace_events
       WHERE run_id IN (\(placeholders))
         AND is_visible = 1
@@ -568,7 +568,8 @@ extension WorkspaceDatabaseConnection {
           rawOutputJSON: Self.traceJSONString(data?["rawOutput"] ?? data?["result"]),
           rawPayloadJSON: rawJSON
         ),
-        createdAt: try text(traces, column: 9)
+        createdAt: try text(traces, column: 9),
+        sequence: sqlite3_column_type(traces, 10) == SQLITE_NULL ? nil : sqlite3_column_int64(traces, 10)
       ))
     }
     return records.sorted(by: WorkspaceRunActivityRecord.precedes)

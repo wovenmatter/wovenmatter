@@ -24,7 +24,8 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
   /// `commentaryIDs` (the final reply is rendered outside the transcript).
   public init(records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) {
     self.init(entries: Self.entries(
-      for: Self.mergedActivities(in: records, commentaryIDs: commentaryIDs)
+      for: Self.mergedActivities(in: records, commentaryIDs: commentaryIDs),
+      hasChecklist: records.contains { $0.activity.kind == .plan && $0.activity.planKind != "proposal" }
     ))
   }
 
@@ -54,9 +55,12 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
     var order: [String] = []
     var values: [String: AgentRunActivity] = [:]
     var cleared: Set<String> = []
+    var versions: [String: Hasher] = [:]
     for record in records.sorted(by: WorkspaceRunActivityRecord.precedes) {
       let update = record.activity
       guard update.kind != .assistant || commentaryIDs.contains(update.id) else { continue }
+      versions[update.id, default: Hasher()].combine(record.id)
+      versions[update.id, default: Hasher()].combine(update.detailVersion)
       if update.phase == "clear" {
         // Keep the merged value so a later update restores the cleared
         // item from the clear's reset state rather than from stale entries.
@@ -72,18 +76,28 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
         values[update.id] = update
       }
     }
-    return order.compactMap { cleared.contains($0) ? nil : values[$0] }
+    return order.compactMap { id in
+      guard !cleared.contains(id), let value = values[id] else { return nil }
+      // A legacy activity can comprise several trace records. Corrections or
+      // deletion of any contributor must invalidate its cached full detail.
+      let version = versions[id] ?? Hasher()
+      return value.merging(AgentRunActivity(
+        id: id, kind: value.kind, detailVersion: Int64(version.finalize())
+      ))
+    }
   }
 
-  static func entries(for activities: [AgentRunActivity]) -> [ConversationWorkTimelineEntry] {
+  static func entries(for activities: [AgentRunActivity], hasChecklist: Bool) -> [ConversationWorkTimelineEntry] {
     var entries: [ConversationWorkTimelineEntry] = []
     var pending: [AgentRunActivity] = []
-    func flush() {
+    func flush(endsTimeline: Bool = false) {
       guard let first = pending.first else { return }
       // A group keeps the first member's ID as it grows, so disclosure state
       // survives start/result updates and additional calls.
       entries.append(ConversationWorkTimelineEntry(
-        content: .group(ConversationWorkGroup(id: "group:\(first.id)", activities: pending))
+        content: .group(ConversationWorkGroup(
+          id: "group:\(first.id)", activities: pending, endsTimeline: endsTimeline
+        ))
       ))
       pending.removeAll(keepingCapacity: true)
     }
@@ -92,7 +106,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       case .fileChange:
         continue
       case .tool:
-        pending.append(activity)
+        if !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist) { pending.append(activity) }
       case .thought:
         // Empty reasoning has nothing to disclose (T3 `workEntryIsVisibleInGroup`).
         if activity.workTimelineThoughtHasText { pending.append(activity) }
@@ -100,13 +114,52 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
         flush()
         guard activity.content?.workTimelineNonempty != nil else { continue }
         entries.append(ConversationWorkTimelineEntry(content: .commentary(activity)))
+      case .plan where activity.planKind != "proposal":
+        // Execution checklists live above the composer. Their revisions and
+        // native control calls remain in the capture, without interrupting
+        // the chronological commentary/command groups.
+        continue
       case .plan, .progress, .activity:
         flush()
         entries.append(ConversationWorkTimelineEntry(content: .activity(activity)))
       }
     }
-    flush()
+    flush(endsTimeline: true)
     return entries
+  }
+
+  /// The reply text and commentary IDs to display for one assistant message.
+  /// `AssistantTranscriptProjection` keeps the latest segment as the reply,
+  /// since the last segment may be its final answer. A segment followed by
+  /// visible work stays commentary, including after interruption; hidden
+  /// checklist mutations never displace the response.
+  public static func displayPartition(
+    _ transcript: AssistantTranscriptProjection,
+    activities: [AgentRunActivity],
+    isLive _: Bool
+  ) -> (body: String, commentaryIDs: Set<String>) {
+    var commentaryIDs = Set(transcript.commentary.map(\.id))
+    guard let index = activities.lastIndex(where: { activity in
+      guard activity.kind == .assistant, !commentaryIDs.contains(activity.id),
+            let segment = activity.content?.workTimelineNonempty else { return false }
+      return transcript.body.hasPrefix(segment)
+        && transcript.body.dropFirst(segment.count).allSatisfy(\.isWhitespace)
+    }), let segment = activities[index].content else {
+      return (transcript.body, commentaryIDs)
+    }
+    let hasChecklist = activities.contains { $0.kind == .plan && $0.planKind != "proposal" }
+    let followedByWork = activities[(index + 1)...].contains { activity in
+      switch activity.kind {
+      case .assistant, .fileChange: false
+      case .thought: activity.workTimelineThoughtHasText
+      case .tool: !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist)
+      case .plan: activity.planKind == "proposal"
+      case .progress, .activity: true
+      }
+    }
+    guard followedByWork else { return (transcript.body, commentaryIDs) }
+    commentaryIDs.insert(activities[index].id)
+    return (String(transcript.body.dropFirst(segment.count)), commentaryIDs)
   }
 }
 
@@ -144,8 +197,12 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public let isThoughtOnly: Bool
   /// The latest tool call failed (T3 marks the group, not every member).
   public let hasFailure: Bool
+  /// Members still pending or running. Providers never settle a thought
+  /// without a status, so only such a thought that ends the timeline is live.
+  public let activeActivityIDs: Set<String>
 
-  public init(id: String, activities: [AgentRunActivity]) {
+  /// `endsTimeline` marks the run's final entry.
+  public init(id: String, activities: [AgentRunActivity], endsTimeline: Bool = false) {
     self.id = id
     self.activities = activities
     let tools = activities.filter { $0.kind != .thought }
@@ -154,6 +211,18 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     action = actions.count == 1 ? actions.first : nil
     hasFailure = tools.last?.workTimelineIsFailure ?? false
     summary = Self.summary(activities: activities, tools: tools)
+    activeActivityIDs = Set(activities.enumerated().compactMap { index, activity in
+      let live = activity.kind == .thought
+        ? endsTimeline && index == activities.count - 1
+          && (activity.status?.workTimelineNonempty == nil || activity.workTimelineShowsProgress)
+        : activity.workTimelineShowsProgress
+      return live ? activity.id : nil
+    })
+  }
+
+  /// Whether a member is still pending or running; see `activeActivityIDs`.
+  public func showsProgress(_ activity: AgentRunActivity) -> Bool {
+    activeActivityIDs.contains(activity.id)
   }
 
   /// The single member shown without a group disclosure (T3 shows a lone
@@ -167,13 +236,13 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   /// running call in the present tense, otherwise the latest call settled.
   public func liveLabel(runIsActive: Bool) -> String? {
     guard runIsActive else { return nil }
-    if let running = activities.last(where: \.workTimelineShowsProgress) {
+    if let running = activities.last(where: showsProgress) {
       return running.workTimelineLabel(active: true)
     }
     return activities.last?.workTimelineLabel(active: false)
   }
 
-  public var hasActiveActivity: Bool { activities.contains(where: \.workTimelineShowsProgress) }
+  public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
 
   static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
     if tools.isEmpty {
@@ -222,7 +291,7 @@ public enum ConversationToolAction: Hashable, Sendable {
 
   public init(_ activity: AgentRunActivity) {
     let name = (activity.toolName ?? activity.title ?? "").lowercased()
-    if name.contains("bash") || name.contains("shell") || name == "exec"
+    if name.contains("bash") || name.contains("shell") || name == "exec" || name == "execute"
       || name.contains("command") || name.contains("terminal") {
       self = .command
     } else if name.contains("websearch") || name.contains("web_search") || name.contains("web search") {
@@ -293,6 +362,15 @@ public enum ConversationToolAction: Hashable, Sendable {
 }
 
 public extension AgentRunActivity {
+  func workTimelineHidesChecklistTool(hasChecklist: Bool) -> Bool {
+    hasChecklist && workTimelineIsChecklistTool && !workTimelineIsFailure
+  }
+
+  var workTimelineIsChecklistTool: Bool {
+    guard kind == .tool else { return false }
+    let names = [toolName, title].compactMap { $0?.lowercased() }
+    return names.contains { ["update_plan", "update_checklist", "update_todos", "todowrite", "todo_write", "todo_list"].contains($0) }
+  }
   /// Whether the activity is still pending or running, by status or phase.
   var workTimelineShowsProgress: Bool {
     let value = (status ?? phase ?? "").lowercased()
@@ -309,10 +387,7 @@ public extension AgentRunActivity {
   func workTimelineLabel(active: Bool) -> String {
     switch kind {
     case .thought:
-      if let title = title?.workTimelineSingleLine,
-         !["thinking", "thought", "reasoning"].contains(title.lowercased()) {
-        return title
-      }
+      if let title = workTimelineThoughtTitle { return title }
       if let detail = detail?.workTimelineSingleLine { return detail }
       if let heading = content.flatMap(Self.leadingBoldHeading) { return heading }
       return active ? "Thinking" : "Thought"
@@ -324,9 +399,16 @@ public extension AgentRunActivity {
     }
   }
 
+  /// A generic "Thinking" title alone discloses nothing, so it is not text.
   internal var workTimelineThoughtHasText: Bool {
-    title?.workTimelineNonempty != nil || detail?.workTimelineNonempty != nil
+    workTimelineThoughtTitle != nil || detail?.workTimelineNonempty != nil
       || content?.workTimelineNonempty != nil
+  }
+
+  private var workTimelineThoughtTitle: String? {
+    guard let title = title?.workTimelineSingleLine,
+          !["thinking", "thought", "reasoning"].contains(title.lowercased()) else { return nil }
+    return title
   }
 
   /// Reasoning summaries often open with `**Heading**`; use it as the label.

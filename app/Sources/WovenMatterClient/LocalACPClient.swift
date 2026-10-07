@@ -1501,7 +1501,13 @@ public actor LocalACPClient {
     }
 
     /// Called by the coordinator only after every admitted input has settled.
-    public func finishRun() {
+    public func finishRun() async {
+        // No native thought-end notification exists in ACP. The coordinator
+        // calls this only after every admitted input and native update settles.
+        if let reasoningID = activeReasoningPhaseID {
+            try? await completeReasoningPhase(reasoningID)
+        }
+        activeReasoningPhaseID = nil
         retainedRunHandlers = nil
         activePrompts.removeAll()
         assistantSnapshotAssembly.reset()
@@ -1655,7 +1661,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
-        finishRun()
+        await finishRun()
         for response in interactiveResponses.values { response.fence.cancel() }
         readerTask?.cancel()
         readerTask = nil
@@ -1888,10 +1894,15 @@ public actor LocalACPClient {
             default:
                 break
             }
-            if let event = projectedEvent(
+            let previousReasoningID = activeReasoningPhaseID
+            let event = projectedEvent(
                 from: envelope,
                 workingDirectory: workingDirectory
-            ) {
+            )
+            if let previousReasoningID, previousReasoningID != activeReasoningPhaseID {
+                try await completeReasoningPhase(previousReasoningID)
+            }
+            if let event {
                 try await activeEventHandler?(event)
             }
         } else if envelope.method == "session/request_permission" {
@@ -1911,6 +1922,16 @@ public actor LocalACPClient {
                 handler: activeInteractionHandler
             )
         } else if envelope.method == "cursor/create_plan" {
+            guard belongsToActiveSession(envelope) else {
+                if let id = envelope.id {
+                    try await respondToCancelledCursorRequest(PendingCursorRequest(id: id, method: "cursor/create_plan"))
+                }
+                return
+            }
+            if let id = activeReasoningPhaseID {
+                activeReasoningPhaseID = nil
+                try await completeReasoningPhase(id)
+            }
             if let event = Self.cursorPlanEvent(from: envelope) {
                 try await activeEventHandler?(event)
             }
@@ -1919,6 +1940,11 @@ public actor LocalACPClient {
                 handler: activeInteractionHandler
             )
         } else if envelope.method == "cursor/update_todos" {
+            guard belongsToActiveSession(envelope) else { return }
+            if let id = activeReasoningPhaseID {
+                activeReasoningPhaseID = nil
+                try await completeReasoningPhase(id)
+            }
             if let event = Self.cursorTodoEvent(from: envelope) {
                 try await activeEventHandler?(event)
             }
@@ -1928,6 +1954,12 @@ public actor LocalACPClient {
                 error: ACPErrorBody(code: -32601, message: "Method not found")
             ))
         }
+    }
+
+    private func completeReasoningPhase(_ id: String) async throws {
+        try await activeEventHandler?(.activity(AgentRunActivity(
+            id: id, kind: .thought, phase: "end", title: "Thinking", status: "completed"
+        ), appendsContent: false))
     }
 
     private func belongsToActiveSession(_ envelope: ACPEnvelope) -> Bool {
@@ -2653,7 +2685,8 @@ public actor LocalACPClient {
             activeReasoningPhaseID = nil
             return .activity(
                 Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory),
-                appendsContent: false
+                appendsContent: update["content"]?.arrayValue?.isEmpty != false
+                    && update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue != nil
             )
         case "plan":
             activeReasoningPhaseID = nil
@@ -2777,6 +2810,11 @@ public actor LocalACPClient {
                 break
             }
         }
+        // Codex ACP streams terminal output in metadata instead of content
+        // blocks. Preserve its exact chunks as readable output as well as in
+        // the canonical wire capture. Standard content blocks remain snapshots.
+        let terminalDelta = textParts.isEmpty
+            ? update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue : nil
         let locations = update["locations"]?.arrayValue?.compactMap { value -> AgentRunLocation? in
             guard let path = value["path"]?.stringValue else { return nil }
             return AgentRunLocation(
@@ -2798,7 +2836,8 @@ public actor LocalACPClient {
                 ?? (phase == "start" ? displayToolName(update["kind"]?.stringValue) : nil),
             status: status ?? (phase == "start" ? "pending" : nil),
             toolName: update["kind"]?.stringValue,
-            content: textParts.joined(separator: "\n\n").nilIfEmpty,
+            content: terminalDelta ?? textParts.joined(separator: "\n\n").nilIfEmpty,
+            contentIsDelta: terminalDelta != nil,
             locations: locations,
             changes: changes,
             rawInputJSON: update["rawInput"].flatMap(jsonString),

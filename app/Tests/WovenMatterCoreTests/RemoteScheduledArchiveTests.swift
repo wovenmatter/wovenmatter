@@ -7,13 +7,13 @@ import WovenMatterCore
 
 @Suite("Remote scheduled native archive")
 struct RemoteScheduledArchiveTests {
-  private func fixture() async throws -> (WorkspaceDatabase, URL, UUID, WorkspaceCalendarRun) {
+  private func fixture(runtimeKind: AgentRuntimeKind = .defaultAgent) async throws -> (WorkspaceDatabase, URL, UUID, WorkspaceCalendarRun) {
     let directory = FileManager.default.temporaryDirectory.appending(path: "wm-scheduled-archive-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let workspaceID = UUID()
     let task = WorkspaceCalendarTask(prompt: "Review the project", configuration: .init(
-      runtimeKind: .defaultAgent, workspaceID: workspaceID, title: "Review", permission: "full"))
+      runtimeKind: runtimeKind, workspaceID: workspaceID, title: "Review", permission: "full"))
     let run = WorkspaceCalendarRun(id: UUID().uuidString.lowercased(), eventID: UUID().uuidString.lowercased(),
       occurrenceIndex: 0, scheduledAt: Date(timeIntervalSince1970: 1_795_000_000),
       sessionID: UUID().uuidString.lowercased(), task: task, status: "accepted", title: "Review")
@@ -45,6 +45,72 @@ struct RemoteScheduledArchiveTests {
       workspaceID: workspaceID, workspaceName: "Fixture", ownerDeviceID: UUID(),
       nativeSessionID: nativeSessionID, updates: updates, error: nil,
       completedAt: run.scheduledAt.addingTimeInterval(10), updateOffset: updateOffset, complete: complete)
+  }
+
+  @Test(arguments: [false, true])
+  func scheduledCursorPreservesNativeMergeClearAndIgnoresMalformedOrChildUpdates(clear: Bool) async throws {
+    let (database, directory, workspaceID, run) = try await fixture(runtimeKind: .cursor)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    func update(_ payload: String, native: String = "native-session") throws -> GatewayJSONValue {
+      try value("""
+        {"sessionUpdate":"woven_cursor_todos","nativeSessionID":"\(native)","payload":\(payload)}
+        """)
+    }
+    var updates = [
+      try update(#"{"sessionId":"native-session","toolCallId":"first","merge":false,"todos":[{"id":"a","content":"Same label","status":"pending"},{"id":"b","content":"Same label","status":"pending"}]}"#),
+      try update(#"{"sessionId":"native-session","toolCallId":"next","merge":true,"todos":[{"id":"a","title":"Same label","status":"inProgress"},{"id":"c","content":"New","status":"canceled"}]}"#),
+      try update(#"{"sessionId":"native-session","toolCallId":"noop","merge":true,"todos":[]}"#),
+      try update(#"{"sessionId":"child","toolCallId":"child","merge":false,"todos":[]}"#),
+      try update(#"{"sessionId":"native-session","toolCallId":"foreign","merge":false,"todos":[]}"#, native: "foreign"),
+      try update(#"{"sessionId":"native-session","toolCallId":"bad","merge":false,"todos":[{"id":"bad"}]}"#),
+      try update(#"{"sessionId":"native-session","toolCallId":"duplicate","merge":false,"todos":[{"id":"a","content":"x"},{"id":"a","content":"y"}]}"#)
+    ]
+    if clear { updates.append(try update(#"{"sessionId":"native-session","toolCallId":"clear","merge":false,"todos":[]}"#)) }
+    try await importResult(database, workspaceID: workspaceID, run: run, updates: Array(updates.prefix(2)), complete: false)
+    try await importResult(database, workspaceID: workspaceID, run: run, updates: Array(updates.dropFirst(2)), updateOffset: 2)
+    let page = try await database.conversationHistoryPage(id: run.sessionID, limit: 20)
+    let plan = try #require(page.activities.first?.activity)
+    #expect(page.activities.count == 1)
+    #expect(plan.id == "cursor-todos")
+    #expect(plan.planEntries.map(\.nativeID) == (clear ? [] : ["a", "b", "c"]))
+    #expect(plan.planEntries.map(\.status) == (clear ? [] : ["in_progress", "pending", "cancelled"]))
+    #expect(plan.planOperation == (clear ? "clear" : "merge"))
+    assertSummaryParity(try await database.conversationHistoryPage(id: run.sessionID, limit: 20, compactActivities: true), page)
+    let archive = try await database.read { try $0.historyRowsUnlocked(
+      "SELECT payload FROM workspace_history_events WHERE conversation_id=? AND kind='native.acp.woven_cursor_todos' ORDER BY sequence", values: [run.sessionID]) }
+    #expect(archive.count == updates.count)
+  }
+
+  @Test(arguments: [false, true])
+  func scheduledHermesUsesCanonicalSuccessfulWriteResults(clear: Bool) async throws {
+    let (database, directory, workspaceID, run) = try await fixture(runtimeKind: .hermes)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    func update(_ payload: String, native: String = "native-session") throws -> GatewayJSONValue {
+      try value("""
+        {"sessionUpdate":"woven_hermes_tool_complete","nativeSessionID":"\(native)","payload":\(payload)}
+        """)
+    }
+    var updates = [
+      try update(#"{"name":"todo_list","args":{"todos":[{"id":"a","status":"completed"}],"merge":true},"result":{"revision":2,"todos":[{"id":"a","content":"Same label","status":"completed"},{"id":"b","content":"Same label","status":"pending"}]}}"#),
+      try update(#"{"name":"todo","args":{},"result":{"revision":3,"todos":[]}}"#),
+      try update(#"{"name":"todo","args":{"todos":[]},"result":{"revision":4,"todos":[],"error":"failed"}}"#),
+      try update(#"{"name":"todo","args":{"todos":[]},"result":{"revision":5,"todos":[{"id":"bad"}]}}"#),
+      try update(#"{"name":"todo","args":{"todos":[]},"result":{"revision":6,"todos":[]}}"#, native: "child"),
+      try update(#"{"name":"todo","args":{"todos":[]},"result":{"revision":1,"todos":[]}}"#)
+    ]
+    if clear { updates.append(try update(#"{"name":"todo","args":{"todos":[]},"result":{"revision":7,"todos":[]}}"#)) }
+    for _ in 0..<2 { try await importResult(database, workspaceID: workspaceID, run: run, updates: updates) }
+    let page = try await database.conversationHistoryPage(id: run.sessionID, limit: 20)
+    let plan = try #require(page.activities.first?.activity)
+    #expect(page.activities.count == 1)
+    #expect(plan.id == "hermes-checklist")
+    #expect(plan.planOperation == (clear ? "clear" : "replace"))
+    #expect(plan.planEntries.map(\.nativeID) == (clear ? [] : ["a", "b"]))
+    #expect(plan.planEntries.map(\.status) == (clear ? [] : ["completed", "pending"]))
+    assertSummaryParity(try await database.conversationHistoryPage(id: run.sessionID, limit: 20, compactActivities: true), page)
+    let archive = try await database.read { try $0.historyRowsUnlocked(
+      "SELECT payload FROM workspace_history_events WHERE conversation_id=? AND kind='native.acp.woven_hermes_tool_complete' ORDER BY sequence", values: [run.sessionID]) }
+    #expect(archive.count == updates.count)
   }
 
   @Test func completeNativeAndUnknownRecordsSurviveReplayWithoutRepeatingMessages() async throws {

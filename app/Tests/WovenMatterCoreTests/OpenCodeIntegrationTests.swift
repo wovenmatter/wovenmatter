@@ -907,7 +907,9 @@ struct OpenCodeIntegrationTests {
         #expect(recovered.olderCursor == nil)
         // The saved transcript is retained, but the canonical visible projection
         // no longer includes content removed by another client.
-        #expect(try await database.conversationContent(id: id).messages.count == 3)
+        #expect(try await database.conversationContent(id: id).messages.count == 2)
+        #expect(try await database.read { try $0.historyRowsUnlocked(
+            "SELECT id FROM dashboard_messages WHERE conversation_id=?", values: [id]).count } == 3)
         await coordinator.shutdown()
     }
 

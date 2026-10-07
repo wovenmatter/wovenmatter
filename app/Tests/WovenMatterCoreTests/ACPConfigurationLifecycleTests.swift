@@ -69,6 +69,7 @@ struct ACPConfigurationLifecycleTests {
     )
 
     #expect(result == expected)
+    #expect(try await database.localACPSession(conversationID: conversationID).acpSessionID == nil)
     #expect(state.starts == 1)
     #expect(state.observers == 1)
     #expect(state.configurationReads == 1)
@@ -130,7 +131,7 @@ struct ACPConfigurationLifecycleTests {
     #expect(persisted.model == "selected-model")
     #expect(persisted.thinking == "high")
 
-    let reopenedState = SelectorDriverState(expectedExistingSessionID: "fixture-session")
+    let reopenedState = SelectorDriverState(expectedExistingSessionID: nil)
     let reopened = LocalACPSessionCoordinator(
       database: reopenedDatabase,
       processLease: ConfigurationTestProcessLease(),
@@ -177,7 +178,7 @@ struct ACPConfigurationLifecycleTests {
       observedUpdate: native
     )
     let secondState = SelectorDriverState(
-      expectedExistingSessionID: "fixture-session",
+      expectedExistingSessionID: nil,
       modelOptions: native.modelOptions
     )
     let drivers = SelectorDriverSequence([firstState, secondState])
