@@ -358,8 +358,8 @@ enum ACPInputFrame: Equatable, Sendable {
     case spooled(URL, byteCount: Int)
 }
 
-final class ACPLineCursor: @unchecked Sendable {
-    static let maximumLineBytes = 10_000_000
+public final class ACPLineCursor: @unchecked Sendable {
+    public static let maximumLineBytes = 10_000_000
     // A 64 MiB native record plus its small protocol envelope.
     static let maximumArchiveLineBytes = 65 * 1_024 * 1_024
     static let maximumSpooledFrameBytes = 1_024 * 1_024 * 1_024
@@ -379,7 +379,7 @@ final class ACPLineCursor: @unchecked Sendable {
     private var spool: (url: URL, handle: FileHandle)?
     private var terminalError: (any Error)?
 
-    init(handle: FileHandle, maximumLineBytes: Int? = ACPLineCursor.maximumLineBytes,
+    public init(handle: FileHandle, maximumLineBytes: Int? = ACPLineCursor.maximumLineBytes,
          spoolDirectory: URL = FileManager.default.temporaryDirectory) {
         self.handle = handle
         self.lineByteLimit = maximumLineBytes
@@ -393,7 +393,7 @@ final class ACPLineCursor: @unchecked Sendable {
         }
     }
 
-    func next() async throws -> Data? {
+    public func next() async throws -> Data? {
         let cancellation = ReadCancellation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in

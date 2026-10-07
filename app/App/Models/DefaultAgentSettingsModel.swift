@@ -968,7 +968,6 @@ final class DefaultAgentSettingsModel {
         }
         notice = nil
         error = nil
-        outputBuffer = Data()
         let runID = generation
         activeKeyScope = keyScope
         operationTask = Task { [self] in
@@ -1047,11 +1046,15 @@ final class DefaultAgentSettingsModel {
                 // cannot finish a result whose Keychain commit is still pending.
                 outputTask = Task.detached(priority: .utility) { [weak self] in
                     defer { try? reader.close() }
+                    // FileHandle.read(upToCount:) waits to fill its buffer on
+                    // macOS pipes. Sign-in must deliver each line while the
+                    // helper stays alive waiting for the user's response.
+                    let lines = ACPLineCursor(handle: reader)
                     do {
-                        while !Task.isCancelled, let data = try reader.read(upToCount: 65_536), !data.isEmpty {
+                        while !Task.isCancelled, let line = try await lines.next() {
                             await MainActor.run { [weak self] in
                                 guard let self, self.generation == runID else { return }
-                                self.receive(data)
+                                self.receiveLine(line)
                             }
                         }
                     } catch { }
@@ -1095,46 +1098,41 @@ final class DefaultAgentSettingsModel {
             }
         } catch { self.error = "Built-in helper disconnected." }
     }
-    private func receive(_ data: Data) {
-        outputBuffer.append(data)
-        while let newline = outputBuffer.firstIndex(of: 0x0a) {
-            let line = outputBuffer[..<newline]
-            outputBuffer.removeSubrange(...newline)
-            guard !receivedResult, let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-            if let result = object["result"] as? [String: Any] {
-                guard !processingResult else { continue }
-                processingResult = true
-                receivedResult = true
-                let runID = generation
-                let context = ResultContext(keyScope: activeKeyScope, removingAccount: removingAccount,
-                    reconnectingAccount: reconnectingAccount, provider: signInProvider, catalogOnly: catalogOnly,
-                    catalogConfiguration: catalogRequestConfiguration, catalogKey: catalogRequestKey,
-                    sdkRevision: catalogRequestSDKRevision)
-                resultTask = Task { [self] in await receiveResult(result, runID: runID, context: context) }
-                continue
+    private func receiveLine(_ line: Data) {
+        guard !receivedResult, let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
+        if let result = object["result"] as? [String: Any] {
+            guard !processingResult else { return }
+            processingResult = true
+            receivedResult = true
+            let runID = generation
+            let context = ResultContext(keyScope: activeKeyScope, removingAccount: removingAccount,
+                reconnectingAccount: reconnectingAccount, provider: signInProvider, catalogOnly: catalogOnly,
+                catalogConfiguration: catalogRequestConfiguration, catalogKey: catalogRequestKey,
+                sdkRevision: catalogRequestSDKRevision)
+            resultTask = Task { [self] in await receiveResult(result, runID: runID, context: context) }
+            return
+        }
+        if let error = object["error"] as? String {
+            receivedResult = true
+            clearCatalogRequest()
+            self.error = error
+            completeSignInPresentation()
+        }
+        if let event = object["notification"] as? [String: Any] {
+            if let url = (event["url"] ?? event["verificationUri"]) as? String, let value = URL(string: url),
+                value.scheme == "https"
+            {
+                signInURL = value
             }
-            if let error = object["error"] as? String {
-                receivedResult = true
-                clearCatalogRequest()
-                self.error = error
-                completeSignInPresentation()
-            }
-            if let event = object["notification"] as? [String: Any] {
-                if let url = (event["url"] ?? event["verificationUri"]) as? String, let value = URL(string: url),
-                    value.scheme == "https"
-                {
-                    signInURL = value
-                }
-                if let code = event["userCode"] as? String { signInCode = code }
-                notice = (event["message"] ?? event["instructions"]) as? String
-            }
-            if let value = object["prompt"] as? [String: Any] {
-                promptID = object["id"] as? String
-                prompt = value["message"] as? String
-                promptOptions = (value["options"] as? [[String: String]] ?? []).compactMap { v in
-                    guard let id = v["id"], let label = v["label"] else { return nil }
-                    return (id, label)
-                }
+            if let code = event["userCode"] as? String { signInCode = code }
+            notice = (event["message"] ?? event["instructions"]) as? String
+        }
+        if let value = object["prompt"] as? [String: Any] {
+            promptID = object["id"] as? String
+            prompt = value["message"] as? String
+            promptOptions = (value["options"] as? [[String: String]] ?? []).compactMap { v in
+                guard let id = v["id"], let label = v["label"] else { return nil }
+                return (id, label)
             }
         }
     }
