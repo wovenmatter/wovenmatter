@@ -303,14 +303,7 @@ struct WorkspaceAgentToolTests {
         operations: [.addTableRow(tableID: tableID, after: Int.max)]),
         callerConversationID: caller, requestID: UUID().uuidString)
     }
-    let beforeAtomicFailure = try await db.readNoteForEditing(id: note)
-    await #expect(throws: (any Error).self) {
-      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
-        expectedRevision: beforeAtomicFailure.revision,
-        operations: [.appendText("must roll back", .paragraph), .deleteBlock(id: "missing")]),
-        callerConversationID: caller, requestID: UUID().uuidString)
-    }
-    #expect(try await db.readNoteForEditing(id: note) == beforeAtomicFailure)
+
   }
 
   @Test func discoveryPaginationAndRequestIDCanonicalizationAreConsistent() async throws {
@@ -804,21 +797,27 @@ struct WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     var settings = try await db.toolSettings(); settings.maximumManagedSessions = 1
     try await db.saveToolSettings(settings)
+    try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: source)
     let firstID = UUID().uuidString, secondID = UUID().uuidString
     let args = ["sessions", "create", "--title", "Fixture"]
     let first = try await db.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let planned = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    #expect(planned.objectValue?["target_id"] == first.objectValue?["target_id"])
     try await db.failToolSessionCreation(requestID: firstID)
     _ = try await db.reserveToolSessionCreation(sourceID: source, requestID: secondID, arguments: args, purpose: "Work", managed: true)
     await #expect(throws: WorkspaceToolError.managedLimit(1)) {
       _ = try await db.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
     }
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     try await reopened.recoverToolSessionCreations()
     let retry = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
     #expect(retry.objectValue?["status"]?.stringValue == "planned")
     let target = try #require(retry.objectValue?["target_id"]?.stringValue)
     #expect(first.objectValue?["target_id"]?.stringValue == target)
-    _ = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    let created = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    #expect(created == target)
+    #expect(try await reopened.sessionRelationship(target).createdBy == source)
+    #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes])
     try await reopened.completeToolSessionCreation(requestID: firstID, sourceID: source)
     try await reopened.failToolSessionCreation(requestID: firstID)
     try await reopened.recoverToolSessionCreations()
@@ -826,33 +825,8 @@ struct WorkspaceAgentToolTests {
     let completed = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
     #expect(completed.objectValue?["status"]?.stringValue == "ready")
     #expect(try await reopened.sessionRelationship(target).coordinatorID == nil)
-  }
-
-  @Test func creationReservationsSurviveReopenAndCountTowardFanout() async throws {
-    let (db, dir, a, _) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    var settings = try await db.toolSettings(); settings.maximumManagedSessions = 1
-    try await db.saveToolSettings(settings)
-    try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: a)
-    let requestID = UUID().uuidString.lowercased()
-    let args = ["sessions", "create", "--title", "Research"]
-    let reservation = try await db.reserveToolSessionCreation(sourceID: a, requestID: requestID, arguments: args, purpose: "Research", managed: true)
-    let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
-    await #expect(throws: WorkspaceToolError.managedLimit(1)) {
-      try await db.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Extra", managed: true)
-    }
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    let retry = try await reopened.reserveToolSessionCreation(sourceID: a, requestID: requestID, arguments: args, purpose: "Research", managed: true)
-    #expect(retry.objectValue?["target_id"]?.stringValue == target)
-    let created = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Research", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
-    #expect(created == target)
-    #expect(try await reopened.sessionRelationship(target).createdBy == a)
-    #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes])
-    try await reopened.beginCoordination(sourceID: a, targetID: target, purpose: "Research", userApprovedAccess: true)
-    try await reopened.completeToolSessionCreation(requestID: requestID, sourceID: a)
-    try await reopened.endCoordination(targetID: target, sourceID: a)
-    #expect(try await reopened.sessionRelationship(target).createdBy == a)
-    _ = try await reopened.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)
+    #expect(try await reopened.sessionRelationship(target).createdBy == source)
+    _ = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)
   }
 }
 

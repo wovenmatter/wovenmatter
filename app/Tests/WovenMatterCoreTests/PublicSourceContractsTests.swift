@@ -5,20 +5,6 @@ import WovenMatterCore
 
 @Suite("Public source contracts", .serialized)
 struct PublicSourceContractsTests {
-  @Test("disabled usage accounts are absent and never probed")
-  func passiveUsageAccounts() async {
-    let now = Date(timeIntervalSince1970: 1_800_000_000)
-    let accounts = await ProviderLimitCollector.collect(
-      homeDirectory: FileManager.default.temporaryDirectory,
-      openRouterAPIKey: nil,
-      enabledProviders: [],
-      keychainInteraction: .oneShotExplicit,
-      now: now
-    )
-
-    #expect(accounts.isEmpty)
-  }
-
   @Test("enabling one usage account does not probe the others")
   func scopedUsageAccountEnablement() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-consent")

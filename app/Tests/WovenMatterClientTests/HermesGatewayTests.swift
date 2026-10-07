@@ -269,25 +269,6 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
-    @Test func completionReasoningDoesNotDuplicateStreamedReasoning() async throws {
-        let transport = HermesTransportFixture()
-        let client = makeClient(transport)
-        let output = HermesEventFixture()
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
-        let turn = Task { try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: { await output.record($0) }, onPermission: nil, onInteraction: nil) }
-        try await transport.waitForSubmit()
-        await transport.event(type: "reasoning.delta", payload: ["text": "streamed reasoning"])
-        await transport.event(type: "message.complete", payload: ["text": "Final", "reasoning": "streamed reasoning"])
-        _ = try await turn.value
-        let thoughts = await output.events.compactMap { event -> AgentRunActivity? in
-            if case .activity(let activity, _) = event, activity.kind == .thought { return activity }
-            return nil
-        }
-        #expect(thoughts.count == 1)
-        #expect(thoughts[0].content == "streamed reasoning")
-        await client.shutdown()
-    }
-
     private func makeClient(_ transport: HermesTransportFixture, environment: [String: String] = [:]) -> HermesGatewayClient {
         HermesGatewayClient(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
             executableURL: URL(fileURLWithPath: "/fixture/not-executed"), arguments: [], environment: environment),

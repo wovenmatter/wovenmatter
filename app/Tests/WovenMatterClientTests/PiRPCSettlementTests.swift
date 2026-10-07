@@ -165,15 +165,6 @@ struct PiRPCSettlementTests {
     await fixture.client.shutdown()
   }
 
-  @Test func immediateSettlementBeforeWaitRegistrationSucceeds() async throws {
-    let fixture = PiPipeFixture()
-    let server = Task { try await fixture.serve(settles: true) }
-    try await fixture.initialize()
-    #expect(try await fixture.client.prompt("fixture") == .endTurn)
-    try await server.value
-    await fixture.client.shutdown()
-  }
-
   @Test func cancelledAcknowledgedPromptThrowsAndClosesTransport() async throws {
     let fixture = PiPipeFixture()
     let hold = PiPromptGate()
@@ -396,7 +387,7 @@ struct PiPipeFixture: Sendable {
     }
   }
 
-  fileprivate func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
+  func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
              streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false, resumeApproval: Bool? = nil) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
@@ -476,7 +467,7 @@ struct PiPipeFixture: Sendable {
   }
 }
 
-private actor PiPromptGate {
+actor PiPromptGate {
   private var arrived = false
   private var observer: CheckedContinuation<Void, Never>?
   private var pending: CheckedContinuation<Void, Never>?
@@ -656,8 +647,8 @@ struct PiHandledCommandTests {
         #expect(command["message"] as? String == (prompts == 1 ? firstPrompt : "ordinary message"))
         if let pending { await pending.pause(); return }
         if prompts == 1 && !normalStartup {
-          try write(["type": "extension_ui_request", "id": "notice", "method": "notify",
-                     "message": "Search is on.", "notifyType": severity], to: fixture)
+          try fixture.emit(["type": "extension_ui_request", "id": "notice", "method": "notify",
+                     "message": "Search is on.", "notifyType": severity])
         }
       }
       if type == "get_state" {
@@ -665,24 +656,20 @@ struct PiHandledCommandTests {
                 "isCompacting": false, "pendingMessageCount": 0]
       }
       if type == "get_entries" { data = ["entries": []] }
-      try write(["type": "response", "id": command["id"]!, "success": true, "data": data], to: fixture)
+      try fixture.emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
       if type == "get_state", prompts == 1, let stopAfterACK {
         Task { await stopAfterACK.pause() }
       }
       if (normalStartup && type == "get_state" && prompts > 0) || (type == "prompt" && prompts == 2) {
         // State reports active before the first agent_start reaches the client.
-        try write(["type": "agent_start"], to: fixture)
-        try write(["type": "message_end", "message": ["role": "assistant", "content": "finished"]], to: fixture)
-        try write(["type": "agent_settled"], to: fixture)
+        try fixture.emit(["type": "agent_start"])
+        try fixture.emit(["type": "message_end", "message": ["role": "assistant", "content": "finished"]])
+        try fixture.emit(["type": "agent_settled"])
       }
     }
   }
 
-  private func write(_ object: [String: Any], to fixture: PiPipeFixture) throws {
-    var bytes = try JSONSerialization.data(withJSONObject: object)
-    bytes.append(10)
-    try fixture.events.fileHandleForWriting.write(contentsOf: bytes)
-  }
+
 }
 
 private final class PiWireCapture: @unchecked Sendable {

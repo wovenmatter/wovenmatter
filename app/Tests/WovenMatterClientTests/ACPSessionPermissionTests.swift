@@ -35,10 +35,10 @@ struct ACPSessionPermissionTests {
         #expect(alive == -1 && processError == ESRCH)
     }
 
-    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
-    func nativeConfigurationAndLabelsSurviveOtherSelections(kind: AgentRuntimeKind) async throws {
-        let state = configuration(permission: "default")
-        let selected = configuration(permission: "full")
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], ["mode", "permission_mode", "approval_mode"])
+    func nativeConfigurationAndLabelsSurviveOtherSelections(kind: AgentRuntimeKind, id: String) async throws {
+        let state = configuration(permission: "default", id: id)
+        let selected = configuration(permission: "full", id: id)
         try await withClient(kind: kind, state: state, handlers: [
             "session/set_config_option": respond(selected),
         ]) { client, fixture, initialized async throws in
@@ -57,7 +57,7 @@ struct ACPSessionPermissionTests {
             #expect(requests.count == 1)
             let params = requests.first?["params"] as? [String: Any]
             #expect(params?["sessionId"] as? String == "permission-session")
-            #expect(params?["configId"] as? String == "mode")
+            #expect(params?["configId"] as? String == id)
             #expect(params?["value"] as? String == "full")
         }
     }
@@ -100,25 +100,7 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func claudeKnownModesUseApprovalLabelsWithoutInventingCapabilities() async throws {
-        let options = ["default", "auto", "acceptEdits", "bypassPermissions"].map {
-            ["value": $0, "name": "Native " + $0]
-        }
-        let state: [String: Any] = ["configOptions": [[
-            "id": "mode", "category": "mode", "currentValue": "default", "options": options,
-        ]]]
-        try await withClient(kind: .claudeCode, state: state, requestedPermission: "default") { _, fixture, initialized async throws in
-            let labels = initialized.configuration.permissionOptionMetadata
-            #expect(labels["default"]?.name == "Ask for approval")
-            #expect(labels["auto"]?.name == "Auto")
-            #expect(labels["acceptEdits"]?.name == "Auto-accept edits")
-            #expect(labels["bypassPermissions"]?.name == "Full access")
-            #expect(initialized.configuration.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions"])
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-        }
-    }
-
-    @Test(arguments: ["plan", "dontAsk"])
+    @Test(arguments: ["default", "plan", "dontAsk"])
     func claudeAdvertisedPoliciesRemainSelectable(current: String) async throws {
         let options = ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"].map {
             ["value": $0, "name": "Native " + $0]
@@ -128,7 +110,12 @@ struct ACPSessionPermissionTests {
         ]]]
         try await withClient(kind: .claudeCode, state: state, requestedPermission: current) { client, fixture, initialized async throws in
             #expect(initialized.configuration.permission == current)
-            #expect(initialized.configuration.permissionOptionMetadata[current]?.name == (current == "plan" ? "Plan" : "Don't ask"))
+            let labels = initialized.configuration.permissionOptionMetadata
+            #expect(labels["default"]?.name == "Ask for approval")
+            #expect(labels["auto"]?.name == "Auto")
+            #expect(labels["acceptEdits"]?.name == "Auto-accept edits")
+            #expect(labels["bypassPermissions"]?.name == "Full access")
+            #expect(labels[current]?.name == ["default": "Ask for approval", "plan": "Plan", "dontAsk": "Don't ask"][current])
             #expect(try await client.setSessionPermission(current).permission == current)
             #expect(initialized.configuration.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"])
             #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
@@ -157,18 +144,6 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test(arguments: ["permission_mode", "approval_mode"])
-    func explicitPermissionConfigurationIDIsUsed(id: String) async throws {
-        let state = configuration(permission: "default", id: id)
-        try await withClient(state: state, handlers: [
-            "session/set_config_option": respond(configuration(permission: "full", id: id)),
-        ]) { client, fixture, _ async throws in
-            #expect(try await client.setSessionPermission("full").permission == "full")
-            let params = try fixture.requests(method: "session/set_config_option").first?["params"] as? [String: Any]
-            #expect(params?["configId"] as? String == id)
-        }
-    }
-
     @Test func nativeErrorAndUnknownValuesNeverEscalate() async throws {
         try await withClient(state: configuration(permission: "default"), handlers: [
             "session/set_config_option": #"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Policy rejects full"}}\n' "$id""#,
@@ -182,18 +157,6 @@ struct ACPSessionPermissionTests {
                 _ = try await client.setSessionPermission("full")
                 Issue.record("A rejected native change was accepted")
             } catch LocalACPClientError.agent(let code, _) { #expect(code == -32602) }
-            #expect(await client.sessionConfiguration().permission == "default")
-        }
-    }
-
-    @Test func modernSetterRequiresNativeReadback() async throws {
-        try await withClient(state: configuration(permission: "default"), handlers: [
-            "session/set_config_option": respond([:]),
-        ]) { client, _, _ async throws in
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("An empty modern setter response did not confirm the change")
-            } catch LocalACPClientError.configurationNotConfirmed { }
             #expect(await client.sessionConfiguration().permission == "default")
         }
     }

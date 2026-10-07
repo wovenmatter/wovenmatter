@@ -106,38 +106,26 @@ struct ChatPanelLayoutTests {
     #expect(onlyAuxiliary.activePanelID == .primary)
     #expect(onlyAuxiliary.canAddPanel(from: .primary))
 
-    var closeUpper = threePanelState()
-    let closedUpper = closeUpper.closePanel(b)
-    #expect(closedUpper)
-    #expect(closeUpper.auxiliaryRows.map { $0.map(\.id) } == [[a]])
-    #expect(closeUpper.normalizedFrames()[a]?.height == 1)
-
-    var closeLower = threePanelState()
-    let closedLower = closeLower.closePanel(a)
-    #expect(closedLower)
-    #expect(closeLower.auxiliaryRows.map { $0.map(\.id) } == [[b]])
-    #expect(closeLower.normalizedFrames()[b]?.height == 1)
-
-    var upperDivided = threePanelState()
-    let dividedUpper = upperDivided.addPanel(from: b, newPanelID: c)
-    let closedUpperLeading = upperDivided.closePanel(b)
-    #expect(dividedUpper)
-    #expect(closedUpperLeading)
-    #expect(upperDivided.auxiliaryRows.map { $0.map(\.id) } == [[c], [a]])
-    #expect(upperDivided.canAddPanel(from: c))
-    let closedUpperRemainder = upperDivided.closePanel(c)
-    #expect(closedUpperRemainder)
-    #expect(upperDivided.auxiliaryRows.map { $0.map(\.id) } == [[a]])
-
-    var lowerDivided = threePanelState()
-    let dividedLower = lowerDivided.addPanel(from: a, newPanelID: c)
-    let closedLowerTrailing = lowerDivided.closePanel(c)
-    #expect(dividedLower)
-    #expect(closedLowerTrailing)
-    #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[b], [a]])
-    let closedLowerRemainder = lowerDivided.closePanel(a)
-    #expect(closedLowerRemainder)
-    #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[b]])
+    for (closed, survivor) in [(b, a), (a, b)] {
+      var state = threePanelState()
+      let didClose = state.closePanel(closed)
+      #expect(didClose)
+      #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[survivor]])
+      #expect(state.normalizedFrames()[survivor]?.height == 1)
+    }
+    for (split, firstClose, remainder, survivor, rows) in [
+      (b, b, c, a, [[c], [a]]), (a, c, a, b, [[b], [a]]),
+    ] {
+      var state = threePanelState()
+      let didSplit = state.addPanel(from: split, newPanelID: c)
+      let didCloseFirst = state.closePanel(firstClose)
+      #expect(didSplit && didCloseFirst)
+      #expect(state.auxiliaryRows.map { $0.map(\.id) } == rows)
+      #expect(state.canAddPanel(from: remainder))
+      let didCloseRemainder = state.closePanel(remainder)
+      #expect(didCloseRemainder)
+      #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[survivor]])
+    }
   }
 
   @Test("activation projects one sidebar selection and replacement is active-only")
@@ -212,57 +200,27 @@ struct ChatPanelLayoutTests {
     #expect(onePanel.focusRequest == nil)
   }
 
-  @Test("spatial navigation follows actual geometry without wrapping")
-  func spatialNavigation() {
-    var state = fivePanelState()
-
-    let activatedPrimary = state.activatePanel(.primary)
-    #expect(activatedPrimary)
-    let leftFromPrimary = state.navigate(.left)
-    let upFromPrimary = state.navigate(.up)
-    let downFromPrimary = state.navigate(.down)
-    let rightFromPrimary = state.navigate(.right)
-    #expect(leftFromPrimary == nil)
-    #expect(upFromPrimary == nil)
-    #expect(downFromPrimary == nil)
-    #expect(rightFromPrimary == b)
-
-    let rightFromB = state.navigate(.right)
-    let rightFromD = state.navigate(.right)
-    let downFromD = state.navigate(.down)
-    let leftFromC = state.navigate(.left)
-    let leftFromA = state.navigate(.left)
-    #expect(rightFromB == d)
-    #expect(rightFromD == nil)
-    #expect(downFromD == c)
-    #expect(leftFromC == a)
-    #expect(leftFromA == .primary)
-
-    let activatedA = state.activatePanel(a)
-    let upFromA = state.navigate(.up)
-    let upFromB = state.navigate(.up)
-    #expect(activatedA)
-    #expect(upFromA == b)
-    #expect(upFromB == nil)
-  }
-
-  @Test("successful navigation emits destination composer focus generations")
-  func navigationFocusRequests() {
-    var state = threePanelState()
-    let generationAfterAdds = state.focusRequest?.generation
-
-    let activatedPrimary = state.activatePanel(.primary)
-    let navigatedRight = state.navigate(.right)
-    #expect(activatedPrimary)
-    #expect(navigatedRight == b)
-    #expect(state.focusRequest == DashboardChatPanelFocusRequest(
-      panelID: b,
-      generation: (generationAfterAdds ?? 0) + 1
-    ))
-    let request = state.focusRequest
-    let navigatedUp = state.navigate(.up)
-    #expect(navigatedUp == nil)
-    #expect(state.focusRequest == request)
+  @Test("spatial navigation follows geometry and focuses only successful destinations")
+  func spatialNavigationAndFocus() {
+    let cases: [(DashboardChatPanelState, [(DashboardChatPanelDirection, DashboardChatPanelID?)])] = [
+      (fivePanelState(), [(.left, nil), (.up, nil), (.down, nil), (.right, b),
+        (.right, d), (.right, nil), (.down, c), (.left, a), (.left, .primary),
+        (.right, b), (.down, a), (.up, b), (.up, nil)]),
+      (threePanelState(), [(.right, b), (.up, nil)]),
+    ]
+    for (initial, steps) in cases {
+      var state = initial
+      let activated = state.activatePanel(.primary)
+      #expect(activated)
+      for (direction, destination) in steps {
+        let previous = state.focusRequest
+        #expect(state.navigate(direction) == destination)
+        let expected = destination.map {
+          DashboardChatPanelFocusRequest(panelID: $0, generation: (previous?.generation ?? 0) + 1)
+        } ?? previous
+        #expect(state.focusRequest == expected)
+      }
+    }
   }
 
   private func threePanelState() -> DashboardChatPanelState {
