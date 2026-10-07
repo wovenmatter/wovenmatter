@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-/// A narrow boundary for the credential-bearing Built-in control connection.
+/// A narrow boundary for the credential-bearing Pi Durable control connection.
 /// Decoding and re-encoding the public record contract excludes transport and
 /// configuration fields; explicit session fencing also applies to replay pages.
 enum BuiltInNativeHistoryCapture {
@@ -14,7 +14,7 @@ enum BuiltInNativeHistoryCapture {
               batch.records.allSatisfy({
                   !$0.id.isEmpty && !$0.kind.isEmpty && ["event", "delta", "snapshot"].contains($0.contentMode)
               }) else {
-            throw LocalACPClientError.invalidResponse("Invalid Built-in native archive identity")
+            throw LocalACPClientError.invalidResponse("Invalid Pi Durable native archive identity")
         }
         batch.sourceID = sourcePrefix + batch.sourceID
         // Background tasks may commit while a later turn is active. Only the

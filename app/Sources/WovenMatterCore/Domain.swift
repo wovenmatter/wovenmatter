@@ -57,7 +57,7 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
 
   public var displayName: String {
     switch self {
-    case .defaultAgent: "Built-in"
+    case .defaultAgent: "Pi Durable"
     case .openclaw: "OpenClaw"
     case .pi: "Pi"
     case .codex: "Codex"

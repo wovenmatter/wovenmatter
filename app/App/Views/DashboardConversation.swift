@@ -454,8 +454,8 @@ struct DashboardCloudConversation: View {
                     } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
                         DashboardPanelControlButton(
                             glyph: .settings,
-                            accessibilityLabel: "Built-in Agent settings",
-                            help: "Built-in Agent settings"
+                            accessibilityLabel: "Pi Durable settings",
+                            help: "Pi Durable settings"
                         ) {
                             model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                         }

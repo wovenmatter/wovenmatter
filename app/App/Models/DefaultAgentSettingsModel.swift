@@ -1042,13 +1042,13 @@ final class DefaultAgentSettingsModel {
                     catch {
                         await MainActor.run { [weak self] in
                             guard let self, self.generation == runID else { return }
-                            self.failHelper("Could not read the Built-in helper response. Try again.")
+                            self.failHelper("Could not read the Pi Durable helper response. Try again.")
                         }
                         return
                     }
                     await MainActor.run { [weak self] in
                         guard let self, self.generation == runID else { return }
-                        self.failHelper("Built-in setup did not complete. Try again.")
+                        self.failHelper("Pi Durable setup did not complete. Try again.")
                     }
                 }
                 write(body)
@@ -1075,7 +1075,7 @@ final class DefaultAgentSettingsModel {
         do {
             var data = try JSONSerialization.data(withJSONObject: value)
             data.append(0x0a)
-            guard let input else { throw DefaultAgentError.message("Built-in helper disconnected.") }
+            guard let input else { throw DefaultAgentError.message("Pi Durable helper disconnected.") }
             let runID = generation
             let body = data
             inputQueue.async { [weak self] in
@@ -1083,11 +1083,11 @@ final class DefaultAgentSettingsModel {
                 catch {
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == runID else { return }
-                        self.failHelper("Built-in helper disconnected. Try again.")
+                        self.failHelper("Pi Durable helper disconnected. Try again.")
                     }
                 }
             }
-        } catch { failHelper("Built-in helper disconnected. Try again.") }
+        } catch { failHelper("Pi Durable helper disconnected. Try again.") }
     }
     private func receiveLine(_ line: Data) {
         guard !receivedResult, let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }

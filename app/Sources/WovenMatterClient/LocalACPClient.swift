@@ -1637,7 +1637,7 @@ public actor LocalACPClient {
         guard runtimeKind == .defaultAgent, let sessionID else { return }
         let result = try await request(method: "woven/idle", params: .object(["sessionId": .string(sessionID)]))
         guard self.sessionID == sessionID, result?["idle"]?.boolValue == true else {
-            throw LocalACPClientError.invalidResponse("Built-in native work did not confirm idle retirement")
+            throw LocalACPClientError.invalidResponse("Pi Durable native work did not confirm idle retirement")
         }
         // Detached remote execution cannot push commits after the primary
         // response. Reconcile its completed background work before release.
@@ -1852,18 +1852,18 @@ public actor LocalACPClient {
                 let payload = try await prepareCredentialPayload(defaultAgentScope)
                 try await write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
             } catch {
-                try await write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Built-in credentials are unavailable.")))
+                try await write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Pi Durable credentials are unavailable.")))
             }
         } else if envelope.method == "session/update" {
             guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
             if runtimeKind == .defaultAgent,
                update?["sessionUpdate"]?.stringValue == "woven_native_record" {
-                // The Built-in control channel carries credentials. Only the
+                // The Pi Durable control channel carries credentials. Only the
                 // engine's explicit committed-record projection is archived;
                 // recording the whole wire would persist credential exchanges.
                 guard let sessionID, let batch = update?["recordBatch"] else {
-                    throw LocalACPClientError.invalidResponse("Missing Built-in native archive batch")
+                    throw LocalACPClientError.invalidResponse("Missing Pi Durable native archive batch")
                 }
                 try await recordBuiltInNativeHistory(batch, sessionID: sessionID)
                 return
@@ -1952,7 +1952,7 @@ public actor LocalACPClient {
                   let hasMore = page?["hasMore"]?.boolValue,
                   let next = try? BuiltInNativeHistoryCursor(nextValue),
                   next >= after, !hasMore || next > after else {
-                throw LocalACPClientError.invalidResponse("Invalid Built-in native archive page")
+                throw LocalACPClientError.invalidResponse("Invalid Pi Durable native archive page")
             }
             try await recordBuiltInNativeHistory(batch, sessionID: sessionID)
             if !hasMore { return }
@@ -2035,10 +2035,6 @@ public actor LocalACPClient {
             )
         }
         if let configOptions = value["configOptions"]?.arrayValue {
-            if runtimeKind == .defaultAgent, value["_meta"]?["engineUsed"]?.boolValue == true,
-               let engine = value["_meta"]?["engine"]?.stringValue, ["pi", "claude"].contains(engine) {
-                UserDefaults.standard.set(engine, forKey: DefaultAgentSupport.lastEngineKey)
-            }
             let parsed = configurationOptions(from: configOptions)
             let hadModelOption = modelConfigurationID != nil
             let hadPermissionOption = permissionConfigurationID != nil

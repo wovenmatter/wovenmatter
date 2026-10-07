@@ -134,7 +134,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   }
   let inFlight = 0, retiring = false;
   const tracked = fn => async (...args) => {
-    if (retiring) throw new DefaultAgentError('The Built-in runtime is updating. Retry after it finishes.');
+    if (retiring) throw new DefaultAgentError('The Pi Durable runtime is updating. Retry after it finishes.');
     inFlight++;
     try { return await fn(...args); } finally { inFlight--; }
   };

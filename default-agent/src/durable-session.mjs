@@ -31,20 +31,20 @@ const safeNativeFailure = error => ({ message: error instanceof DefaultAgentErro
 // image-capable tools, resource instructions and sandbox, not the execution loop.
 export async function openDurableSession(engine, id, requested) {
   const sessionID = id ?? randomUUID();
-  if (!/^[0-9a-f-]{36}$/i.test(sessionID)) throw new DefaultAgentError('Invalid Built-in session.');
+  if (!/^[0-9a-f-]{36}$/i.test(sessionID)) throw new DefaultAgentError('Invalid Pi Durable session.');
   const root = join(engine.directory, 'durable', sessionID);
   await mkdir(root, { recursive: true, mode: 0o700 });
   let release, record, ownerError, eventStream;
   try { release = await ownNativeStore(root, error => { ownerError = error; void record?.session?.abort()?.catch(() => {}); if (record) record.lockError = error; }); }
-  catch { throw new DefaultAgentError('This Built-in session is already owned by another runtime. Reconnect to its current execution owner.'); }
+  catch { throw new DefaultAgentError('This Pi Durable session is already owned by another runtime. Reconnect to its current execution owner.'); }
   try {
     let manifest = await readJSON(join(root, 'woven-session.json'), null);
-    if (id && !manifest) throw new DefaultAgentError('This Built-in Durable session could not be found. Create a new conversation.');
+    if (id && !manifest) throw new DefaultAgentError('This Pi Durable session could not be found. Create a new conversation.');
     const cwd = manifest?.cwd ?? requested ?? await engine.sessionDirectory(engine.cwd);
-    if (requested !== undefined && requested !== cwd) throw new DefaultAgentError('This Built-in session belongs to a different working directory. Create a new session for this location.');
+    if (requested !== undefined && requested !== cwd) throw new DefaultAgentError('This Pi Durable session belongs to a different working directory. Create a new session for this location.');
     await engine.sessionDirectory(cwd);
     manifest ??= { schemaVersion: 1, sessionID, storeID: randomUUID(), cwd };
-    if (!/^[0-9a-f-]{36}$/i.test(manifest.storeID ?? '') || manifest.sessionID !== sessionID) throw new DefaultAgentError('Built-in native identity is invalid.');
+    if (!/^[0-9a-f-]{36}$/i.test(manifest.storeID ?? '') || manifest.sessionID !== sessionID) throw new DefaultAgentError('Pi Durable native identity is invalid.');
     await writePrivateJSON(join(root, 'woven-session.json'), manifest);
     const archivePath = join(root, `woven-native-records-${randomUUID()}.jsonl`);
     const archiveStore = await openNativeArchive(archivePath);
@@ -64,7 +64,7 @@ export async function openDurableSession(engine, id, requested) {
       if (conversationID === record.conversation.id) return record;
       if (!scopes.has(conversationID)) scopes.set(conversationID, (async () => {
         const metadata = childMetadata.get(conversationID) ?? await record.harness.snapshot(ChildContext, conversationID, context);
-        if (!metadata || metadata.parentConversationID !== record.conversation.id) throw new DefaultAgentError('This child does not belong to the current Built-in conversation.');
+        if (!metadata || metadata.parentConversationID !== record.conversation.id) throw new DefaultAgentError('This child does not belong to the current Pi Durable conversation.');
         const child = await record.harness.conversation(conversationID, context);
         if (!child) throw new DefaultAgentError('This native child conversation is unavailable.');
         const scope = createSubagentContext(record, engine, { conversation: child, sessionID: metadata.sessionID, model: engine.resolveModel(`${metadata.provider}/${metadata.modelId}`), accountID: metadata.accountID, thinkingLevel: metadata.thinking, runID: metadata.runID, cli: childBindings.get(conversationID) ?? new SessionCLIContext().fork(), appendArchive: items => record.appendArchive(scopedArchive({ conversation: child, runID: metadata.runID }, items)), reportUsage: usage => record.reportUsage?.(usage) }, context);

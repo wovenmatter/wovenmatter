@@ -62,7 +62,7 @@ public struct WorkspaceHTTPObservation: Codable, Sendable {
 
 public enum WorkspaceHistoryPrivacy {
   /// Remove credential *transport* only. Native message/tool content (including
-  /// ordinary fields named `token`) is retained. Built-in credential RPCs must
+  /// ordinary fields named `token`) is retained. Pi Durable credential RPCs must
   /// never be recorded as raw run history.
   public static func redactingTransportSecrets(_ text: String) -> String {
     let endpoints = redactingToolEndpoints(text)

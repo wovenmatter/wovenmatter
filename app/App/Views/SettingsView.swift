@@ -220,7 +220,7 @@ struct SettingsView: View {
                     action: { section = .connections("global") }
                 )
                 SettingsDestinationRow(
-                    title: "Built-in Agent",
+                    title: AgentRuntimeKind.defaultAgent.displayName,
                     detail: "Conversation defaults, subagents, providers, and models.",
                     icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
                     action: { section = .defaultAgent("global", .landing) }

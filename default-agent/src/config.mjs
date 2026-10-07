@@ -11,7 +11,7 @@ export const emptyConfig = { providers, models: [], defaultModel: null, fallback
 export class DefaultAgentError extends Error {}
 export function operationErrorMessage(error) {
   return error instanceof DefaultAgentError ? error.message
-    : 'Built-in could not complete this operation. Check its connections and workspace unlock state in Settings → Connections.';
+    : 'Pi Durable could not complete this operation. Check its connections and workspace unlock state in Settings → Connections.';
 }
 export async function readJSON(path, fallback = {}) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
@@ -31,7 +31,7 @@ export async function writePrivateJSON(path, value) {
   }
 }
 export function validateConfig(input) {
-  if (!input || typeof input !== 'object') throw new Error('Invalid Built-in settings.');
+  if (!input || typeof input !== 'object') throw new Error('Invalid Pi Durable settings.');
   const uniqueStrings = (value) => Array.isArray(value) && value.length <= 2000 && value.every(v => typeof v === 'string' && v.length < 512) ? [...new Set(value)] : [];
   const customServers = localServers(input.customServers);
   const supported = [...providers, ...customServers.map(s => s.id)];

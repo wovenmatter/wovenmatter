@@ -9,7 +9,7 @@ const { openNativeArchive, sanitizeNativeTransportBytes, nativePresentationUpdat
   existsSync(bundled) ? bundled.href : new URL('../../default-agent/src/native-journal.mjs', import.meta.url).href)
 
 // Use the same exact records, large-record chunks, checksums and manifests as
-// Built-in transport. This spool belongs only to the current scheduled run.
+// Pi Durable transport. This spool belongs only to the current scheduled run.
 export async function createTaskNativeArchive({sourceID, nativeSessionID, runID, publish}) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-task-native-'))
   const archive = await openNativeArchive(join(directory, 'records.jsonl'))

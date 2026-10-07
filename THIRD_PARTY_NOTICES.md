@@ -34,9 +34,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Built-in durable runtime
+## Pi Durable runtime
 
-Built-in bundles `@earendil-works/pi-durable` 1.0.3 from
+Pi Durable bundles `@earendil-works/pi-durable` 1.0.3 from
 [Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.0.3/packages/durable)
 for native execution and persistence. Its
 [upstream license](https://github.com/earendil-works/pi/blob/v1.0.3/LICENSE)

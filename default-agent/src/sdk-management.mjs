@@ -125,7 +125,7 @@ export async function checkSDKUpdates({ directory, id, signal, fetchImplementati
   const runtime = await resolveSDKRuntime({ directory });
   const previous = await readJSON(paths(directory).latest, null, 16384).catch(() => null);
   const versions = previous?.base === runtime.base ? { ...previous.versions } : {};
-  if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi SDK or Claude SDK.');
+  if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi Durable SDK or Claude SDK.');
   for (const definition of definitions.filter(value => id === undefined || value.id === id)) {
     const current = await packageVersion(runtime.root, definition.packages[0]);
     const latest = await registryVersion(definition.packages[0], signal, fetchImplementation);
@@ -205,7 +205,7 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
   signal = signal ? AbortSignal.any([signal, lockController.signal]) : lockController.signal;
   aborted(signal);
   const definition = definitions.find(value => value.id === id);
-  if (!definition) throw fail('Choose Pi SDK or Claude SDK.');
+  if (!definition) throw fail('Choose Pi Durable SDK or Claude SDK.');
   const p = paths(directory);
   await privateDirectory(p.root); await privateDirectory(p.generations);
   const unlock = await lock(p.lock, () => lockController.abort());

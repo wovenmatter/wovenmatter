@@ -160,12 +160,12 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
   if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
   let sessionID,attachmentToken,accepted=false
   try {
-    if((await defaultAgent.status()).locked) throw Object.assign(before('Waiting for Woven Matter to reconnect and unlock the Built-in agent.'),{deferred:true})
+    if((await defaultAgent.status()).locked) throw Object.assign(before('Waiting for Woven Matter to reconnect and unlock Pi Durable.'),{deferred:true})
     const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentProtocol:1,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{})}})
     const session=opened.result
     attachmentToken=session?._meta?.attachmentToken ?? opened.attachmentToken
     sessionID=session?.sessionId ?? nativeSessionID
-    if(!sessionID) throw before('The Built-in task session is unavailable.')
+    if(!sessionID) throw before('The Pi Durable task session is unavailable.')
     bindSession(sessionID)
     await applyTaskConfiguration(async(method,params)=>(await defaultAgent.invoke({method,params,attachmentToken})).result,sessionID,session,run.task.configuration)
     if(signal.aborted) throw before('Background execution was turned off.')

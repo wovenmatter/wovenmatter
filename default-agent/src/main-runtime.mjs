@@ -24,7 +24,7 @@ const pendingCredentials = new Map();
 async function requestCredentials() {
   const id = 'credentials-' + crypto.randomUUID();
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => { pendingCredentials.delete(id); reject(new Error('Built-in credential connection timed out.')); }, 30000);
+    const timeout = setTimeout(() => { pendingCredentials.delete(id); reject(new Error('Pi Durable credential connection timed out.')); }, 30000);
     pendingCredentials.set(id, { resolve: value => { clearTimeout(timeout); resolve(value); }, reject });
     send({ jsonrpc: '2.0', id, method: 'woven/credentials', params: {} });
   });
@@ -39,7 +39,7 @@ async function remoteRequest(path, body, canUnlock = true) {
     await remoteRequest('configuration', await requestCredentials(), false);
     return remoteRequest(path, body, false);
   }
-  if (!response.ok) throw new Error(`Built-in workspace service failed (HTTP ${response.status}).`);
+  if (!response.ok) throw new Error(`Pi Durable workspace service failed (HTTP ${response.status}).`);
   return response.json();
 }
 const remoteAttachmentTokens = new Map();
@@ -117,7 +117,7 @@ async function invoke(message) {
       return { ...(await e.status({ signal: controlController.signal })), connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
       } finally { clearTimeout(loginTimeout); process.stdin.removeListener('end', abortLogin); process.removeListener('SIGTERM', abortLogin); }
     }
-    if (message.action === 'sign-in-status') return { statuses: [...(await e.status({ signal: controlController.signal })).providers.map(p => ({ ...p, name: 'Built-in · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
+    if (message.action === 'sign-in-status') return { statuses: [...(await e.status({ signal: controlController.signal })).providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
     if (message.action === 'refresh') {
       const errors = {};
       for (const provider of ['openai-codex', 'xai']) {
@@ -171,7 +171,7 @@ lines.on('line', line => {
   try { message = JSON.parse(line); } catch { return; }
   if (pendingCredentials.has(message.id)) {
     const pending = pendingCredentials.get(message.id); pendingCredentials.delete(message.id);
-    if (message.error) pending.reject(new Error('Built-in credentials are unavailable.'));
+    if (message.error) pending.reject(new Error('Pi Durable credentials are unavailable.'));
     else pending.resolve(message.result);
     return;
   }

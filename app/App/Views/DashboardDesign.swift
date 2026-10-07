@@ -607,7 +607,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .grok: "Grok Build"
         case .openClaw: "OpenClaw"
         case .hermes: "Hermes"
-        case .defaultAgent: "Built-in"
+        case .defaultAgent: AgentRuntimeKind.defaultAgent.displayName
         case .pi: "Pi"
         case .cursor: "Cursor"
         case .openCode: "OpenCode"

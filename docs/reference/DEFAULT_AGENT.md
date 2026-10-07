@@ -1,9 +1,9 @@
-# Built-in implementation
+# Pi Durable implementation
 
 The native app adds `AgentRuntimeKind.defaultAgent`; the eight external harnesses
 remain in the installation catalog. Local discovery resolves only the app-bundled
 Node executable and `default-agent/src/main.mjs`. The helper imports the pinned
-Pi SDK directly and exposes ACP to reuse the native conversation, tool activity,
+Pi Durable SDK directly and exposes ACP to reuse the native conversation, tool activity,
 notes, persistence, and model-control presentation. It never invokes the
 external `pi` command.
 
@@ -42,7 +42,7 @@ storage environment and the existing filesystem policy; changes to those
 upstream conventions require compatibility review.
 
 Local ACP starts through `main.mjs`, which selects a generation before importing
-SDK code. The remote HTTP service delegates Built-in execution to a managed child
+SDK code. The remote HTTP service delegates Pi Durable execution to a managed child
 process, retaining credentials only in the existing private process boundary.
 It waits for active work and admission leases before switching generations;
 scheduled runs hold a lease through setup and completion. SDK commands use the
@@ -52,7 +52,7 @@ progress, and errors are scoped to their workspace.
 
 `DefaultAgentSettingsScope` stores non-secret preferences and per-workspace
 replacements. API keys and owned OAuth credentials use macOS Keychain.
-Connections is the central account management surface for Built-in, Usage,
+Connections is the central account management surface for Pi Durable, Usage,
 and Dictation. Global OpenRouter keeps its existing shared Keychain item. Local
 helpers receive access-only credentials over private pipes.
 `ProviderAccountCoordinator` owns renewal and saves rotated credentials before
@@ -72,7 +72,7 @@ Remote SDK sessions and accepted operations are owned by
 the workspace service, not an SSH reader. The helper inside `docker exec` only
 attaches to those operations. Accepted native run UUIDs make duplicate submissions
 idempotent; journals and completion snapshots recover results after disconnect.
-Snapshots reconcile only exact run/conversation identities belonging to Built-in. Service restarts do not replay accepted work.
+Snapshots reconcile only exact run/conversation identities belonging to Pi Durable. Service restarts do not replay accepted work.
 
 Search is an explicit Exa adapter, with a separate credential slot and bounded
 results. Model providers are independent of search providers. Adding a search
@@ -87,10 +87,10 @@ real remote-host disconnect remain separate acceptance checks.
 ## Connections, dictation, and custom servers
 
 The app-owned coordinator supplies access-only snapshots to Usage, native Grok
-STT, and the Built-in transports. Concurrent refreshes coalesce. An STT or
+STT, and the Pi Durable transports. Concurrent refreshes coalesce. An STT or
 Usage HTTP 401 can request one early renewal through the same lock, with a
 compare-and-swap Keychain save so sign-out or a replacement account wins. Global
-connections serve app-wide consumers; workspace overrides serve Built-in.
+connections serve app-wide consumers; workspace overrides serve Pi Durable.
 Usage does not restore persisted quotas belonging to a previous shared account
 or an independently signed-in harness.
 

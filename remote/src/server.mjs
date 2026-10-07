@@ -108,8 +108,8 @@ const server = createServer(async (request, response) => {
         id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
       })));
       const statuses = await signInStatuses(entries);
-      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Built-in', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
-        : agent.providers.map(p => ({ ...p, name: 'Built-in · ' + p.name }))));
+      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Pi Durable', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
+        : agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name }))));
       return json(response, 200, { statuses });
     }
     if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
@@ -174,7 +174,7 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/harnesses') {
       const statuses = await Promise.all([...catalog.values()].map(harnessStatus))
-      statuses.unshift({ id: 'default_agent', displayName: 'Built-in', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
+      statuses.unshift({ id: 'default_agent', displayName: 'Pi Durable', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
       return json(response, 200, { harnesses: statuses })
     }
 

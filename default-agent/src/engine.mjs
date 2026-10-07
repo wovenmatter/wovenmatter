@@ -134,14 +134,14 @@ export class DefaultAgentEngine {
   }
   async sessionDirectory(value) {
     if (typeof value !== 'string' || !isAbsolute(value) || value.includes('\0') || Buffer.byteLength(value) > 4096) {
-      throw new DefaultAgentError('Choose an absolute working directory for this Built-in session.');
+      throw new DefaultAgentError('Choose an absolute working directory for this Pi Durable session.');
     }
     try {
       const directory = await realpath(value);
       if (!(await stat(directory)).isDirectory()) throw new Error('Not a directory.');
       return directory;
     } catch {
-      throw new DefaultAgentError('The Built-in session working directory is unavailable.');
+      throw new DefaultAgentError('The Pi Durable session working directory is unavailable.');
     }
   }
   async create(id, requestedCwd) {
@@ -149,7 +149,7 @@ export class DefaultAgentEngine {
     if (id && this.sessions.has(id)) {
       const record = this.sessions.get(id);
       if (requested !== undefined && requested !== record.cwd) {
-        throw new DefaultAgentError('This Built-in session belongs to a different working directory. Create a new session for this location.');
+        throw new DefaultAgentError('This Pi Durable session belongs to a different working directory. Create a new session for this location.');
       }
       if (record.archiveError) throw new DefaultAgentError('The native archive is unavailable. Start a new conversation.');
       return record;
@@ -219,7 +219,7 @@ export class DefaultAgentEngine {
     }
     if (option !== 'model') throw new DefaultAgentError('Unknown session option.');
     const model = this.resolveModel(reference);
-    if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Built-in Agent.');
+    if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Pi Durable.');
     const accounts = await this.credentials.candidates(model.provider);
     const account = accounts.find(a => a.credential && (a.credential.type !== 'oauth' || a.credential.expires > Date.now()));
     if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Connections before choosing this model.`);
@@ -234,7 +234,7 @@ export class DefaultAgentEngine {
     return this.configuration(record);
   }
   async prompt(record, text, emit, cliContext, identity) {
-    if (record.busy) throw new DefaultAgentError('This Built-in session already has an active turn.');
+    if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
     const nextRunID = identity === undefined ? record.runID : identity.runID;
     record.busy = true;
     record.cli ??= new SessionCLIContext();
@@ -286,7 +286,7 @@ export class DefaultAgentEngine {
         record.accountID = account.id;
         record.accountOwned = account.owned === true;
         record.credentialIdentity = credentialRouteIdentity(record, account);
-        if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Built-in Agent.'; continue; }
+        if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Pi Durable.'; continue; }
         record.httpAccessFailure = undefined;
         try {
           const withAccount = action => this.credentials.runWithAccount(provider, account, () =>
@@ -294,7 +294,7 @@ export class DefaultAgentEngine {
               ? this.claude.withProfile(account.credential?.accountId, action) : action());
           const run = async () => {
           const model = this.resolveModel(reference);
-          if (!model) throw new Error('Model is no longer available. Select a model in Settings → Built-in Agent.');
+          if (!model) throw new Error('Model is no longer available. Select a model in Settings → Pi Durable.');
           if (isClaude(reference)) {
             if (model.provider === 'anthropic' && !await this.credentials.read('anthropic')) throw new Error('Authentication required.');
           } else {
@@ -314,7 +314,7 @@ export class DefaultAgentEngine {
           }
           this.persistOptions(record);
           const configuration = this.configuration(record, fallbackReason);
-          emit({ sessionUpdate: 'config_option_update', ...configuration, _meta: { ...configuration._meta, engineUsed: true } });
+          emit({ sessionUpdate: 'config_option_update', ...configuration });
           const continuations = [];
           const acceptSteer = (input, requestId, binding) => new Promise((resolve, reject) => {
             controller.signal.throwIfAborted();
@@ -420,11 +420,11 @@ export class DefaultAgentEngine {
     }
     if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), params._meta?.wovenInputID, params._meta?.wovenTools);
     if (method === 'session/prompt') {
-      if (record.busy) throw new DefaultAgentError('This Built-in session is still responding. Wait or stop it first.');
+      if (record.busy) throw new DefaultAgentError('This Pi Durable session is still responding. Wait or stop it first.');
       const runID = params._meta?.wovenRunID;
       const result = await this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, params._meta?.wovenTools, { runID, inputID: params._meta?.wovenInputID ?? runID });
       return result;
     }
-    throw new Error('Unsupported Built-in operation.');
+    throw new Error('Unsupported Pi Durable operation.');
   }
 }

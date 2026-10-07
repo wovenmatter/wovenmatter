@@ -1,6 +1,6 @@
-# Built-in runtime
+# Pi Durable runtime
 
-Built-in uses pinned Pi Durable 1.0.3 `Harness`, `Conversation` and `Submission`
+The agent uses pinned Pi Durable SDK 1.0.3 `Harness`, `Conversation` and `Submission`
 APIs locally and remotely. The coding-agent library supplies image/file/search
 and code-mode tools, instructions and `ModelRuntime`; Durable owns execution.
 Claude accounts use the official Claude Agent SDK. Standalone Pi is independent.
@@ -8,7 +8,7 @@ Claude accounts use the official Claude Agent SDK. Standalone Pi is independent.
 ## Native persistence
 
 Each conversation owns `durable/<woven-session-uuid>/native/` under its execution
-host's Built-in workspace root. Durable persists its tasks, requests, checkpoints
+host's Pi Durable workspace root. Durable persists its tasks, requests, checkpoints
 and context in fsynced multi-file JSONL. A small manifest identifies the store and
 working directory; a library heartbeat lock enforces one execution owner.
 
@@ -24,7 +24,7 @@ fails closed when a prior process's delivery outcome is uncertain.
 
 ## Attached subagents
 
-Built-in can spawn native child conversations, send follow-ups and wait for their
+Pi Durable can spawn native child conversations, send follow-ups and wait for their
 results. The active-child limit defaults to eight and can be set from two through
 24. Children use the parent's exact connection unless the user or workspace
 instructions explicitly authorize another route; ambiguous routing fails before

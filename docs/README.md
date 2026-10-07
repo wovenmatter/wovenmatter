@@ -13,7 +13,7 @@ work across sessions, and organize your conversations, notes, and data.
 ## Work with your agents
 
 - [Workspaces and storage](guide/workspaces.md) — shared roots, saved conversations, and where your data lives.
-- [Built-in](guide/default-agent.md) — built-in tools, provider connections, and fallback models.
+- [Pi Durable](guide/default-agent.md) — built-in tools, provider connections, and fallback models.
 - [Connections and dictation](guide/connections-and-dictation.md) — shared accounts, Grok dictation, and local model servers.
 - [Executor apps](guide/executor.md) — shared app capabilities, scoped Execute, approvals, and Pi code mode.
 - [Remote workspaces](guide/remote-workspaces.md) — work with agents on other Linux machines.

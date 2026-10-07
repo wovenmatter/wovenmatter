@@ -149,7 +149,7 @@ export async function resolveSubagentRoute(engine, { parentRoute, parentThinking
   if (!inherited) throw new SubagentRouteError('parent_route_unavailable', 'The parent model or exact account is no longer enabled. Choose an available connection before spawning a subagent.');
   const requested = text(model);
   let matches = requested ? routes.filter(route => modelMatches(route, requested)) : routes.filter(route => route.modelId === parent.modelId && (connection !== undefined || route.provider === parent.provider));
-  if (!matches.length) throw new SubagentRouteError('model_unavailable', 'That model is not enabled for Built-in. Inspect the available subagent models and routes.');
+  if (!matches.length) throw new SubagentRouteError('model_unavailable', 'That model is not enabled for Pi Durable. Inspect the available subagent models and routes.');
   if (connection !== undefined) matches = matches.filter(route => connectionMatches(route, connection));
   else {
     const local = matches.filter(route => sameConnection(route, parent));

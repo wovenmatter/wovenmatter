@@ -17,11 +17,11 @@ struct BuiltInNativeHistoryCursor: Equatable, Comparable {
             self.record = record
             self.byteOffset = byteOffset
         } else {
-            throw LocalACPClientError.invalidResponse("Invalid Built-in native archive cursor")
+            throw LocalACPClientError.invalidResponse("Invalid Pi Durable native archive cursor")
         }
         let maximumSafeInteger: Int64 = 9_007_199_254_740_991
         guard record >= 0, byteOffset >= 0, record <= maximumSafeInteger, byteOffset <= maximumSafeInteger else {
-            throw LocalACPClientError.invalidResponse("Invalid Built-in native archive cursor")
+            throw LocalACPClientError.invalidResponse("Invalid Pi Durable native archive cursor")
         }
     }
 

@@ -274,6 +274,9 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public let setupMethods: [RemoteHarnessSetupMethod]
     public let detectedProviders: [String]
 
+    /// Older workspace services may still report the previous agent name.
+    public var presentationName: String { id == .defaultAgent ? id.displayName : displayName }
+
     /// Lifecycle responses are newer than the harness inventory fetched before launch.
     /// Reconcile only the native OpenCode instance; ACP authentication stays authoritative.
     public func reconcilingOpenCode(instance: RemoteWorkspaceInstanceStatus?, installed: Bool?) -> Self {
@@ -1325,7 +1328,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         else {
             if path == "v1/default-agent/sdks" {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
-                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage its Built-in SDKs.")
+                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
