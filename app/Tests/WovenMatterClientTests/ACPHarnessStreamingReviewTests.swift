@@ -39,7 +39,8 @@ struct ACPHarnessStreamingReviewTests {
       initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"terminal"}"#, extras: [:], promptOverride: """
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call","toolCallId":"exec","kind":"execute","title":"python3"}}}'
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","_meta":{"terminal_output_delta":{"data":"wait"}}}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","status":"completed","_meta":{"terminal_output_delta":{"data":"ing\\n"},"terminal_exit":{"exit_code":0}}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","_meta":{"terminal_output_delta":{"data":"ing\\n"}}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","status":"completed","_meta":{"terminal_exit":{"exit_code":0}}}}}'
         respond "$id" '{"stopReason":"end_turn"}'; continue
         """)
     defer { fixture.remove() }
@@ -52,7 +53,9 @@ struct ACPHarnessStreamingReviewTests {
       guard case .activity(let activity, _) = event, activity.kind == .tool else { return nil }
       return activity
     }
-    let merged = try #require(tools.first).merging(tools[1]).merging(tools[2])
+    #expect(tools.count == 4)
+    let first = try #require(tools.first)
+    let merged = tools.dropFirst().reduce(first) { $0.merging($1) }
     #expect(merged.content == "waiting\n")
     #expect(merged.status == "completed")
     #expect(merged.rawPayloadJSON?.contains("terminal_exit") == true)

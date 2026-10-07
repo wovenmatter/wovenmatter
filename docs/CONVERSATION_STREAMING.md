@@ -88,3 +88,23 @@ clear, terminal deltas, paging, cache invalidation and canonical retention.
 Live acceptance above covers the configured local Codex and Pi Durable routes.
 Updated remote gateway code must run on a separately updated remote installation
 to exercise those normalizers there; this PR does not deploy it.
+
+### Observed upstream output limitation
+
+The final Codex live check exposed an omission in the active Codex ACP 2.1.1
+adapter: a command printed line 1 immediately, then lines 2–5 at two-second
+intervals, but the ACP wire carried only lines 2–5. WovenMatter retained those
+chunks exactly, including a separate exit-only update. The same command's native
+Codex completion record contained all five lines.
+
+The adapter's command reporter marks output as streamed after any delta. Its
+standard renderer then suppresses the aggregated completion output for streamed
+terminal commands. Thus the desktop cannot recover an omitted prefix from these
+ACP events. This is a known limit of this configured adapter route, not evidence
+that every upstream-native byte is present in the ACP capture.
+
+Recovering settled output from Codex's native records would add another capture
+source, requiring explicit session/item identity, local/remote boundaries and
+incremental file cursors. It is separate work. This change does not patch installed
+tools, replay the entire native history on every turn, or claim complete command
+output when the adapter omitted bytes.
