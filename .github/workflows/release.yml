@@ -15,6 +15,8 @@ concurrency:
 jobs:
   macos:
     name: Signed Apple Silicon release
+    outputs:
+      artifact_name: ${{ steps.artifacts.outputs.name }}
     runs-on: macos-26
     timeout-minutes: 60
     environment: release
@@ -34,14 +36,28 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           test "$(git rev-list -n 1 "$TAG")" = "$GITHUB_SHA"
-          scripts/scan-public-tree.sh
-          scripts/test-release.sh
+
+      - name: Record available completed main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Informational only: release never triggers CI or reruns test scopes.
+          if ci_url="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --event push --branch main --commit "$GITHUB_SHA" --status success \
+            --limit 1 --json headSha,url --jq '.[0].url // empty')" && [ -n "$ci_url" ]; then
+            echo "Completed exact-source main CI: $ci_url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No completed main CI metadata available; continuing with the accepted main source." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
-      - name: Run deterministic validation
-        run: scripts/test-changes.sh --all
+      - name: Cache pinned CEF download only
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/Library/Caches/WovenMatter/CEF/archives
+          key: release-cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('app/Browser/cef-version.json', 'scripts/prepare-browser.sh') }}
 
       - name: Import Developer ID identity
         env:
@@ -78,30 +94,15 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           scripts/build-release.sh "$version"
 
-      - name: Stage immutable GitHub Release draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="$GITHUB_REF_NAME"
-          version="${tag#v}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            is_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft')"
-            if [[ "$is_draft" != "true" ]]; then
-              echo "Release $tag is already published; refusing to replace published assets." >&2
-              exit 1
-            fi
-          else
-            gh release create "$tag" \
-              --draft \
-              --title "Woven Matter v${version}" \
-              --notes "Signed and notarized Apple Silicon release."
-          fi
-          gh release upload "$tag" dist/* --clobber
-          expected="$(printf '%s\n' "SHA256SUMS.txt" "WovenMatter_${version}_arm64.dmg" "latest-mac.json" | sort)"
-          actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
-          test "$actual" = "$expected"
-          echo "Release $tag is staged as a private draft."
-          echo "Verify the draft through scripts/publish-release.sh, then write the release description and wait for Trey's explicit approval before publication."
+      - name: Save verified distribution artifacts for staging retries
+        id: artifacts
+        run: echo "name=release-dist-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifacts.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Remove temporary signing keychain
         if: always()
@@ -111,3 +112,48 @@ jobs:
           keychain="$RUNNER_TEMP/wovenmatter-release.keychain-db"
           security delete-keychain "$keychain" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-private-key.p8"
+
+  stage:
+    name: Stage private release draft
+    needs: macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.macos.outputs.artifact_name }}
+          path: dist
+      - name: Verify transferred checksums
+        working-directory: dist
+        run: shasum -a 256 -c SHA256SUMS.txt
+      - name: Stage immutable GitHub Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          # Recheck tag identity at this separate job/retry boundary.
+          tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag")"
+          test "$(jq -r '.object.type' <<<"$tag_ref")" = tag
+          tag_object="$(jq -r '.object.sha' <<<"$tag_ref")"
+          tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq '.object.sha')"
+          test "$tag_commit" = "$GITHUB_SHA"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "Release $tag is already published; refusing to replace published assets." >&2
+              exit 1
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --title "Woven Matter v${version}" \
+              --notes "Signed and notarized Apple Silicon release."
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" dist/* --clobber
+          expected="$(printf '%s\n' "SHA256SUMS.txt" "WovenMatter_${version}_arm64.dmg" "latest-mac.json" | sort)"
+          actual="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)"
+          test "$actual" = "$expected"
+          echo "Release $tag is staged as a private draft."
+          echo "Verify the draft through scripts/publish-release.sh, then write the release description and wait for Trey's explicit approval before publication."

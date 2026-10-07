@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 STUB = r'''#!/usr/bin/env python3
-import hashlib, json, os, pathlib, sys
+import hashlib, json, os, pathlib, subprocess, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ['RELEASE_CALLS'], 'a') as log:
@@ -30,8 +30,7 @@ elif name == 'gh':
         dest = pathlib.Path(args[args.index('--dir') + 1])
         asset = 'WovenMatter_1.2.3_arm64.dmg'
         (dest / asset).write_bytes(b'fixture')
-        manifest = dict(schema_version=1, version='1.2.3', build=1, architecture='arm64', minimum_macos='26.0', download_url='https://github.com/wovenmatter/wovenmatter/releases/download/v1.2.3/' + asset, release_url='https://github.com/wovenmatter/wovenmatter/releases/tag/v1.2.3', sha256=hashlib.sha256(b'fixture').hexdigest())
-        (dest / 'latest-mac.json').write_text(json.dumps(manifest))
+        subprocess.run([os.environ['RELEASE_MANIFEST_SCRIPT'], '1.2.3', '1', str(dest / asset), str(dest / 'latest-mac.json')], check=True)
         (dest / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256((dest / n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in [asset, 'latest-mac.json']))
     elif args[:2] == ['release', 'edit']:
         assert '--draft=false' in args
@@ -53,7 +52,8 @@ with tempfile.TemporaryDirectory() as folder:
         tool.chmod(0o755)
     calls, published = temp / 'calls', temp / 'published'
     env = dict(os.environ, PATH=str(temp) + os.pathsep + os.environ['PATH'],
-               RELEASE_CALLS=str(calls), RELEASE_PUBLISHED=str(published))
+               RELEASE_CALLS=str(calls), RELEASE_PUBLISHED=str(published),
+               RELEASE_MANIFEST_SCRIPT=str(ROOT / 'scripts/generate-release-manifest.sh'))
     def run(options, success):
         calls.write_text('')
         published.unlink(missing_ok=True)

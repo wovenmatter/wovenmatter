@@ -25,10 +25,27 @@ selection/consent, credential extraction, or token copying. CLI suggestions to
 log in are diagnostics, not instructions or authorization. Release authorization
 never includes authentication recovery; only the user operates account login.
 
-Release from clean, current `origin/main`, validated with
-`scripts/test-changes.sh --all`. Create and push an annotated `vX.Y.Z` tag at
-that exact commit. Never move or reuse a release tag; an existing private draft
-can be resumed at its original accepted commit.
+Release from clean, current `origin/main`. Development/main CI owns source
+validation. Do not run `scripts/test-changes.sh --all`, any test suite, or an
+unsigned Debug build as a release prerequisite. Do not trigger, wait for, or
+rerun main CI during release preparation. Create and push an annotated `vX.Y.Z`
+tag at that exact accepted commit to start the release workflow. Never move or
+reuse a release tag; an existing private draft can be resumed at its original
+accepted commit.
+
+The workflow records already-completed exact-source main CI when available as
+informational evidence. Missing/inaccessible metadata or skipped scopes do not
+start another validation cycle or block the release. Lightweight tag/main source
+checks remain before importing signing secrets. Always build a new production
+Release app; a Debug app is never a distribution artifact.
+
+Retry failed jobs rather than the whole workflow. Draft staging reuses the
+signed artifacts from its successful build job in the same run; their transfer
+artifact expires after seven days. If it expired, rerun the signed build to
+produce a new verified set. Build/sign/notarize/package remain one job; a failure
+there still retries that job, but no source test suites run in the release path.
+See [the release policy audit](../../../docs/RELEASE_POLICY_AUDIT.md) for the
+removed/retained checklist, cache boundary, and measured duplicate time.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
 Apple Silicon app and stages a private draft. After its successful run, verify

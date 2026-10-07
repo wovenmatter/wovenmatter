@@ -63,6 +63,26 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
+Prepare the candidate from clean, current `origin/main`, then tag that accepted
+commit to start the release workflow. Development/main CI owns source validation.
+Release preparation never requires local `--all`, test suites, or an unsigned
+Debug build, and never triggers, waits for, or reruns main CI. The release
+workflow records already-completed exact-source CI when available; missing or
+inaccessible metadata and skipped scopes do not create another validation cycle
+or block release. General CI selection and tests remain independent of release.
+The signed production build always uses Release configuration and fresh
+DerivedData, with lightweight tag/main checks before signing secrets are imported.
+
+Signed distribution and draft staging are separate jobs. Retry failed jobs
+rather than the entire workflow. Draft staging reuses the successful build job's
+signed artifact set in the same run and checks transferred checksums; its
+transfer artifact lasts seven days. Build/sign/notarize/package still retry as
+one job when they fail. The release cache contains only the pinned CEF download
+archive, keyed by runner OS/architecture and the pin/download-script hashes with
+no fallback keys. Fresh extraction verifies the pinned checksum after restore.
+No signed products, DerivedData, npm dependency trees, keychains, or credentials
+are cached. See [the removed/retained release policy audit](RELEASE_POLICY_AUDIT.md).
+
 A supplied or confirmed version authorizes building and verifying a private
 draft. Publication requires Trey's explicit manual approval of the exact release
 description for that release. A tag push only stages a draft. For version `X.Y.Z`, the identities are:

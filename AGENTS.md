@@ -10,6 +10,8 @@
 - Build and launch: `scripts/build_and_run.sh`.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
+  Development/main CI owns source validation. Release preparation never runs
+  local test suites or reruns CI; follow the release skill to start the workflow.
   Tests must not consume provider services. Container lifecycle tests use
   `scripts/test-container.sh` when in scope and Docker is available.
 - Release, installation, publication, and delivery require an explicit request.
