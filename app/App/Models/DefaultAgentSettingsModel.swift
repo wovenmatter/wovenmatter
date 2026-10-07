@@ -43,13 +43,8 @@ final class DefaultAgentSettingsModel {
     private var connectionChangesTask: Task<Void, Never>?
     private var configurationChangesTask: Task<Void, Never>?
     private var accountsTask: Task<Void, Never>?
-    private var resultTask: Task<Void, Never>?
-    private var processingResult = false
     private var receivedResult = false
-    private var outputEnded = false
-    private var terminationStatus: Int32?
     private var outputTask: Task<Void, Never>?
-    private var output: FileHandle?
     private var catalogOnly = false
     private var catalogRequestConfiguration: DefaultAgentSettings?
     private var catalogRequestKey: String?
@@ -660,22 +655,8 @@ final class DefaultAgentSettingsModel {
         operationTask = nil
         accountsTask?.cancel()
         accountsTask = nil
-        // A received terminal result owns its credential commit. Navigation only
-        // cancels presentation; a completed sign-in must remain connected.
-        resultTask = nil
-        processingResult = false
-        outputTask?.cancel()
-        outputTask = nil
-        // Terminate before closing a pipe that a reader/writer may be using.
-        // FileHandle close/write can wait for that operation; neither belongs on
-        // MainActor. The serial queue also preserves request/answer ordering.
-        if let process, process.isRunning { process.terminate() }
-        process = nil
-        if let output { DispatchQueue.global(qos: .utility).async { try? output.close() } }
-        output = nil
+        stopHelper()
         finishSignIn()
-        if let input { inputQueue.async { try? input.close() } }
-        input = nil
         busy = false
         signInProvider = nil
         signInURL = nil
@@ -683,6 +664,16 @@ final class DefaultAgentSettingsModel {
         prompt = nil
         promptID = nil
         promptOptions = []
+    }
+    private func stopHelper() {
+        outputTask?.cancel()
+        outputTask = nil
+        // The reader task owns closing stdout after its cancellable read ends.
+        // Serialize stdin closure with writes, which must stay off MainActor.
+        if let process, process.isRunning { process.terminate() }
+        process = nil
+        if let input { inputQueue.async { try? input.close() } }
+        input = nil
     }
     private func completeSignInPresentation() {
         if let provider = signInProvider {
@@ -956,8 +947,6 @@ final class DefaultAgentSettingsModel {
         signInProvider = login
         if login != nil { signInOutcome = nil }
         receivedResult = false
-        outputEnded = false
-        terminationStatus = nil
         catalogOnly = action == "catalog"
         catalogRequestConfiguration = catalogConfiguration
         catalogRequestKey = catalogKey(remote: remote)
@@ -1031,19 +1020,11 @@ final class DefaultAgentSettingsModel {
                 child.standardOutput = stdout
                 child.standardError = FileHandle.nullDevice
                 let reader = stdout.fileHandleForReading
-                child.terminationHandler = { [weak self] child in
-                    Task { @MainActor in
-                        guard let self, self.generation == runID else { return }
-                        self.terminationStatus = child.terminationStatus
-                        self.finishHelperIfNeeded()
-                    }
-                }
                 try child.run()
                 process = child
                 input = stdin.fileHandleForWriting
-                output = reader
-                // One reader delivers bytes and EOF in order; process exit alone
-                // cannot finish a result whose Keychain commit is still pending.
+                // Drain complete lines before handling EOF. A terminal result
+                // owns its credential commit independently of helper shutdown.
                 outputTask = Task.detached(priority: .utility) { [weak self] in
                     defer { try? reader.close() }
                     // FileHandle.read(upToCount:) waits to fill its buffer on
@@ -1057,11 +1038,17 @@ final class DefaultAgentSettingsModel {
                                 self.receiveLine(line)
                             }
                         }
-                    } catch { }
+                    } catch is CancellationError { return }
+                    catch {
+                        await MainActor.run { [weak self] in
+                            guard let self, self.generation == runID else { return }
+                            self.failHelper("Could not read the Built-in helper response. Try again.")
+                        }
+                        return
+                    }
                     await MainActor.run { [weak self] in
                         guard let self, self.generation == runID else { return }
-                        self.outputEnded = true
-                        self.finishHelperIfNeeded()
+                        self.failHelper("Built-in setup did not complete. Try again.")
                     }
                 }
                 write(body)
@@ -1074,10 +1061,14 @@ final class DefaultAgentSettingsModel {
             }
         }
     }
-    private func finishHelperIfNeeded() {
-        guard outputEnded, terminationStatus != nil, !processingResult, !receivedResult else { return }
-        if error == nil { error = "Built-in setup did not complete. Try again." }
+    private func failHelper(_ message: String) {
+        // Late pipe failures or EOF cannot override an accepted result while
+        // its account changes are still being saved.
+        guard !receivedResult else { return }
+        receivedResult = true
+        stopHelper()
         clearCatalogRequest()
+        error = message
         completeSignInPresentation()
     }
     private func write(_ value: [String: Any]) {
@@ -1092,31 +1083,29 @@ final class DefaultAgentSettingsModel {
                 catch {
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == runID else { return }
-                        self.error = "Built-in helper disconnected."
+                        self.failHelper("Built-in helper disconnected. Try again.")
                     }
                 }
             }
-        } catch { self.error = "Built-in helper disconnected." }
+        } catch { failHelper("Built-in helper disconnected. Try again.") }
     }
     private func receiveLine(_ line: Data) {
         guard !receivedResult, let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
         if let result = object["result"] as? [String: Any] {
-            guard !processingResult else { return }
-            processingResult = true
             receivedResult = true
             let runID = generation
             let context = ResultContext(keyScope: activeKeyScope, removingAccount: removingAccount,
                 reconnectingAccount: reconnectingAccount, provider: signInProvider, catalogOnly: catalogOnly,
                 catalogConfiguration: catalogRequestConfiguration, catalogKey: catalogRequestKey,
                 sdkRevision: catalogRequestSDKRevision)
-            resultTask = Task { [self] in await receiveResult(result, runID: runID, context: context) }
+            // Navigation may cancel presentation and transport, but an accepted
+            // result must finish saving its credentials in the captured scope.
+            Task { [self] in await receiveResult(result, runID: runID, context: context) }
             return
         }
         if let error = object["error"] as? String {
-            receivedResult = true
-            clearCatalogRequest()
-            self.error = error
-            completeSignInPresentation()
+            failHelper(error)
+            return
         }
         if let event = object["notification"] as? [String: Any] {
             if let url = (event["url"] ?? event["verificationUri"]) as? String, let value = URL(string: url),
@@ -1138,11 +1127,7 @@ final class DefaultAgentSettingsModel {
     }
     private func receiveResult(_ result: [String: Any], runID: UUID, context: ResultContext) async {
         defer {
-            if generation == runID {
-                if context.catalogOnly { clearCatalogRequest() }
-                processingResult = false
-                finishHelperIfNeeded()
-            }
+            if generation == runID, context.catalogOnly { clearCatalogRequest() }
         }
         let data = try? JSONSerialization.data(withJSONObject: result)
         if context.catalogOnly {
