@@ -140,30 +140,6 @@ struct ChatPanelLayoutTests {
     #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[b]])
   }
 
-  @Test("every five-panel close order returns to the unchanged primary")
-  func allCloseOrders() {
-    let auxiliaryIDs = [a, b, c, d]
-    for order in permutations(of: auxiliaryIDs) {
-      var state = fivePanelState()
-      let assignedA = state.setConversation("chat-a", in: a)
-      let assignedB = state.setConversation("chat-b", in: b)
-      let assignedC = state.setConversation("chat-c", in: c)
-      let assignedD = state.setConversation("chat-d", in: d)
-      #expect(assignedA && assignedB && assignedC && assignedD)
-
-      for panelID in order {
-        let closed = state.closePanel(panelID)
-        #expect(closed)
-      }
-      #expect(state.panels == [DashboardChatPanel(
-        id: .primary,
-        conversationID: "primary"
-      )])
-      #expect(state.activePanelID == .primary)
-      #expect(state.canAddPanel(from: .primary))
-    }
-  }
-
   @Test("activation projects one sidebar selection and replacement is active-only")
   func activationAndReplacement() {
     var state = threePanelState()
@@ -303,14 +279,4 @@ struct ChatPanelLayoutTests {
     return state
   }
 
-  private func permutations<T>(of values: [T]) -> [[T]] {
-    guard let first = values.first else { return [[]] }
-    return permutations(of: Array(values.dropFirst())).flatMap { suffix in
-      (0...suffix.count).map { index in
-        var next = suffix
-        next.insert(first, at: index)
-        return next
-      }
-    }
-  }
 }

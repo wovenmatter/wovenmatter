@@ -25,33 +25,23 @@ struct DatabasePresentationReadTests {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    let gate = PresentationReadGate()
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
     let task = Task {
       try await database.read { database in
         #expect(!Thread.isMainThread)
-        gate.pause()
+        entered.continuation.yield(())
+        #expect(release.wait(timeout: .now() + 60) == .success)
         return try database.dashboardRevision()
       }
     }
-    for await _ in gate.entered { break }
+    for await _ in entered.stream { break }
     // This MainActor continuation runs while the database read is still queued
     // on its worker; cancellation must not resume with its eventual stale value.
     task.cancel()
-    gate.release()
+    release.signal()
     await #expect(throws: CancellationError.self) { try await task.value }
     #expect(try await database.read { try $0.dashboardRevision() } >= 0)
   }
-}
-
-private final class PresentationReadGate: @unchecked Sendable {
-  let entered: AsyncStream<Void>
-  private let continuation: AsyncStream<Void>.Continuation
-  private let semaphore = DispatchSemaphore(value: 0)
-  init() {
-    let stream = AsyncStream<Void>.makeStream()
-    entered = stream.stream
-    continuation = stream.continuation
-  }
-  func pause() { continuation.yield(()); semaphore.wait() }
-  func release() { semaphore.signal() }
 }

@@ -17,27 +17,17 @@ platform="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["arc
 expected="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archives"][sys.argv[2]]["sha1"])' "$pin" "$architecture")"
 cache="${WOVENMATTER_CEF_CACHE_DIR:-$HOME/Library/Caches/WovenMatter/CEF}"
 name="cef_binary_${version}_${platform}_minimal"
-mkdir -p "$cache/archives"
+mkdir -p "$cache"
 # Distinct Xcode builds share immutable downloads; atomic directory rename
 # prevents a partially extracted SDK becoming visible to another build.
 if [ ! -f "$cache/$name/.verified" ]; then
   staging="$(mktemp -d "$cache/.download.XXXXXX")"
   trap 'rm -rf "$staging"' EXIT
-  archive="$cache/archives/$name.tar.bz2"
-  if [ ! -f "$archive" ]; then
-    curl --fail --location --retry 3 --silent --show-error \
-      "https://cef-builds.spotifycdn.com/$name.tar.bz2" -o "$staging/cef.tar.bz2"
-    archive="$staging/cef.tar.bz2"
-  fi
-  # Actions caches only the raw archive. Recheck the repository pin on every
-  # fresh extraction, including restores; never cache signed/bundled products.
-  actual="$(shasum "$archive" | awk '{print $1}')"
+  curl --fail --location --retry 3 --silent --show-error \
+    "https://cef-builds.spotifycdn.com/$name.tar.bz2" -o "$staging/cef.tar.bz2"
+  actual="$(shasum "$staging/cef.tar.bz2" | awk '{print $1}')"
   if [ "$actual" != "$expected" ]; then echo 'CEF archive checksum mismatch.' >&2; exit 1; fi
-  if [ "$archive" = "$staging/cef.tar.bz2" ]; then
-    mv "$archive" "$cache/archives/$name.tar.bz2"
-    archive="$cache/archives/$name.tar.bz2"
-  fi
-  tar -xjf "$archive" -C "$staging"
+  tar -xjf "$staging/cef.tar.bz2" -C "$staging"
   touch "$staging/$name/.verified"
   if [ ! -d "$cache/$name" ]; then
     mv "$staging/$name" "$cache/$name"

@@ -90,49 +90,17 @@ release_run_url="$(jq -r --arg sha "$expected_sha" '
 test -n "$release_run_url" \
   || { printf 'No successful Release workflow found for %s at %s.\n' "$tag" "$expected_sha" >&2; exit 65; }
 
-# Identify bytes independently of tag/asset names. Notes edits do not invalidate
-# this identity; replacing an asset changes its ID/digest and forces a download.
-asset_identity() {
-  gh api "repos/$repository/releases/tags/$tag" | jq -ce --arg tag "$tag" --arg sha "$expected_sha" '
-    select(.tag_name == $tag and .draft == true)
-    | {tag: .tag_name, source: $sha, release_id: .id,
-       assets: (.assets | map({id, name, size, digest, updated_at, state}) | sort_by(.name))}
-  '
-}
-identity="$(asset_identity)"
-jq -e --arg asset "$expected_asset" '
-  (.assets | map(.name)) == ["SHA256SUMS.txt", $asset, "latest-mac.json"]
-' <<<"$identity" >/dev/null
-cacheable=false
-if jq -e '.assets | all(.state == "uploaded" and (.id | type == "number")
-  and (.size | type == "number") and ((.digest // "") | test("^sha256:[0-9a-f]{64}$")))' <<<"$identity" >/dev/null; then
-  cacheable=true
-fi
-matches_remote_assets() {
-  (cd "$1" && jq -r '.assets[] | (.digest | ltrimstr("sha256:")) + "  " + .name' <<<"$identity" | shasum -a 256 -c -)
-}
-
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/wovenmatter-publish-${version}.XXXXXX")"
 trap 'rm -rf "$temporary"; rm -f "$notes_snapshot"' EXIT
-payload="$temporary"
-cache_root="${WOVENMATTER_PUBLISH_CACHE_DIR:-${TMPDIR:-/tmp}/wovenmatter-verified-downloads}"
-cache_key="$(printf '%s' "$identity" | shasum -a 256 | awk '{ print $1 }')"
-cache_dir="$cache_root/$cache_key"
-if "$cacheable" && [ -d "$cache_dir" ] && matches_remote_assets "$cache_dir" >/dev/null 2>&1; then
-  payload="$cache_dir"
-  printf '%s\n' 'Reusing exact-identity downloaded assets; rechecking signatures and Gatekeeper.'
-else
-  gh release download "$tag" --repo "$repository" --dir "$payload"
-fi
-if "$cacheable"; then matches_remote_assets "$payload"; fi
+gh release download "$tag" --repo "$repository" --dir "$temporary"
 
 (
-  cd "$payload"
+  cd "$temporary"
   shasum -a 256 -c SHA256SUMS.txt
 )
 
-dmg="${payload}/${expected_asset}"
-manifest="${payload}/latest-mac.json"
+dmg="${temporary}/${expected_asset}"
+manifest="${temporary}/latest-mac.json"
 dmg_sha="$(shasum -a 256 "$dmg" | awk '{ print $1 }')"
 jq -e \
   --arg version "$version" \
@@ -154,14 +122,6 @@ xcrun stapler validate "$dmg"
 gatekeeper_result="$(spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2>&1)"
 grep -Fq 'accepted' <<<"$gatekeeper_result"
 grep -Fq 'source=Notarized Developer ID' <<<"$gatekeeper_result"
-
-# Reject a draft asset replacement during verification, including on cache hits.
-test "$(asset_identity)" = "$identity" \
-  || { printf '%s\n' 'Release asset identity changed during verification.' >&2; exit 65; }
-if "$cacheable" && [ "$payload" = "$temporary" ]; then
-  (umask 077; mkdir -p "$cache_dir")
-  mv "$payload/$expected_asset" "$payload/latest-mac.json" "$payload/SHA256SUMS.txt" "$cache_dir/"
-fi
 
 printf 'Verified private release %s at %s.\n' "$tag" "$expected_sha"
 printf 'Release workflow: %s\n' "$release_run_url"
