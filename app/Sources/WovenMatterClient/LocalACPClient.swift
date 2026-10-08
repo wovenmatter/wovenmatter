@@ -9,6 +9,7 @@ public enum LocalACPEvent: Equatable, Sendable {
     case sessionIdentity(String)
     case assistantBoundary
     case activity(AgentRunActivity, appendsContent: Bool)
+    case programStatus(ProgramStatus, runID: String?)
     case usage(UsageTokenCounts)
     case composerPrefill(String)
 }
@@ -2605,6 +2606,12 @@ public actor LocalACPClient {
         guard let update = envelope.params?["update"],
               let kind = update["sessionUpdate"]?.stringValue else { return nil }
         switch kind {
+        case "woven_program_status":
+            guard runtimeKind == .defaultAgent, let raw = Self.jsonString(update["status"] ?? .null),
+                  let report = try? JSONDecoder().decode(ProgramStatus.self, from: Data(raw.utf8)),
+                  let valid = report.validated,
+                  let runID = update["_meta"]?["wovenRunID"]?.stringValue, !runID.isEmpty else { return nil }
+            return .programStatus(valid, runID: runID)
         case "woven_subagents":
             guard runtimeKind == .defaultAgent,
                   let raw = Self.jsonString(update),

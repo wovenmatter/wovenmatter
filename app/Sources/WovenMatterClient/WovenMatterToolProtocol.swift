@@ -370,6 +370,9 @@ public struct WovenMatterToolCommand: Sendable {
       """
     case .sessions: """
       list [--search TEXT] [--all-workspace] | status SESSION_ID | folders | harnesses
+      Session status follows OSC 7501: idle, working, blocked, done, error.
+      programStatus includes kind (permission, question, auth), details and child records.
+      executionStatus retains cancellation and uncertain delivery; status never grants approval.
       create --title TITLE --text INSTRUCTION --purpose INTENT [--independent]
         [--harness NAME --model MODEL --thinking LEVEL --folder ID --workspace ID --directory ABSOLUTE_PATH]
       send SESSION_ID --text MESSAGE [--request-id UUID]

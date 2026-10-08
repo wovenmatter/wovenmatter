@@ -82,12 +82,13 @@ extension ApplicationModel {
                     requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
             }
             for request in pendingLocalACPInteractions {
-                let requiresUserApproval: Bool = switch request.request {
-                case .plan: true
-                case .questions, .secret: false
+                let kind: ProgramStatus.Kind = switch request.request {
+                case .plan: .permission
+                case .questions: .question
+                case .secret: .auth
                 }
                 if let delivery = try await database.recordCoordinationNeedsInput(sessionID: request.conversationID,
-                    requestID: request.id.uuidString, requiresUserApproval: requiresUserApproval) { notifications.append(delivery) }
+                    requestID: request.id.uuidString, requiresUserApproval: kind == .permission, kind: kind) { notifications.append(delivery) }
             }
             for instance in openCodeInstances {
                 for (sessionID, snapshot) in instance.snapshots {

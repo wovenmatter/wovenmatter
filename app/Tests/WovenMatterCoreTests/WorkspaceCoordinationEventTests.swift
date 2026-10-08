@@ -34,7 +34,7 @@ struct WorkspaceCoordinationEventTests {
     #expect(deliveries.count == 1)
     let delivery = try #require(deliveries.first)
     #expect(delivery.sourceID == b && delivery.targetID == a && delivery.kind == .notification)
-    #expect(delivery.text == "Session “Worker” (\(b)): finished its turn. Run: \(run.runID).")
+    #expect(delivery.text == "Session “Worker” (\(b)): done. Run: \(run.runID).")
     #expect(try await db.sessionRelationship(b).coordinatorID == a)
     let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     #expect(try await reopened.collectCoordinationTurnNotifications().isEmpty)
@@ -92,7 +92,7 @@ struct WorkspaceCoordinationEventTests {
     try await db.setCoordinationNotifications(sourceID: a, targetID: b, enabled: true)
     #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
     let pending = try #require(try await db.recordCoordinationNeedsInput(sessionID: b, requestID: "permission-1", requiresUserApproval: true))
-    #expect(pending.text == "Session “Worker” (\(b)): needs user approval.")
+    #expect(pending.text == "Session “Worker” (\(b)): blocked (permission).")
     #expect(try await db.recordCoordinationNeedsInput(sessionID: b, requestID: "permission-1", requiresUserApproval: true) == nil)
     _ = try await db.claimToolDelivery(id: pending.id)
     try await db.endCoordination(targetID: b, sourceID: a)
@@ -162,10 +162,26 @@ struct WorkspaceCoordinationEventTests {
     let run = try await db.beginLocalACPRun(conversationID: b, content: "Fail")
     try await db.completeLocalACPRun(runID: run.runID, error: "Could not apply change")
     let failure = try #require(try await db.collectCoordinationTurnNotifications().first)
-    #expect(failure.text.contains("failed") && failure.text.contains("Could not apply change"))
+    #expect(failure.text.contains("error") && failure.text.contains("Could not apply change"))
     try await db.setSessionTools(.init(enabled: []), sessionID: a)
     #expect(try await db.claimToolDelivery(id: failure.id) == nil)
     #expect(try await db.toolDelivery(id: failure.id)?.status == "cancelled")
+  }
+
+  @Test func nativeAuthBlockNotifiesOnceAndCannotFinishItsParent() async throws {
+    let (db, dir, lead, worker) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try await db.beginCoordination(sourceID: lead, targetID: worker, purpose: "Work")
+    let run = try await db.beginLocalACPRun(conversationID: worker, content: "Work")
+    try await db.recordProgramStatus(.init(state: .blocked, id: "children/1", kind: .auth), runID: run.runID)
+    let first = try await db.collectCoordinationTurnNotifications()
+    #expect(first.count == 1 && first.first?.text.contains("blocked (auth)") == true)
+    #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
+    try await db.recordProgramStatus(.init(state: .done, id: "children/1"), runID: run.runID)
+    #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
+    #expect(try await db.workspaceOverview().conversations.first { $0.id == worker }?.programStatus?.status?.state == .working)
+    try await db.completeLocalACPRun(runID: run.runID)
+    #expect(try await db.collectCoordinationTurnNotifications().first?.text.contains("done.") == true)
   }
 }
 

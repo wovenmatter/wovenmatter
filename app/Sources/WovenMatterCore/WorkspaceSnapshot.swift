@@ -51,6 +51,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
   public let folderID: String?
   public let isPinned: Bool
   public let isArchived: Bool
+  public var programStatus: ProgramStatusSnapshot?
 
   enum CodingKeys: String, CodingKey {
     case id, title, unread
@@ -68,6 +69,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     case folderID = "folder_id"
     case isPinned = "is_pinned"
     case isArchived = "is_archived"
+    case programStatus
   }
 
   public init(from decoder: any Decoder) throws {
@@ -98,6 +100,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
     isPinned = try values.sqliteBool(forKey: .isPinned)
     isArchived = try values.sqliteBool(forKey: .isArchived)
+    programStatus = try values.decodeIfPresent(ProgramStatusSnapshot.self, forKey: .programStatus)
   }
 }
 

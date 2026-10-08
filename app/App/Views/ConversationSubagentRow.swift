@@ -55,7 +55,7 @@ struct ConversationSubagentRow: View {
                 Text(child.name?.nonempty ?? "Subagent")
                     .font(.system(size: 12.5, weight: .medium))
                 if let state = child.state?.nonempty {
-                    Text(state.replacingOccurrences(of: "_", with: " ").capitalized)
+                    Text(child.programStatus?.label ?? state.replacingOccurrences(of: "_", with: " ").capitalized)
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                 }

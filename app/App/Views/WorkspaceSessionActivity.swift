@@ -100,9 +100,12 @@ struct WorkspaceOutgoingReceipt: View {
         let snapshot = model.openCodeModel(for: receipt.targetID)?.snapshots[receipt.targetID]
         if model.pendingLocalACPPermissions.contains(where: { $0.conversationID == receipt.targetID })
             || model.pendingLocalACPInteractions.contains(where: { $0.conversationID == receipt.targetID })
-            || snapshot.map({ !$0.permissions.isEmpty || !$0.forms.isEmpty }) == true { return "Needs input" }
-        if model.runningToolSessionIDs.contains(receipt.targetID) { return "Running" }
-        if model.conversationState(for: receipt.targetID)?.error != nil { return "Needs attention" }
+            || snapshot.map({ !$0.permissions.isEmpty || !$0.forms.isEmpty }) == true { return "Blocked" }
+        if model.runningToolSessionIDs.contains(receipt.targetID) {
+            return destination?.programStatus?.status?.state == .blocked ? "Blocked" : "Working"
+        }
+        if model.conversationState(for: receipt.targetID)?.error != nil { return "Error" }
+        if let status = destination?.programStatus?.status { return status.label }
         return destination == nil ? "Unavailable" : "Idle"
     }
 

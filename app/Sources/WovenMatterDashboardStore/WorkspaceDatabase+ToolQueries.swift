@@ -70,6 +70,17 @@ extension WorkspaceDatabaseConnection {
       try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.history.read",
         payload: try toolsJSON(["command": query.command, "resultIDs": ids.joined(separator: ",")])))
       var object = result.objectValue ?? [:]
+      if query.command == "conversations" {
+        let statuses = try programStatusSnapshotsUnlocked()
+        object["rows"] = .array(try (object["rows"]?.arrayValue ?? []).map { row in
+          guard var fields = row.objectValue, let id = fields["id"]?.stringValue else { return row }
+          let snapshot = statuses[id] ?? ProgramStatusSnapshot(status: ProgramStatus(state: .idle))
+          fields["programStatus"] = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(snapshot))
+          fields["executionStatus"] = snapshot.executionStatus.map { .string($0) } ?? fields["status"] ?? .null
+          fields["status"] = snapshot.status.map { .string($0.state.rawValue) } ?? .null
+          return .object(fields)
+        })
+      }
       object["scope"] = .string(scope)
       return .object(object)
     }
