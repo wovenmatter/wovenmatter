@@ -35,6 +35,9 @@ struct ProgramStatusTests {
     #expect(settled.status?.state == .done && settled.records.allSatisfy { !$0.isActive })
     #expect(ProgramStatusSnapshot.run(id: "r", executionStatus: "uncertain", error: nil, app: nil, reports: reports).status == nil)
     #expect(ProgramStatusSnapshot.run(id: "r", executionStatus: "cancelled", error: nil, app: nil, reports: reports).status?.state == .idle)
+    let endpoint = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
+    let failed = ProgramStatusSnapshot.run(id: "r", executionStatus: "failed", error: "Cannot reach " + endpoint, app: nil, reports: [])
+    #expect(failed.status?.message == "Cannot reach [Woven Matter session tool endpoint]")
   }
 
   @Test func optionalFieldsAreForwardCompatibleAndAppInherits() throws {

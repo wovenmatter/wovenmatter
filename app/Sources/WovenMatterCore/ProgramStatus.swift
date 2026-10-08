@@ -69,7 +69,8 @@ public struct ProgramStatus: Codable, Equatable, Sendable {
 
   public static func message(_ text: String?) -> String? {
     guard let text else { return nil }
-    let clean = String(String.UnicodeScalarView(text.unicodeScalars.map { isControl($0) ? " " : $0 }))
+    let safe = WorkspaceHistoryPrivacy.redactingToolEndpoints(text)
+    let clean = String(String.UnicodeScalarView(safe.unicodeScalars.map { isControl($0) ? " " : $0 }))
       .trimmingCharacters(in: .whitespacesAndNewlines)
     var result = "", bytes = 0
     for scalar in clean.unicodeScalars {
