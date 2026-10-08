@@ -4,6 +4,28 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiStreamingReviewTests {
+  @Test func arbitraryExtensionTodoToolsRemainToolsWithoutAStandardChecklistContract() async throws {
+    let fixture = PiPipeFixture()
+    let names = ["todo", "todo_list", "todowrite", "update_plan", "update_checklist", "subagent"]
+    let lines = try names.map { name in
+      String(decoding: try JSONSerialization.data(withJSONObject: [
+        "type": "tool_execution_end", "toolCallId": name, "toolName": name, "isError": false,
+        "result": ["content": [["type": "text", "text": "{\"todos\":[]}"]]]
+      ]), as: UTF8.self)
+    }
+    let server = Task { try await fixture.serve(settles: true, streamLines: lines) }
+    try await fixture.initialize()
+    let collector = PiStreamingReviewCollector()
+    _ = try await fixture.client.prompt("fixture") { await collector.record($0) }
+    try await server.value
+    let activities = await collector.values.compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, _) = event else { return nil }; return activity
+    }
+    #expect(activities.map(\.kind) == Array(repeating: .tool, count: names.count))
+    #expect(activities.map(\.toolName) == names)
+    await fixture.client.shutdown()
+  }
+
   @Test func authoritativeFinalRepairsDeltasAcrossToolBoundary() async throws {
     let fixture = PiPipeFixture()
     let lines = [

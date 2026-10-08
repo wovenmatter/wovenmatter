@@ -16,6 +16,7 @@ public actor HermesGatewayClient {
     private var archivedNativeHighWater: [String: Int64] = [:]
     private var home = ""
     private var sequence: Double = 0
+    private var checklistRevision: Double = 0
     private var epoch: String?
     private var configuration = LocalACPSessionConfiguration.empty
     private var permissionInfo: HermesValue = .null
@@ -180,6 +181,7 @@ public actor HermesGatewayClient {
                 throw HermesGatewayError.message("Hermes resumed an unexpected conversation identity.")
             }
         }
+        if sessionID != live { checklistRevision = 0 }
         sessionID = live; storedID = requestedStoredID ?? stored; resolvedStoredID = stored
         let info = snapshot["info"]
         updatePermissionInfo(info)
@@ -679,10 +681,17 @@ public actor HermesGatewayClient {
             case "tool.start", "tool.complete":
                 activeReasoningID = nil
                 let complete = event["type"].text == "tool.complete"
+                let failed = complete && !payload["result"]["error"].isNull
                 try await onEvent?(.activity(AgentRunActivity(id: payload["tool_id"].text, kind: .tool,
-                    title: payload["name"].string, status: complete ? "completed" : "running", toolName: payload["name"].string,
+                    title: payload["name"].string, status: complete ? (failed ? "failed" : "completed") : "running", toolName: payload["name"].string,
                     content: complete ? payload["result_text"].string ?? payload["result"].json : payload["context"].string,
-                    rawInputJSON: payload["args"].isNull ? nil : payload["args"].json), appendsContent: false))
+                    rawInputJSON: payload["args"].isNull ? nil : payload["args"].json,
+                    rawOutputJSON: complete ? payload["result"].json : nil), appendsContent: false))
+                if busy, terminal == nil, complete, let checklist = Self.checklistUpdate(payload),
+                   let revision = payload["result"]["revision"].number, revision > checklistRevision {
+                    checklistRevision = revision
+                    try await onEvent?(.activity(checklist, appendsContent: false))
+                }
             case "approval.request", "clarify.request", "sudo.request", "secret.request":
                 beginInteraction(event["type"].text, payload)
             case "request.cancel":
@@ -692,6 +701,33 @@ public actor HermesGatewayClient {
             default: break
             }
         } catch { finish(.failure(error)) }
+    }
+
+    /// Hermes todo_list (legacy name: todo) returns the full canonical list,
+    /// even for a partial ID merge. Only successful writes establish progress
+    /// for this run: reads and session-wide todo.updated/resume snapshots can
+    /// describe an older task. receive() already fences the owning session;
+    /// delegated child progress uses separate subagent events/session IDs.
+    public static func checklistUpdate(_ payload: HermesValue) -> AgentRunActivity? {
+        guard ["todo_list", "todo"].contains(payload["name"].text),
+              case .array = payload["args"]["todos"],
+              payload["result"]["error"].isNull,
+              let revision = payload["result"]["revision"].number,
+              revision.isFinite, revision >= 1, revision.rounded() == revision,
+              case .array(let todos) = payload["result"]["todos"] else { return nil }
+        var seen: Set<String> = []
+        var entries: [AgentRunPlanEntry] = []
+        for todo in todos {
+            guard let id = todo["id"].string, !id.isEmpty, seen.insert(id).inserted,
+                  let content = todo["content"].string, !content.isEmpty,
+                  let status = todo["status"].string, !status.isEmpty else { return nil }
+            entries.append(AgentRunPlanEntry(content: content, status: status, nativeID: id))
+        }
+        return AgentRunActivity(id: "hermes-checklist", kind: .plan,
+            phase: entries.isEmpty ? "clear" : "update", title: "Plan",
+            planEntries: entries, rawInputJSON: payload["args"].json,
+            rawOutputJSON: payload["result"].json, planKind: "checklist",
+            planOperation: entries.isEmpty ? "clear" : "replace")
     }
 
     private func archiveNativeSession() async throws {

@@ -5,6 +5,56 @@ import WovenMatterCore
 
 struct HermesStreamingReviewTests {
 
+  @Test func successfulRootChecklistWritesKeepToolsAndDoNotLeakIntoNextRun() async throws {
+    let transport = HermesTransportFixture()
+    let client = HermesGatewayClient(
+      launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
+      transport: transport, home: "/tmp/hermes-checklist-review")
+    _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
+      existingSessionID: nil, title: nil, systemPrompt: nil)
+    let output = HermesStreamingEvents()
+    let turn = Task { try await client.prompt(.init(text: "fixture"), onEvent: { await output.record($0) },
+      onPermission: nil, onInteraction: nil) }
+    try await transport.waitForSubmit()
+    let todos: HermesValue = .array([["id": "a", "content": "Root work", "status": "in_progress"]])
+    var tool: HermesValue = ["tool_id": "write", "name": "todo_list", "args": ["todos": todos],
+      "result": ["todos": todos, "revision": .number(1)]]
+    await transport.event(type: "tool.start", payload: tool)
+    await transport.event(type: "tool.complete", payload: tool, sessionID: "child")
+    await transport.event(type: "subagent.tool", payload: tool)
+    await transport.event(type: "tool.complete", payload: tool)
+    var read = tool; read["tool_id"] = "read"; read["args"] = [:]
+    await transport.event(type: "tool.complete", payload: read)
+    var failed = tool; failed["tool_id"] = "failed"; failed["result"] = ["error": "Rejected"]
+    await transport.event(type: "tool.complete", payload: failed)
+    tool["tool_id"] = "clear"; tool["args"]["todos"] = .array([])
+    tool["result"] = ["todos": .array([]), "revision": .number(2)]
+    await transport.event(type: "tool.complete", payload: tool)
+    await transport.event(type: "todo.updated", payload: tool["result"])
+    var stale = read; stale["args"] = ["todos": todos]; stale["tool_id"] = "stale"
+    await transport.event(type: "tool.complete", payload: stale)
+    await transport.event(type: "message.complete", payload: ["text": "Done"])
+    #expect(try await turn.value == .endTurn)
+    let activities = await output.allEvents().compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, _) = event else { return nil }; return activity
+    }
+    #expect(activities.map(\.kind) == [.tool, .tool, .plan, .tool, .tool, .tool, .plan, .tool])
+    #expect(activities.filter { $0.kind == .plan }.map(\.planOperation) == ["replace", "clear"])
+    #expect(activities.first { $0.id == "failed" }?.status == "failed")
+    #expect(activities.first { $0.id == "write" && $0.status == "completed" }?.rawOutputJSON != nil)
+    await transport.resetSubmission()
+    let nextOutput = HermesStreamingEvents()
+    let next = Task { try await client.prompt(.init(text: "another task"), onEvent: { await nextOutput.record($0) },
+      onPermission: nil, onInteraction: nil) }
+    try await transport.waitForSubmit()
+    await transport.event(type: "tool.complete", payload: read)
+    await transport.event(type: "todo.updated", payload: read["result"])
+    await transport.event(type: "message.complete", payload: ["text": "No new checklist"])
+    #expect(try await next.value == .endTurn)
+    #expect(await !nextOutput.allEvents().contains { if case .activity(let activity, _) = $0 { return activity.kind == .plan }; return false })
+    await client.shutdown()
+  }
+
   @Test(arguments: ["send", "skill", "prefill", "exec", "plugin"])
   func commandFeedbackIsPreservedWithoutBecomingAnAssistantReply(_ outcome: String) async throws {
     let transport = HermesTransportFixture(commandResult: [

@@ -86,6 +86,10 @@ struct ConversationResponseTests {
         view.apply(content: source + "\n\nStreamed tail.", document: nil, isStreaming: true)
         require(view.selectedRange() == acrossBlocks, "Streaming growth discarded the user's selection")
         require(view.string.hasSuffix("Streamed tail."), "Streaming tail disappeared")
+        view.apply(content: source.replacingOccurrences(of: "First **bold**", with: "Other **bold**")
+            + "\n\nStreamed tail.", document: nil, isStreaming: true)
+        require(view.selectedRange().length == 0, "A rewritten prefix kept a selection over different text")
+        view.setSelectedRange(acrossBlocks)
         view.apply(content: "Short", document: nil, isStreaming: false)
         require(NSMaxRange(view.selectedRange()) <= view.string.utf16.count, "Shrinking content left an invalid selection")
 

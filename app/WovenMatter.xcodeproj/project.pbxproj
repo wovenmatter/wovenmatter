@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */; };
+		FCF465ABA5EF4C84A9433309 /* ConversationTranscriptState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */; };
+		8CF0AF093FDD4417AE3CE998 /* ConversationTasksBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */; };
 		D49400000000000000000001 /* ConversationResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49400000000000000000003 /* ConversationResponse.swift */; };
 		E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000006; };
 		E7E000000000000000000003 /* ExecutorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000004; };
@@ -117,6 +120,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = App/ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
+		ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranscriptState.swift; sourceTree = "<group>"; };
+		AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTasksBadge.swift; sourceTree = "<group>"; };
 		D49400000000000000000003 /* ConversationResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationResponse.swift; sourceTree = "<group>"; };
 		E7E000000000000000000006 /* ExecutorRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExecutorRuntime.swift"; sourceTree = "<group>"; };
 		E7E000000000000000000004 /* ExecutorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExecutorControls.swift"; sourceTree = "<group>"; };
@@ -314,6 +320,7 @@
 				A71B00000000000000000102 /* LibraryModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
+				ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
 				F10000000000000000000002 /* AgentDatabases.swift */,
 				A13000000000000000000002 /* RemoteWorkspacesModel.swift */,
@@ -352,6 +359,7 @@
 				E10000000000000000000002 /* NoteEditor.swift */,
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
 				D49400000000000000000003 /* ConversationResponse.swift */,
+				AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				A10500000000000000000003 /* ConversationSubagentRow.swift */,
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
@@ -477,6 +485,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */,
 				A12000000000000000000005 /* remote-workspace.sh in Resources */,
 				A12000000000000000000007 /* remote in Resources */,
 				A12000000000000000000009 /* harnesses in Resources */,
@@ -600,6 +609,8 @@
 				D49400000000000000000001 /* ConversationResponse.swift in Sources */,
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
 				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
+				8CF0AF093FDD4417AE3CE998 /* ConversationTasksBadge.swift in Sources */,
+				FCF465ABA5EF4C84A9433309 /* ConversationTranscriptState.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
 				A10500000000000000000004 /* ConversationSubagentRow.swift in Sources */,
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,

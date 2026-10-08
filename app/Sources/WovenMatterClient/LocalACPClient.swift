@@ -690,6 +690,8 @@ public actor LocalACPClient {
     // separates reasoning phases so distinct commentary is not merged.
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
+    private var assistantSnapshotAssembly = NativeTextSnapshotAssembler()
+    private var thoughtSnapshotAssemblies: [String: NativeTextSnapshotAssembler] = [:]
     private let cliConnection: AgentCLIContext?
     private var closed = false
     private var shutdownTask: Task<Void, Never>?
@@ -1499,9 +1501,17 @@ public actor LocalACPClient {
     }
 
     /// Called by the coordinator only after every admitted input has settled.
-    public func finishRun() {
+    public func finishRun() async {
+        // No native thought-end notification exists in ACP. The coordinator
+        // calls this only after every admitted input and native update settles.
+        if let reasoningID = activeReasoningPhaseID {
+            try? await completeReasoningPhase(reasoningID)
+        }
+        activeReasoningPhaseID = nil
         retainedRunHandlers = nil
         activePrompts.removeAll()
+        assistantSnapshotAssembly.reset()
+        thoughtSnapshotAssemblies.removeAll()
     }
 
     private func promptRequestFinished(_ id: UUID) {
@@ -1651,7 +1661,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
-        finishRun()
+        await finishRun()
         for response in interactiveResponses.values { response.fence.cancel() }
         readerTask?.cancel()
         readerTask = nil
@@ -1884,10 +1894,15 @@ public actor LocalACPClient {
             default:
                 break
             }
-            if let event = projectedEvent(
+            let previousReasoningID = activeReasoningPhaseID
+            let event = projectedEvent(
                 from: envelope,
                 workingDirectory: workingDirectory
-            ) {
+            )
+            if let previousReasoningID, previousReasoningID != activeReasoningPhaseID {
+                try await completeReasoningPhase(previousReasoningID)
+            }
+            if let event {
                 try await activeEventHandler?(event)
             }
         } else if envelope.method == "session/request_permission" {
@@ -1907,6 +1922,16 @@ public actor LocalACPClient {
                 handler: activeInteractionHandler
             )
         } else if envelope.method == "cursor/create_plan" {
+            guard belongsToActiveSession(envelope) else {
+                if let id = envelope.id {
+                    try await respondToCancelledCursorRequest(PendingCursorRequest(id: id, method: "cursor/create_plan"))
+                }
+                return
+            }
+            if let id = activeReasoningPhaseID {
+                activeReasoningPhaseID = nil
+                try await completeReasoningPhase(id)
+            }
             if let event = Self.cursorPlanEvent(from: envelope) {
                 try await activeEventHandler?(event)
             }
@@ -1915,6 +1940,11 @@ public actor LocalACPClient {
                 handler: activeInteractionHandler
             )
         } else if envelope.method == "cursor/update_todos" {
+            guard belongsToActiveSession(envelope) else { return }
+            if let id = activeReasoningPhaseID {
+                activeReasoningPhaseID = nil
+                try await completeReasoningPhase(id)
+            }
             if let event = Self.cursorTodoEvent(from: envelope) {
                 try await activeEventHandler?(event)
             }
@@ -1924,6 +1954,12 @@ public actor LocalACPClient {
                 error: ACPErrorBody(code: -32601, message: "Method not found")
             ))
         }
+    }
+
+    private func completeReasoningPhase(_ id: String) async throws {
+        try await activeEventHandler?(.activity(AgentRunActivity(
+            id: id, kind: .thought, phase: "end", title: "Thinking", status: "completed"
+        ), appendsContent: false))
     }
 
     private func belongsToActiveSession(_ envelope: ACPEnvelope) -> Bool {
@@ -2576,6 +2612,13 @@ public actor LocalACPClient {
             return .activity(activity, appendsContent: false)
         case "agent_message_chunk":
             activeReasoningPhaseID = nil
+            if runtimeKind == .defaultAgent, update["_meta"]?["wovenAssistantSnapshot"]?.boolValue == true {
+                guard let text = update["content"]?["text"]?.stringValue,
+                      let complete = assistantSnapshotAssembly.receive(text,
+                        starts: update["_meta"]?["wovenSnapshotStart"]?.boolValue == true,
+                        ends: update["_meta"]?["wovenSnapshotEnd"]?.boolValue == true) else { return nil }
+                return .assistantSnapshot(complete)
+            }
             if let text = update["content"]?["text"]?.stringValue { return .assistantChunk(text) }
             guard let block = update["content"] else { return nil }
             let resource = block["resource"] ?? block
@@ -2590,6 +2633,10 @@ public actor LocalACPClient {
                 ?? (source.isEmpty ? (mime?.hasPrefix("image/") == true ? "Image" : "Attachment") : URL(string: source)?.lastPathComponent ?? "Attachment")
             return .assistantAsset(LibraryAsset(source: source, title: name,
                 kind: LibraryLinkDiscovery.kind(source: source, mimeType: mime), mimeType: mime, data: data))
+        case "woven_assistant_boundary":
+            guard runtimeKind == .defaultAgent else { return nil }
+            activeReasoningPhaseID = nil
+            return .assistantBoundary
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
             let reasoningID: String
@@ -2602,6 +2649,18 @@ public actor LocalACPClient {
                 reasoningPhaseSequence += 1
                 reasoningID = "thought-\(reasoningPhaseSequence)"
                 activeReasoningPhaseID = reasoningID
+            }
+            if runtimeKind == .defaultAgent, update["_meta"]?["wovenThoughtSnapshot"]?.boolValue == true {
+                var assembly = thoughtSnapshotAssemblies[reasoningID] ?? NativeTextSnapshotAssembler()
+                let complete = assembly.receive(text,
+                    starts: update["_meta"]?["wovenSnapshotStart"]?.boolValue == true,
+                    ends: update["_meta"]?["wovenSnapshotEnd"]?.boolValue == true)
+                thoughtSnapshotAssemblies[reasoningID] = assembly
+                guard let complete else { return nil }
+                thoughtSnapshotAssemblies.removeValue(forKey: reasoningID)
+                return .activity(AgentRunActivity(id: reasoningID, kind: .thought, phase: "update",
+                    title: "Thinking", status: "running", content: complete, contentIsDelta: false,
+                    rawPayloadJSON: Self.jsonString(update)), appendsContent: false)
             }
             return .activity(
                 AgentRunActivity(
@@ -2624,9 +2683,9 @@ public actor LocalACPClient {
             )
         case "tool_call_update":
             activeReasoningPhaseID = nil
+            let activity = Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory)
             return .activity(
-                Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory),
-                appendsContent: false
+                activity, appendsContent: activity.contentIsDelta == true
             )
         case "plan":
             activeReasoningPhaseID = nil
@@ -2636,7 +2695,8 @@ public actor LocalACPClient {
                 return AgentRunPlanEntry(
                     content: content,
                     priority: value["priority"]?.stringValue,
-                    status: status
+                    status: status,
+                    nativeID: value["id"]?.stringValue
                 )
             } ?? []
             return .activity(
@@ -2647,7 +2707,8 @@ public actor LocalACPClient {
                     title: "Plan",
                     status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
                     planEntries: entries,
-                    rawPayloadJSON: Self.jsonString(update)
+                    rawPayloadJSON: Self.jsonString(update),
+                    planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace"
                 ),
                 appendsContent: false
             )
@@ -2658,21 +2719,22 @@ public actor LocalACPClient {
 
     private static func cursorTodoEvent(from envelope: ACPEnvelope) -> LocalACPEvent? {
         guard let params = envelope.params,
-              let toolCallID = params["toolCallId"]?.stringValue,
-              params["merge"]?.boolValue != nil,
+              params["toolCallId"]?.stringValue != nil,
+              let merge = params["merge"]?.boolValue,
               let rawTodos = params["todos"]?.arrayValue else { return nil }
         let entries = rawTodos.compactMap(cursorPlanEntry)
         return .activity(
             AgentRunActivity(
-                id: toolCallID,
+                id: "cursor-todos",
                 kind: .plan,
-                phase: "update",
+                phase: !merge && entries.isEmpty ? "clear" : "update",
                 title: "Plan",
                 status: entries.allSatisfy { $0.status == "completed" }
                     ? "completed"
                     : "running",
                 planEntries: entries,
-                rawPayloadJSON: jsonString(params)
+                rawPayloadJSON: jsonString(params),
+                planKind: "checklist", planOperation: merge ? "merge" : "replace"
             ),
             appendsContent: false
         )
@@ -2693,7 +2755,8 @@ public actor LocalACPClient {
                 status: "completed",
                 content: markdown.nilIfEmpty,
                 planEntries: entries,
-                rawPayloadJSON: jsonString(params)
+                rawPayloadJSON: jsonString(params),
+                planKind: "proposal", planOperation: "replace"
             ),
             appendsContent: false
         )
@@ -2715,7 +2778,7 @@ public actor LocalACPClient {
         case "cancelled", "canceled": "cancelled"
         default: "pending"
         }
-        return AgentRunPlanEntry(content: step, status: status)
+        return AgentRunPlanEntry(content: step, status: status, nativeID: value["id"]?.stringValue)
     }
 
     private static func toolActivity(
@@ -2746,6 +2809,11 @@ public actor LocalACPClient {
                 break
             }
         }
+        // Codex ACP streams terminal output in metadata instead of content
+        // blocks. Preserve its exact chunks as readable output as well as in
+        // the canonical wire capture. Standard content blocks remain snapshots.
+        let terminalDelta = textParts.isEmpty
+            ? update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue : nil
         let locations = update["locations"]?.arrayValue?.compactMap { value -> AgentRunLocation? in
             guard let path = value["path"]?.stringValue else { return nil }
             return AgentRunLocation(
@@ -2767,7 +2835,8 @@ public actor LocalACPClient {
                 ?? (phase == "start" ? displayToolName(update["kind"]?.stringValue) : nil),
             status: status ?? (phase == "start" ? "pending" : nil),
             toolName: update["kind"]?.stringValue,
-            content: textParts.joined(separator: "\n\n").nilIfEmpty,
+            content: terminalDelta ?? textParts.joined(separator: "\n\n").nilIfEmpty,
+            contentIsDelta: terminalDelta != nil,
             locations: locations,
             changes: changes,
             rawInputJSON: update["rawInput"].flatMap(jsonString),

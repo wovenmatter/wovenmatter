@@ -366,9 +366,9 @@ actor HermesTransportFixture: HermesGatewayTransport {
         var params = params; params["session_id"] = "live"
         await onRequest?(["id": .string(id), "method": .string(method), "params": params])
     }
-    func event(type: String, payload: HermesValue) async {
+    func event(type: String, payload: HermesValue, sessionID: String = "live") async {
         sequence += 1
-        await onEvent?(["session_id": "live", "seq": .number(Double(sequence)), "type": .string(type), "payload": payload])
+        await onEvent?(["session_id": .string(sessionID), "seq": .number(Double(sequence)), "type": .string(type), "payload": payload])
     }
     func complete() async {
         running = false

@@ -50,6 +50,7 @@ final class WorkspaceDatabaseConnection {
       try migrateCalendar()
       try migrateLibrary()
       try createNativeRunArchive()
+      try createConversationActivityIndex()
     } catch {
       sqlite3_close(database)
       connection = nil

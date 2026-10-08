@@ -263,19 +263,21 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
         rawPayloadJSON: json(.object(payload))
       )
     case "plan":
+      let entries = planEntries(in: data["steps"])
       content = string(data["explanation"])
       toolName = nil
       eventType = "plan"
       activity = AgentRunActivity(
         id: "plan",
         kind: .plan,
-        phase: phase,
+        phase: entries.isEmpty ? "clear" : phase,
         title: string(data["title"]) ?? "Updated the plan",
         detail: string(data["source"]),
         status: phase == "end" ? "completed" : "running",
         content: content,
-        planEntries: planEntries(in: data["steps"]),
-        rawPayloadJSON: json(.object(payload))
+        planEntries: entries,
+        rawPayloadJSON: json(.object(payload)),
+        planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace"
       )
     case "command_output":
       let exitCode = data["exitCode"]?.intValue

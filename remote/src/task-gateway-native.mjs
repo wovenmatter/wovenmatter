@@ -127,7 +127,7 @@ async function runPi({run,config,cwd,environment,launch,nativeSessionID,signal,p
 
 async function runHermes({run,config,cwd,environment,hermes,read,WebSocketClass,fetchRequest,nativeSessionID,signal,publish,bindSession}) {
   if(config.permission && !['default','full'].includes(config.permission))throw before('The saved Hermes permission is unavailable.')
-  let accepted=false, socket, heartbeat, liveID, serial=0, needsApproval=false, text='', lastSeq=0, archive, epoch
+  let accepted=false, socket, heartbeat, liveID, serial=0, needsApproval=false, text='', lastSeq=0, archive, epoch, completed=false
   const finished=deferred(), pending=new Map()
   const fail=error=>{for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(error)};pending.clear();finished.reject(error)}
   let send, rpc
@@ -149,16 +149,23 @@ async function runHermes({run,config,cwd,environment,hermes,read,WebSocketClass,
         if(value.method!=='event'||event?.session_id!==liveID||!accepted)continue
         if(event.seq!=null){if(event.seq<=lastSeq)continue;lastSeq=event.seq}
         const payload=event.payload ?? {}
+        const checklistInTurn = !completed
         const needsFinalText = event.type === 'message.complete' && !text
         if(event.type==='message.delta')text+=payload.text??''
         if (archive && hermesRunEvent(event.type)) {
           void archive.capture(event, {id: event.seq == null ? undefined : `event:${epoch}:${event.seq}`, kind: event.type, present: safe => {
             if (safe.type === 'message.delta' || needsFinalText && safe.payload?.text) publishNativePresentation(textUpdate(safe.payload?.text ?? ''), publish)
             if (['thinking.delta','reasoning.delta'].includes(safe.type)) publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:safe.payload?.text ?? ''}}, publish)
+            // Keep the paired native args/result for the shared Mac normalizer.
+            if (checklistInTurn && safe.type === 'tool.complete' && ['todo_list','todo'].includes(safe.payload?.name)) {
+              const {name,args,result} = safe.payload
+              publish({sessionUpdate:'woven_hermes_tool_complete',nativeSessionID:boundID,payload:{name,args,result}})
+            }
           }}).catch(error => fail(error))
         }
         if(['approval.request','clarify.request','sudo.request','secret.request'].includes(event.type)){needsApproval=true;if(event.type==='approval.request')void rpc('approval.respond',{session_id:liveID,request_id:payload.request_id,choice:'deny'}).catch(()=>{});finished.reject(approval());continue}
         if(event.type==='message.complete') {
+          completed=true
           if(needsApproval)finished.reject(approval())
           else if(payload.status==='error')finished.reject(new Error('Hermes could not complete this task.'))
           else finished.resolve({stopReason:payload.status==='interrupted'?'cancelled':'end_turn'})

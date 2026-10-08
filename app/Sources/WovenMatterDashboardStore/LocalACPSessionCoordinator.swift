@@ -285,9 +285,10 @@ public actor LocalACPSessionCoordinator {
         let runtimeKind: AgentRuntimeKind
         let nativeSessionID: String
         let remoteWorkspaceID: UUID?
-        // Cursor returns a session ID before it has created the durable
-        // store.db needed by session/load. Keep a newly created Cursor ID
-        // attached to this live process until its first prompt succeeds.
+        // Codex and Cursor allocate IDs before creating their durable session
+        // history. Keep those draft IDs attached to this process until the
+        // first prompt succeeds, so a configuration probe cannot persist an
+        // identity that session/load cannot yet reopen.
         var pendingDurableSessionID: String?
         // Actor methods reenter while an adapter call is awaiting a response.
         // Only sessions with no such caller may be evicted.
@@ -918,7 +919,7 @@ public actor LocalACPSessionCoordinator {
             launch: launch,
             workspace: workspace,
             systemPrompt: systemPrompt,
-            requiredSessionID: permission != nil ? stored.acpSessionID : nil
+            requiredSessionID: permission != nil && permission != stored.permission ? stored.acpSessionID : nil
         )
         do {
             var configuration = await client.configuration()
@@ -1675,7 +1676,7 @@ public actor LocalACPSessionCoordinator {
                 throw LifecycleError.sessionIdentityChanged
             }
             if initialized.sessionID != descriptor.acpSessionID {
-                // Cursor, Pi and Hermes allocate IDs before their session stores
+                // Codex, Cursor, Pi and Hermes allocate IDs before their session stores
                 // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
                     || initialized.loadedExistingSession {
@@ -1901,7 +1902,7 @@ public actor LocalACPSessionCoordinator {
     private static func defersNewSessionPersistence(
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
-        runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
+        runtimeKind == .codex || runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
     }
 
     private func persistConfiguration(

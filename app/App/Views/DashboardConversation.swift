@@ -235,7 +235,9 @@ struct DashboardCloudConversation: View {
                                                         fileName: attachment.fileName, mimeType: attachment.mimeType)
                                                 },
                                                 layout: fragment.layout,
-                                                displayedBody: presentation?.displayedBody
+                                                displayedBody: presentation?.displayedBody,
+                                                commentaryIDs: presentation?.commentaryIDs,
+                                                workTimeline: presentation?.workTimeline
                                             )
                                         }
                                     }
@@ -271,6 +273,11 @@ struct DashboardCloudConversation: View {
                     pendingBottomConversationID = nil
                     scrollPositionID = nil
                     scrollState.setNearBottom(false)
+                }
+                .environment(\.conversationActivityDetails) { runID, activityID in
+                    guard let conversationID = conversation?.id, let store = model.dashboardStore else { return nil }
+                    return try await store.database.conversationActivityDetails(
+                        conversationID: conversationID, runID: runID, activityID: activityID)
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.top, for: .sizeChanges)
@@ -325,6 +332,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    conversationState?.transcriptState.tasksExpanded = false
                     model.agentTools?.observeSessionFromUI(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
@@ -414,57 +422,33 @@ struct DashboardCloudConversation: View {
                     )
                     .id(interaction.id)
                 }
-                if let conversation,
-                   model.localRunningConversationIDs.contains(conversation.id) {
-                    HStack(spacing: 9) {
-                        Image(systemName: "bolt")
-                            .foregroundStyle(DashboardPalette.primary)
-                        Text(localPermission != nil ? "Waiting for approval"
-                            : localInteraction != nil ? "Waiting for your answer" : "Agent is working")
-                            .font(.system(size: 12.5, weight: .medium))
-                        Spacer()
-                        Button("Stop") {
-                            if model.isOpenClawGatewayConversation(
-                                conversation.id
+                // Side buttons sit on the composer's bottom control row; the
+                // composer grows upward with its draft and Tasks badge.
+                HStack(alignment: .bottom, spacing: 8) {
+                    Group {
+                        if showsClosePanel {
+                            DashboardPanelControlButton(
+                                glyph: .panelRightOpen,
+                                accessibilityLabel: "Remove panel",
+                                help: "Remove panel",
+                                action: onClosePanel
+                            )
+                        } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                            DashboardPanelControlButton(
+                                glyph: .settings,
+                                accessibilityLabel: "Pi Durable settings",
+                                help: "Pi Durable settings"
                             ) {
-                                model.cancelOpenClawGatewayPrompt(
-                                    conversationID: conversation.id
-                                )
-                            } else {
-                                model.cancelLocalACPPrompt(
-                                    conversationID: conversation.id
-                                )
+                                model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                             }
+                        } else if showsAddPanel {
+                            Color.clear
+                                .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                         }
-                        .buttonStyle(DashboardQuietButtonStyle())
                     }
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: 768, minHeight: 38)
-                    .background(theme.palette.themeWhisper)
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                }
-                HStack(alignment: .center, spacing: 8) {
-                    if showsClosePanel {
-                        DashboardPanelControlButton(
-                            glyph: .panelRightOpen,
-                            accessibilityLabel: "Remove panel",
-                            help: "Remove panel",
-                            action: onClosePanel
-                        )
-                    } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
-                        DashboardPanelControlButton(
-                            glyph: .settings,
-                            accessibilityLabel: "Pi Durable settings",
-                            help: "Pi Durable settings"
-                        ) {
-                            model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-                        }
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
+                    .padding(.bottom, DashboardComposer.verticalPadding)
                     DashboardComposer(
                         placeholder: dashboardComposerPlaceholder(
                             agent: agent,
@@ -589,21 +573,35 @@ struct DashboardCloudConversation: View {
                         onDropFiles: onDropFiles,
                         onUnavailableAction: onUnavailableComposerAction,
                         onCommandNavigation: onCommandNavigation,
-                        onSend: onSend
+                        onSend: {
+                            transcriptOwnsScroll = false
+                            isUserScrolling = false
+                            scrollInteractionRevision += 1
+                            scrollState.setNearBottom(true)
+                            scrollPositionID = chatEndID
+                            onSend()
+                        },
+                        onStop: conversation.flatMap { current in
+                            guard model.localRunningConversationIDs.contains(current.id) else { return nil }
+                            return { model.cancelLocalACPPrompt(conversationID: current.id) }
+                        }
                     )
-                    if showsAddPanel {
-                        DashboardPanelControlButton(
-                            glyph: .panelLeftOpen,
-                            accessibilityLabel: "Add panel",
-                            help: "Add panel",
-                            action: onAddPanel
-                        )
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                    Group {
+                        if showsAddPanel {
+                            DashboardPanelControlButton(
+                                glyph: .panelLeftOpen,
+                                accessibilityLabel: "Add panel",
+                                help: "Add panel",
+                                action: onAddPanel
+                            )
+                        } else if showsClosePanel {
+                            Color.clear
+                                .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
                     }
+                    .padding(.bottom, DashboardComposer.verticalPadding)
                 }
                 // Animate the whole row so the outside buttons follow the
                 // composer height in the same layout transaction.
@@ -623,6 +621,11 @@ struct DashboardCloudConversation: View {
             .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .environment(\.conversationTranscriptState, conversationState?.transcriptState)
+        .environment(\.conversationTaskProgress, localPermission == nil && localInteraction == nil
+            ? conversationState?.taskProgress : nil)
+        .onChange(of: localPermission?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
+        .onChange(of: localInteraction?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
         .alert("Could not open attachment", isPresented: Binding(
             get: { attachmentOpenError != nil },
             set: { if !$0 { attachmentOpenError = nil } }
@@ -1107,12 +1110,17 @@ struct DashboardMessageRow: View {
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
+    var commentaryIDs: Set<String>? = nil
+    var workTimeline: ConversationWorkTimeline? = nil
 
     private var assistantBody: String { displayedBody ?? transcript.body }
 
-    private var transcript: AssistantTranscriptProjection {
-        AssistantTranscriptProjection(messageID: message.id, content: message.content,
-            activities: activities.map(\.activity))
+    /// Fallback for a row without a prepared presentation.
+    private var transcript: (body: String, commentaryIDs: Set<String>) {
+        let work = activities.map(\.activity)
+        return ConversationWorkTimeline.displayPartition(
+            AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
+            activities: work, isLive: message.status == "streaming")
     }
 
     var body: some View {
@@ -1129,9 +1137,7 @@ struct DashboardMessageRow: View {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
                     guard let run else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleContent(
-                        run: run, in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
-                    ) ? 18 : 0
+                    return ConversationWorkTranscript.hasVisibleContent(run: run, timeline: projectedTimeline) ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
@@ -1147,8 +1153,9 @@ struct DashboardMessageRow: View {
                             run: run,
                             presentation: runPresentation,
                             records: activities,
-                            commentaryIDs: Set(transcript.commentary.map(\.id)),
-                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
+                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            timeline: projectedTimeline
                         )
                     }
                     if isUser {
@@ -1185,6 +1192,11 @@ struct DashboardMessageRow: View {
             displayedBody: assistantBody,
             failedRunError: run?.status == "failed" ? run?.error : nil
         )
+    }
+
+    private var projectedTimeline: ConversationWorkTimeline {
+        workTimeline ?? ConversationWorkTimeline(records: activities,
+            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs)
     }
 }
 

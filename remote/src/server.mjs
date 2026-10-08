@@ -83,11 +83,14 @@ const maintenance = createRuntimeMaintenance({
 const releaseTaskOwner = runningAsService
   ? await acquireHostLock(resolve(workspaceRoot,'.wovenmatter/task-gateway.owner.lock'),harnessEnvironment(),workspaceRoot)
   : null
-const durableACP = createDurableACP({ catalog, workspaceRoot, environment:harnessEnvironment,
+const durableACP = createDurableACP({ catalog, workspaceRoot,
+  environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isEnabled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
-  execute:createTaskExecutor({catalog,workspaceRoot,environment:harnessEnvironment,defaultAgent,hermes,instances,
+  execute:createTaskExecutor({catalog,workspaceRoot,
+    environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
+    defaultAgent,hermes,instances,
     isEnabled:id => maintenance.isEnabled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
@@ -485,7 +488,7 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
 function harnessRuntimeEnvironment(harness) {
   const environment = harnessEnvironment()
   if (harness.id === 'codex') {
-    environment.CODEX_CONFIG = '{"approvals_reviewer":"auto_review"}'
+    environment.CODEX_CONFIG = '{"approvals_reviewer":"auto_review","tools.update_plan.enabled":true}'
   } else if (harness.id === 'hermes') {
     environment.HERMES_ACP_SKIP_CONFIGURED_MCP = '0'
   }

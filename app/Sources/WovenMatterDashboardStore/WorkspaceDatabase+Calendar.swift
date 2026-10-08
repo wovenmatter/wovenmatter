@@ -608,9 +608,16 @@ extension WorkspaceDatabaseConnection {
       // session above makes the existing synchronization path fetch its history.
       if configuration.runtimeKind != .opencode {
         var response = ""
+        var responseAssembly = NativeTextSnapshotAssembler()
         try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { update in
           guard update.objectValue?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return }
-          response += update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
+          let text = update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
+          let meta = update.objectValue?["_meta"]?.objectValue
+          if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+            if let complete = responseAssembly.receive(text,
+                starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { response = complete }
+          } else { response += text }
         }
         // The execution host already assigned the stable Woven run identity.
         let runID = run.id
@@ -636,17 +643,72 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [runID])
         var thoughtSequence = 0
         var activeThought: String?
+        var thoughtAssemblies: [String: NativeTextSnapshotAssembler] = [:]
+        var assistantAssembly = NativeTextSnapshotAssembler()
+        var assistantPrefix = "", frozenPrefix = ""
+        var boundarySequence = 0
+        var hermesChecklistRevision: Double = 0
         try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { value in
           guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { return }
           let raw = try toolsJSON(value)
           var activity: AgentRunActivity?
           var appending = false
+          let meta = object["_meta"]?.objectValue
+          if kind == "woven_hermes_tool_complete" || kind == "woven_cursor_todos" {
+            guard let nativeSessionID, !nativeSessionID.isEmpty,
+                  object["nativeSessionID"]?.stringValue == nativeSessionID,
+                  let payload = object["payload"] else { return }
+            if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
+              let native = try HermesValue.decode(JSONEncoder().encode(payload))
+              if let checklist = HermesGatewayClient.checklistUpdate(native),
+                 let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
+                hermesChecklistRevision = revision
+                activity = checklist
+              }
+            } else if kind == "woven_cursor_todos", configuration.runtimeKind == .cursor {
+              activity = Self.remoteCursorChecklist(payload, sessionID: nativeSessionID, rawPayloadJSON: raw)
+            }
+            guard activity != nil else { return }
+          }
+          if kind == "agent_message_chunk" {
+            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+            if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+              if let complete = assistantAssembly.receive(text,
+                  starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                  ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { assistantPrefix = complete }
+            } else { assistantPrefix += text }
+            activeThought = nil
+            return
+          }
+          if assistantPrefix != frozenPrefix, !assistantPrefix.isEmpty,
+             ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary", "woven_hermes_tool_complete", "woven_cursor_todos"].contains(kind) {
+            let segment = assistantPrefix.hasPrefix(frozenPrefix)
+              ? String(assistantPrefix.dropFirst(frozenPrefix.count)) : assistantPrefix
+            boundarySequence += 1
+            try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+              activity: .init(id: "calendar-assistant-\(boundarySequence)", kind: .assistant,
+                phase: "commentary", content: segment, assistantMessageID: assistantID,
+                assistantCheckpoint: AssistantTextCheckpoint(assistantPrefix)), appendingContent: false, updatedAt: completedAt)
+            frozenPrefix = assistantPrefix
+          }
           if kind == "agent_thought_chunk" {
             if activeThought == nil { thoughtSequence += 1; activeThought = "thought-\(thoughtSequence)" }
             let id = object["_meta"]?.objectValue?["wovenThoughtID"]?.stringValue ?? activeThought!
-            activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
-              content: object["content"]?.objectValue?["text"]?.stringValue, contentIsDelta: true, rawPayloadJSON: raw)
-            appending = true
+            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+            if configuration.runtimeKind == .defaultAgent, meta?["wovenThoughtSnapshot"]?.boolValue == true {
+              var assembly = thoughtAssemblies[id] ?? NativeTextSnapshotAssembler()
+              let complete = assembly.receive(text, starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true)
+              thoughtAssemblies[id] = assembly
+              guard let complete else { return }
+              thoughtAssemblies.removeValue(forKey: id)
+              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+                content: complete, contentIsDelta: false, rawPayloadJSON: raw)
+            } else {
+              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+                content: text, contentIsDelta: true, rawPayloadJSON: raw)
+              appending = true
+            }
           } else {
             activeThought = nil
             if kind == "woven_subagents", configuration.runtimeKind == .defaultAgent {
@@ -660,9 +722,12 @@ extension WorkspaceDatabaseConnection {
               let entries = object["entries"]?.arrayValue?.compactMap { entry -> AgentRunPlanEntry? in
                 guard let fields = entry.objectValue, let content = fields["content"]?.stringValue,
                       let status = fields["status"]?.stringValue else { return nil }
-                return .init(content: content, priority: fields["priority"]?.stringValue, status: status)
+                return .init(content: content, priority: fields["priority"]?.stringValue, status: status,
+                  nativeID: fields["id"]?.stringValue)
               } ?? []
-              activity = .init(id: "plan", kind: .plan, title: "Plan", planEntries: entries, rawPayloadJSON: raw)
+              activity = .init(id: "plan", kind: .plan, phase: entries.isEmpty ? "clear" : "update",
+                title: "Plan", planEntries: entries, rawPayloadJSON: raw,
+                planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace")
             }
           }
           if let activity {
@@ -678,6 +743,31 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("INSERT INTO workspace_calendar_remote_receipts(id,workspace_id,session_id,payload_json) VALUES(?,?,?,?)",
         [receiptID,workspaceID.uuidString.lowercased(),run.sessionID,try toolsJSON(updates)])
     }
+  }
+
+  private static func remoteCursorChecklist(_ payload: GatewayJSONValue, sessionID: String, rawPayloadJSON: String) -> AgentRunActivity? {
+    guard let fields = payload.objectValue, fields["sessionId"]?.stringValue == sessionID,
+          let toolID = fields["toolCallId"]?.stringValue, !toolID.isEmpty,
+          let merge = fields["merge"]?.boolValue, let todos = fields["todos"]?.arrayValue else { return nil }
+    var entries: [AgentRunPlanEntry] = []
+    var ids: Set<String> = []
+    for todo in todos {
+      guard let row = todo.objectValue,
+            let content = [row["content"]?.stringValue, row["title"]?.stringValue]
+              .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }),
+            let id = row["id"]?.stringValue, !id.isEmpty, ids.insert(id).inserted else { return nil }
+      let status = switch row["status"]?.stringValue {
+      case "completed": "completed"
+      case "in_progress", "inProgress": "in_progress"
+      case "cancelled", "canceled": "cancelled"
+      default: "pending"
+      }
+      entries.append(.init(content: content, status: status, nativeID: id))
+    }
+    return .init(id: "cursor-todos", kind: .plan, phase: !merge && entries.isEmpty ? "clear" : "update",
+      title: "Plan", status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
+      planEntries: entries, rawPayloadJSON: rawPayloadJSON, planKind: "checklist",
+      planOperation: merge ? "merge" : entries.isEmpty ? "clear" : "replace")
   }
 
   /// Stream the retained ACP projection in its host-assigned ordinal order.

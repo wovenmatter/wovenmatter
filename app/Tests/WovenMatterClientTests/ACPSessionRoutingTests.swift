@@ -126,15 +126,33 @@ struct ACPSessionRoutingTests {
             if case .activity(let value, _) = event { return value }
             return nil
         }
-        #expect(activities.count == 5)
         let thoughts = activities.filter { $0.kind == .thought }
-        #expect(thoughts.map(\.content) == ["parent thought one", "parent thought two"])
-        #expect(thoughts.first?.id == thoughts.last?.id)
+        #expect(thoughts.map(\.id) == ["thought-1", "thought-1", "thought-1"])
+        #expect(thoughts.map(\.content) == ["parent thought one", "parent thought two", nil])
+        #expect(thoughts.map(\.phase) == ["update", "update", "end"])
+        #expect(thoughts.map(\.status) == ["running", "running", "completed"])
+        #expect(delivered.compactMap { event -> Bool? in
+            guard case .activity(let activity, let appendsContent) = event,
+                  activity.kind == .thought else { return nil }
+            return appendsContent
+        } == [true, true, false])
         #expect(activities.filter { $0.kind == .tool }.map(\.id) == ["parent-tool", "parent-tool"])
         #expect(activities.filter { $0.kind == .tool }.last?.status == "completed")
         #expect(activities.filter { $0.kind == .plan }.map(\.phase) == ["update"])
-        // No child event can flush/freeze a partial assistant segment downstream.
-        #expect(delivered.count == 8)
+        // Only the parent's first answer closes its thought. Foreign messages
+        // and tool calls must neither split that phase nor enter the transcript.
+        #expect(delivered.map { event in
+            switch event {
+            case .activity(let activity, _): "\(activity.kind.rawValue):\(activity.id):\(activity.phase ?? "")"
+            case .assistantChunk(let text): "assistant:\(text)"
+            default: "unexpected"
+            }
+        } == [
+            "thought:thought-1:update", "thought:thought-1:update", "thought:thought-1:end",
+            "assistant:Casement, ", "assistant:Hardenburg, Britannica.",
+            "tool:parent-tool:start", "tool:parent-tool:end", "plan:plan:update",
+            "assistant: legacy adapter",
+        ])
         let snapshots = await configurations.values()
         #expect(snapshots.count == 3)
         #expect(snapshots.first?.slashCommands.isEmpty == true)

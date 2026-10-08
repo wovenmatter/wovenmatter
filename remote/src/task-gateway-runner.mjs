@@ -73,16 +73,16 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       if (config.permission === 'force') args.unshift('--force')
     }
     // Never lend a connected Mac session's identity/tool authority to a task.
-    const env = isolateTaskEnvironment(environment())
+    const env = isolateTaskEnvironment(environment(harness))
     const child = launch(harness.command,args,{cwd:directory,env,stdio:['pipe','pipe','pipe']})
-    let count=0, sessionID, accepted=false, terminal=false, needsApproval=false, archive
+    let count=0, sessionID, accepted=false, terminal=false, needsApproval=false, archive, promptCompleted=false
     const pending = new Map()
     const failAll = error => { for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error) }; pending.clear() }
     const send = message => { if (!child.stdin.writable || terminal) throw new Error('The agent disconnected.'); child.stdin.write(JSON.stringify(message)+'\n') }
     const rpc = (method,params) => new Promise((done,reject) => {
       const id=++count
       const timer=setTimeout(()=>{ pending.delete(id); reject(new Error('The agent did not respond in time.')) },method==='session/prompt'?24*3600000:30000)
-      pending.set(id,{done,reject,timer})
+      pending.set(id,{done,reject,timer,method})
       try { send({jsonrpc:'2.0',id,method,params}) } catch(error) { clearTimeout(timer);pending.delete(id);reject(error) }
     })
     child.stdin.on('error',()=>failAll(new Error('The agent input connection closed.')))
@@ -91,7 +91,14 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     const receiveLine = line => {
       let message;try { message=JSON.parse(line) } catch { return }
       if (!message || typeof message !== 'object' || Array.isArray(message)) return
-      if (message.method && message.id != null) {
+      if (message.method === 'cursor/update_todos' && harness.id === 'cursor') {
+        // Native Cursor todos are notifications, separate from ACP session/update.
+        // Require the owning session and archive the original notification first.
+        if (!accepted || message.params?.sessionId !== sessionID) return
+        void archive.capture(message, {kind:'cursor/update_todos', present: promptCompleted ? undefined : safe => publish({
+          sessionUpdate:'woven_cursor_todos',nativeSessionID:sessionID,payload:safe.params,
+        })}).catch(() => { failAll(new Error('The task output could not be retained.')); child.kill('SIGTERM') })
+      } else if (message.method && message.id != null) {
         if (message.method==='session/request_permission') {
           if (accepted && archive && (!message.params?.sessionId || message.params.sessionId === sessionID)) {
             void archive.capture(message.params, {id: `permission:${run.id}:${message.id}`, kind: 'permission.request'})
@@ -109,6 +116,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       }
       else if (message.id!=null && pending.has(message.id)) {
         const entry=pending.get(message.id);pending.delete(message.id);clearTimeout(entry.timer)
+        if (entry.method === 'session/prompt') promptCompleted=true
         if (message.error) entry.reject(new Error('The agent could not complete this operation. Check its account and saved task settings.'))
         else entry.done(message.result ?? {})
       }

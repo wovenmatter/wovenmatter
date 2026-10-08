@@ -53,6 +53,38 @@ extension WorkspaceDatabaseConnection {
   }
 
   func saveOpenCodeSnapshotUnlocked(_ snapshot: OpenCodeSessionSnapshot, conversationID: String, fallbackTitle: String) throws {
+      let previous = try openCodeSnapshot(conversationID: conversationID)
+      let nativeIDs = Set(snapshot.messages.map { $0["id"].text })
+      // A paged tail cannot hide unloaded history. Reconcile only the old
+      // suffix covered by the new tail, or all previously visible messages
+      // when the service reports that history starts here. Captured rows and
+      // native archives remain intact; a later snapshot can restore visibility.
+      let covered: [OpenCodeValue]
+      if snapshot.olderCursor == nil { covered = previous?.messages ?? [] }
+      else if let old = previous?.messages,
+              let anchor = old.firstIndex(where: { nativeIDs.contains($0["id"].text) }) {
+        covered = Array(old[anchor...])
+      } else { covered = [] }
+      for removed in covered where !nativeIDs.contains(removed["id"].text) {
+        let messageID = "opencode:\(conversationID):\(removed["id"].text)"
+        let hide = try prepareUnlocked("INSERT OR IGNORE INTO desktop_opencode_hidden_messages VALUES(?,?)")
+        defer { sqlite3_finalize(hide) }
+        try bind(messageID, at: 1, to: hide); try bind(conversationID, at: 2, to: hide); try stepDone(hide)
+        try executeUnlocked("UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1")
+        let invalidate = try prepareUnlocked("""
+          UPDATE desktop_activity_index SET deleted=1,revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
+          WHERE run_id=? AND conversation_id=? AND deleted=0
+          """)
+        defer { sqlite3_finalize(invalidate) }
+        try bind(messageID + ":run", at: 1, to: invalidate)
+        try bind(conversationID, at: 2, to: invalidate); try stepDone(invalidate)
+      }
+      for nativeID in nativeIDs {
+        let show = try prepareUnlocked("DELETE FROM desktop_opencode_hidden_messages WHERE message_id=? AND conversation_id=?")
+        defer { sqlite3_finalize(show) }
+        try bind("opencode:\(conversationID):\(nativeID)", at: 1, to: show)
+        try bind(conversationID, at: 2, to: show); try stepDone(show)
+      }
       let now = Self.timestamp(Date())
       let json = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
       let state = try prepareUnlocked("UPDATE desktop_opencode_sessions SET snapshot_json = ? WHERE conversation_id = ?")
@@ -123,6 +155,29 @@ extension WorkspaceDatabaseConnection {
             try bind(activityID, at: Int32(offset + 2), to: obsolete)
           }
           try stepDone(obsolete)
+          // An identical surviving part need not fire the source UPDATE trigger.
+          // Restore from current source rows, including tombstones left by an older
+          // build that already removed the message's hidden marker.
+          let revival = try prepareUnlocked("""
+            UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1
+              AND EXISTS(SELECT 1 FROM desktop_activity_index i
+                JOIN dashboard_run_events e ON e.id=i.source_id
+                WHERE i.run_id=? AND i.conversation_id=? AND i.source_kind='event' AND i.deleted=1)
+            """)
+          defer { sqlite3_finalize(revival) }
+          try bind(runID, at: 1, to: revival)
+          try bind(conversationID, at: 2, to: revival); try stepDone(revival)
+          if changedRowCountUnlocked > 0 {
+            let restore = try prepareUnlocked("""
+              UPDATE desktop_activity_index SET deleted=0,
+                revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
+              WHERE run_id=? AND conversation_id=? AND source_kind='event' AND deleted=1
+                AND EXISTS(SELECT 1 FROM dashboard_run_events e WHERE e.id=source_id)
+              """)
+            defer { sqlite3_finalize(restore) }
+            try bind(runID, at: 1, to: restore)
+            try bind(conversationID, at: 2, to: restore); try stepDone(restore)
+          }
           for activity in activities {
             try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: Date(), replacingActivity: true)
           }
