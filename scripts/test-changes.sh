@@ -44,6 +44,7 @@ run_package_tests() {
   local process_suites=(
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
+    WorkspaceAgentToolsServiceTests
     NativeHarnessArchiveTests
     NativeFramePrivacyTests
     NativeJSONSearchProjectionTests
@@ -56,7 +57,7 @@ run_package_tests() {
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
     swift test --package-path app --scratch-path "$swift_scratch")
-  # Process fixtures measure startup, deadlines, and reaping; the SDK suite also
+  # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
   # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
