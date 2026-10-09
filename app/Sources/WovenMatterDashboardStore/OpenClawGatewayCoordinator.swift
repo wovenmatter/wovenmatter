@@ -1224,7 +1224,7 @@ public actor OpenClawGatewayCoordinator {
       _ = try await client.request(Self.approvalResolveMethod(kind: approval.kind), params: .object([
         "id": .string(approval.id), "decision": .string(decision)
       ]), expectedConnectionGeneration: transportGeneration)
-      try await database.recordProgramStatus(ProgramStatus(state: .clear), runID: runID, source: "approval:" + approval.id)
+      try? await database.recordProgramStatus(ProgramStatus(state: .clear), runID: runID, source: "approval:" + approval.id)
     } catch {
       guard !Task.isCancelled else { return }
       let message = error.localizedDescription

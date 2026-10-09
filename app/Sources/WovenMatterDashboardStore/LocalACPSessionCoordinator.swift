@@ -677,7 +677,8 @@ public actor LocalACPSessionCoordinator {
                 switch event {
                 case .programStatus(let report, let reportedRunID):
                     guard reportedRunID == nil || reportedRunID == run.runID else { return }
-                    try await self.database.recordProgramStatus(report, runID: run.runID)
+                    // Advisory persistence must not fail the native event stream.
+                    try? await self.database.recordProgramStatus(report, runID: run.runID)
                     await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
                 case .assistantAsset(let asset):
                     try await streamWriter.finishSegment()

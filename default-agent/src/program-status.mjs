@@ -22,6 +22,10 @@ export function reportProgramStatus(record, { state, id, kind, title, msg, progr
   if (runID === record.runID) {
     if (record.programStatusesRunID !== runID) { record.programStatuses = new Map(); record.programStatusesRunID = runID; }
     const key = id ?? '';
+    // Coalesce unchanged output at the producer. Received reports still update
+    // the consumer's LRU order. Blocks may be repeated to repair advisory loss.
+    if (state !== 'clear' && state !== 'blocked'
+        && JSON.stringify(record.programStatuses.get(key)) === JSON.stringify(status)) return;
     if (state === 'clear') {
       for (const candidate of record.programStatuses.keys()) if (!id || candidate === id || candidate.startsWith(id + '/')) record.programStatuses.delete(candidate);
     } else { record.programStatuses.set(key, status); }

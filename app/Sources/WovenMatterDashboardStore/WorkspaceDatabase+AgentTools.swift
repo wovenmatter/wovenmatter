@@ -281,11 +281,16 @@ extension WorkspaceDatabaseConnection {
   func requireTranscriptAccessUnlocked(sourceID: String, targetID: String) throws {
     let tools = try sessionToolsUnlocked(sourceID)
     try requireToolSessionUnlocked(targetID)
-    if sourceID == targetID || tools.enabled.contains(.history) { return }
-    if !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'", values: [sourceID, targetID])).isEmpty { return }
-    if tools.enabled.contains(.sessions),
-       try relationshipUnlocked(targetID).coordinatorID == sourceID { return }
-    throw WorkspaceToolError.accessRequired(targetID)
+    guard try canReadTranscriptUnlocked(sourceID: sourceID, targetID: targetID, enabled: tools.enabled) else {
+      throw WorkspaceToolError.accessRequired(targetID)
+    }
+  }
+
+  func canReadTranscriptUnlocked(sourceID: String, targetID: String, enabled: Set<WorkspaceToolGroup>) throws -> Bool {
+    guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [targetID])).isEmpty else { return false }
+    if sourceID == targetID || enabled.contains(.history) { return true }
+    if !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'", values: [sourceID, targetID])).isEmpty { return true }
+    return try enabled.contains(.sessions) && relationshipUnlocked(targetID).coordinatorID == sourceID
   }
 
   public func sessionRelationships() throws -> [WorkspaceSessionRelationship] {

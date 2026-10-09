@@ -5,6 +5,30 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct OpenClawGatewayReviewTests {
+  @Test func successfulApprovalSurvivesFailedAdvisoryClear() async throws {
+    let fixture = try await ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    await fixture.socket.setHistory(.object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(true)])]))
+    try await fixture.database.write { connection in
+      try connection.toolsExecuteUnlocked("CREATE TRIGGER reject_advisory_clear BEFORE DELETE ON desktop_program_status BEGIN SELECT RAISE(FAIL,'Fixture advisory failure'); END", [])
+    }
+    let run = try await fixture.coordinator.accept(conversationID: id, content: "Work", onPermission: { _ in "allow-once" })
+    await fixture.coordinator.receiveGatewayEventForTesting(.init(name: "exec.approval.requested", payload: .object([
+      "id": .string("fixture-approval"), "request": .object(["runId": .string(run.runID), "sessionKey": .string(fixture.session.key), "command": .string("pwd")])
+    ]), sequence: nil), agentID: fixture.agentID)
+    var result: AgentRunActivity?
+    for _ in 0..<300 {
+      result = try await fixture.database.conversationHistoryPage(id: id, limit: 20).activities.map(\.activity).first { $0.phase == "result" && $0.id.hasSuffix("approval:fixture-approval") }
+      if result != nil { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await fixture.socket.requestMethods.contains("exec.approval.resolve"))
+    #expect(result?.title == "Command approved" && result?.status == "completed")
+    #expect(try await fixture.database.activeDeviceOwnedConversationIDs().contains(id))
+    await fixture.coordinator.shutdown()
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func recoveredIdleSnapshotCannotCloseANewerSteeringInput() async throws {
     let fixture = try await ReviewGatewayFixture()

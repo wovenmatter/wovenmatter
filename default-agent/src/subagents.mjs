@@ -190,6 +190,15 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
       const recent = remaining ? allChildren.filter(child => !activeIDs.has(child.conversationId)).slice(-remaining) : [];
       const children = [...recent, ...active];
       const subagents = (await Promise.all(children.map(child => childSnapshot(child, inspection)))).filter(Boolean);
+      // Credential waits can start or finish while other children are being
+      // read. Reconcile after every await, before publishing either projection.
+      for (const child of subagents) {
+        if (['working', 'blocked'].includes(child.state)) {
+          child.state = child.executionStatus !== 'cancelling'
+            && record.programStatuses?.get(`children/${child.nativeConversationID}`)?.state === 'blocked'
+            ? 'blocked' : 'working';
+        }
+      }
       const snapshot = { sessionUpdate: 'woven_subagents', subagents, concurrency: capFor(record), activeCount: subagents.filter(child => ['working', 'blocked'].includes(child.state)).length };
       const serialized = JSON.stringify(snapshot);
       if (serialized === lastSnapshot || disposed) return;

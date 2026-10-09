@@ -63,9 +63,15 @@ or progress percentages for it.
 
 `wovenmatter sessions list/status` expose the standard `status` plus
 `programStatus` (effective status, records, run ID and execution facts).
+Run IDs and free-text status details follow existing transcript grants; session
+discovery without those grants retains only status metadata. Advisory write
+failures never fail a native run or approval response. Producers coalesce
+unchanged non-blocked reports; blocked reports can repair a lost advisory write.
+Every report actually received still updates record order for LRU eviction.
 Coordination notifications use `done`, `error`, `idle (cancelled)` and
 `blocked (kind)`. Existing session and subagent labels use the shared vocabulary;
-the sidebar layout and interaction remain unchanged.
+the sidebar layout and interaction remain unchanged. Cancellation keeps its
+existing feedback in the same row as `Working (cancelling)` / `Idle (cancelled)`.
 
 ## Validation
 

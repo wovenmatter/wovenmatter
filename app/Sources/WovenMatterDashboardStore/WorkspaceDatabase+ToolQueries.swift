@@ -74,7 +74,10 @@ extension WorkspaceDatabaseConnection {
         let statuses = try programStatusSnapshotsUnlocked()
         object["rows"] = .array(try (object["rows"]?.arrayValue ?? []).map { row in
           guard var fields = row.objectValue, let id = fields["id"]?.stringValue else { return row }
-          let snapshot = statuses[id] ?? ProgramStatusSnapshot(status: ProgramStatus(state: .idle))
+          var snapshot = statuses[id] ?? ProgramStatusSnapshot(status: ProgramStatus(state: .idle))
+          if try !canReadTranscriptUnlocked(sourceID: callerID, targetID: id, enabled: groups) {
+            snapshot = snapshot.sessionMetadata
+          }
           fields["programStatus"] = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(snapshot))
           fields["executionStatus"] = snapshot.executionStatus.map { .string($0) } ?? fields["status"] ?? .null
           fields["status"] = snapshot.status.map { .string($0.state.rawValue) } ?? .null
@@ -84,6 +87,18 @@ extension WorkspaceDatabaseConnection {
       object["scope"] = .string(scope)
       return .object(object)
     }
+  }
+}
+
+private extension ProgramStatusSnapshot {
+  /// Session discovery exposes status, while run identity and free text follow
+  /// the same grants as the underlying transcript and error details.
+  var sessionMetadata: Self {
+    func metadata(_ report: ProgramStatus) -> ProgramStatus {
+      ProgramStatus(state: report.state, id: report.id, app: report.app,
+                    kind: report.kind, progress: report.progress)
+    }
+    return Self(executionStatus: executionStatus, status: status.map(metadata), records: records.map(metadata))
   }
 }
 

@@ -47,13 +47,17 @@ extension WorkspaceDatabaseConnection {
     }
     // OpenCode's native active/decision snapshot spans multiple message runs.
     // An assistant message ending in tool use does not settle that session.
-    for row in try historyRowsUnlocked("SELECT conversation_id,snapshot_json FROM desktop_opencode_sessions", values: []) {
-      guard let value = row.objectValue, let id = value["conversation_id"]?.stringValue,
-            let json = value["snapshot_json"]?.stringValue,
-            let native = try? JSONDecoder().decode(OpenCodeSessionSnapshot.self, from: Data(json.utf8)) else { continue }
+    for row in try historyRowsUnlocked("""
+      SELECT conversation_id,json_extract(snapshot_json,'$.active') AS active,
+        json_array_length(snapshot_json,'$.permissions') AS permission_count,
+        json_array_length(snapshot_json,'$.forms') AS form_count
+      FROM desktop_opencode_sessions WHERE json_valid(snapshot_json)
+      """, values: []) {
+      guard let value = row.objectValue, let id = value["conversation_id"]?.stringValue else { continue }
       let prior = result[id]
-      let blocked: ProgramStatus.Kind? = !native.permissions.isEmpty ? .permission : !native.forms.isEmpty ? .question : nil
-      if blocked != nil || native.active {
+      let blocked: ProgramStatus.Kind? = (value["permission_count"]?.intValue ?? 0) > 0 ? .permission
+        : (value["form_count"]?.intValue ?? 0) > 0 ? .question : nil
+      if blocked != nil || value["active"]?.intValue == 1 {
         result[id] = ProgramStatusSnapshot(runID: prior?.runID, executionStatus: "running",
           status: ProgramStatus(state: blocked == nil ? .working : .blocked, app: "opencode", kind: blocked))
       } else if prior == nil {

@@ -54,8 +54,8 @@ struct ConversationSubagentRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(child.name?.nonempty ?? "Subagent")
                     .font(.system(size: 12.5, weight: .medium))
-                if let state = child.state?.nonempty {
-                    Text(child.programStatus?.label ?? state.replacingOccurrences(of: "_", with: " ").capitalized)
+                if let label = child.statusLabel?.nonempty {
+                    Text(label)
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                 }
