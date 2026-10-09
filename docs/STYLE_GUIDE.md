@@ -4,8 +4,8 @@ Match the existing app and reuse its shared components. Keep this guide current
 when an intentional design change is accepted.
 
 - **Colors and geometry:** use `DashboardTheme`, `DashboardPalette`,
-  `DashboardMetrics`, and `DashboardShapes` in
-  [DashboardDesign.swift](../app/App/Views/DashboardDesign.swift). Preserve the
+  `DashboardMetrics` in [DashboardStyle.swift](../app/App/Views/DashboardStyle.swift),
+  and desktop `DashboardShapes` in `DashboardDesign.swift`. Preserve the
   Green and Cognac themes; keep spacing, radii, and surface treatments consistent
   with adjacent screens. Keep exact values in code.
 - **Typography:** use the macOS system font and the existing size/weight
@@ -23,7 +23,8 @@ when an intentional design change is accepted.
   such as Auto and Auto Accept into the same text. Popouts retain full labels
   and descriptions.
 - **Components:** reuse the shared cards, selectors, search fields, and button
-  styles in `DashboardDesign.swift`, and the page/row patterns in
+  styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
+  patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
@@ -73,3 +74,18 @@ when an intentional design change is accepted.
 
 Compare rendered changes with the existing screen or supplied design reference.
 Code cleanup alone should not alter appearance or interaction.
+
+## iPhone and iPad
+
+Both Xcode targets compile `app/App/Views/DashboardStyle.swift` and bundle
+`app/App/SharedAssets.xcassets`. These are the canonical Lucide glyphs, harness
+logos, Green/Cognac palettes, radii, search field, segmented selectors, and
+primary/quiet/icon buttons.
+Do not copy the icon catalog or introduce a parallel mobile palette. Desktop
+runtime metadata and window-specific controls remain in `DashboardDesign.swift`.
+
+The companion keeps Dynamic Type and a 44-point minimum for shared touch controls;
+desktop sizing is unchanged. Dark appearance uses the shared palette's iOS contrast
+variants. Native sheets, pickers, switches, QR scanning and share controls retain
+iOS behavior. SF Symbols used by desktop for spreadsheet/HTML/file kinds, text
+formatting, and status controls remain deliberate exceptions to Lucide.

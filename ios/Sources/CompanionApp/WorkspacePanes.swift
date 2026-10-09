@@ -17,34 +17,34 @@ struct LibraryPane: View {
     VStack(spacing: 0) {
       PaneHeader(title: "Library") { if loading { ProgressView() } }
       HStack {
-        TextField("Search files, links and photos", text: $search).textFieldStyle(.roundedBorder).onSubmit { Task { await load() } }
-        Button("Search") { Task { await load() } }.disabled(!model.online || loading)
+        DashboardSearchField(text: $search, prompt: "Search files, links and photos").onSubmit { Task { await load() } }
+        Button("Search") { Task { await load() } }.buttonStyle(DashboardQuietButtonStyle()).disabled(!model.online || loading)
       }.padding(.horizontal)
-      Picker("Kind", selection: $kind) {
-        Text("All").tag(""); Text("Files").tag("file"); Text("Links").tag("link"); Text("Photos").tag("photo")
-      }.pickerStyle(.segmented).padding()
+      DashboardSegmentedSelector(options: ["", "file", "link", "photo"], selection: $kind) {
+        ["": "All", "file": "Files", "link": "Links", "photo": "Photos"][$0] ?? $0
+      }.accessibilityLabel("Library item kind").padding()
       List {
-        if !model.online { Text("Connect to your Mac to browse the Library.").foregroundStyle(.secondary) }
-        if let failure { Text(failure).foregroundStyle(.secondary) }
+        if !model.online { Text("Connect to your Mac to browse the Library.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
         ForEach(items) { item in
           VStack(alignment: .leading, spacing: 6) {
             if let url = item.webURL, ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
-              Link(destination: url) { Label(item.title, systemImage: "link") }
+              Link(destination: url) { Label(item.title, systemImage: "link") }.tint(DashboardPalette.success)
             } else {
               Button { Task { await open(item) } } label: { Label(item.title, systemImage: item.kind == "photo" ? "photo" : "doc") }
                 .disabled(!model.online || !item.available)
             }
-            Text([item.agent, item.workspace].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-            if let error = item.error { Text(error).font(.caption).foregroundStyle(.secondary) }
+            Text([item.agent, item.workspace].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            if let error = item.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
             HStack {
               Button("Open conversation") { Task { await model.selectConversation(item.conversationID) } }
               if !item.available { Button("Retry file") { Task { if await model.perform(.retryLibrary(id: item.id)) { await load() } } }.disabled(!model.online) }
             }.font(.caption).buttonStyle(.borderless)
           }.padding(.vertical, 4)
         }
-        if items.isEmpty && model.online && !loading && failure == nil { Text("No Library items match this search.").foregroundStyle(.secondary) }
+        if items.isEmpty && model.online && !loading && failure == nil { Text("No Library items match this search.").foregroundStyle(DashboardPalette.mutedForeground) }
         if hasMore { Button("Load more") { Task { await load(more: true) } }.disabled(loading) }
-      }.listStyle(.plain).refreshable { await load() }
+      }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.task(id: model.online) { await load() }.onChange(of: kind) { Task { await load() } }
       .quickLookPreview($preview)
   }
@@ -77,13 +77,13 @@ struct TrashPane: View {
         if let failure { Text(failure) }
         ForEach(items) { item in
           HStack {
-            Label(item.title, systemImage: item.kind == "note" ? "doc.text" : "bubble.left")
+            Label(item.title, glyph: item.kind == "note" ? .fileText : .messageSquare)
             Spacer()
             Button("Restore") { Task { await restore(item) } }.disabled(!model.online)
           }
         }
-        if model.online && items.isEmpty && failure == nil { Text("Trash is empty.").foregroundStyle(.secondary) }
-      }.listStyle(.plain).refreshable { await load() }
+        if model.online && items.isEmpty && failure == nil { Text("Trash is empty.").foregroundStyle(DashboardPalette.mutedForeground) }
+      }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.task(id: model.online) { await load() }
   }
   private func load() async {
@@ -112,7 +112,7 @@ struct ItemManagementSheet: View {
   var body: some View {
     NavigationStack {
       Form {
-        if let error = model.errorMessage { Text(error).foregroundStyle(.red).accessibilityIdentifier("workspace-action-error") }
+        if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
         if busy { ProgressView("Saving…") }
         Section("Title") {
           TextField("Title", text: $title)
@@ -132,7 +132,7 @@ struct ItemManagementSheet: View {
           Button(isNote ? "Export original document" : "Export full run") { Task { await export(original: true) } }
         }
         Section { Button("Move to Trash", role: .destructive) { confirmTrash = true } }
-        if !model.online { Text("Connect to your Mac to manage this item.").foregroundStyle(.secondary) }
+        if !model.online { Text("Connect to your Mac to manage this item.").foregroundStyle(DashboardPalette.mutedForeground) }
       }.disabled(busy || !model.online)
         .navigationTitle(isNote ? "Note details" : "Conversation details")
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -181,7 +181,7 @@ struct SessionSettingsSheet: View {
   var body: some View {
     NavigationStack {
       Form {
-        if let error = model.errorMessage { Text(error).foregroundStyle(.red).accessibilityIdentifier("workspace-action-error") }
+        if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
         if busy { ProgressView("Saving…") }
         if let settings {
           Section("Agent settings") {

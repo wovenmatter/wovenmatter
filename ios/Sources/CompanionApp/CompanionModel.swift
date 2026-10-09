@@ -5,7 +5,18 @@ import WovenMatterCompanion
 
 @MainActor @Observable final class CompanionModel {
   enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", library = "Library", calendar = "Calendar", trash = "Trash"
-    var icon: String { switch self { case .home: "house"; case .folders: "folder"; case .chat: "bubble.left"; case .note: "doc.text"; case .settings: "gearshape"; case .library: "books.vertical"; case .calendar: "calendar"; case .trash: "trash" } }
+    var icon: DashboardLucideGlyph {
+      switch self {
+      case .home: .house
+      case .folders: .folder
+      case .chat: .messageSquare
+      case .note: .fileText
+      case .settings: .settings
+      case .library: .libraryBig
+      case .calendar: .calendarDays
+      case .trash: .trash
+      }
+    }
   }
   var tab: Tab = .home
   var state = MobileStoreState()

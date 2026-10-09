@@ -8,15 +8,16 @@ struct EmptyNotePane: View {
   @Bindable var model: CompanionModel
   var body: some View {
     VStack(spacing: 18) {
-      Image(systemName: "doc.text").font(.system(size: 44)).foregroundStyle(.secondary)
+      DashboardLucideIcon(glyph: .fileText, size: 44).foregroundStyle(DashboardPalette.mutedForeground)
       Text("A place for your next idea").font(.title2.bold())
-      Text("Create a note here or choose one in Folders. Your writing works offline.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-      Button("New note") { Task { await model.newNote() } }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white)
+      Text("Create a note here or choose one in Folders. Your writing works offline.").foregroundStyle(DashboardPalette.mutedForeground).multilineTextAlignment(.center)
+      Button("New note") { Task { await model.newNote() } }.buttonStyle(DashboardPrimaryButtonStyle())
     }.padding(30)
   }
 }
 
 struct NotePane: View {
+  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   let note: CompanionNote
   @State private var title: String
@@ -38,7 +39,7 @@ struct NotePane: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack(alignment: .firstTextBaseline, spacing: 12) {
-        TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical).font(.title.bold()).lineLimit(1...3)
+        TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical).font(.title.weight(.semibold)).lineLimit(1...3)
           .accessibilityIdentifier("note-title").disabled(!editable)
         Menu {
           Button("Paragraph") { setStyle(.paragraph) }
@@ -48,37 +49,37 @@ struct NotePane: View {
             guard let id = selectedBlockID ?? document?.blocks.first?.id else { return }
             change { try RichDocumentEditing.togglingBold(in: content, blockID: id) }
           }
-          Button("Add paragraph", systemImage: "plus") { change { try RichDocumentEditing.appendingParagraph(to: content) } }
-        } label: { Text("Aa").font(.title3.weight(.medium)).frame(width: 44, height: 44) }.disabled(!editable).accessibilityLabel("Note formatting")
+          Button("Add paragraph", glyph: .plus) { change { try RichDocumentEditing.appendingParagraph(to: content) } }
+        } label: { Image(systemName: "textformat").font(.title3.weight(.medium)).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).disabled(!editable).accessibilityLabel("Note formatting")
         Menu {
           Button("Details, move and export") { detailsPresented = true }.disabled(!model.online)
-          Button("Reference in new chat", systemImage: "bubble.left") { model.newChat(); model.referencedNoteID = note.id }.disabled(!editable)
+          Button("Reference in new chat", glyph: .messageSquare) { model.newChat(); model.referencedNoteID = note.id }.disabled(!editable)
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("Note actions")
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Note actions")
       }.padding(.horizontal, 20).padding(.top, 14)
       HStack(spacing: 6) {
-        Image(systemName: model.state.conflicts[note.id] != nil ? "exclamationmark.circle" : "checkmark")
+        DashboardLucideIcon(glyph: model.state.conflicts[note.id] != nil ? .alertCircle : .check, size: 14)
         Text(model.saveLabel(note.id)).accessibilityIdentifier("note-save-state")
         Spacer()
-      }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.bottom, 12)
+      }.font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 20).padding(.bottom, 12)
       if model.state.conflicts[note.id] != nil {
-        Button { conflictsPresented = true } label: { Label("Your writing is safe. Review the Mac version.", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(MobileTheme.surface) }.padding(.horizontal, 20)
+        Button { conflictsPresented = true } label: { Label("Your writing is safe. Review the Mac version.", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(theme.palette.themeWhisper) }.padding(.horizontal, 20)
       }
       if model.state.uncachedNoteIDs.contains(note.id) {
         ContentUnavailableView("Not saved on this device", systemImage: "icloud.and.arrow.down", description: Text("Connect to your Mac to open the full document. Its title and folder are available offline."))
-        if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white).padding() }
+        if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(DashboardPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {
-          Text("HTML asset · read only").font(.caption).foregroundStyle(.secondary)
+          Text("HTML asset · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
           if document.databaseLink != nil {
             LinkedArtifactPreview(model: model, note: note, tableID: nil, html: document.html)
           } else { SafeHTMLPreview(html: document.html) }
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-              if document.kind != .note { Text("Spreadsheet · read only").font(.caption).foregroundStyle(.secondary) }
-              else if !editable { Text("Read only · unsupported attributes preserved").font(.caption).foregroundStyle(.secondary) }
+              if document.kind != .note { Text("Spreadsheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              else if !editable { Text("Read only · unsupported attributes preserved").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
               if document.kind == .spreadsheet, document.databaseLink != nil, document.blocks.isEmpty {
                 LinkedArtifactPreview(model: model, note: note, tableID: nil, html: nil)
               }
@@ -105,7 +106,7 @@ struct NotePane: View {
                 }
               }
               if editable {
-                Button { change { try RichDocumentEditing.appendingParagraph(to: content) } } label: { Label("Add paragraph", systemImage: "plus").font(.caption).foregroundStyle(.secondary) }.padding(.top, 12)
+                Button { change { try RichDocumentEditing.appendingParagraph(to: content) } } label: { Label("Add paragraph", glyph: .plus).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }.frame(minHeight: 44).padding(.top, 12)
               }
             }.padding(.horizontal, 20).padding(.bottom, 50)
           }.scrollDismissesKeyboard(.interactively)
@@ -114,7 +115,7 @@ struct NotePane: View {
         ScrollView {
           VStack(alignment: .leading, spacing: 16) {
             Label("Read only · original format preserved", systemImage: "lock.doc").font(.subheadline.weight(.medium))
-            Text("This document uses a format this device cannot edit. Open it on your Mac or export the original document.").foregroundStyle(.secondary)
+            Text("This document uses a format this device cannot edit. Open it on your Mac or export the original document.").foregroundStyle(DashboardPalette.mutedForeground)
             Text(content).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
           }.padding(20)
         }
@@ -145,6 +146,7 @@ struct NotePane: View {
 }
 
 private struct ConflictPane: View {
+  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   var id: String
   var conflict: MobileNoteConflict
@@ -157,19 +159,19 @@ private struct ConflictPane: View {
           version("Your iPhone version", note: conflict.local)
           version("Mac version", note: conflict.remote)
           version("Common saved version", note: conflict.base)
-          Button("Keep iPhone version as a new note") { Task { await model.preserveConflict(id); dismiss() } }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white)
-          Text("The Mac version keeps its original identity. Your writing becomes a new note, so a deleted note is never silently restored.").font(.caption).foregroundStyle(.secondary)
+          Button("Keep iPhone version as a new note") { Task { await model.preserveConflict(id); dismiss() } }.buttonStyle(DashboardPrimaryButtonStyle())
+          Text("The Mac version keeps its original identity. Your writing becomes a new note, so a deleted note is never silently restored.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }.padding(20)
       }.navigationTitle("Saved conflict").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-    }.tint(MobileTheme.green)
+    }.tint(theme.palette.themeAccent)
   }
   private func version(_ label: String, note: CompanionNote?) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(label).font(.headline)
-      if let note { Text(note.title).font(.subheadline.bold()); Text(RichDocumentEditing.document(note.content)?.plainText ?? note.content).font(.subheadline).textSelection(.enabled); Text("Revision \(note.revision)").font(.caption).foregroundStyle(.secondary) }
-      else { Text("Deleted or not yet created on the Mac").foregroundStyle(.secondary) }
-    }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+      if let note { Text(note.title).font(.subheadline.bold()); Text(RichDocumentEditing.document(note.content)?.plainText ?? note.content).font(.subheadline).textSelection(.enabled); Text("Revision \(note.revision)").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+      else { Text("Deleted or not yet created on the Mac").foregroundStyle(DashboardPalette.mutedForeground) }
+    }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
   }
 }
 
@@ -185,6 +187,8 @@ private struct RichBlockTextView: UIViewRepresentable {
     view.isScrollEnabled = false; view.backgroundColor = .clear
     view.textContainerInset = .init(top: 6, left: 0, bottom: 6, right: 0); view.textContainer.lineFragmentPadding = 0
     view.adjustsFontForContentSizeCategory = true
+    view.tintColor = UIColor(DashboardPalette.primary)
+    view.linkTextAttributes = [.foregroundColor: UIColor(DashboardPalette.success)]
     view.delegate = context.coordinator; view.attributedText = Self.attributed(block)
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return view
@@ -251,7 +255,7 @@ private struct RichBlockTextView: UIViewRepresentable {
       if run.bold || block.style.rawValue.hasPrefix("heading") { traits.insert(.traitBold) }
       if run.italic { traits.insert(.traitItalic) }
       if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) { font = UIFont(descriptor: descriptor, size: font.pointSize) }
-      var attributes: [NSAttributedString.Key: Any] = [.font: UIFontMetrics(forTextStyle: .body).scaledFont(for: font), .foregroundColor: UIColor.label, .paragraphStyle: paragraph]
+      var attributes: [NSAttributedString.Key: Any] = [.font: UIFontMetrics(forTextStyle: .body).scaledFont(for: font), .foregroundColor: UIColor(DashboardPalette.foreground), .paragraphStyle: paragraph]
       if run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
       if let foreground = run.foregroundHex.flatMap(UIColor.init(hex:)) { attributes[.foregroundColor] = foreground }
       if let background = run.highlightHex.flatMap(UIColor.init(hex:)) { attributes[.backgroundColor] = background }
@@ -263,6 +267,7 @@ private struct RichBlockTextView: UIViewRepresentable {
 }
 
 private struct NativeTablePreview: View {
+  @Environment(\.dashboardTheme) private var theme
   let table: NoteTableBlock
   var body: some View {
     ScrollView(.horizontal) {
@@ -272,7 +277,7 @@ private struct NativeTablePreview: View {
             ForEach(row.cells) { cell in
               Text(AttributedString(RichBlockTextView.attributed(.init(runs: cell.runs))))
                 .frame(minWidth: 100, minHeight: 34, alignment: .leading).padding(8)
-                .background(index < table.headerRowCount ? MobileTheme.surface : .clear)
+                .background(index < table.headerRowCount ? theme.palette.themeWhisper : .clear)
                 .overlay(Rectangle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)).textSelection(.enabled)
             }
           }
@@ -317,6 +322,7 @@ struct SafeHTMLPreview: UIViewRepresentable {
 }
 
 private struct LinkedArtifactPreview: View {
+  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   let note: CompanionNote
   let tableID: String?
@@ -328,12 +334,12 @@ private struct LinkedArtifactPreview: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack {
-        Label("Live linked data · read only", systemImage: "externaldrive").font(.caption).foregroundStyle(.secondary)
+        Label("Live linked data · read only", glyph: .database).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         Spacer()
         if loading { ProgressView().controlSize(.small) }
         else { Button("Refresh") { Task { await load() } }.font(.caption).disabled(!model.online) }
       }.padding(.horizontal, html == nil ? 0 : 20)
-      if let error { Text(error).font(.caption).foregroundStyle(.secondary).padding(.horizontal, html == nil ? 0 : 20) }
+      if let error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, html == nil ? 0 : 20) }
       if let html { SafeHTMLPreview(html: html, linkedDataJSON: data?.json) }
       else if let data {
         ScrollView(.horizontal) {
@@ -350,7 +356,7 @@ private struct LinkedArtifactPreview: View {
       ForEach(Array(cells.enumerated()), id: \.offset) { _, text in
         Text(text).font(header ? .subheadline.bold() : .subheadline).textSelection(.enabled)
           .frame(width: 150, alignment: .leading).padding(8)
-          .background(header ? MobileTheme.surface : .clear)
+          .background(header ? theme.palette.themeWhisper : .clear)
           .overlay(Rectangle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
       }
     }

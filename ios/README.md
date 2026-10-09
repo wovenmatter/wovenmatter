@@ -87,4 +87,21 @@ simulator. Use a separate simulator without fixture variables for real pairing.
 
 The primary tabs are Home, Folders, Chats, Notes, and Settings. Opening a folder
 shows its searchable notes and chats within Folders; Back to Folders returns to
-the folder list. Settings contains Mac connection and sync controls.
+the folder list. Settings contains Mac connection, sync controls, and the Green/Cognac appearance choice.
+
+## Styling parity
+
+The companion uses the desktop's actual Lucide assets and harness logos, compiled
+from the same `DashboardStyle.swift` and `SharedAssets.xcassets`; it does not maintain
+copies. Library uses `library-big`, chats `message-square`, notes `file-text`, and
+settings `settings`. Navigation, new-item actions, search, calendar navigation,
+send, warnings and database references follow the same glyph/stroke definitions.
+Home is the upstream Lucide 0.563.0 house with the matching 1.5 stroke.
+
+The audit covered Home, folder navigation and contents, chat/composer and agent
+selection, note editing/conflicts/read-only assets, Library, Calendar/event forms,
+Trash, Settings, pairing, item management and session settings. Palettes, muted
+text, links, radii, search, segmented selectors, and primary/quiet buttons now use the shared definitions.
+System typography remains Dynamic Type; touch targets and native iOS sheets,
+pickers, switches, share/camera controls are intentionally adapted for mobile.
+Desktop SF document-kind and formatting symbols remain consistent exceptions.

@@ -17,6 +17,8 @@ targets:
     platform: iOS
     sources:
       - path: Sources/CompanionApp
+      - path: ../app/App/Views/DashboardStyle.swift
+      - path: ../app/App/SharedAssets.xcassets
     dependencies:
       - package: Mobile
         product: CompanionClient

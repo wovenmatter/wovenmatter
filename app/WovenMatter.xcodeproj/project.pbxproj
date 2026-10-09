@@ -37,6 +37,7 @@
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
+		D57200000000000000000001 /* SharedAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D57200000000000000000002 /* SharedAssets.xcassets */; };
 		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
 		A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */; };
 		0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */; };
@@ -53,6 +54,7 @@
 		A11C00000000000000000003 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000004 /* WorkspaceView.swift */; };
 		DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */; };
 		D45100000000000000000001 /* DashboardDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45100000000000000000002 /* DashboardDesign.swift */; };
+		D57100000000000000000001 /* DashboardStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57100000000000000000002 /* DashboardStyle.swift */; };
 		D45300000000000000000001 /* DashboardCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45300000000000000000002 /* DashboardCalendarView.swift */; };
 		D45400000000000000000001 /* DashboardUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* DashboardUsageView.swift */; };
 		D49000000000000000000001 /* ConversationMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49000000000000000000003 /* ConversationMarkdown.swift */; };
@@ -153,6 +155,7 @@
 		C06300000000000000000002 /* ApplicationUsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationUsageModel.swift; sourceTree = "<group>"; };
 		AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterLifecycleDelegate.swift; sourceTree = "<group>"; };
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D57200000000000000000002 /* SharedAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = SharedAssets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposerTextEditor.swift; sourceTree = "<group>"; };
 		37C9459F43D4462FD229B6B1 /* WovenMatter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WovenMatter.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -171,6 +174,7 @@
 		5E7A0000000000000000000E /* SettingsUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUsageView.swift; sourceTree = "<group>"; };
 		DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "wovenmatter-macos"; path = .; sourceTree = SOURCE_ROOT; };
 		D45100000000000000000002 /* DashboardDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDesign.swift; sourceTree = "<group>"; };
+		D57100000000000000000002 /* DashboardStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStyle.swift; sourceTree = "<group>"; };
 		D45300000000000000000002 /* DashboardCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCalendarView.swift; sourceTree = "<group>"; };
 		D45400000000000000000002 /* DashboardUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageView.swift; sourceTree = "<group>"; };
 		D49000000000000000000003 /* ConversationMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdown.swift; sourceTree = "<group>"; };
@@ -288,6 +292,7 @@
 			isa = PBXGroup;
 			children = (
 				A11C00000000000000000002 /* Assets.xcassets */,
+				D57200000000000000000002 /* SharedAssets.xcassets */,
 				5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */,
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
@@ -381,6 +386,7 @@
 				A71B00000000000000000002 /* DashboardLibraryView.swift */,
 				D45400000000000000000002 /* DashboardUsageView.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
+				D57100000000000000000002 /* DashboardStyle.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
 				0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */,
@@ -507,6 +513,7 @@
 				1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */,
 				03644CA683A4476385B50640 /* wovenmatter in Resources */,
 				A11C00000000000000000001 /* Assets.xcassets in Resources */,
+				D57200000000000000000001 /* SharedAssets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -641,6 +648,7 @@
 				A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
+				D57100000000000000000001 /* DashboardStyle.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,

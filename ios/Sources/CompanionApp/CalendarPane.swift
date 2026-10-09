@@ -14,30 +14,35 @@ struct CalendarPane: View {
   var body: some View {
     VStack(spacing: 0) {
       PaneHeader(title: "Calendar") {
-        Button { creating = true } label: { Image(systemName: "plus") }.disabled(!model.online).accessibilityLabel("New calendar event")
+        Button { creating = true } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }.disabled(!model.online).accessibilityLabel("New calendar event")
       }
       HStack {
-        Button { shift(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous month")
+        Button { shift(-1) } label: { DashboardLucideIcon(glyph: .arrowLeft, size: 20).frame(width: 44, height: 44) }.accessibilityLabel("Previous month")
         Spacer()
         Text(month, format: .dateTime.month(.wide).year()).font(.headline)
         Spacer()
-        Button { shift(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next month")
-      }.padding(.horizontal, 24).padding(.bottom)
+        Button { shift(1) } label: { DashboardLucideIcon(glyph: .arrowRight, size: 20).frame(width: 44, height: 44) }.accessibilityLabel("Next month")
+      }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 24).padding(.bottom)
       List {
-        if !model.online { Text("Connect to your Mac to view Calendar and scheduled tasks.").foregroundStyle(.secondary) }
+        if !model.online { Text("Connect to your Mac to view Calendar and scheduled tasks.").foregroundStyle(DashboardPalette.mutedForeground) }
         if loading { ProgressView() }
-        if let failure { Text(failure).foregroundStyle(.secondary) }
+        if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
         ForEach(events, id: \.occurrenceID) { event in
           Button { selected = event } label: {
             VStack(alignment: .leading, spacing: 6) {
-              Label(event.draft.title, systemImage: event.draft.task == nil ? "calendar" : "clock.arrow.circlepath")
-              Text(event.startsAt, format: event.draft.allDay ? .dateTime.weekday().month().day() : .dateTime.weekday().month().day().hour().minute()).font(.subheadline).foregroundStyle(.secondary)
-              if let status = event.status { Text(status).font(.caption).foregroundStyle(.secondary) }
+              Label {
+                Text(event.draft.title)
+              } icon: {
+                DashboardLucideIcon(glyph: event.draft.task == nil ? .calendarDays : .calendarClock, size: 20)
+                  .foregroundStyle(eventColor(event))
+              }
+              Text(event.startsAt, format: event.draft.allDay ? .dateTime.weekday().month().day() : .dateTime.weekday().month().day().hour().minute()).font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+              if let status = event.status { Text(status).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
             }.padding(.vertical, 4)
           }.buttonStyle(.plain)
         }
-        if model.online && events.isEmpty && !loading && failure == nil { Text("No events this month.").foregroundStyle(.secondary) }
-      }.listStyle(.plain).refreshable { await load() }
+        if model.online && events.isEmpty && !loading && failure == nil { Text("No events this month.").foregroundStyle(DashboardPalette.mutedForeground) }
+      }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.task(id: month) { await load() }.onChange(of: model.online) { Task { await load() } }
       .sheet(isPresented: $creating, onDismiss: { Task { await load() } }) {
         CalendarEventSheet(model: model, event: nil)
@@ -45,6 +50,12 @@ struct CalendarPane: View {
       .sheet(item: $selected, onDismiss: { Task { await load() } }) { event in
         CalendarEventSheet(model: model, event: event)
       }
+  }
+  private func eventColor(_ event: CompanionCalendarEvent) -> Color {
+    if event.draft.task != nil {
+      return event.draft.recurrenceUnit == nil ? DashboardPalette.calendarTask : DashboardPalette.calendarRecurringTask
+    }
+    return event.draft.recurrenceUnit == nil ? DashboardPalette.calendarEvent : DashboardPalette.calendarRecurringEvent
   }
   private func shift(_ step: Int) { month = Calendar.current.date(byAdding: .month, value: step, to: month) ?? month }
   private func load() async {
@@ -77,7 +88,7 @@ struct CalendarEventSheet: View {
   var body: some View {
     NavigationStack {
       Form {
-        if let error = model.errorMessage { Text(error).foregroundStyle(.red).accessibilityIdentifier("workspace-action-error") }
+        if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
         if busy { ProgressView("Saving…") }
         Section("Event") {
           TextField("Title", text: $draft.title)
@@ -88,12 +99,12 @@ struct CalendarEventSheet: View {
           if draft.endsAt != nil {
             DatePicker("Ends", selection: Binding(get: { draft.endsAt ?? draft.startsAt }, set: { draft.endsAt = $0 }), displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
           }
-          Text("Time zone: \(draft.timeZoneID)").font(.caption).foregroundStyle(.secondary)
+          Text("Time zone: \(draft.timeZoneID)").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
           Picker("Repeat", selection: recurrence) {
             Text("Never").tag(""); Text("Daily").tag("day"); Text("Weekly").tag("week"); Text("Monthly").tag("month")
           }
           if draft.recurrenceUnit != nil { Stepper("Every \(draft.recurrenceInterval)", value: $draft.recurrenceInterval, in: 1...366) }
-          if event?.draft.recurrenceUnit != nil { Text("Changes apply to the series. The start above is the series’ original start.").font(.caption).foregroundStyle(.secondary) }
+          if event?.draft.recurrenceUnit != nil { Text("Changes apply to the series. The start above is the series’ original start.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
         }
         Section("Scheduled task") {
           Toggle("Send a prompt to an agent", isOn: scheduled)
@@ -133,7 +144,7 @@ struct CalendarEventSheet: View {
         ForEach(model.folders) { Text($0.name).tag($0.id) }
       }
       if draft.recurrenceUnit != nil { Toggle("New session each time", isOn: Binding(get: { draft.task?.newSessionEachTime ?? false }, set: { draft.task?.newSessionEachTime = $0 })) }
-      Text("Runs on your Mac using its saved agent settings. Keep the Mac and its background service available at the scheduled time.").font(.caption).foregroundStyle(.secondary)
+      Text("Runs on your Mac using its saved agent settings. Keep the Mac and its background service available at the scheduled time.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
     }
   }
   private var selectedRoute: String {
