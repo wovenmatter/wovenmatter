@@ -33,10 +33,12 @@ struct CompanionShell: View {
               ForEach(Array(CompanionModel.Tab.allCases.dropFirst(5)), id: \.self) { tab in sidebarRow(tab) }
             }.padding(.horizontal, 12)
           }
-          Button { model.pairingPresented = true } label: {
-            Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
-              .font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(20)
-          }.buttonStyle(.plain).accessibilityLabel("Mac connection: " + model.connectionLabel)
+          if !model.fixture {
+            Button { model.pairingPresented = true } label: {
+              Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
+                .font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(20)
+            }.buttonStyle(.plain).accessibilityLabel("Mac connection: " + model.connectionLabel)
+          }
         }.frame(width: DashboardMetrics.railWidth).background(theme.palette.themeWhisper)
         Divider()
       }
@@ -163,25 +165,26 @@ struct HomePane: View {
       }
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          HStack(alignment: .top, spacing: 12) {
-            Image(systemName: model.fixture ? "iphone.gen3" : model.online ? "checkmark.circle.fill" : "laptopcomputer")
-              .font(.title3).foregroundStyle(theme.palette.themeAccent)
-            VStack(alignment: .leading, spacing: 6) {
-              Text(model.connectionLabel).font(.subheadline.weight(.semibold))
-              Text(model.fixture ? "Explore your workspace with sample notes and conversations."
-                : model.online ? "Your workspace is connected. Agents run on your Mac."
-                : "Your notes stay available here. Connect to your Mac to sync and use agents.")
-                .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
-              if !model.fixture && !model.online {
-                if model.credential == nil {
-                  Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(DashboardPrimaryButtonStyle())
-                } else {
-                  Button(model.connecting ? "Connecting…" : "Reconnect") { Task { await model.refresh() } }.disabled(model.connecting)
+          if !model.fixture {
+            HStack(alignment: .top, spacing: 12) {
+              Image(systemName: model.online ? "checkmark.circle.fill" : "laptopcomputer")
+                .font(.title3).foregroundStyle(theme.palette.themeAccent)
+              VStack(alignment: .leading, spacing: 6) {
+                Text(model.connectionLabel).font(.subheadline.weight(.semibold))
+                Text(model.online ? "Your workspace is connected. Agents run on your Mac."
+                  : "Your notes stay available here. Connect to your Mac to sync and use agents.")
+                  .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+                if !model.online {
+                  if model.credential == nil {
+                    Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(DashboardPrimaryButtonStyle())
+                  } else {
+                    Button(model.connecting ? "Connecting…" : "Reconnect") { Task { await model.refresh() } }.disabled(model.connecting)
+                  }
                 }
               }
-            }
-          }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+            }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+              .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+          }
           ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) { quickActions }
             VStack(spacing: 12) { quickActions }
@@ -344,16 +347,15 @@ struct CompanionSettingsPane: View {
       PaneHeader(title: "Settings") { EmptyView() }
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          GroupLabel(text: "Mac connection")
-          VStack(alignment: .leading, spacing: 8) {
-            Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
-              .font(.headline)
-            Text(model.fixture ? "You’re exploring sample content. Pairing is available in the regular app."
-              : "Connect to your Mac to sync your workspace and use agents.")
-              .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
-          }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
           if !model.fixture {
+            GroupLabel(text: "Mac connection")
+            VStack(alignment: .leading, spacing: 8) {
+              Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
+                .font(.headline)
+              Text("Connect to your Mac to sync your workspace and use agents.")
+                .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+              .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
             WorkspaceRow(systemIcon: "qrcode", title: model.credential == nil ? "Pair your Mac" : "Pairing") { model.pairingPresented = true }
             WorkspaceRow(icon: .rotate, title: model.connecting ? "Connecting…" : "Sync now") { Task { await model.refresh() } }
               .disabled(model.credential == nil || model.connecting)

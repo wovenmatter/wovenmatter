@@ -112,7 +112,7 @@ import WovenMatterCompanion
       booted = true
       defer { initialized = true }
       await reload()
-      if fixture { await seedFixture(); connectionLabel = "Preview · saved on this device" }
+      if fixture { await seedFixture() }
       else {
         do { credential = try MobileCredentialVault.load(); try configureTransport() }
         catch { errorMessage = error.localizedDescription }
