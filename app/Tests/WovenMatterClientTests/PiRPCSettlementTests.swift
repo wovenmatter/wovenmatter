@@ -668,18 +668,37 @@ private final class PiWireCapture: @unchecked Sendable {
 
 @Suite(.timeLimit(.minutes(1)))
 struct PiQuestionAndCompactionTests {
-  @Test(arguments: ["select", "input", "editor", "empty", "confirm", "stop", "timeout"])
+  @Test func deadlineDuringAnswerHistoryCancelsBeforeDispatch() async throws {
+    let fixture = PiPipeFixture(recorder: { direction, data in
+      if direction == "out",
+         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+         payload["type"] as? String == "extension_ui_response", payload["value"] != nil {
+        try await Task.sleep(for: .milliseconds(300))
+      }
+    })
+    let server = Task { try await serve(fixture, method: "history-timeout") }
+    try await fixture.initialize()
+    #expect(try await fixture.client.prompt("fixture", onInteraction: { _ in
+      .formValues(["value": .string("answer before timeout")])
+    }) == .endTurn)
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(arguments: ["select", "input", "editor", "empty", "confirm", "stop", "timeout", "no-timeout"])
   func nativeDialogsPreserveValuesAndStopUnansweredUI(method: String) async throws {
     let fixture = PiPipeFixture()
     let opened = AsyncStream<Void>.makeStream()
     let server = Task { try await serve(fixture, method: method) }
     try await fixture.initialize()
-    let prompt = Task { try await fixture.client.prompt("fixture", onPermission: { _ in
-      #expect(method == "confirm"); return "reject"
+    let prompt = Task { try await fixture.client.prompt("fixture", onPermission: { request in
+      #expect(method == "confirm")
+      #expect(request.title == "Question\n\nConfirmation detail")
+      return "reject"
     }, onInteraction: { request in
       guard case .form(let form) = request else { Issue.record("Expected question form"); return .cancelled }
-      #expect(method != "confirm" && method != "timeout")
-      if method == "stop" {
+      #expect(method != "confirm")
+      if method == "stop" || method == "timeout" {
         opened.continuation.yield(())
         try? await Task.sleep(for: .seconds(30))
         return .formValues(["value": .string("late answer")])
@@ -742,7 +761,10 @@ struct PiQuestionAndCompactionTests {
       if type == "extension_ui_response" {
         #expect(command["id"] as? String == "question")
         uiAnswered = true
-        if method == "stop" || method == "timeout" { #expect(command["cancelled"] as? Bool == true) }
+        if ["stop", "timeout", "history-timeout"].contains(method) {
+          #expect(command["cancelled"] as? Bool == true)
+          #expect(command["value"] == nil)
+        }
         else if method == "confirm" { #expect(command["confirmed"] as? Bool == false); #expect(command["cancelled"] == nil) }
         else { #expect(command["value"] as? String == (method == "select" ? "reject" : method == "empty" ? "" : "  answer\ntext  ")); #expect(command["cancelled"] == nil) }
         if method != "stop" { try fixture.emit(["type": "agent_settled"]); continue }
@@ -761,8 +783,11 @@ struct PiQuestionAndCompactionTests {
             try fixture.emit(["type": "message_end", "message": ["role": "assistant", "content": "answer", "stopReason": "error", "errorMessage": "Prior error before abort"]])
             try fixture.emit(["type": "agent_settled", "aborted": true])
           } else {
-            try fixture.emit(["type": "extension_ui_request", "id": "question", "method": ["empty", "stop", "timeout"].contains(method) ? "input" : method,
-                "title": "Question", "options": ["reject", "other"], "prefill": "  initial\ntext  ", "timeout": method == "timeout" ? 0 : 60000])
+            var request: [String: Any] = ["type": "extension_ui_request", "id": "question", "method": ["empty", "stop", "timeout", "history-timeout", "no-timeout"].contains(method) ? "input" : method,
+                "title": "Question", "options": ["reject", "other"], "prefill": "  initial\ntext  ",
+                "timeout": method == "no-timeout" ? 0 : ["timeout", "history-timeout"].contains(method) ? 200 : 60000]
+            if method == "confirm" { request["message"] = "Confirmation detail" }
+            try fixture.emit(request)
           }
         }
       }

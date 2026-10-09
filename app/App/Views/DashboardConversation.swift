@@ -1320,8 +1320,42 @@ struct DashboardLocalFormCard: View {
     @State private var text: [String: String] = [:]
     @State private var flags: [String: Bool] = [:]
     @State private var selections: [String: Set<String>] = [:]
+    @State private var initialized = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView {
+                formFields
+            }
+            .scrollIndicators(.never)
+            .frame(maxHeight: 260)
+            HStack(spacing: 8) {
+                Button("Submit") { if let values { onResolve(.formValues(values)) } }
+                    .buttonStyle(DashboardPrimaryButtonStyle()).disabled(values == nil)
+                Button("Cancel", role: .cancel) { onResolve(.cancelled) }.buttonStyle(DashboardQuietButtonStyle())
+            }
+        }
+        .padding(13).frame(maxWidth: 768, alignment: .leading)
+        .background(theme.palette.themeWhisper).clipShape(DashboardShapes.card)
+        .overlay { DashboardShapes.card.stroke(theme.palette.border, lineWidth: 1) }
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            for field in request.fields {
+                guard let value = field.initialValue else { continue }
+                included.insert(field.id)
+                switch value {
+                case .string(let value):
+                    if field.kind == .singleChoice { selections[field.id] = [value] } else { text[field.id] = value }
+                case .strings(let values): selections[field.id] = Set(values)
+                case .number(let value): text[field.id] = String(value)
+                case .boolean(let value): flags[field.id] = value
+                }
+            }
+        }
+    }
+
+    private var formFields: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(request.message).font(.system(size: 13, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
@@ -1368,27 +1402,6 @@ struct DashboardLocalFormCard: View {
                             }
                         }
                     }
-                }
-            }
-            HStack(spacing: 8) {
-                Button("Submit") { if let values { onResolve(.formValues(values)) } }
-                    .buttonStyle(DashboardPrimaryButtonStyle()).disabled(values == nil)
-                Button("Cancel", role: .cancel) { onResolve(.cancelled) }.buttonStyle(DashboardQuietButtonStyle())
-            }
-        }
-        .padding(13).frame(maxWidth: 768, alignment: .leading)
-        .background(theme.palette.themeWhisper).clipShape(DashboardShapes.card)
-        .overlay { DashboardShapes.card.stroke(theme.palette.border, lineWidth: 1) }
-        .onAppear {
-            for field in request.fields {
-                guard let value = field.initialValue else { continue }
-                included.insert(field.id)
-                switch value {
-                case .string(let value):
-                    if field.kind == .singleChoice { selections[field.id] = [value] } else { text[field.id] = value }
-                case .strings(let values): selections[field.id] = Set(values)
-                case .number(let value): text[field.id] = String(value)
-                case .boolean(let value): flags[field.id] = value
                 }
             }
         }

@@ -1138,7 +1138,8 @@ public actor PiRPCClient {
         guard let id = string(object["id"]) else { return nil }
         let method = string(object["method"])
         if ["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"].contains(method ?? "") { return nil }
-        let title = string(object["title"]) ?? string(object["message"]) ?? "Pi has a question."
+        let prompt = [string(object["title"]), string(object["message"])].compactMap { $0 }.joined(separator: "\n\n")
+        let title = prompt.isEmpty ? "Pi has a question." : prompt
         let form: LocalACPFormRequest?
         if method == "select", let raw = object["options"] as? [String], !raw.isEmpty, raw.count <= 256,
            Set(raw).count == raw.count {
@@ -1150,8 +1151,14 @@ public actor PiRPCClient {
                 placeholder: object["placeholder"] as? String, multiline: method == "editor")])
         } else { form = nil }
         let timeout = (object["timeout"] as? NSNumber)?.doubleValue
-        return ExtensionUIRequest(id: id, method: method, title: title, form: form,
-            deadline: timeout.flatMap { $0.isFinite && $0 >= 0 && $0 <= 3_600_000 ? ContinuousClock.now.advanced(by: .milliseconds($0)) : nil })
+        let deadline = timeout.flatMap { value -> ContinuousClock.Instant? in
+            // Pi uses Node's setTimeout only for a truthy timeout: zero disables
+            // it, and delays outside Node's timer range are clamped to 1 ms.
+            guard value != 0, !value.isNaN else { return nil }
+            let milliseconds = value < 1 || value > Double(Int32.max) ? 1 : value.rounded(.towardZero)
+            return ContinuousClock.now.advanced(by: .milliseconds(milliseconds))
+        }
+        return ExtensionUIRequest(id: id, method: method, title: title, form: form, deadline: deadline)
     }
 
     private func handleExtensionUI(_ request: ExtensionUIRequest) async throws {
@@ -1196,11 +1203,15 @@ public actor PiRPCClient {
         await acquireOutgoing()
         defer { releaseOutgoing() }
         guard !closed, let input else { return }
-        let rejected = selected == nil || cancelled || Task.isCancelled || promptGeneration != generation
+        func shouldCancelResponse() -> Bool {
+            selected == nil || cancelled || extensionUIClosed || Task.isCancelled || promptGeneration != generation
+                || request.deadline.map { $0 <= ContinuousClock.now } == true
+        }
+        let rejected = shouldCancelResponse()
         var data = try response(cancelled: rejected)
         try await launch.historyRecorder?("out", data)
         guard !closed else { return }
-        if !rejected && (cancelled || Task.isCancelled || promptGeneration != generation) {
+        if !rejected && shouldCancelResponse() {
             data = try response(cancelled: true)
             try await launch.historyRecorder?("out", data)
             guard !closed else { return }
