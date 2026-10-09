@@ -19,6 +19,7 @@ struct DashboardCalendarTaskFields: View {
         Binding(get: { task.configuration[keyPath: key] ?? "" }, set: { value in
             task.configuration[keyPath: key] = value.isEmpty ? nil : value
             if key == \.model { task.configuration.thinking = nil }
+            if key == \.permission { task.configuration.usesProductPermissionDefault = false }
             if key == \.nativeWorkingDirectory {
                 task.configuration.nativeWorkspaceID = nil
                 task.configuration.selectionWorkspace = task.configuration.workspaceID.map { "remote:" + $0.uuidString.lowercased() }

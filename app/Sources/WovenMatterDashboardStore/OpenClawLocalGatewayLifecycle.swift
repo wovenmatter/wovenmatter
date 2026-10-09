@@ -314,8 +314,9 @@ private final class GatewayProcessOwner: @unchecked Sendable {
         while process.isRunning, clock.now < forcedDeadline {
           try? await Task.sleep(for: .milliseconds(10))
         }
-        // Never block a caller indefinitely on a process stuck in kernel exit.
-        if !process.isRunning { process.waitUntilExit() }
+        // isRunning becomes false after Foundation observes exit. Do not follow
+        // the bounded polling with waitUntilExit(): its run-loop wait can stall
+        // on a different thread even after the process has already exited.
       }
     }
   }

@@ -14,7 +14,7 @@ struct PairingPane: View {
           Image(systemName: "iphone.and.arrow.forward").font(.system(size: 40)).foregroundStyle(MobileTheme.green)
           Text("Your workspace, within reach.").font(.title.bold())
           Text("On your Mac, open Woven Matter → Settings → iPhone Companion and create a pairing code. Keep both devices connected to the same Tailscale network.").foregroundStyle(.secondary)
-          Button { Task { await beginScanning() } } label: { Label("Scan Mac pairing code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity).padding(6) }.buttonStyle(.borderedProminent).foregroundStyle(.white).disabled(model.connecting)
+          Button { Task { await beginScanning() } } label: { Label("Scan Mac pairing code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity).padding(6) }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white).disabled(model.connecting)
           if let scannerError { Text(scannerError).font(.caption).foregroundStyle(.secondary) }
           Text("Or paste the pairing link").font(.subheadline.weight(.semibold))
           TextField("wovenmatter://pair?…", text: $model.pairingText, axis: .vertical)
@@ -24,7 +24,7 @@ struct PairingPane: View {
             guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else { model.errorMessage = "Paste the full pairing link from your Mac."; return }
             Task { await model.pair(url: url) }
           }.buttonStyle(.bordered).disabled(model.connecting || model.pairingText.isEmpty)
-          Text("Pairing gives this iPhone access to your Mac workspace. Provider credentials stay on your Mac. You can revoke this iPhone in desktop Settings.").font(.caption).foregroundStyle(.secondary)
+          Text("Pairing gives this device access to your Mac workspace. Provider credentials stay on your Mac. You can revoke this device in desktop Settings.").font(.caption).foregroundStyle(.secondary)
           Text("Closing the Mac window can leave Woven Matter running. Quitting the app, stopping companion access, sleep, or a network interruption ends the connection. Notes saved here remain available.").font(.caption).foregroundStyle(.secondary)
         }.padding(24)
       }.navigationTitle("Pair your Mac").navigationBarTitleDisplayMode(.inline)

@@ -1,5 +1,10 @@
 import Foundation
 
+public enum BuiltInCodeMode: String, CaseIterable, Codable, Sendable {
+    case on, only, off
+    public var title: String { switch self { case .on: "On"; case .only: "Only"; case .off: "Off" } }
+}
+
 public struct DefaultAgentSettings: Codable, Equatable, Sendable {
     public static let providerIDs = ["openai-codex", "openai", "openrouter", "opencode-go", "xai", "xai-api", "claude-subscription", "anthropic"]
     public var providers: [String] = Self.providerIDs
@@ -9,6 +14,16 @@ public struct DefaultAgentSettings: Codable, Equatable, Sendable {
     public var fallbackModels: [String] = []
     public var searchProvider = "exa"
     public var customServers: [LocalModelServer]?
+    // Optional storage preserves decoding of settings saved before code mode.
+    public var codeMode: BuiltInCodeMode? = .on
+    public var resolvedCodeMode: BuiltInCodeMode { codeMode ?? .on }
+    public static let subagentConcurrencyRange = 2...24
+    /// The cap for each new parent conversation, excluding the parent itself.
+    public var subagentConcurrency: Int? = 8
+    public var resolvedSubagentConcurrency: Int {
+        min(Self.subagentConcurrencyRange.upperBound,
+            max(Self.subagentConcurrencyRange.lowerBound, subagentConcurrency ?? 8))
+    }
     public init() {}
 
     /// Apply a UI edit to the latest saved value without undoing a connection
@@ -29,6 +44,10 @@ public struct DefaultAgentSettings: Codable, Equatable, Sendable {
         if base.defaultModel != edited.defaultModel { result.defaultModel = edited.defaultModel }
         if base.searchProvider != edited.searchProvider { result.searchProvider = edited.searchProvider }
         if base.customServers != edited.customServers { result.customServers = edited.customServers }
+        if base.codeMode != edited.codeMode { result.codeMode = edited.codeMode }
+        if base.subagentConcurrency != edited.subagentConcurrency {
+            result.subagentConcurrency = edited.subagentConcurrency
+        }
         return result
     }
 }

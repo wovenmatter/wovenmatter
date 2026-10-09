@@ -59,7 +59,7 @@ public enum OpenCodeError: LocalizedError, Equatable, Sendable {
         case .http(401): "OpenCode rejected the credentials. Reconnect with the service's current credentials."
         case .http(404): "This OpenCode resource no longer exists on the connected service."
         case .http(let code): "OpenCode returned HTTP \(code)."
-        case .incompatible(let version): "OpenCode \(version) is unsupported. This build supports \(OpenCodeConnection.supportedVersion)."
+        case .incompatible(let version): "OpenCode \(version) is unsupported. Install a current OpenCode v2 release."
         case .malformedStream: "OpenCode sent an invalid or oversized event. Reconnecting and reconciling session state."
         case .uncertain(let id): "OpenCode may have accepted input \(id). Woven Matter will reconcile it without resending."
         }

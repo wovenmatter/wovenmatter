@@ -267,6 +267,14 @@ extension WorkspaceDatabaseConnection {
       }
       if let imported = hermesImport {
         try markSessionImportedUnlocked(conversationID: conversationID)
+        var nativeBatch = try imported.nativeArchiveBatch()
+        let nativeHome = HermesGatewayClient.parseIdentity(imported.identity).home ?? ""
+        let homeParts = nativeHome.split(separator: "/")
+        let sourceScope = homeParts.count > 1 && homeParts[0] == "remote-workspaces"
+          && UUID(uuidString: String(homeParts[1])) != nil
+          ? "remote:" + String(homeParts[1]).lowercased() : "local"
+        nativeBatch.sourceID = sourceScope + ":" + nativeBatch.sourceID
+        try recordNativeRunRecordsUnlocked(nativeBatch, conversationID: conversationID, agentID: agentID, harness: "hermes")
         let touch = try prepareUnlocked("UPDATE dashboard_conversations SET last_message_at = MAX(last_message_at, (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = ?)), updated_at = ? WHERE id = ?")
         defer { sqlite3_finalize(touch) }
         try bind(conversationID, at: 1, to: touch); try bind(Self.timestamp(Date()), at: 2, to: touch)
@@ -283,6 +291,9 @@ extension WorkspaceDatabaseConnection {
         var seen: Set<Double> = []
         var previousDate = createdAt.addingTimeInterval(-0.001)
         var toolOwners: [String: String] = [:]
+        var checklistCalls: [String: (ownerID: String, function: HermesValue)] = [:]
+        var checklistRevision: Double = 0
+        let importedSessionID = HermesGatewayClient.parseIdentity(imported.identity).storedID
         var lastAssistantID: String?
         for row in imported.messages {
           try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "hermes",
@@ -294,6 +305,7 @@ extension WorkspaceDatabaseConnection {
           let rowTime = Self.timestamp(date)
           let nativeMessageID = "hermes-" + conversationID + "-" + String(Int64(rowID))
           let role = row["role"].text
+          let ownsChecklist = row["session_id"].isNull || row["session_id"].string == importedSessionID
           let toolResult = role == "tool"
           let toolID = row["tool_call_id"].string ?? row["tool_id"].string
           let ownerID = toolResult ? (toolID.flatMap { toolOwners[$0] } ?? lastAssistantID ?? nativeMessageID) : nativeMessageID
@@ -316,6 +328,9 @@ extension WorkspaceDatabaseConnection {
               let callID = call["id"].string ?? "\(nativeMessageID):tool:\(index)"
               toolOwners[callID] = ownerID
               let function = call["function"].isNull ? call : call["function"]
+              if role == "assistant", ownsChecklist, let nativeCallID = call["id"].string, !nativeCallID.isEmpty {
+                checklistCalls[nativeCallID] = (ownerID, function)
+              }
               activities.append(AgentRunActivity(id: callID, kind: .tool, phase: "start",
                 title: function["name"].string, status: "unknown", toolName: function["name"].string,
                 rawInputJSON: function["arguments"].isNull ? nil : function["arguments"].json, rawPayloadJSON: call.json))
@@ -325,6 +340,18 @@ extension WorkspaceDatabaseConnection {
             activities.append(AgentRunActivity(id: toolID ?? nativeMessageID, kind: .tool, phase: "result",
               title: row["name"].string, status: row["is_error"].bool ? "failed" : "completed", toolName: row["name"].string,
               content: row["content"].string, rawOutputJSON: row["content"].json, rawPayloadJSON: row.json))
+            if ownsChecklist, let toolID, let paired = checklistCalls.removeValue(forKey: toolID),
+               paired.ownerID == ownerID, !row["is_error"].bool,
+               row["name"].isNull || row["name"].string == paired.function["name"].string {
+              let call = paired.function
+              let args = call["arguments"].string.flatMap { try? HermesValue.decode(Data($0.utf8)) } ?? call["arguments"]
+              let result = row["content"].string.flatMap { try? HermesValue.decode(Data($0.utf8)) } ?? row["content"]
+              if let checklist = HermesGatewayClient.checklistUpdate(["name": call["name"], "args": args, "result": result]),
+                 let revision = result["revision"].number, revision > checklistRevision {
+                checklistRevision = revision
+                activities.append(checklist)
+              }
+            }
           }
           if !activities.isEmpty {
             let runID = ownerID + ":run"
@@ -1634,6 +1661,7 @@ extension WorkspaceDatabaseConnection {
       guard changedRowCountUnlocked == 1 else {
         throw LocalACPSessionDatabaseError.runNotFound
       }
+      try storeActivitySummaryUnlocked(recordID: recordID, activity: activity)
   }
 
   /// Reconcile only the exact remote run identities that this Mac submitted.
@@ -1752,8 +1780,8 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// The attachment ended without proving that the durable native run ended.
-  /// Keep its identity and a nonterminal status until authoritative recovery.
+  /// The attachment ended without proving the native outcome. Preserve its
+  /// identity and block automatic resubmission while that outcome is unknown.
   func markLocalACPRunUncertain(runID: String, detail: String) throws {
     try transaction { try markLocalACPRunUncertainUnlocked(runID: runID, detail: detail) }
   }
@@ -1782,7 +1810,9 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("""
         UPDATE dashboard_runs SET status='uncertain',error=?,completed_at=NULL,updated_at=?
         WHERE id=? AND desktop_owned=1 AND status='running'
-          AND id IN (SELECT run_id FROM desktop_local_acp_durable_runs)
+          AND (id IN (SELECT run_id FROM desktop_local_acp_durable_runs)
+            OR conversation_id IN (SELECT conversation_id FROM desktop_local_acp_sessions
+              WHERE runtime_kind='default_agent'))
         """, [detail, now, runID])
       guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
       try toolsExecuteUnlocked("""
@@ -1832,16 +1862,6 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(recoveredAt)
-      // Older remote Built-in sessions always used the service. Other legacy
-      // remote harnesses could be foreground SSH; their route is not inferable.
-      try toolsExecuteUnlocked("""
-        INSERT OR IGNORE INTO desktop_local_acp_durable_runs(run_id,remote_workspace_id,native_session_id)
-        SELECT r.id,s.remote_workspace_id,s.acp_session_id FROM dashboard_runs r
-        JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
-        WHERE r.desktop_owned=1 AND r.status='running' AND s.runtime_kind='default_agent'
-          AND s.remote_workspace_id IS NOT NULL AND s.acp_session_id IS NOT NULL
-          AND s.acp_session_id!='' AND r.openclaw_session_key=s.acp_session_id
-        """)
       // Losing this process ends a local CLI, but only detaches a service-owned
       // native run. Do not manufacture terminal truth for the latter.
       let durable = try historyRowsUnlocked("""

@@ -24,24 +24,41 @@ struct SettingsDefaultAgentSDKView: View {
         SettingsCard(title: "Agent SDKs", detail: "Running turns finish with their current SDK. Updates apply to subsequent turns.") {
             ForEach(workspaces) { workspace in
                 let state = connections.sdks.state(for: workspace.id)
-                DisclosureGroup(isExpanded: Binding(get: { expanded.contains(workspace.id) }, set: { value in
-                    if value {
-                        expanded.insert(workspace.id)
+                if workspace.remoteID == nil {
+                    VStack(alignment: .leading, spacing: 10) {
+                        workspaceLabel(workspace, state: state)
+                        workspaceContent(workspace, state: state)
+                    }
+                    .padding(.vertical, 3)
+                    .task {
                         let state = connections.sdks.state(for: workspace.id)
                         if state.status == nil && !state.busy { perform(.status, in: workspace) }
-                    } else { expanded.remove(workspace.id) }
-                })) {
-                    if expanded.contains(workspace.id) {
-                        workspaceContent(workspace, state: state).padding(.top, 10).padding(.bottom, 4)
                     }
-                } label: {
-                    HStack {
-                        Text(workspace.name).font(.callout.weight(.medium))
-                        if state.busy { ProgressView().controlSize(.mini) }
+                } else {
+                    DisclosureGroup(isExpanded: Binding(get: { expanded.contains(workspace.id) }, set: { value in
+                        if value {
+                            expanded.insert(workspace.id)
+                            let state = connections.sdks.state(for: workspace.id)
+                            if state.status == nil && !state.busy { perform(.status, in: workspace) }
+                        } else { expanded.remove(workspace.id) }
+                    })) {
+                        if expanded.contains(workspace.id) {
+                            workspaceContent(workspace, state: state).padding(.top, 10).padding(.bottom, 4)
+                        }
+                    } label: {
+                        workspaceLabel(workspace, state: state)
                     }
+                    .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+                    .padding(.vertical, 3)
                 }
-                .padding(.vertical, 3)
             }
+        }
+    }
+
+    private func workspaceLabel(_ workspace: Workspace, state: DefaultAgentSDKWorkspaceState) -> some View {
+        HStack {
+            Text(workspace.name).font(.callout.weight(.medium))
+            if state.busy { ProgressView().controlSize(.mini) }
         }
     }
 
@@ -70,7 +87,7 @@ struct SettingsDefaultAgentSDKView: View {
 
     private func sdkLabel(_ sdk: DefaultAgentSDKStatus.SDK) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(sdk.name).font(.callout.weight(.medium))
+            Text(sdk.displayName).font(.callout.weight(.medium))
             Text(sdk.installedVersion.map { "Version \($0)" } ?? "Not installed").font(.caption).monospacedDigit().foregroundStyle(.secondary)
             if sdk.updateAvailable, let latest = sdk.latestVersion {
                 Text("Version \(latest) available").font(.caption).foregroundStyle(.secondary)
@@ -86,13 +103,13 @@ struct SettingsDefaultAgentSDKView: View {
             Button("Check for updates") { perform(.check, id: sdk.id, in: workspace) }
             if sdk.updateAvailable, let latest = sdk.latestVersion {
                 Button("Update") { perform(.update, id: sdk.id, version: latest, in: workspace) }
-                    .accessibilityLabel("Update \(sdk.name) in \(workspace.name)")
+                    .accessibilityLabel("Update \(sdk.displayName) in \(workspace.name)")
             }
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(state.busy).fixedSize()
     }
 
     private func progress(_ request: DefaultAgentSDKRequest) -> String {
-        let name = request.id == "claude" ? "Claude SDK" : request.id == "pi" ? "Pi SDK" : "SDKs"
+        let name = request.id == "claude" ? "Claude SDK" : request.id == "pi" ? "Pi Durable SDK" : "SDKs"
         switch request.action {
         case .status: return "Loading SDK versions…"
         case .check: return "Checking \(name) for updates…"

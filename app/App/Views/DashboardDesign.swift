@@ -607,7 +607,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .grok: "Grok Build"
         case .openClaw: "OpenClaw"
         case .hermes: "Hermes"
-        case .defaultAgent: "Built-in"
+        case .defaultAgent: AgentRuntimeKind.defaultAgent.displayName
         case .pi: "Pi"
         case .cursor: "Cursor"
         case .openCode: "OpenCode"
@@ -859,6 +859,9 @@ enum DashboardMetrics {
     static let companionMinimumWidth: CGFloat = 360
     static let separatorWidth: CGFloat = 12
     static let shellInset: CGFloat = 8
+    static let assetToolbarControlWidth: CGFloat = 28
+    static let assetToolbarControlHeight: CGFloat = 30
+    static let assetToolbarVerticalPadding: CGFloat = 2
     static let shellGap: CGFloat = 8
     static let windowAlignedSurfaceMinimumRadius: CGFloat = 12
     static let cardRadius: CGFloat = 14
@@ -1010,20 +1013,21 @@ struct DashboardActiveConversationRowBackground: View {
             shape.fill(presentation.isActive ? theme.palette.themeWhisper : .clear)
             if presentation.allowsMotion {
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    GeometryReader { geometry in
+                    // Animate drawing, rather than a child's frame and offset.
+                    // Active rows appear in both rails; relaying their sweep
+                    // through layout repeatedly invalidates the whole window.
+                    Canvas(rendersAsynchronously: true) { canvas, size in
                         let progress = context.date.timeIntervalSinceReferenceDate
                             .truncatingRemainder(dividingBy: 4.2) / 4.2
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                DashboardPalette.primary.opacity(0.055),
-                                .clear,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                        let start = size.width * (-1.7 + 2.7 * progress)
+                        canvas.fill(
+                            Path(CGRect(x: start, y: 0, width: size.width * 1.7, height: size.height)),
+                            with: .linearGradient(
+                                Gradient(colors: [.clear, DashboardPalette.primary.opacity(0.055), .clear]),
+                                startPoint: CGPoint(x: start, y: 0),
+                                endPoint: CGPoint(x: start + size.width * 1.7, y: 0)
+                            )
                         )
-                        .frame(width: geometry.size.width * 1.7)
-                        .offset(x: geometry.size.width * (-1.7 + 2.7 * progress))
                     }
                     .clipShape(shape)
                 }

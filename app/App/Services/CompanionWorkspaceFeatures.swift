@@ -110,8 +110,20 @@ extension CompanionCommandService {
             try await model.applyPendingSessionSelections(conversationID: id)
         case let .sessionTools(id, enabled, confirmed):
             _ = try await conversation(id)
-            try await store.database.setSessionTools(WorkspaceSessionTools(identifiers: enabled), sessionID: id, confirmedPausingTimers: confirmed)
-            try await model.agentTools?.reload()
+            let requested = try WorkspaceSessionTools(identifiers: enabled)
+            guard let tools = model.agentTools else { throw CommandError.unavailable }
+            let current = try await store.database.sessionTools(id)
+            // Preserve the Mac's selected Executor profiles. Executor enablement
+            // uses the same broker acknowledgement/cancellation path as desktop.
+            var ordinary = current
+            ordinary.enabled = requested.enabled
+            if current.enabled.contains(.executor) { ordinary.enabled.insert(.executor) }
+            else { ordinary.enabled.remove(.executor) }
+            try await store.database.setSessionTools(ordinary, sessionID: id, confirmedPausingTimers: confirmed)
+            if current.enabled.contains(.executor) != requested.enabled.contains(.executor) {
+                try await tools.setEnabled(.executor, enabled: requested.enabled.contains(.executor), sessionID: id)
+            }
+            try await tools.reload()
         case let .saveCalendar(id, revision, draft):
             guard UUID(uuidString: id) != nil else { throw CommandError.invalidCommand }
             let existing = try await store.database.calendarItems().first { $0.id == id }

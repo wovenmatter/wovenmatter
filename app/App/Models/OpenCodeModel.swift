@@ -80,6 +80,7 @@ final class OpenCodeModel {
         let workspace: String
         let nativeDirectory: String
         let selections: SessionSelections
+        let usesProductPermissionDefault: Bool?
     }
 
     private var connectionID: String {
@@ -198,7 +199,7 @@ final class OpenCodeModel {
         if !isInstalled { executable = nil }
         if executable != nil { return }
         if let resolved = await Task.detached(priority: .utility, operation: {
-            LocalACPRuntimeResolver.resolveExecutable(named: "opencode2")
+            OpenCodeServiceLauncher.resolveExecutable()
         }).value { executable = resolved }
     }
 
@@ -230,6 +231,7 @@ final class OpenCodeModel {
             else {
                 connection = try OpenCodeConnection.discover(file: registration)
                 _ = try await OpenCodeHTTPClient(connection: connection).health()
+                try await NativeCLIAdapter.installOpenCode()
             }
             try Task.checkCancellation()
             guard generation == connectionGeneration, !quitting else { throw CancellationError() }
@@ -367,7 +369,9 @@ final class OpenCodeModel {
             captured = PendingCreationPreferences(nativeSessionID: id, workspace: scope,
                 nativeDirectory: workspace.standardizedFileURL.path,
                 selections: reserved?.desiredSelections
-                    ?? sessionPreferences.defaults(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
+                    ?? sessionPreferences.defaults(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope),
+                usesProductPermissionDefault: reserved?.usesProductPermissionDefault
+                    ?? sessionPreferences.usesProductPermissionDefault(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
             defaults.set(try JSONEncoder().encode(captured), forKey: selectionKey)
         }
         defaults.set(id, forKey: pendingKey)
@@ -441,7 +445,8 @@ final class OpenCodeModel {
         if let captured = creationPreferences {
             sessionPreferences.captureConversation(id: conversationID,
                 harness: AgentRuntimeKind.opencode.rawValue, workspace: captured.workspace,
-                nativeFallback: nativeSelections(conversationID), capturedDefaults: captured.selections)
+                nativeFallback: nativeSelections(conversationID), capturedDefaults: captured.selections,
+                usesProductPermissionDefault: captured.usesProductPermissionDefault ?? false)
         }
         if creationPreferences != nil, let captured = sessionPreferences.conversation(id: conversationID), captured.requiresApplication {
             try await applySessionSelections(conversationID, selections: captured.desiredSelections)
@@ -538,7 +543,7 @@ final class OpenCodeModel {
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [], approvalMode: snapshot.approvalMode ?? "normal")
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
     }
 
     @discardableResult
@@ -564,7 +569,8 @@ final class OpenCodeModel {
             if let pending {
                 // Preserve each repair even if another field still fails, so a
                 // later correction or relaunch cannot restore the rejected value.
-                self.sessionPreferences.updateConversation(id: id, selections: desired)
+                self.sessionPreferences.updateConversation(id: id, selections: desired,
+                    permissionIsExplicit: correction.permission != nil)
                 if pending.desiredSelections.thinking != nil, desired.thinking == nil {
                     self.sessionPreferences.updateConversation(id: id, field: .thinking, from: desired)
                 }
@@ -624,8 +630,13 @@ final class OpenCodeModel {
             try await setNativeModel(id, model: model, thinking: thinking)
         }
         if let permission = selections.permission {
-            let confirmed = try await coordinator.setSessionPermission(conversationID: id, permission: permission)
-            snapshots[id]?.approvalMode = confirmed
+            _ = try await coordinator.setSessionPermission(conversationID: id, permission: permission)
+            // The update stream is asynchronous. Read the coordinator's saved
+            // native rules before projecting Full Access for Executor/app calls;
+            // a previous native ask/deny snapshot must not mask this selection.
+            if let canonical = try await store.database.openCodeSnapshot(conversationID: id) {
+                snapshots[id]?.info = canonical.info
+            }
         }
         if let tools = selections.tools { try await applyInitialSessionTools?(id, tools) }
         // Read back the native result; changing models can remove an old variant.
@@ -668,7 +679,7 @@ final class OpenCodeModel {
     func cancelPendingInput(_ id: String) { pendingDispatches[id]?.cancel() }
 
     @discardableResult
-    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil,
+    func send(_ id: String, input: AgentMessageInput,
               requiresIdle: Bool = false, dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeSubmissionReceipt {
         let fence = dispatchFence ?? AgentDispatchFence()
         try fence.check()
@@ -679,7 +690,7 @@ final class OpenCodeModel {
             if let selection = selectionTasks[id] { try await selection.value }
             // IPC dispatch may reach the execution owner even if its reply is lost.
             try fence.claimDispatch()
-            _ = try await backendCommand(.send(id, input, discovery)); return OpenCodeSubmissionReceipt()
+            _ = try await backendCommand(.send(id, input)); return OpenCodeSubmissionReceipt()
         }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
@@ -706,9 +717,9 @@ final class OpenCodeModel {
         try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             return try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery, requiresIdle: requiresIdle, dispatchFence: fence)
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, cliContext: input.cliContext), requiresIdle: requiresIdle, dispatchFence: fence)
         } else {
-            return try await coordinator.prompt(link, input: input, discovery: discovery, requiresIdle: requiresIdle, dispatchFence: fence)
+            return try await coordinator.prompt(link, input: input, requiresIdle: requiresIdle, dispatchFence: fence)
         }
     }
 

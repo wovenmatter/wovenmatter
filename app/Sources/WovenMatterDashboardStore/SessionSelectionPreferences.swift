@@ -19,6 +19,13 @@ public final class SessionSelectionPreferences {
     defaults(in: read(), harness: harness, workspace: workspace)
   }
 
+  public func usesProductPermissionDefault(harness: String, workspace: String?) -> Bool {
+    let document = read()
+    return (workspace.flatMap { document.workspaceDefaults[$0]?[harness]?.permission }
+        ?? document.harnessDefaults[harness]?.permission) == nil
+      && Self.productDefaults(harness: harness).permission != nil
+  }
+
   /// Returns only this scope's overrides, before inheritance, for editing defaults.
   public func storedDefaults(harness: String, workspace: String? = nil) -> SessionSelections {
     storedDefaults(in: read(), harness: harness, workspace: workspace)
@@ -72,7 +79,8 @@ public final class SessionSelectionPreferences {
     workspace: String,
     selections: SessionSelections = SessionSelections(),
     nativeFallback: SessionSelections = SessionSelections(),
-    capturedDefaults: SessionSelections? = nil
+    capturedDefaults: SessionSelections? = nil,
+    usesProductPermissionDefault: Bool? = nil
   ) -> SessionSelectionSnapshot {
     var document = read()
     if let existing = document.conversations[id] { return existing }
@@ -84,7 +92,10 @@ public final class SessionSelectionPreferences {
       workspace: workspace,
       selections: desired.overlaying(nativeFallback),
       desiredSelections: desired,
-      requiresApplication: true
+      requiresApplication: true,
+      usesProductPermissionDefault: usesProductPermissionDefault ?? (selections.permission == nil
+        && (document.workspaceDefaults[workspace]?[harness]?.permission ?? document.harnessDefaults[harness]?.permission) == nil
+        && desired.permission != nil && desired.permission == Self.productDefaults(harness: harness).permission)
     )
     document.conversations[id] = snapshot
     write(document)
@@ -113,22 +124,44 @@ public final class SessionSelectionPreferences {
   /// Records explicit non-nil choices. Empty tools explicitly replaces the prior tools.
   /// Unknown conversation IDs are left untouched; capture the context first.
   @discardableResult
-  public func updateConversation(id: String, selections: SessionSelections) -> SessionSelectionSnapshot? {
+  public func updateConversation(id: String, selections: SessionSelections,
+    permissionIsExplicit: Bool = true) -> SessionSelectionSnapshot? {
     var document = read()
     guard var snapshot = document.conversations[id] else { return nil }
     snapshot.selections = selections.overlaying(snapshot.selections)
     snapshot.desiredSelections = selections.overlaying(snapshot.desiredSelections)
+    if permissionIsExplicit, selections.permission != nil { snapshot.usesProductPermissionDefault = false }
     document.conversations[id] = snapshot
     write(document)
     return snapshot
   }
 
   /// Apply the event's saved choices to its next ordinary session turn.
-  public func stageCalendarSelections(id: String, harness: String, workspace: String, selections: SessionSelections) {
+  public func stageCalendarSelections(id: String, harness: String, workspace: String, selections: SessionSelections,
+    usesProductPermissionDefault: Bool = false) {
     var document = read()
     document.conversations[id] = SessionSelectionSnapshot(harness: harness, workspace: workspace,
-      selections: selections, desiredSelections: selections, requiresApplication: true)
+      selections: selections, desiredSelections: selections, requiresApplication: true,
+      usesProductPermissionDefault: usesProductPermissionDefault)
     write(document)
+  }
+
+  /// An installed adapter may not support this product's initial Full Access
+  /// policy. In that case inherit its native state, without treating observation
+  /// as a choice or rewriting any existing/explicit conversation selections.
+  @discardableResult
+  public func reconcileProductPermissionDefault(id: String, options: [String], nativePermission: String?) -> SessionSelectionSnapshot? {
+    var document = read()
+    guard var snapshot = document.conversations[id], snapshot.requiresApplication,
+          snapshot.usesProductPermissionDefault,
+          let permission = snapshot.desiredSelections.permission,
+          !options.contains(permission) else { return document.conversations[id] }
+    snapshot.desiredSelections.permission = nil
+    snapshot.selections.permission = nativePermission
+    snapshot.usesProductPermissionDefault = false
+    document.conversations[id] = snapshot
+    write(document)
+    return snapshot
   }
 
   /// Acknowledges successful native application without changing captured choices.
@@ -154,6 +187,7 @@ public final class SessionSelectionPreferences {
     guard var snapshot = document.conversations[id] else { return nil }
     snapshot.selections = snapshot.selections.replacing(field, from: selections)
     snapshot.desiredSelections = snapshot.desiredSelections.replacing(field, from: selections)
+    if field == .permission { snapshot.usesProductPermissionDefault = false }
     document.conversations[id] = snapshot
     write(document)
     return snapshot
@@ -236,15 +270,17 @@ public final class SessionSelectionPreferences {
 
   /// The app's starting policy for new conversations, below explicit user
   /// defaults. Never written as an override or applied to imported sessions.
-  private static func productDefaults(harness: String) -> SessionSelections {
+  public static func productDefaults(harness: String) -> SessionSelections {
     let permission: String?
     switch AgentRuntimeKind(rawValue: harness) {
     case .codex: permission = "agent-full-access"
     case .claudeCode, .grokBuild: permission = "bypassPermissions"
-    case .openclaw, .hermes, .opencode: permission = "full"
-    // Cursor's existing internal value means Full access, not smart review.
-    case .cursor: permission = "auto"
-    case .pi, .defaultAgent, nil: permission = nil
+    case .openclaw, .hermes: permission = "full"
+    case .opencode: permission = "allow"
+    // Cursor Full Access uses its documented native --force process flag.
+    case .cursor: permission = "force"
+    case .defaultAgent: permission = "full"
+    case .pi, nil: permission = nil
     }
     return SessionSelections(permission: permission)
   }

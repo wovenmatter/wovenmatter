@@ -306,7 +306,7 @@ struct SettingsRemoteWorkspacesView: View {
                     set: { model.setBackgroundExecution($0, for: workspace) }
                 ))
                 .disabled(busy || model.changingTaskGatewayIDs.contains(workspace.id) || !model.isCredentialAccessEnabled)
-                Text("Enabled by default. Tasks and sessions continue while this host is running. Results sync when you reconnect. Built-in needs this Mac to unlock credentials after a remote restart.")
+                Text("Enabled by default. Tasks and sessions continue while this host is running. Results sync when you reconnect. Pi Durable needs this Mac to unlock credentials after a remote restart.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let gateway = model.taskGatewayStatuses[workspace.id], gateway.enabled != workspace.backgroundExecutionEnabled {
@@ -535,7 +535,7 @@ struct SettingsRemoteWorkspacesView: View {
                                 size: 20
                             )
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(harness.displayName)
+                                Text(harness.presentationName)
                                     .font(.system(size: 13, weight: .medium))
                                 if !harness.detectedProviders.isEmpty {
                                     Text("Detected: \(harness.detectedProviders.joined(separator: ", "))")

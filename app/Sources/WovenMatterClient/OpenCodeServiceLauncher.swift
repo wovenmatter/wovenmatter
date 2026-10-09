@@ -6,6 +6,7 @@ public enum OpenCodeServiceLauncher {
     /// launch; a live incompatible/unhealthy service is never replaced.
     public static func ensure(executable: URL?, registration: URL = OpenCodeConnection.registrationURL(),
                               clientFactory: @Sendable (OpenCodeConnection) -> OpenCodeHTTPClient = { OpenCodeHTTPClient(connection: $0) }) async throws -> OpenCodeConnection {
+        try await NativeCLIAdapter.installOpenCode()
         if FileManager.default.fileExists(atPath: registration.path) {
             let existing = try OpenCodeConnection.discover(file: registration)
             do { _ = try await clientFactory(existing).health(); return existing }
@@ -19,20 +20,22 @@ public enum OpenCodeServiceLauncher {
     }
 
     public static var installDefinition: LocalACPRuntimeDefinition {
-        LocalACPRuntimeDefinition(runtimeKind: .opencode, displayName: "OpenCode v2", commandName: "opencode2",
-            arguments: [], underlyingCLIName: "opencode2",
+        LocalACPRuntimeDefinition(runtimeKind: .opencode, displayName: "OpenCode v2", commandName: "opencode", alternativeCommandNames: ["opencode2"],
+            arguments: [], underlyingCLIName: nil,
             cliInstallerSource: URL(string: "https://registry.npmjs.org/@opencode%2fcli"),
-            cliInstallerInterpreter: nil, cliNpmPackageSpec: "@opencode/cli@" + OpenCodeConnection.supportedVersion,
+            cliInstallerInterpreter: nil, cliNpmPackageSpec: "@opencode/cli@latest",
             adapterPackage: nil, adapterDescription: "Local OpenCode v2 service")
     }
 
-    public static func install(using installer: LocalACPRuntimeInstaller = LocalACPRuntimeInstaller()) async throws -> URL {
+    public static func install(using installer: LocalACPRuntimeInstaller = LocalACPRuntimeInstaller(),
+                               fetch: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata) async throws -> URL {
         let definition = installDefinition
-        let executable = try await installer.install(definition, component: .cli, expectedPackageSpec: definition.cliNpmPackageSpec)
+        let preview = try await installer.prepareCLIInstall(definition, fetch: fetch)
+        let executable = try await installer.install(definition, component: .cli, expectedPackageSpec: preview.packageSpec)
         let result = try await Task.detached {
             try LocalACPProcessRunner.run(executableURL: executable, arguments: ["--version"])
         }.value
-        guard result.succeeded, normalizedVersion(result.stdout) == OpenCodeConnection.supportedVersion else {
+        guard result.succeeded, OpenCodeConnection.supportsVersion(normalizedVersion(result.stdout)) else {
             throw OpenCodeError.message("The downloaded OpenCode version could not be verified. Try Download again.")
         }
         return executable
@@ -43,7 +46,7 @@ public enum OpenCodeServiceLauncher {
         let connection = try OpenCodeConnection.discover(file: registration)
         guard isRunning(connection.pid) else { return }
         // Verify the authenticated service identity before signaling its process.
-        _ = try await OpenCodeHTTPClient(connection: connection).health()
+        _ = try await OpenCodeHTTPClient(connection: connection).health(allowLegacyBetaForStop: true)
         guard try OpenCodeConnection.discover(file: registration) == connection,
               let pid = connection.pid else { throw OpenCodeError.message("OpenCode changed while stopping. Try again.") }
         guard kill(Int32(pid), SIGTERM) == 0 || errno == ESRCH else {
@@ -58,7 +61,20 @@ public enum OpenCodeServiceLauncher {
 
     public static func normalizedVersion(_ output: String) -> String {
         let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return version.hasPrefix("opencode2 v") ? String(version.dropFirst("opencode2 v".count)) : version
+        for prefix in ["opencode v", "opencode2 v"] where version.hasPrefix(prefix) {
+            return String(version.dropFirst(prefix.count))
+        }
+        return version
+    }
+
+    /// Prefer the standard command, while retaining the npm compatibility alias.
+    /// A v1 command must not hide a supported v2 alias in the same environment.
+    public static func resolveExecutable(resolver: LocalACPRuntimeResolver = LocalACPRuntimeResolver(),
+                                         probe: RuntimeMaintenance.Probe = RuntimeMaintenance.probeVersion) -> URL? {
+        let candidates = installDefinition.commandNames.compactMap { resolver.executable(named: $0) }
+        return candidates.first { candidate in
+            probe(candidate).map { OpenCodeConnection.supportsVersion(normalizedVersion($0)) } == true
+        } ?? candidates.first
     }
 
     private static func isRunning(_ pid: Int?) -> Bool {
@@ -91,7 +107,7 @@ public enum OpenCodeServiceLauncher {
         for _ in 0..<40 where probe.isRunning { try await Task.sleep(for: .milliseconds(250)) }
         guard !probe.isRunning, probe.terminationStatus == 0 else { throw OpenCodeError.message("Could not verify the selected OpenCode executable.") }
         let version = normalizedVersion(String(decoding: try Data(contentsOf: output).prefix(4096), as: UTF8.self))
-        guard version == OpenCodeConnection.supportedVersion else { throw OpenCodeError.incompatible(version) }
+        guard OpenCodeConnection.supportsVersion(version) else { throw OpenCodeError.incompatible(version) }
         let process = Process()
         process.executableURL = executable
         process.arguments = ["serve", "--service"]
@@ -109,7 +125,7 @@ public enum OpenCodeServiceLauncher {
             if let endpoint = try? OpenCodeConnection.discover(file: registration),
                (try? await OpenCodeHTTPClient(connection: endpoint).health()) != nil { return }
             if !process.isRunning && process.terminationStatus != 0 {
-                throw OpenCodeError.message("OpenCode could not start its shared service. Check opencode2 service status.")
+                throw OpenCodeError.message("OpenCode could not start its shared service. Check opencode service status.")
             }
             try await Task.sleep(for: .milliseconds(250))
         }

@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 import Testing
 import WovenMatterClient
 import WovenMatterCore
@@ -142,6 +141,64 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
   }
 
+  @Test("draft attachments open through the Library file path before send or indexing")
+  func draftAttachmentOpening() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let source = f.root.appending(path: "Report.docx")
+    let bytes = Data("Attached document".utf8)
+    try bytes.write(to: source)
+    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(
+      fileURL: source, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    // Opening uses the staged bytes even if the source in Downloads changes or disappears.
+    try FileManager.default.removeItem(at: source)
+    let service = LibraryService(database: f.db)
+    let opened = try await service.openAttachmentURL(
+      contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
+    #expect(opened.lastPathComponent == "Report.docx")
+    #expect(try Data(contentsOf: opened) == bytes)
+    #expect(opened != draft.localURL)
+    let permissions = try FileManager.default.attributesOfItem(atPath: opened.path)[.posixPermissions] as? NSNumber
+    #expect(permissions?.intValue == 0o400)
+    #expect(try await f.db.libraryItems().isEmpty)
+
+    let chat = try await f.session()
+    _ = try await f.db.beginLocalACPRun(conversationID: chat, input: .init(text: "", attachments: [.file(draft)]))
+    try await f.db.indexLibraryMessages()
+    let item = try await #require(f.db.libraryItems().first)
+    #expect(try await service.openURL(id: item.id) == opened)
+    #expect(try Data(contentsOf: draft.localURL) == bytes)
+  }
+
+  @Test("attachment opening validates content identities and preserves the backend write boundary")
+  func attachmentOpeningBoundary() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let service = LibraryService(database: f.db)
+    for hash in ["../../workspace.sqlite", String(repeating: "a", count: 63), String(repeating: "A", count: 64)] {
+      await #expect(throws: AgentMessageAttachmentError.self) {
+        try await service.openAttachmentURL(contentHash: hash, fileName: "file.txt", mimeType: "text/plain")
+      }
+    }
+    await #expect(throws: AgentMessageAttachmentError.self) {
+      try await service.openAttachmentURL(
+        contentHash: String(repeating: "a", count: 64), fileName: "missing.txt", mimeType: "text/plain")
+    }
+    let source = f.root.appending(path: "Screenshot.png")
+    try Data([1, 2, 3]).write(to: source)
+    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: source, mimeType: "image/png")
+    let reader = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+    let projection = LibraryService(database: reader)
+    await #expect(throws: WorkspaceDatabaseError.readOnlyProjection) {
+      try await projection.openAttachmentURL(
+        contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
+    }
+    let opened = try await service.openAttachmentURL(
+      contentHash: draft.contentHash, fileName: "../../Screenshot.png", mimeType: draft.mimeType)
+    #expect(opened.lastPathComponent == "....Screenshot.png")
+    #expect(opened.deletingLastPathComponent().lastPathComponent == draft.contentHash)
+  }
+
   @Test("archive preserves items, trash hides items and defeats a late transfer")
   func deletion() async throws {
     let f = try await Fixture()
@@ -174,7 +231,7 @@ struct WorkspaceLibraryTests {
         "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?",
         [configuration.id.uuidString.lowercased(), chat])
      } }
-    _ = try await f.exchange(chat, text: "Make a report", reply: "[Report](./report.pdf)")
+    let run = try await f.exchange(chat, text: "https://example.com", reply: "[Report](./report.pdf)")
     let bytes = Data("PDF fixture".utf8)
     let service = LibraryService(
       database: f.db,
@@ -184,10 +241,14 @@ struct WorkspaceLibraryTests {
         #expect(input == nil)
         return bytes
       }))
+    try await service.synchronize(locations: [], remoteWorkspace: { _ in nil })
+    let unavailable = try await #require(f.db.libraryItems().first { $0.sender == .agent })
+    #expect(unavailable.storage == .unavailable)
+    try await service.retry(id: unavailable.id)
     try await service.synchronize(
       locations: [.init(conversationID: chat, name: "Server", root: "/home/.woven-matter")],
       remoteWorkspace: { _ in configuration })
-    let item = try await #require(f.db.libraryItems().first)
+    let item = try await #require(f.db.libraryItems().first { $0.sender == .agent })
     #expect(item.storage == .retained)
     #expect(item.sizeBytes == Int64(bytes.count))
     let opened = try await service.openURL(id: item.id)
@@ -198,6 +259,17 @@ struct WorkspaceLibraryTests {
     #expect(try store.retain(bytes) == item.contentHash)
     #expect(
       try FileManager.default.contentsOfDirectory(atPath: f.root.appending(path: "library-files").path).count == 1)
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id=?", [run.userMessageID])
+     } }
+    #expect(try await f.db.libraryItems().count == 1)
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "UPDATE dashboard_conversations SET context_generation=context_generation+1 WHERE id=?", [chat])
+     } }
+    try await f.db.indexLibraryMessages()
+    #expect(try await f.db.libraryItems().isEmpty)
+    #expect(try await f.db.retainedLibraryHashes().isEmpty)
   }
 
   @Test("local retention confines reads and cleanup removes only unreferenced managed files")
@@ -206,10 +278,11 @@ struct WorkspaceLibraryTests {
     defer { f.close() }
     let workspace = f.root.appending(path: "workspace")
     try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-    let file = workspace.appending(path: "report.pdf")
+    let file = workspace.appending(path: "my report.txt")
     try Data("original".utf8).write(to: file)
     let files = LibraryFileStore(supportDirectory: f.root)
-    let bytes = try files.readLocal(source: "report.pdf", root: workspace)
+    let bytes = try files.readLocal(source: "./my%20report.txt#section", root: workspace)
+    #expect(bytes == Data("original".utf8))
     let hash = try files.retain(bytes)
     try Data("changed".utf8).write(to: file)
     #expect(try Data(contentsOf: f.root.appending(path: "library-files/" + hash)) == bytes)
@@ -225,6 +298,23 @@ struct WorkspaceLibraryTests {
     try files.cleanup(retained: [], visible: [])
     #expect(!FileManager.default.fileExists(atPath: blob.path))
     #expect(FileManager.default.fileExists(atPath: file.path))
+    #expect(
+      try RemoteLibraryFiles.path(source: "./my%20report.txt#section", root: "/home/work")
+        == "/home/work/./my report.txt")
+    #expect(LibraryFileReference.path("file://other-host/report.txt") == nil)
+    #expect(LibraryFileReference.path("./bad%00path.txt") == nil)
+    let chat = try await f.session()
+    let run = try await f.exchange(chat, text: "Generate")
+    try await f.db.recordLibraryOutput(
+      runID: run.runID,
+      asset: .init(
+        source: "", title: String(repeating: "文", count: 180),
+        kind: .file, mimeType: "text/plain", data: Data("contents".utf8)))
+    let item = try await #require(f.db.libraryItems().first)
+    let opened = try files.url(for: item)
+    #expect(opened.lastPathComponent.utf8.count <= 240)
+    #expect(opened.pathExtension == "txt")
+    #expect(try Data(contentsOf: opened) == Data("contents".utf8))
   }
 
   @Test("native OpenCode uploads and image responses retain the canonical exchange once")
@@ -290,38 +380,6 @@ struct WorkspaceLibraryTests {
     #expect(item.contentHash == nil)
     #expect(try await f.db.librarySourceMessage(id: item.id) == "Attached image")
     #expect(try await f.db.pendingLibraryFiles().isEmpty)
-  }
-
-  @Test("unavailable remote files can retry; clearing and message deletion remove their items")
-  func retryAndClear() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let remote = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "fixture", hostName: "host.invalid")
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?",
-        [remote.id.uuidString.lowercased(), chat])
-     } }
-    let run = try await f.exchange(chat, text: "https://example.com", reply: "[File](./report.txt)")
-    let service = LibraryService(database: f.db, remoteFiles: .init(runner: { _, _, _ in Data("report".utf8) }))
-    try await service.synchronize(locations: [], remoteWorkspace: { _ in nil })
-    let item = try await #require(f.db.libraryItems().first { $0.sender == .agent })
-    #expect(item.storage == .unavailable)
-    try await service.retry(id: item.id)
-    try await service.synchronize(locations: [], remoteWorkspace: { _ in remote })
-    #expect(try await f.db.libraryItem(id: item.id)?.storage == .retained)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id=?", [run.userMessageID])
-     } }
-    #expect(try await f.db.libraryItems().count == 1)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET context_generation=context_generation+1 WHERE id=?", [chat])
-     } }
-    try await f.db.indexLibraryMessages()
-    #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.retainedLibraryHashes().isEmpty)
   }
 
   @Test("native attachment echoes reuse uploads and complete an already discovered file")
@@ -436,33 +494,6 @@ struct WorkspaceLibraryTests {
      } }
     #expect(try await f.db.libraryRevision() > renamed)
     #expect(try await f.db.libraryPage(query: .init(), count: 100).items.first?.harness == "pi")
-  }
-
-  @Test("encoded file links and long Unicode titles open without losing extensions")
-  func encodedFileNames() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let url = f.root.appending(path: "my report.txt")
-    try Data("contents".utf8).write(to: url)
-    let files = LibraryFileStore(supportDirectory: f.root)
-    #expect(try files.readLocal(source: "./my%20report.txt#section", root: f.root) == Data("contents".utf8))
-    #expect(
-      try RemoteLibraryFiles.path(source: "./my%20report.txt#section", root: "/home/work")
-        == "/home/work/./my report.txt")
-    #expect(LibraryFileReference.path("file://other-host/report.txt") == nil)
-    #expect(LibraryFileReference.path("./bad%00path.txt") == nil)
-    let chat = try await f.session()
-    let run = try await f.exchange(chat, text: "Generate")
-    try await f.db.recordLibraryOutput(
-      runID: run.runID,
-      asset: .init(
-        source: "", title: String(repeating: "文", count: 180),
-        kind: .file, mimeType: "text/plain", data: Data("contents".utf8)))
-    let item = try await #require(f.db.libraryItems().first)
-    let opened = try files.url(for: item)
-    #expect(opened.lastPathComponent.utf8.count <= 240)
-    #expect(opened.pathExtension == "txt")
-    #expect(try Data(contentsOf: opened) == Data("contents".utf8))
   }
 
   @Test("URL discovery preserves citations and filenames, ignores code, and deduplicates within a message")

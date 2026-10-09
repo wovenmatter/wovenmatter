@@ -440,9 +440,14 @@ extension WorkspaceDatabaseConnection {
     } else {
       try validateFolderUnlocked(id: folderID, operatorID: operatorID)
     }
-    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?", [configuration.title, folderID, id])
-    try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, id])
+    let title = "Scheduled: " + configuration.title
+    // Adoption only runs when the chat is inserted. Keep the initial title as
+    // an app title so later native snapshots and recurring runs cannot reset it.
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO desktop_conversation_titles(conversation_id,title) VALUES(?,?)", [id, title])
+    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=(SELECT title FROM desktop_conversation_titles WHERE conversation_id=?),folder_id=? WHERE id=?", [id, folderID, id])
+    try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [title, id])
     try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), id])
+    try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.executorProfiles ?? []), id])
   }
 }
 
@@ -548,15 +553,23 @@ extension WorkspaceDatabaseConnection {
   /// duplicate a prompt or assistant reply. Native updates are retained verbatim.
   public func importRemoteCalendarTranscript(receiptID: String, run: WorkspaceCalendarRun,
       workspaceID: UUID, workspaceName: String, ownerDeviceID: UUID,
-      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date) throws {
+      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date,
+      updateOffset: Int = 0, complete: Bool = true) throws {
     try transaction {
-      guard run.task.configuration.workspaceID == workspaceID,
+      guard updateOffset >= 0, updateOffset <= Int.max - updates.count,
+            run.task.configuration.workspaceID == workspaceID,
             let conversationID = UUID(uuidString: run.sessionID) else {
         throw WorkspaceToolError.invalid("Invalid remote scheduled session.")
       }
-      if try !historyRowsUnlocked("SELECT 1 FROM workspace_calendar_remote_receipts WHERE id=?", values: [receiptID]).isEmpty { return }
       let configuration = run.task.configuration
-      let existing = try historyRowsUnlocked("SELECT remote_workspace_id,runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [run.sessionID]).first?.objectValue
+      let receipt = try historyRowsUnlocked("SELECT workspace_id,session_id FROM workspace_calendar_remote_receipts WHERE id=?", values: [receiptID]).first?.objectValue
+      if let receipt {
+        guard receipt["workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
+              receipt["session_id"]?.stringValue == run.sessionID else {
+          throw WorkspaceToolError.invalid("Remote result identity conflicts with an existing receipt.")
+        }
+      }
+      let existing = try historyRowsUnlocked("SELECT remote_workspace_id,runtime_kind,acp_session_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [run.sessionID]).first?.objectValue
       if let existing {
         guard existing["remote_workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
               existing["runtime_kind"]?.stringValue == configuration.runtimeKind.rawValue else {
@@ -570,19 +583,44 @@ extension WorkspaceDatabaseConnection {
           openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
           requestedConversationID: conversationID, allowMissingCalendarFolder: true)
       }
+      if let recordedNativeID = existing?["acp_session_id"]?.stringValue,
+         let nativeSessionID, recordedNativeID != nativeSessionID {
+        throw WorkspaceToolError.invalid("Remote result belongs to a different native session.")
+      }
+      try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=coalesce(acp_session_id,?) WHERE conversation_id=?",
+        [nativeSessionID, run.sessionID])
+      let previousSequence = try historyRowsUnlocked("SELECT coalesce(max(sequence),0) AS sequence FROM workspace_history_events", values: [])
+        .first?.objectValue?["sequence"]?.intValue ?? 0
+      try archiveRemoteCalendarUpdatesUnlocked(receiptID: receiptID, workspaceID: workspaceID,
+        conversationID: run.sessionID, nativeSessionID: nativeSessionID,
+        harness: configuration.runtimeKind.rawValue, runID: run.id, updates: updates, updateOffset: updateOffset)
+      // Observed updates belong to this result; native snapshots may also
+      // expose historical records whose run association remains unknown.
+      try toolsExecuteUnlocked("UPDATE workspace_history_events SET run_id=? WHERE sequence>? AND conversation_id=? AND source_id=? AND run_id IS NULL",
+        [run.id, String(previousSequence), run.sessionID,
+          "remote:" + workspaceID.uuidString.lowercased() + ":calendar"])
+      guard receipt == nil, complete else { return }
       try toolsExecuteUnlocked("""
-        UPDATE desktop_local_acp_sessions SET acp_session_id=coalesce(?,acp_session_id),model=?,thinking=?,permission=?,updated_at=?,revision=revision+1
+        UPDATE desktop_local_acp_sessions SET model=?,thinking=?,permission=?,updated_at=?,revision=revision+1
         WHERE conversation_id=?
-        """, [nativeSessionID,configuration.model,configuration.thinking,configuration.permission,Self.timestamp(completedAt),run.sessionID])
+        """, [configuration.model,configuration.thinking,configuration.permission,Self.timestamp(completedAt),run.sessionID])
       // OpenCode's server remains its transcript owner; attaching the native
       // session above makes the existing synchronization path fetch its history.
       if configuration.runtimeKind != .opencode {
-        let response = updates.compactMap { update -> String? in
-          let object = update.objectValue?["update"]?.objectValue ?? update.objectValue
-          guard object?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return nil }
-          return object?["content"]?.objectValue?["text"]?.stringValue
-        }.joined()
-        let runID = UUID().uuidString.lowercased()
+        var response = ""
+        var responseAssembly = NativeTextSnapshotAssembler()
+        try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { update in
+          guard update.objectValue?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return }
+          let text = update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
+          let meta = update.objectValue?["_meta"]?.objectValue
+          if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+            if let complete = responseAssembly.receive(text,
+                starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { response = complete }
+          } else { response += text }
+        }
+        // The execution host already assigned the stable Woven run identity.
+        let runID = run.id
         let userID = UUID().uuidString.lowercased(), assistantID = UUID().uuidString.lowercased()
         let status = error == nil ? "completed" : "failed"
         let started = Self.timestamp(run.scheduledAt), finished = Self.timestamp(completedAt)
@@ -601,25 +639,81 @@ extension WorkspaceDatabaseConnection {
             started_at,created_at,updated_at,completed_at,error,desktop_owned)
           SELECT ?,id,user_id,agent_id,agent_codename,'wovenmatter_macos','device_owned',authority_device_id,agent_id,
             ?,?,?,?,?,?,?,?,?,1 FROM dashboard_conversations WHERE id=?
-          """, [runID,nativeSessionID,userID,assistantID,status,started,started,finished,finished,error,run.sessionID])
+          """, [runID,nativeSessionID ?? "",userID,assistantID,status,started,started,finished,finished,error,run.sessionID])
         try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [runID])
         var thoughtSequence = 0
         var activeThought: String?
-        for update in updates {
-          let value = update.objectValue?["update"] ?? update
-          guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { continue }
+        var thoughtAssemblies: [String: NativeTextSnapshotAssembler] = [:]
+        var assistantAssembly = NativeTextSnapshotAssembler()
+        var assistantPrefix = "", frozenPrefix = ""
+        var boundarySequence = 0
+        var hermesChecklistRevision: Double = 0
+        try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { value in
+          guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { return }
           let raw = try toolsJSON(value)
           var activity: AgentRunActivity?
           var appending = false
+          let meta = object["_meta"]?.objectValue
+          if kind == "woven_hermes_tool_complete" || kind == "woven_cursor_todos" {
+            guard let nativeSessionID, !nativeSessionID.isEmpty,
+                  object["nativeSessionID"]?.stringValue == nativeSessionID,
+                  let payload = object["payload"] else { return }
+            if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
+              let native = try HermesValue.decode(JSONEncoder().encode(payload))
+              if let checklist = HermesGatewayClient.checklistUpdate(native),
+                 let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
+                hermesChecklistRevision = revision
+                activity = checklist
+              }
+            } else if kind == "woven_cursor_todos", configuration.runtimeKind == .cursor {
+              activity = Self.remoteCursorChecklist(payload, sessionID: nativeSessionID, rawPayloadJSON: raw)
+            }
+            guard activity != nil else { return }
+          }
+          if kind == "agent_message_chunk" {
+            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+            if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+              if let complete = assistantAssembly.receive(text,
+                  starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                  ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { assistantPrefix = complete }
+            } else { assistantPrefix += text }
+            activeThought = nil
+            return
+          }
+          if assistantPrefix != frozenPrefix, !assistantPrefix.isEmpty,
+             ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary", "woven_hermes_tool_complete", "woven_cursor_todos"].contains(kind) {
+            let segment = assistantPrefix.hasPrefix(frozenPrefix)
+              ? String(assistantPrefix.dropFirst(frozenPrefix.count)) : assistantPrefix
+            boundarySequence += 1
+            try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+              activity: .init(id: "calendar-assistant-\(boundarySequence)", kind: .assistant,
+                phase: "commentary", content: segment, assistantMessageID: assistantID,
+                assistantCheckpoint: AssistantTextCheckpoint(assistantPrefix)), appendingContent: false, updatedAt: completedAt)
+            frozenPrefix = assistantPrefix
+          }
           if kind == "agent_thought_chunk" {
             if activeThought == nil { thoughtSequence += 1; activeThought = "thought-\(thoughtSequence)" }
             let id = object["_meta"]?.objectValue?["wovenThoughtID"]?.stringValue ?? activeThought!
-            activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
-              content: object["content"]?.objectValue?["text"]?.stringValue, contentIsDelta: true, rawPayloadJSON: raw)
-            appending = true
+            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+            if configuration.runtimeKind == .defaultAgent, meta?["wovenThoughtSnapshot"]?.boolValue == true {
+              var assembly = thoughtAssemblies[id] ?? NativeTextSnapshotAssembler()
+              let complete = assembly.receive(text, starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true)
+              thoughtAssemblies[id] = assembly
+              guard let complete else { return }
+              thoughtAssemblies.removeValue(forKey: id)
+              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+                content: complete, contentIsDelta: false, rawPayloadJSON: raw)
+            } else {
+              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+                content: text, contentIsDelta: true, rawPayloadJSON: raw)
+              appending = true
+            }
           } else {
             activeThought = nil
-            if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
+            if kind == "woven_subagents", configuration.runtimeKind == .defaultAgent {
+              activity = AgentRunActivity.builtInSubagentSnapshot(rawPayloadJSON: raw)
+            } else if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
               activity = .init(id: id, kind: .tool, title: object["title"]?.stringValue,
                 status: object["status"]?.stringValue, toolName: object["kind"]?.stringValue,
                 rawInputJSON: try object["rawInput"].map(toolsJSON),
@@ -628,9 +722,12 @@ extension WorkspaceDatabaseConnection {
               let entries = object["entries"]?.arrayValue?.compactMap { entry -> AgentRunPlanEntry? in
                 guard let fields = entry.objectValue, let content = fields["content"]?.stringValue,
                       let status = fields["status"]?.stringValue else { return nil }
-                return .init(content: content, priority: fields["priority"]?.stringValue, status: status)
+                return .init(content: content, priority: fields["priority"]?.stringValue, status: status,
+                  nativeID: fields["id"]?.stringValue)
               } ?? []
-              activity = .init(id: "plan", kind: .plan, title: "Plan", planEntries: entries, rawPayloadJSON: raw)
+              activity = .init(id: "plan", kind: .plan, phase: entries.isEmpty ? "clear" : "update",
+                title: "Plan", planEntries: entries, rawPayloadJSON: raw,
+                planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace")
             }
           }
           if let activity {
@@ -647,6 +744,95 @@ extension WorkspaceDatabaseConnection {
         [receiptID,workspaceID.uuidString.lowercased(),run.sessionID,try toolsJSON(updates)])
     }
   }
+
+  private static func remoteCursorChecklist(_ payload: GatewayJSONValue, sessionID: String, rawPayloadJSON: String) -> AgentRunActivity? {
+    guard let fields = payload.objectValue, fields["sessionId"]?.stringValue == sessionID,
+          let toolID = fields["toolCallId"]?.stringValue, !toolID.isEmpty,
+          let merge = fields["merge"]?.boolValue, let todos = fields["todos"]?.arrayValue else { return nil }
+    var entries: [AgentRunPlanEntry] = []
+    var ids: Set<String> = []
+    for todo in todos {
+      guard let row = todo.objectValue,
+            let content = [row["content"]?.stringValue, row["title"]?.stringValue]
+              .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }),
+            let id = row["id"]?.stringValue, !id.isEmpty, ids.insert(id).inserted else { return nil }
+      let status = switch row["status"]?.stringValue {
+      case "completed": "completed"
+      case "in_progress", "inProgress": "in_progress"
+      case "cancelled", "canceled": "cancelled"
+      default: "pending"
+      }
+      entries.append(.init(content: content, status: status, nativeID: id))
+    }
+    return .init(id: "cursor-todos", kind: .plan, phase: !merge && entries.isEmpty ? "clear" : "update",
+      title: "Plan", status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
+      planEntries: entries, rawPayloadJSON: rawPayloadJSON, planKind: "checklist",
+      planOperation: merge ? "merge" : entries.isEmpty ? "clear" : "replace")
+  }
+
+  /// Stream the retained ACP projection in its host-assigned ordinal order.
+  private func forEachRemoteCalendarUpdateUnlocked(receiptID: String, workspaceID: UUID,
+      conversationID: String, _ body: (GatewayJSONValue) throws -> Void) throws {
+    let prefix = "receipt:" + receiptID + ":update:"
+    try forEachHistoryRowUnlocked("""
+      SELECT projection_json FROM workspace_history_events
+      WHERE conversation_id=? AND source_id=? AND substr(native_record_id,1,?)=?
+      ORDER BY CAST(substr(native_record_id,?) AS INTEGER),sequence
+      """, values: [conversationID, "remote:" + workspaceID.uuidString.lowercased() + ":calendar",
+        String(prefix.count), prefix, String(prefix.count + 1)]) { row in
+      guard let raw = row.objectValue?["projection_json"]?.stringValue else { return }
+      try body(JSONDecoder().decode(GatewayJSONValue.self, from: Data(raw.utf8)))
+    }
+  }
+
+  /// Retain the host's complete exposed updates in addition to UI projections.
+  /// Native batch identity is shared with live/history capture; the host and
+  /// conversation come from the result's validated route, never the payload.
+  private func archiveRemoteCalendarUpdatesUnlocked(receiptID: String, workspaceID: UUID,
+      conversationID: String, nativeSessionID: String?, harness: String,
+      runID: String?, updates: [GatewayJSONValue], updateOffset: Int) throws {
+    let host = "remote:" + workspaceID.uuidString.lowercased()
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    // The transport has already decoded these values. Canonicalize the JSON
+    // we reconstruct so a later receipt reconciliation has the same identity.
+    func archivedJSON(_ value: GatewayJSONValue) throws -> String {
+      String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+    var observed: [WorkspaceNativeRunRecord] = []
+    for (index, update) in updates.enumerated() {
+      let value = update.objectValue?["update"] ?? update
+      let object = value.objectValue
+      let kind = object?["sessionUpdate"]?.stringValue ?? "update"
+      if kind == "woven_native_record", let encoded = object?["recordBatch"] {
+        var batch = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self,
+          from: JSONEncoder().encode(encoded))
+        guard batch.nativeSessionID == nativeSessionID else {
+          throw WorkspaceToolError.invalid("Remote native record belongs to a different session.")
+        }
+        batch.sourceID = host + ":" + batch.sourceID
+        try recordNativeRunRecordsUnlocked(batch, conversationID: conversationID,
+          harness: harness, sourceConnectionID: workspaceID.uuidString.lowercased(), pendingRunID: runID)
+      } else {
+        let isDelta = ["agent_message_chunk", "agent_thought_chunk", "user_message_chunk"].contains(kind)
+        observed.append(.init(id: "receipt:" + receiptID + ":update:" + String(updateOffset + index),
+          runID: runID, kind: "acp." + kind, payload: try archivedJSON(update),
+          contentMode: isDelta ? "delta" : "event",
+          text: object?["content"]?.objectValue?["text"]?.stringValue,
+          projectionJSON: try archivedJSON(value), completeness: "native-result"))
+      }
+    }
+    if !observed.isEmpty {
+      // Result updates use the validated Woven conversation identity.
+      // Native batches above retain the harness's own session identity.
+      try recordNativeRunRecordsUnlocked(.init(sourceID: host + ":calendar",
+        nativeSessionID: conversationID, records: observed),
+        conversationID: conversationID, runID: runID, harness: harness,
+        sourceConnectionID: workspaceID.uuidString.lowercased())
+    }
+  }
+
+
 }
 
 extension WorkspaceDatabaseConnection {
@@ -746,8 +932,9 @@ extension WorkspaceDatabase {
 
   public func importRemoteCalendarTranscript(receiptID: String, run: WorkspaceCalendarRun,
       workspaceID: UUID, workspaceName: String, ownerDeviceID: UUID,
-      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date) async throws {
-    try await write { try $0.importRemoteCalendarTranscript(receiptID: receiptID, run: run, workspaceID: workspaceID, workspaceName: workspaceName, ownerDeviceID: ownerDeviceID, nativeSessionID: nativeSessionID, updates: updates, error: error, completedAt: completedAt) }
+      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date,
+      updateOffset: Int = 0, complete: Bool = true) async throws {
+    try await write { try $0.importRemoteCalendarTranscript(receiptID: receiptID, run: run, workspaceID: workspaceID, workspaceName: workspaceName, ownerDeviceID: ownerDeviceID, nativeSessionID: nativeSessionID, updates: updates, error: error, completedAt: completedAt, updateOffset: updateOffset, complete: complete) }
   }
 
   public func restoreRemoteCalendarExecutionCheckpoint(workspaceID: UUID, schedules: [RemoteTaskGatewaySchedule]) async throws {

@@ -1,21 +1,20 @@
-import { mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { createAgentSession, createCodingTools, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { openDurableSession } from './durable-session.mjs';
+import { credentialRouteIdentity } from './native-context.mjs';
 import { Credentials } from './credentials.mjs';
 import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
-import { searchTools } from './search.mjs';
-import { providerFetch } from './transport.mjs';
 import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
-
-const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
+import { SessionCLIContext } from './cli-context.mjs';
 
 export class DefaultAgentEngine {
-  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, requestPermission }) {
+  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
-    this.claude = claude ?? new ClaudeRuntime(directory); this.requestPermission = requestPermission;
+    this.claude = claude ?? new ClaudeRuntime(directory);
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -25,7 +24,7 @@ export class DefaultAgentEngine {
     registerLocalServers(this.runtime, this.config.customServers);
     const xaiModels = this.runtime.getModels().filter(model => model.provider === 'xai');
     if (xaiModels.length) this.runtime.registerProvider('xai-api', {
-      name: 'xAI API key', baseUrl: 'https://api.x.ai/v1', api: 'openai-completions', authHeader: true,
+      name: 'xAI API key', baseUrl: 'https://api.x.ai/v1', api: 'openai-responses', authHeader: true,
       models: xaiModels.map(({ provider, api, baseUrl, ...model }) => model),
     });
     registerClaudeProviders(this.runtime, this.claude, this.credentials);
@@ -73,7 +72,7 @@ export class DefaultAgentEngine {
       registerLocalServers(this.runtime, config.customServers);
     }
     if (payload.credentials) { this.supplied = payload.credentials; await this.credentials.replace(payload.credentials, payload.credentialAccounts); }
-    for (const record of this.sessions.values()) if (!record.busy) this.normalizeSelection(record);
+    for (const record of this.sessions.values()) if (!record.busy && !record.resuming) this.normalizeSelection(record);
   }
   catalog() {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
@@ -106,6 +105,10 @@ export class DefaultAgentEngine {
     return ids.flatMap(id => all.filter(m => m.id === id));
   }
   normalizeSelection(record) {
+    if (record.codeModeState) {
+      record.codeModeState.value = this.config.codeMode;
+      record.session.setActiveToolsByName([...record.ordinaryTools, ...(this.config.codeMode === 'off' ? [] : ['codemode'])]);
+    }
     const visible = this.modelOptions();
     if (!visible.some(m => m.id === record.selected)) {
       record.selected = visible[0]?.id;
@@ -118,36 +121,26 @@ export class DefaultAgentEngine {
   configuration(record, reason) {
     const levels = this.thinkingLevels(record);
     const thinking = record.session.thinkingLevel;
-    return { configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
+    return { availableCommands: [{ name: 'compact', description: 'Compact the conversation using the selected native provider, with Pi fallback for unsupported routes.', input: { hint: 'Optional compaction instructions' } }], configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
       options: this.modelOptions().map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
-      { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: record.permission ?? 'normal', options: [
-        { value: 'normal', name: 'Ask Before Changes', description: 'Ask before running commands or changing files.' },
-        { value: 'full', name: 'Full Access', description: 'Allow workspace tools to run without approval prompts.' },
-      ] }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
+      { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full Access', description: 'Native Durable workspace tools run without approval prompts.' }] }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
   }
   persistOptions(record) {
-    record.manager.appendCustomEntry('woven-built-in-options', { selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel });
-  }
-  async approve(record, name, input, signal, toolCallId) {
-    signal?.throwIfAborted();
-    if (record.permission === 'full') return true;
-    if (!record.requestPermission && !this.requestPermission) return false;
-    return (record.requestPermission ?? this.requestPermission)({ sessionId: record.session.sessionId,
-      toolCall: { toolCallId, title: name, kind: name.toLowerCase() === 'bash' ? 'execute' : 'other', rawInput: input },
-      options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] }, signal);
+    record.saveOptions({ selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
+      ...(record.accountID ? { accountID: record.accountID, accountOwned: record.accountOwned === true, credentialIdentity: record.credentialIdentity ?? null } : {}) });
   }
   async sessionDirectory(value) {
     if (typeof value !== 'string' || !isAbsolute(value) || value.includes('\0') || Buffer.byteLength(value) > 4096) {
-      throw new DefaultAgentError('Choose an absolute working directory for this Built-in session.');
+      throw new DefaultAgentError('Choose an absolute working directory for this Pi Durable session.');
     }
     try {
       const directory = await realpath(value);
       if (!(await stat(directory)).isDirectory()) throw new Error('Not a directory.');
       return directory;
     } catch {
-      throw new DefaultAgentError('The Built-in session working directory is unavailable.');
+      throw new DefaultAgentError('The Pi Durable session working directory is unavailable.');
     }
   }
   async create(id, requestedCwd) {
@@ -155,80 +148,72 @@ export class DefaultAgentEngine {
     if (id && this.sessions.has(id)) {
       const record = this.sessions.get(id);
       if (requested !== undefined && requested !== record.cwd) {
-        throw new DefaultAgentError('This Built-in session belongs to a different working directory. Create a new session for this location.');
+        throw new DefaultAgentError('This Pi Durable session belongs to a different working directory. Create a new session for this location.');
       }
+      if (record.archiveError) throw new DefaultAgentError('The native archive is unavailable. Start a new conversation.');
       return record;
     }
-    let manager, cwd;
-    const sessionDir = join(this.directory, 'sessions');
-    await mkdir(sessionDir, { recursive: true, mode: 0o700 });
-    if (id) {
-      if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Invalid Built-in session.');
-      const files = await readdir(sessionDir);
-      const file = files.find(f => f.endsWith(`_${id}.jsonl`));
-      if (!file) throw new Error('Built-in session could not be found.');
-      manager = SessionManager.open(join(sessionDir, file), sessionDir);
-      cwd = await this.sessionDirectory(manager.getCwd());
-      if (requested !== undefined && requested !== cwd) {
-        throw new DefaultAgentError('This Built-in session belongs to a different working directory. Create a new session for this location.');
+    const record = await openDurableSession(this, id, requested);
+    try {
+      const options = record.options;
+      const native = await record.harness.inspect(record.nativeContext);
+      if (native.tasks.length || native.submissions.length) {
+        // Reinstall the host around committed native work without replacing the
+        // agent/route it was already executing. A new user run is admitted only
+        // after that attached group settles or is stopped.
+        const agent = await record.conversation.agent(record.nativeContext);
+        record.selected = agent.model ? `${agent.model.provider}/${agent.model.modelId}` : options.selected;
+        record.session.thinkingLevel = agent.thinkingLevel;
+        record.accountID = options.accountID;
+        record.accountOwned = options.accountOwned;
+        record.credentialIdentity = options.credentialIdentity ?? undefined;
+        record.runID = record.subagents.currentRunID();
+        record.resuming = true;
+        this.sessions.set(record.session.sessionId, record);
+        record.resumeNative();
+        return record;
       }
-    } else {
-      cwd = requested ?? await this.sessionDirectory(this.cwd);
-      manager = SessionManager.create(cwd, sessionDir);
-      // SDK defers persistence until the first assistant response. Woven Matter
-      // needs even a configuration-only draft to have a durable identity.
-      await writeFile(manager.getSessionFile(), JSON.stringify(manager.getHeader()) + '\n', { mode: 0o600, flag: 'wx' });
-      manager = SessionManager.open(manager.getSessionFile(), sessionDir);
+      const connected = new Set((await this.credentials.list()).map(c => c.providerId));
+      const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
+      if (!options.selected && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
+        if ((await this.claude.status()).connected) connected.add('claude-subscription');
+      }
+      if (!hasDefault) this.implicitDefaultModel = this.catalog().find(m => connected.has(m.provider))?.id ?? this.catalog()[0]?.id;
+      const visible = this.modelOptions();
+      const selected = [options.selected, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
+      const model = this.resolveModel(selected);
+      record.selected = model ? modelRef(model) : selected;
+      if (model) await record.session.setModel(model);
+      this.normalizeSelection(record);
+      this.persistOptions(record);
+      this.sessions.set(record.session.sessionId, record);
+      await record.configurationQueue;
+      await record.archiveQueue;
+      record.resumeNative();
+      return record;
+    } catch (error) {
+      await record.session.dispose().catch(() => {});
+      throw error;
     }
-    const saved = manager.buildSessionContext?.().model;
-    const options = manager.getEntries().filter(e => e.type === 'custom' && e.customType === 'woven-built-in-options').at(-1)?.data ?? {};
-    const connected = new Set((await this.credentials.list()).map(c => c.providerId));
-    const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
-    if (!options.selected && !saved && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
-      if ((await this.claude.status()).connected) connected.add('claude-subscription');
-    }
-    if (!hasDefault) this.implicitDefaultModel = this.catalog().find(m => connected.has(m.provider))?.id ?? this.catalog()[0]?.id;
-    const visible = this.modelOptions();
-    const selected = [options.selected, saved ? `${saved.provider}/${saved.modelId}` : null, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
-    const model = this.resolveModel(selected);
-    const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
-    const loader = new DefaultResourceLoader({ cwd, agentDir: this.directory, settingsManager,
-      noExtensions: true, noThemes: true,
-      appendSystemPrompt: [builtInInstructions] });
-    await loader.reload();
-    const record = { manager, cwd, selected, busy: false, permission: options.permission ?? 'normal' };
-    const guardedTools = createCodingTools(cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,
-      execute: async (id, input, signal, onUpdate) => {
-        if (['bash', 'write', 'edit'].includes(tool.name) && !await this.approve(record, tool.name, input, signal, id)) throw new Error('The user declined this tool.');
-        return tool.execute(id, input, signal, onUpdate);
-      } }));
-    const { session } = await createAgentSession({ cwd, agentDir: this.directory, modelRuntime: this.runtime, model, thinkingLevel: options.thinking, sessionManager: manager, settingsManager, resourceLoader: loader,
-      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], customTools: [...guardedTools, ...searchTools(async () => (await this.credentials.read('exa'))?.key)] });
-    record.session = session;
-    record.selected = model ? modelRef(model) : selected;
-    const stream = session.agent.streamFunction;
-    session.agent.streamFunction = (model, context, options) => stream(model, context, {
-      ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(record),
-    });
-    this.sessions.set(session.sessionId, record);
-    return record;
   }
   resolveModel(reference) { const slash = reference?.indexOf('/') ?? -1; return slash < 0 ? undefined : this.runtime.getModel(reference.slice(0, slash), reference.slice(slash + 1)); }
   async select(record, reference, option = 'model') {
     if (record.busy) throw new Error('Wait for the current response before changing models.');
+    const native = await record.harness.inspect(record.nativeContext);
+    if (record.busy || native.tasks.length || native.submissions.length) throw new DefaultAgentError('Wait for the native run and its attached subagents before changing session options.');
     if (option === 'thinking') {
       if (!this.thinkingLevels(record).includes(reference)) throw new DefaultAgentError('This thinking level is unavailable for the selected model.');
-      record.session.setThinkingLevel(reference);
+      await record.session.setThinkingLevel(reference);
       this.persistOptions(record);
       return this.configuration(record);
     }
     if (option === 'permission_mode') {
-      if (!['normal', 'full'].includes(reference)) throw new DefaultAgentError('Unknown permission mode.');
-      record.permission = reference; this.persistOptions(record); return this.configuration(record);
+      if (reference !== 'full') throw new DefaultAgentError('Unknown permission mode.');
+      record.permission = 'full'; this.persistOptions(record); return this.configuration(record);
     }
     if (option !== 'model') throw new DefaultAgentError('Unknown session option.');
     const model = this.resolveModel(reference);
-    if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Built-in Agent.');
+    if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Pi Durable.');
     const accounts = await this.credentials.candidates(model.provider);
     const account = accounts.find(a => a.credential && (a.credential.type !== 'oauth' || a.credential.expires > Date.now()));
     if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Connections before choosing this model.`);
@@ -239,39 +224,48 @@ export class DefaultAgentEngine {
     } catch { throw new DefaultAgentError(`This ${this.providerName(model.provider)} connection is unavailable. Check its account in Settings → Connections.`); }
     record.selected = reference;
     this.persistOptions(record);
+    await record.configurationQueue;
     return this.configuration(record);
   }
-  async prompt(record, text, emit, requestPermission) {
-    if (record.busy) throw new DefaultAgentError('This Built-in session already has an active turn.');
-    this.normalizeSelection(record);
+  async prompt(record, text, emit, cliContext, identity) {
+    if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
+    const nextRunID = identity === undefined ? record.runID : identity.runID;
     record.busy = true;
+    record.cli ??= new SessionCLIContext();
     let ready;
     record.steeringReady = new Promise(resolve => { ready = resolve; });
     let finished;
     record.promptFinished = new Promise(resolve => { finished = resolve; });
     const controller = new AbortController();
     record.promptController = controller;
-    record.requestPermission = requestPermission;
-    const beforeMessages = [...record.session.messages];
-    const beforeLeaf = record.manager.getLeafId();
+    let beforeLeaf;
     let visible = false;
     let steered = false;
     const usage = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
-    let messageSequence = 0;
-    const unsubscribe = record.session.subscribe(event => {
-      if (event.type === 'message_start') messageSequence += 1;
-      if (event.type === 'message_end' && event.message?.role === 'assistant' && event.message.usage) {
-        const value = event.message.usage;
-        usage.inputTokens += value.input ?? 0; usage.outputTokens += value.output ?? 0;
-        usage.cachedReadTokens += value.cacheRead ?? 0; usage.cachedWriteTokens += value.cacheWrite ?? 0;
-      }
-      if (event.type === 'message_update') {
-        const update = event.assistantMessageEvent;
-        if (update.type === 'text_delta' || update.type === 'thinking_delta') { visible = true; emit({ sessionUpdate: update.type === 'text_delta' ? 'agent_message_chunk' : 'agent_thought_chunk', content: { type: 'text', text: update.delta }, ...(update.type === 'thinking_delta' ? { _meta: { wovenThoughtID: `built-in-${messageSequence}-${update.contentIndex ?? 0}` } } : {}) }); }
-      } else if (event.type === 'tool_execution_start') { visible = true; emit({ sessionUpdate: 'tool_call', toolCallId: event.toolCallId, title: event.toolName, kind: event.toolName === 'bash' ? 'execute' : 'other', status: 'in_progress', rawInput: event.args }); }
-      else if (event.type === 'tool_execution_end') emit({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: event.isError ? 'failed' : 'completed', content: (event.result?.content ?? []).filter(c => c.type === 'text').map(c => ({ type: 'content', content: c })) });
-    });
+    let unsubscribe = () => {};
     try {
+      controller.signal.throwIfAborted();
+      await record.subagents.beginGroup(nextRunID);
+      record.runID = nextRunID;
+      if (identity !== undefined) record.inputID = identity.inputID;
+      record.emit = emit;
+      record.allowFallback = false;
+      record.lastError = undefined; record.lastCommandOutcome = undefined; record.nativeContextFailure = undefined;
+      record.nativeVisible = false;
+      record.resuming = false;
+      unsubscribe = record.subscribe(({ update, usage: value }) => {
+        if (value) {
+          usage.inputTokens += value.input ?? 0; usage.outputTokens += value.output ?? 0;
+          usage.cachedReadTokens += value.cacheRead ?? 0; usage.cachedWriteTokens += value.cacheWrite ?? 0;
+        }
+        if (update) {
+          if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(update.sessionUpdate)) visible = true;
+          emit(update);
+        }
+      });
+      this.normalizeSelection(record);
+      beforeLeaf = await record.contextLeaf();
+      controller.signal.throwIfAborted();
       const enabled = new Set(this.modelOptions().map(model => model.id));
       const references = [...new Set([record.selected, ...this.config.fallbackModels].filter(id => enabled.has(id)))];
       const attempts = [];
@@ -283,7 +277,10 @@ export class DefaultAgentEngine {
       for (let index = 0; index < attempts.length; index++) {
         controller.signal.throwIfAborted();
         const { reference, account, provider } = attempts[index];
-        if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Built-in Agent.'; continue; }
+        record.accountID = account.id;
+        record.accountOwned = account.owned === true;
+        record.credentialIdentity = credentialRouteIdentity(record, account);
+        if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Pi Durable.'; continue; }
         record.httpAccessFailure = undefined;
         try {
           const withAccount = action => this.credentials.runWithAccount(provider, account, () =>
@@ -291,7 +288,7 @@ export class DefaultAgentEngine {
               ? this.claude.withProfile(account.credential?.accountId, action) : action());
           const run = async () => {
           const model = this.resolveModel(reference);
-          if (!model) throw new Error('Model is no longer available. Select a model in Settings → Built-in Agent.');
+          if (!model) throw new Error('Model is no longer available. Select a model in Settings → Pi Durable.');
           if (isClaude(reference)) {
             if (model.provider === 'anthropic' && !await this.credentials.read('anthropic')) throw new Error('Authentication required.');
           } else {
@@ -301,46 +298,53 @@ export class DefaultAgentEngine {
             controller.signal.throwIfAborted();
           }
           controller.signal.throwIfAborted();
+          const previousReference = record.selected;
           if (record.session.model?.provider !== model.provider || record.session.model?.id !== model.id) await record.session.setModel(model);
           controller.signal.throwIfAborted();
           let fallbackReason = reason ? `Switched to ${account.label} · ${this.providerName(model.provider)}. ${reason}` : undefined;
-          if (record.selected !== reference) {
+          if (previousReference !== reference) {
             record.selected = reference;
             fallbackReason = `Switched to ${model.name} · ${this.providerName(model.provider)}. ${reason}`;
           }
           this.persistOptions(record);
           const configuration = this.configuration(record, fallbackReason);
-          emit({ sessionUpdate: 'config_option_update', ...configuration, _meta: { ...configuration._meta, engineUsed: true } });
+          emit({ sessionUpdate: 'config_option_update', ...configuration });
           const continuations = [];
-          const acceptSteer = input => new Promise((resolve, reject) => {
+          const acceptSteer = (input, requestId, binding) => new Promise((resolve, reject) => {
             controller.signal.throwIfAborted();
             let accepted = false;
+            const removeBinding = record.cli.enqueue(binding);
             const task = withAccount(() => record.session.prompt(input, {
-              streamingBehavior: 'steer',
-              preflightResult: ok => {
-                if (ok) {
+              streamingBehavior: 'steer', requestId,
+              preflightResult: disposition => {
+                if (disposition === 'started' || disposition === 'queued') {
                   // Stop can arrive while extension preflight is suspended.
                   // Prevent its late completion from starting a fresh loop.
-                  if (controller.signal.aborted) { record.session.clearQueue(); controller.signal.throwIfAborted(); }
+                  controller.signal.throwIfAborted();
                   accepted = true; steered = true; resolve({ outcome: 'injected' });
+                } else {
+                  reject(new DefaultAgentError('The input was handled without entering the model conversation.'));
                 }
               },
             }));
             // Native preflight either injects into the current loop or starts
             // a continuation if that loop just ended. Keep the same credentials,
             // event subscription and ACP prompt alive until both have settled.
-            continuations.push(task.catch(error => {
+            continuations.push(task.finally(removeBinding).catch(error => {
               reject(error);
               if (accepted) return error;
             }));
           });
           try {
             let initialError;
+            const removeInputBinding = record.cli.enqueue(cliContext);
             try {
-              await record.session.prompt(text, { preflightResult: ok => {
-                if (ok) { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
+              await record.session.prompt(text, { preflightResult: disposition => {
+                if (disposition === 'started' || disposition === 'queued') { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
+                else { throw new DefaultAgentError('The input was handled without entering the model conversation.'); }
               } });
             } catch (error) { initialError = error; }
+            finally { removeInputBinding(); }
             let continuationError;
             while (continuations.length) {
               const errors = await Promise.all(continuations.splice(0));
@@ -350,6 +354,7 @@ export class DefaultAgentEngine {
             if (initialError) throw initialError;
           } finally { record.acceptSteer = undefined; }
           if (controller.signal.aborted) return { stopReason: 'cancelled', usage };
+          if (record.lastCommandOutcome) return { stopReason: record.lastCommandOutcome, usage };
           const last = record.session.messages.at(-1);
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn', usage };
@@ -357,10 +362,13 @@ export class DefaultAgentEngine {
           return await withAccount(run);
         } catch (error) {
           if (controller.signal.aborted) return { stopReason: 'cancelled' };
+          if (record.nativeContextFailure) throw new DefaultAgentError(record.nativeContextFailure.message);
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : (error.accessReason ?? accessFailure(error));
-          if (!reason || visible || steered) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Connections.'));
-          if (beforeLeaf) record.manager.branch(beforeLeaf); else record.manager.resetLeaf();
-          record.session.agent.state.messages = beforeMessages;
+          if (!reason || visible || steered || record.nativeVisible) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Connections.'));
+          record.allowFallback = true;
+          await record.rewind(beforeLeaf);
+          await record.session.refreshContext();
+
         }
       }
       throw new DefaultAgentError('No configured connection has access. Open Settings → Connections to sign in or update an API key.');
@@ -369,40 +377,48 @@ export class DefaultAgentEngine {
       throw error;
     } finally {
       unsubscribe();
+      record.cli.finish();
       record.busy = false;
       ready();
       record.steeringReady = undefined;
       finished();
       record.promptFinished = undefined;
       record.promptController = undefined;
-      record.requestPermission = undefined;
     }
   }
-  async steer(record, text) {
+  async steer(record, text, inputID, cliContext) {
     if (!text.trim()) throw new DefaultAgentError('A message is required.');
     if (!record.busy) return { outcome: 'promptRequired' };
     await record.steeringReady;
     if (record.promptController?.signal.aborted) throw new DefaultAgentError('The run is stopping. Send this message after it stops.');
     if (!record.acceptSteer) { await record.promptFinished; return { outcome: 'promptRequired' }; }
-    return record.acceptSteer(text);
+    return record.acceptSteer(text, inputID ?? crypto.randomUUID(), cliContext);
   }
-  async handle(method, params = {}, emit = () => {}, requestPermission) {
+  async handle(method, params = {}, emit = () => {}) {
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
     if (method === 'woven/status') return this.status();
     if (method === 'session/new' || method === 'session/load') {
       const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd);
+      if (params._meta?.wovenToolsConnection) record.cli.reconnect(params._meta.wovenToolsConnection);
+      if (!record.busy) record.emit = emit;
       return { sessionId: record.session.sessionId, ...this.configuration(record) };
     }
     const record = this.sessions.get(params.sessionId) ?? await this.create(params.sessionId);
     if (method === 'session/set_config_option') return this.select(record, params.value, params.configId ?? params.id ?? 'model');
+    if (method === 'woven/history') return record.history(params.after ?? 0, params.limit ?? 200);
+    if (method === 'woven/idle') return record.waitIdle();
     if (method === 'session/cancel') {
       record.promptController?.abort();
-      record.session.clearQueue();
       await record.session.abort();
       return {};
     }
-    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'));
-    if (method === 'session/prompt') return this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, requestPermission);
-    throw new Error('Unsupported Built-in operation.');
+    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), params._meta?.wovenInputID, params._meta?.wovenTools);
+    if (method === 'session/prompt') {
+      if (record.busy) throw new DefaultAgentError('This Pi Durable session is still responding. Wait or stop it first.');
+      const runID = params._meta?.wovenRunID;
+      const result = await this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, params._meta?.wovenTools, { runID, inputID: params._meta?.wovenInputID ?? runID });
+      return result;
+    }
+    throw new Error('Unsupported Pi Durable operation.');
   }
 }

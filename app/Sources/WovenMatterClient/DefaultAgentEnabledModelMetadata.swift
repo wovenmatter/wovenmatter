@@ -43,7 +43,13 @@ public enum DefaultAgentEnabledModelMetadata {
                 for reference in references {
                     // API groups can repeat an ID. Preserve its name only when the
                     // supplied metadata agrees, without inventing API precedence.
-                    let candidates = Set(catalog.values.compactMap { cleanName($0[reference.model]?.name) })
+                    let candidates = Set(catalog.values.compactMap { models -> String? in
+                        // Pi 1.0 keys models by type. App selectors contain chat
+                        // IDs only; image/classifier entries cannot supply names.
+                        let model = models["chat:\(reference.model)"] ?? models[reference.model]
+                        guard model?.type == nil || model?.type == "chat" else { return nil }
+                        return cleanName(model?.name)
+                    })
                     if candidates.count == 1 { names[reference.id] = candidates.first }
                 }
             }
@@ -89,7 +95,7 @@ public enum DefaultAgentEnabledModelMetadata {
     }
 
     private struct Reference { let id: String; let provider: String; let model: String }
-    private struct NamedModel: Decodable { let name: String? }
+    private struct NamedModel: Decodable { let name: String?; let type: String? }
     private struct RuntimeMarker: Decodable { let base: String; let generation: String }
     private struct Package: Decodable { let version: String }
     private struct ClaudeCatalog: Decodable { let runtimeVersion: String?; let models: [ClaudeModel] }

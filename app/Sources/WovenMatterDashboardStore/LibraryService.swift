@@ -109,6 +109,10 @@ public actor LibraryService {
     return try files.url(for: item)
   }
 
+  public func openAttachmentURL(contentHash: String, fileName: String, mimeType: String) throws -> URL {
+    try files.attachmentURL(contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+  }
+
   public func retry(id: String) async throws {
     try await database.retryLibraryFile(id: id)
   }

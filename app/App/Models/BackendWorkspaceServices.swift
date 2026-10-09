@@ -3,6 +3,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 enum BackendWorkspaceServiceCommand: Codable, Sendable {
+    case authorizeSavedConnections
     case openCodeSettingsAgent(UUID?), renameOpenCode(UUID, String), remoteOpenClawAgent(UUID)
     case consumePrefill(String, String)
     case buzzEnabled(Bool), refreshBuzz, addBuzz(name: String, workspacePath: String, agentStorePath: String)

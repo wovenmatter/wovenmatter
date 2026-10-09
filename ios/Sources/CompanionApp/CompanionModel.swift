@@ -100,7 +100,7 @@ import WovenMatterCompanion
       booted = true
       defer { initialized = true }
       await reload()
-      if fixture { await seedFixture(); connectionLabel = "Preview · saved on iPhone" }
+      if fixture { await seedFixture(); connectionLabel = "Preview · saved on this device" }
       else {
         do { credential = try MobileCredentialVault.load(); try configureTransport() }
         catch { errorMessage = error.localizedDescription }
@@ -198,7 +198,7 @@ import WovenMatterCompanion
     guard let store else { return }
     draftTitles[id] = title; draftContents[id] = content
     let generation = (saveGenerations[id] ?? 0) + 1
-    saveGenerations[id] = generation; saveStates[id] = "Saving on iPhone…"
+    saveGenerations[id] = generation; saveStates[id] = "Saving on this device…"
     let previous = saveTask
     let folder = state.notes[id]?.folderID
     saveTask = Task {
@@ -207,16 +207,16 @@ import WovenMatterCompanion
         try await store.editNote(id: id, title: title, content: content, folderID: folder, base: base)
         await reload()
         if saveGenerations[id] == generation {
-          saveStates[id] = "Saved on iPhone"
+          saveStates[id] = "Saved on this device"
           draftTitles.removeValue(forKey: id); draftContents.removeValue(forKey: id)
         }
       } catch { if saveGenerations[id] == generation { saveStates[id] = "Couldn’t save · writing kept open"; errorMessage = error.localizedDescription } }
     }
   }
   func saveLabel(_ id: String) -> String {
-    if let value = saveStates[id], value != "Saved on iPhone" { return value }
-    if state.conflicts[id] != nil { return "Saved on iPhone · conflict needs attention" }
-    return state.isDirty(id) ? "Saved on iPhone · waiting to sync" : "Saved · synced with Mac"
+    if let value = saveStates[id], value != "Saved on this device" { return value }
+    if state.conflicts[id] != nil { return "Saved on this device · conflict needs attention" }
+    return state.isDirty(id) ? "Saved on this device · waiting to sync" : "Saved · synced with Mac"
   }
   func linkedData(note: CompanionNote, tableID: String? = nil) async throws -> CompanionLinkedData {
     guard online, let engine else { throw MobileConnectionError.offline }
@@ -397,7 +397,7 @@ import WovenMatterCompanion
       if state.notes.isEmpty {
         let note = CompanionNote(id: "11111111-1111-4111-8111-111111111111", folderID: "inbox", title: "Launch Plan", content: try NoteDocument(blocks: [
           .richText(.init(text: "Capture ideas wherever you are.")),
-          .richText(.init(style: .bulletedList, text: "Your notes are saved on this iPhone.")),
+          .richText(.init(style: .bulletedList, text: "Your notes are saved on this device.")),
           .richText(.init(style: .bulletedList, text: "Reconnect to bring the plan back to your Mac.")),
         ]).encoded())
         try await store.apply(CompanionSnapshot(workspaceID: "fixture", cursor: 1, folders: [.init(id: "inbox", name: "Inbox")], notes: [note], conversations: [

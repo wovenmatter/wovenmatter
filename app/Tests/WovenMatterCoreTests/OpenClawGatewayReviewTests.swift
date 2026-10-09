@@ -244,20 +244,6 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
-  @Test func interruptedWorkspaceCreationAdoptsTheExistingSessionWithoutResettingItsDirectory() async throws {
-    let fixture = try await ReviewGatewayFixture()
-    defer { fixture.remove() }
-    let key = "agent:main:wovenmatter:recovered"
-    await fixture.socket.setWorkspaceSession(key, row: .object([
-      "key": .string(key), "spawnedCwd": .string("/workspace/user-moved"), "displayName": .string("User renamed")
-    ]))
-    try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
-      cwd: URL(fileURLWithPath: "/workspace/original"), recover: true)
-    #expect(await fixture.socket.creationParameters == nil)
-    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.describe" }.count == 1)
-    await fixture.coordinator.shutdown()
-  }
-
   @Test func workspaceCreationRecoveryCreatesOnlyWhenTheSessionIsMissing() async throws {
     let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -265,6 +251,9 @@ struct OpenClawGatewayReviewTests {
     for _ in 0..<2 {
       try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
         cwd: URL(fileURLWithPath: "/workspace/initial"), recover: true)
+      await fixture.socket.setWorkspaceSession(key, row: .object([
+        "key": .string(key), "spawnedCwd": .string("/workspace/user-moved"), "displayName": .string("User renamed")
+      ]))
     }
     #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.create" }.count == 1)
     await fixture.socket.setWorkspaceSession(key, row: .object(["key": .string("wrong-session")]))

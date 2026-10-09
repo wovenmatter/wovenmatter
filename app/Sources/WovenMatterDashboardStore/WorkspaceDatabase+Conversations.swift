@@ -149,6 +149,7 @@ extension WorkspaceDatabaseConnection {
         AND conversation.id = ?
         AND conversation.deleted_at IS NULL
         AND conversation.is_archived = 0
+        AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY message.created_at, message.id
       """,
@@ -193,7 +194,11 @@ extension WorkspaceDatabaseConnection {
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
+    limit: Int,
+    compactActivities: Bool = false,
+    activityCursor: Int64? = nil,
+    knownActivityRunIDs: [String] = [],
+    knownMessageIDs: [String] = []
   ) throws -> WorkspaceConversationHistoryPage {
     try withLock {
       guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
@@ -218,6 +223,51 @@ extension WorkspaceDatabaseConnection {
       } else {
         cursorPredicate = ""
       }
+      let knownJSON = String(decoding: try JSONEncoder().encode(knownMessageIDs), as: UTF8.self)
+      var retainedIDs: [String] = [], changedIDs: [String] = []
+      if !knownMessageIDs.isEmpty {
+        let metadata = try prepareUnlocked("""
+          SELECT message.id, coalesce(revision.revision,0)
+          FROM dashboard_messages message
+          JOIN dashboard_conversations conversation ON conversation.id=message.conversation_id
+          LEFT JOIN desktop_message_revisions revision ON revision.id=message.id
+          WHERE message.conversation_id=? AND message.id IN (SELECT value FROM json_each(?))
+            AND (conversation.user_id=? OR conversation.desktop_owned=1)
+            AND conversation.deleted_at IS NULL AND conversation.is_archived=0
+            AND conversation.governing_plane='wovenmatter_macos'
+            AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
+          """)
+        defer { sqlite3_finalize(metadata) }
+        for (i, value) in [id, knownJSON, operatorID].enumerated() { try bind(value, at: Int32(i+1), to: metadata) }
+        while true {
+          let code = sqlite3_step(metadata)
+          if code == SQLITE_DONE { break }
+          guard code == SQLITE_ROW else { throw stepError() }
+          let messageID = try text(metadata, column: 0)
+          retainedIDs.append(messageID)
+          if activityCursor == nil || sqlite3_column_int64(metadata,1) > activityCursor! { changedIDs.append(messageID) }
+        }
+      }
+      let changedJSON = String(decoding: try JSONEncoder().encode(changedIDs), as: UTF8.self)
+      let retainedMessages: [WorkspaceMessageRecord] = changedIDs.isEmpty ? [] : try decodeCanonicalRowsUnlocked(
+        """
+        SELECT json_object(
+          'id', message.id, 'conversation_id', message.conversation_id,
+          'client_message_id', message.client_message_id,
+          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
+          'run_id', message.run_id, 'role', message.role,
+          'governing_plane', message.governing_plane,
+          'authority_device_id', message.authority_device_id,
+          'content', message.content, 'status', message.status,
+          'created_at', message.created_at, 'updated_at', message.updated_at
+        )
+        FROM dashboard_messages AS message
+        WHERE message.id IN (SELECT value FROM json_each(?)) AND message.conversation_id=?
+        ORDER BY message.created_at,message.id
+        """, bindings: [changedJSON,id], as: WorkspaceMessageRecord.self)
       var newestFirst = try decodeCanonicalRowsUnlocked(
         """
         SELECT json_object(
@@ -240,6 +290,8 @@ extension WorkspaceDatabaseConnection {
           AND conversation.id = ?
           AND conversation.deleted_at IS NULL
           AND conversation.is_archived = 0
+          AND conversation.governing_plane='wovenmatter_macos'
+          AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           \(cursorPredicate)
         ORDER BY message.created_at DESC, message.id DESC
         LIMIT \(boundedLimit + 1)
@@ -252,14 +304,24 @@ extension WorkspaceDatabaseConnection {
         newestFirst.removeLast(newestFirst.count - boundedLimit)
       }
       let messages = Array(newestFirst.reversed())
-      let messageIDs = messages.map(\.id)
+      let messageIDs = Array(Set(messages.map(\.id) + retainedIDs))
       let runs: [WorkspaceRunRecord]
       let activities: [WorkspaceRunActivityRecord]
       let attachments: [WorkspaceMessageAttachmentRecord]
       let references: [WorkspaceMessageReferenceRecord]
+      var activityRevision: Int64?
+      var removedActivityIDs: [String] = []
+      var activityReadMetrics = ConversationActivityReadMetrics()
       if messageIDs.isEmpty {
         runs = []
-        activities = []
+        if compactActivities {
+          let page = try compactRunActivitiesUnlocked(conversationID: id,
+            runIDs: [], after: activityCursor, knownRunIDs: knownActivityRunIDs)
+          activities = page.records
+          activityRevision = page.revision
+          removedActivityIDs = page.removed
+          activityReadMetrics = page.metrics
+        } else { activities = [] }
         attachments = []
         references = []
       } else {
@@ -293,7 +355,16 @@ extension WorkspaceDatabaseConnection {
           bindings: [operatorID, id] + messageIDs + messageIDs,
           as: WorkspaceRunRecord.self
         )
-        activities = try runActivityRecordsUnlocked(runIDs: runs.map(\.id))
+        if compactActivities {
+          let page = try compactRunActivitiesUnlocked(conversationID: id,
+            runIDs: runs.map(\.id), after: activityCursor, knownRunIDs: knownActivityRunIDs)
+          activities = page.records
+          activityRevision = page.revision
+          removedActivityIDs = page.removed
+          activityReadMetrics = page.metrics
+        } else {
+          activities = try runActivityRecordsUnlocked(runIDs: runs.map(\.id))
+        }
         attachments = try messageAttachmentRecordsUnlocked(messageIDs: messageIDs)
         references = try messageReferenceRecordsUnlocked(messageIDs: messageIDs)
       }
@@ -304,7 +375,13 @@ extension WorkspaceDatabaseConnection {
         activities: activities,
         attachments: attachments,
         references: references,
-        hasOlderMessages: hasOlderMessages
+        hasOlderMessages: hasOlderMessages,
+        activityRevision: activityRevision,
+        activitiesAreDelta: compactActivities && activityCursor != nil && activityCursor! <= (activityRevision ?? -1),
+        removedActivityIDs: removedActivityIDs,
+        activityReadMetrics: activityReadMetrics,
+        retainedMessages: retainedMessages,
+        retainedMessageIDs: knownMessageIDs.isEmpty ? nil : retainedIDs
       )
     }
   }
@@ -368,24 +445,35 @@ extension WorkspaceDatabaseConnection {
   func runActivityRecordsUnlocked(
     runIDs: [String] = [],
     assistantOnly: Bool = false,
-    conversationID: String? = nil
+    conversationID: String? = nil,
+    eventRecordIDs: [String]? = nil,
+    traceRecordIDs: [String]? = nil
   ) throws -> [WorkspaceRunActivityRecord] {
     guard conversationID != nil || !runIDs.isEmpty else { return [] }
     let placeholders = conversationID != nil
       ? "SELECT id FROM dashboard_runs WHERE conversation_id = ?"
       : Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
     let bindings = conversationID.map { [$0] } ?? runIDs
+    func filter(_ ids: [String]?) throws -> String {
+      guard let ids else { return "" }
+      // The JSON array is bound separately, avoiding SQLite's parameter limit.
+      return ids.isEmpty ? "AND 0" : "AND id IN (SELECT value FROM json_each(?))"
+    }
     var records: [WorkspaceRunActivityRecord] = []
     let events = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, content, created_at, rowid
       FROM dashboard_run_events
       WHERE run_id IN (\(placeholders))
         \(assistantOnly ? "AND event_type = 'assistant'" : "")
+        \(try filter(eventRecordIDs))
       ORDER BY created_at, rowid
       """)
     defer { sqlite3_finalize(events) }
     for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: events)
+    }
+    if let eventRecordIDs, !eventRecordIDs.isEmpty {
+      try bind(String(decoding: try JSONEncoder().encode(eventRecordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: events)
     }
     while true {
       let code = sqlite3_step(events)
@@ -420,16 +508,20 @@ extension WorkspaceDatabaseConnection {
     if assistantOnly { return records.sorted(by: WorkspaceRunActivityRecord.precedes) }
     let traces = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, event_name,
-        event_phase, tool_name, content, raw_event_json, created_at
+        event_phase, tool_name, content, raw_event_json, created_at, seq
       FROM dashboard_run_trace_events
       WHERE run_id IN (\(placeholders))
         AND is_visible = 1
         AND event_type NOT IN ('assistant_delta', 'assistant_replace', 'done')
+        \(try filter(traceRecordIDs))
       ORDER BY created_at, seq, id
       """)
     defer { sqlite3_finalize(traces) }
     for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: traces)
+    }
+    if let traceRecordIDs, !traceRecordIDs.isEmpty {
+      try bind(String(decoding: try JSONEncoder().encode(traceRecordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: traces)
     }
     while true {
       let code = sqlite3_step(traces)
@@ -476,7 +568,8 @@ extension WorkspaceDatabaseConnection {
           rawOutputJSON: Self.traceJSONString(data?["rawOutput"] ?? data?["result"]),
           rawPayloadJSON: rawJSON
         ),
-        createdAt: try text(traces, column: 9)
+        createdAt: try text(traces, column: 9),
+        sequence: sqlite3_column_type(traces, 10) == SQLITE_NULL ? nil : sqlite3_column_int64(traces, 10)
       ))
     }
     return records.sorted(by: WorkspaceRunActivityRecord.precedes)
@@ -630,8 +723,13 @@ extension WorkspaceDatabase {
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
+    limit: Int,
+    compactActivities: Bool = false,
+    activityCursor: Int64? = nil,
+    knownActivityRunIDs: [String] = [],
+    knownMessageIDs: [String] = []
   ) async throws -> WorkspaceConversationHistoryPage {
-    try await read { try $0.conversationHistoryPage(id: id, before: cursor, limit: limit) }
+    try await read { try $0.conversationHistoryPage(id: id, before: cursor, limit: limit,
+      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs, knownMessageIDs: knownMessageIDs) }
   }
 }

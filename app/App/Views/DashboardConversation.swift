@@ -122,6 +122,7 @@ struct DashboardCloudConversation: View {
     @State private var isUserScrolling = false
     @State private var libraryHighlightID: String?
     @State private var librarySourceMessageID: String?
+    @State private var attachmentOpenError: String?
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -146,8 +147,6 @@ struct DashboardCloudConversation: View {
             case .incomingCommand(let receipt): return [.incomingCommand(receipt)]
             case .message(let value): message = value
             }
-            let presentation = messagePresentations[message.id]
-            let run = runsByAssistantMessageID[message.id]
             let mediaCount: Int
             if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil,
                let nativeMessage = openCode.snapshots[message.conversationID]?.messages.first(where: { $0["id"].text == message.clientMessageID }) {
@@ -156,10 +155,6 @@ struct DashboardCloudConversation: View {
             return ConversationMessageLayout.rows(
                 messageID: message.id,
                 role: message.role,
-                content: message.content,
-                displayedBody: presentation?.displayedBody ?? message.content,
-                failedRunError: run?.status == "failed" ? run?.error : nil,
-                document: presentation?.document,
                 mediaCount: mediaCount
             ).map { .message(DashboardConversationMessageRow(message: message, layout: $0)) }
         }
@@ -235,8 +230,14 @@ struct DashboardCloudConversation: View {
                                                 },
                                                 runPresentation: run.flatMap { runPresentations[$0.id] },
                                                 activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
+                                                onOpenAttachment: { attachment in
+                                                    openAttachment(contentHash: attachment.contentHash,
+                                                        fileName: attachment.fileName, mimeType: attachment.mimeType)
+                                                },
                                                 layout: fragment.layout,
-                                                displayedBody: presentation?.displayedBody
+                                                displayedBody: presentation?.displayedBody,
+                                                commentaryIDs: presentation?.commentaryIDs,
+                                                workTimeline: presentation?.workTimeline
                                             )
                                         }
                                     }
@@ -262,6 +263,9 @@ struct DashboardCloudConversation: View {
                     await scrollToLibraryMessage(using: proxy)
                 }
                 .onDisappear { model.agentTools?.observeSessionFromUI(nil, token: toolObservationToken) }
+                .environment(\.conversationSubagentHistory) { request in
+                    try await model.builtInSubagentHistory(request)
+                }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -269,6 +273,11 @@ struct DashboardCloudConversation: View {
                     pendingBottomConversationID = nil
                     scrollPositionID = nil
                     scrollState.setNearBottom(false)
+                }
+                .environment(\.conversationActivityDetails) { runID, activityID in
+                    guard let conversationID = conversation?.id, let store = model.dashboardStore else { return nil }
+                    return try await store.database.conversationActivityDetails(
+                        conversationID: conversationID, runID: runID, activityID: activityID)
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.top, for: .sizeChanges)
@@ -323,6 +332,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    conversationState?.transcriptState.tasksExpanded = false
                     model.agentTools?.observeSessionFromUI(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
@@ -412,57 +422,33 @@ struct DashboardCloudConversation: View {
                     )
                     .id(interaction.id)
                 }
-                if let conversation,
-                   model.localRunningConversationIDs.contains(conversation.id) {
-                    HStack(spacing: 9) {
-                        Image(systemName: "bolt")
-                            .foregroundStyle(DashboardPalette.primary)
-                        Text(localPermission != nil ? "Waiting for approval"
-                            : localInteraction != nil ? "Waiting for your answer" : "Agent is working")
-                            .font(.system(size: 12.5, weight: .medium))
-                        Spacer()
-                        Button("Stop") {
-                            if model.isOpenClawGatewayConversation(
-                                conversation.id
+                // Side buttons sit on the composer's bottom control row; the
+                // composer grows upward with its draft and Tasks badge.
+                HStack(alignment: .bottom, spacing: 8) {
+                    Group {
+                        if showsClosePanel {
+                            DashboardPanelControlButton(
+                                glyph: .panelRightOpen,
+                                accessibilityLabel: "Remove panel",
+                                help: "Remove panel",
+                                action: onClosePanel
+                            )
+                        } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                            DashboardPanelControlButton(
+                                glyph: .settings,
+                                accessibilityLabel: "Pi Durable settings",
+                                help: "Pi Durable settings"
                             ) {
-                                model.cancelOpenClawGatewayPrompt(
-                                    conversationID: conversation.id
-                                )
-                            } else {
-                                model.cancelLocalACPPrompt(
-                                    conversationID: conversation.id
-                                )
+                                model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                             }
+                        } else if showsAddPanel {
+                            Color.clear
+                                .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                         }
-                        .buttonStyle(DashboardQuietButtonStyle())
                     }
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: 768, minHeight: 38)
-                    .background(theme.palette.themeWhisper)
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                }
-                HStack(alignment: .center, spacing: 8) {
-                    if showsClosePanel {
-                        DashboardPanelControlButton(
-                            glyph: .panelRightOpen,
-                            accessibilityLabel: "Remove panel",
-                            help: "Remove panel",
-                            action: onClosePanel
-                        )
-                    } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
-                        DashboardPanelControlButton(
-                            glyph: .settings,
-                            accessibilityLabel: "Built-in Agent settings",
-                            help: "Built-in Agent settings"
-                        ) {
-                            model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-                        }
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
+                    .padding(.bottom, DashboardComposer.verticalPadding)
                     DashboardComposer(
                         placeholder: dashboardComposerPlaceholder(
                             agent: agent,
@@ -580,24 +566,42 @@ struct DashboardCloudConversation: View {
                         },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,
+                        onOpenAttachment: { file in
+                            openAttachment(contentHash: file.contentHash,
+                                fileName: file.fileName, mimeType: file.mimeType)
+                        },
                         onDropFiles: onDropFiles,
                         onUnavailableAction: onUnavailableComposerAction,
                         onCommandNavigation: onCommandNavigation,
-                        onSend: onSend
+                        onSend: {
+                            transcriptOwnsScroll = false
+                            isUserScrolling = false
+                            scrollInteractionRevision += 1
+                            scrollState.setNearBottom(true)
+                            scrollPositionID = chatEndID
+                            onSend()
+                        },
+                        onStop: conversation.flatMap { current in
+                            guard model.localRunningConversationIDs.contains(current.id) else { return nil }
+                            return { model.cancelLocalACPPrompt(conversationID: current.id) }
+                        }
                     )
-                    if showsAddPanel {
-                        DashboardPanelControlButton(
-                            glyph: .panelLeftOpen,
-                            accessibilityLabel: "Add panel",
-                            help: "Add panel",
-                            action: onAddPanel
-                        )
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                    Group {
+                        if showsAddPanel {
+                            DashboardPanelControlButton(
+                                glyph: .panelLeftOpen,
+                                accessibilityLabel: "Add panel",
+                                help: "Add panel",
+                                action: onAddPanel
+                            )
+                        } else if showsClosePanel {
+                            Color.clear
+                                .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
                     }
+                    .padding(.bottom, DashboardComposer.verticalPadding)
                 }
                 // Animate the whole row so the outside buttons follow the
                 // composer height in the same layout transaction.
@@ -617,6 +621,19 @@ struct DashboardCloudConversation: View {
             .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .environment(\.conversationTranscriptState, conversationState?.transcriptState)
+        .environment(\.conversationTaskProgress, localPermission == nil && localInteraction == nil
+            ? conversationState?.taskProgress : nil)
+        .onChange(of: localPermission?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
+        .onChange(of: localInteraction?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
+        .alert("Could not open attachment", isPresented: Binding(
+            get: { attachmentOpenError != nil },
+            set: { if !$0 { attachmentOpenError = nil } }
+        )) {
+            Button("OK", role: .cancel) { attachmentOpenError = nil }
+        } message: {
+            Text(attachmentOpenError ?? "")
+        }
         .task(id: sessionIdentity) {
             guard let conversation else { return }
             if model.isOpenClawGatewayConversation(conversation.id) {
@@ -626,6 +643,19 @@ struct DashboardCloudConversation: View {
             if conversation.localRuntimeKind != nil {
                 await model.refreshLocalACPSession(conversation: conversation)
             }
+        }
+    }
+
+    private func openAttachment(contentHash: String?, fileName: String, mimeType: String) {
+        guard let contentHash else {
+            attachmentOpenError = "This attachment is not available on this Mac."
+            return
+        }
+        Task {
+            do {
+                try await model.library.openAttachment(
+                    contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+            } catch { attachmentOpenError = error.localizedDescription }
         }
     }
 
@@ -1077,16 +1107,20 @@ struct DashboardMessageRow: View {
     let run: WorkspaceRunRecord?
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
+    let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
+    var commentaryIDs: Set<String>? = nil
+    var workTimeline: ConversationWorkTimeline? = nil
 
-    private var isFirstMessagePart: Bool { layout?.isFirstMessagePart ?? true }
-    private var isLastMessagePart: Bool { layout?.isLastMessagePart ?? true }
     private var assistantBody: String { displayedBody ?? transcript.body }
 
-    private var transcript: AssistantTranscriptProjection {
-        AssistantTranscriptProjection(messageID: message.id, content: message.content,
-            activities: activities.map(\.activity))
+    /// Fallback for a row without a prepared presentation.
+    private var transcript: (body: String, commentaryIDs: Set<String>) {
+        let work = activities.map(\.activity)
+        return ConversationWorkTimeline.displayPartition(
+            AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
+            activities: work, isLive: message.status == "streaming")
     }
 
     var body: some View {
@@ -1103,9 +1137,7 @@ struct DashboardMessageRow: View {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
                     guard let run else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleContent(
-                        run: run, in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
-                    ) ? 18 : 0
+                    return ConversationWorkTranscript.hasVisibleContent(run: run, timeline: projectedTimeline) ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
@@ -1116,13 +1148,14 @@ struct DashboardMessageRow: View {
             HStack {
                 if isUser { Spacer(minLength: 72) }
                 VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, isFirstMessagePart, let run {
+                    if !isUser, let run {
                         ConversationWorkTranscript(
                             run: run,
                             presentation: runPresentation,
                             records: activities,
-                            commentaryIDs: Set(transcript.commentary.map(\.id)),
-                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
+                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            timeline: projectedTimeline
                         )
                     }
                     if isUser {
@@ -1130,30 +1163,17 @@ struct DashboardMessageRow: View {
                         ConversationUserMessage(
                             content: message.content,
                             attachments: attachments,
-                            references: references
+                            references: references,
+                            onOpenAttachment: onOpenAttachment
                         )
                     } else if showsAssistantBody {
-                        if let renderedDocument {
-                            markdown(renderedDocument)
-                            .padding(.horizontal, 4)
-                            .padding(.top, isFirstMessagePart ? 2 : 0)
-                            .padding(.bottom, isLastMessagePart ? 2 : 0)
-                            .textSelection(.enabled)
-                        } else {
-                            Text(RemoteNoteEditEnvelope.redactingEnvelopes(
-                                in: assistantBody
-                            ))
-                                .font(.system(size: 15))
-                                .lineSpacing(4)
-                                .foregroundStyle(
-                                    message.status == "streaming"
-                                        ? DashboardPalette.mutedForeground
-                                        : DashboardPalette.foreground
-                                )
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .textSelection(.enabled)
-                        }
+                        ConversationResponse(
+                            content: RemoteNoteEditEnvelope.redactingEnvelopes(in: assistantBody),
+                            document: renderedDocument,
+                            isStreaming: message.status == "streaming"
+                        )
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
                     }
                     if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)
@@ -1166,16 +1186,6 @@ struct DashboardMessageRow: View {
         }
     }
 
-    @ViewBuilder
-    private func markdown(_ document: ConversationMarkdownDocument) -> some View {
-        if let layout, case .markdownBlocks(let range, _) = layout.content,
-           document.blocks.indices.contains(range.lowerBound), range.upperBound <= document.blocks.count {
-            ConversationMarkdown(blocks: Array(document.blocks[range]), isStreaming: message.status == "streaming")
-        } else {
-            ConversationMarkdown(document: document, isStreaming: message.status == "streaming")
-        }
-    }
-
     private var showsAssistantBody: Bool {
         ConversationMessageLayout.showsAssistantBody(
             content: message.content,
@@ -1183,12 +1193,18 @@ struct DashboardMessageRow: View {
             failedRunError: run?.status == "failed" ? run?.error : nil
         )
     }
+
+    private var projectedTimeline: ConversationWorkTimeline {
+        workTimeline ?? ConversationWorkTimeline(records: activities,
+            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs)
+    }
 }
 
 struct ConversationUserMessage: View {
     let content: String
     let attachments: [WorkspaceMessageAttachmentRecord]
     let references: [WorkspaceMessageReferenceRecord]
+    var onOpenAttachment: ((WorkspaceMessageAttachmentRecord) -> Void)? = nil
     @State private var expanded = false
 
     var body: some View {
@@ -1208,14 +1224,22 @@ struct ConversationUserMessage: View {
                     spacing: 6
                 ) {
                     ForEach(attachments) { attachment in
-                        DashboardPersistedAttachmentChip(
-                            icon: attachment.kind == .image ? "photo" : "doc",
-                            title: attachment.fileName,
-                            detail: ByteCountFormatter.string(
-                                fromByteCount: attachment.sizeBytes,
-                                countStyle: .file
+                        Button { onOpenAttachment?(attachment) } label: {
+                            DashboardPersistedAttachmentChip(
+                                icon: attachment.kind == .image ? "photo" : "doc",
+                                title: attachment.fileName,
+                                detail: ByteCountFormatter.string(
+                                    fromByteCount: attachment.sizeBytes,
+                                    countStyle: .file
+                                )
                             )
-                        )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(onOpenAttachment == nil)
+                        .accessibilityLabel("Open \(attachment.fileName)")
+                        .help("Open \(attachment.fileName)")
                     }
                     ForEach(references) { reference in
                         DashboardPersistedAttachmentChip(

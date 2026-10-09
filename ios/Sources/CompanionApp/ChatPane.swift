@@ -24,7 +24,7 @@ struct ChatPane: View {
           if model.activeRunID != nil { Button("Stop this run", systemImage: "stop.fill", role: .destructive) { Task { await model.stop() } }.disabled(!model.online || model.activeProvider?.canStop != true) }
           Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } }.disabled(!model.online)
         } label: { Image(systemName: "ellipsis").font(.title2).frame(width: 44, height: 44) }.accessibilityLabel("Conversation actions")
-      }.padding(.horizontal, 20).padding(.top, 8)
+      }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 22) {
@@ -58,7 +58,7 @@ struct ChatPane: View {
             }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
-        }
+        }.scrollDismissesKeyboard(.interactively)
         .onChange(of: model.transcript?.messages.last?.content) { _, _ in
           if UIAccessibility.isReduceMotionEnabled { proxy.scrollTo("latest", anchor: .bottom) }
           else { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("latest", anchor: .bottom) } }
@@ -94,7 +94,7 @@ struct ChatPane: View {
         .lineLimit(2...6).accessibilityIdentifier("chat-composer")
         .disabled(!model.online)
       HStack(spacing: 14) {
-        Button { referencesPresented = true } label: { Image(systemName: "plus").font(.title2).frame(width: 32, height: 38) }.accessibilityLabel("Reference a note")
+        Button { referencesPresented = true } label: { Image(systemName: "plus").font(.title2).frame(width: 44, height: 44) }.accessibilityLabel("Reference a note")
         if model.selectedConversationID == nil {
           Menu {
             ForEach(model.providers) { provider in
@@ -108,11 +108,11 @@ struct ChatPane: View {
         } else { Text(model.activeProvider?.displayName ?? model.selectedConversation?.runtimeKind ?? "Agent").font(.caption).foregroundStyle(.secondary) }
         Spacer()
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
-          Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 38, height: 38) }.accessibilityLabel("Stop run").disabled(!model.online)
+          Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }.accessibilityLabel("Stop run").disabled(!model.online)
         }
         Button { Task { await model.send() } } label: {
           Group { if model.sending { ProgressView().tint(.white) } else { Image(systemName: "arrow.up").font(.title3.weight(.semibold)) } }
-            .frame(width: 42, height: 42).foregroundStyle(.white).background(canSend ? MobileTheme.green : Color.gray.opacity(0.35), in: Circle())
+            .frame(width: 44, height: 44).foregroundStyle(.white).background(canSend ? MobileTheme.action : Color.gray.opacity(0.35), in: Circle())
         }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
       }
       if !model.online { Text("Connect to your running Mac to send. Agent messages are never queued offline.").font(.caption2).foregroundStyle(.secondary) }
@@ -129,7 +129,7 @@ private struct MessageView: View {
   let message: CompanionMessage
   var body: some View {
     VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 8) {
-      Text(message.role == "user" ? "You" : message.role == "assistant" ? "Computer" : message.role.capitalized)
+      Text(message.role == "user" ? "You" : message.role == "assistant" ? "Assistant" : message.role.capitalized)
         .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
       Text(.init(message.content)).font(.body).lineSpacing(4).textSelection(.enabled)
         .padding(message.role == "user" ? 14 : 0)
@@ -177,7 +177,7 @@ struct PendingInteractionView: View {
           var result = answers.mapValues { Array($0).sorted() }
           for (id, text) in freeText where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[id, default: []].append(text) }
           respond(.init(answers: result))
-        }.buttonStyle(.borderedProminent).foregroundStyle(.white).disabled(!interaction.questions.allSatisfy { !(answers[$0.id] ?? []).isEmpty || !(freeText[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white).disabled(!interaction.questions.allSatisfy { !(answers[$0.id] ?? []).isEmpty || !(freeText[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
       }
       Button("Cancel request", role: .cancel) { respond(.init(cancelled: true)) }.font(.caption)
       Text("The first valid answer on either device wins.").font(.caption2).foregroundStyle(.secondary)

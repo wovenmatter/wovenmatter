@@ -41,6 +41,13 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
   public let attachments: [WorkspaceMessageAttachmentRecord]
   public let references: [WorkspaceMessageReferenceRecord]
   public let hasOlderMessages: Bool
+  public let activityRevision: Int64?
+  public let activitiesAreDelta: Bool
+  public let removedActivityIDs: [String]
+  public let activityReadMetrics: ConversationActivityReadMetrics
+  public let retainedMessages: [WorkspaceMessageRecord]
+  /// A complete, lightweight existence check for the previously loaded window.
+  public let retainedMessageIDs: [String]?
 
   public var oldestMessageCursor: WorkspaceConversationHistoryCursor? {
     messages.first.map {
@@ -55,7 +62,13 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
     activities: [WorkspaceRunActivityRecord] = [],
     attachments: [WorkspaceMessageAttachmentRecord] = [],
     references: [WorkspaceMessageReferenceRecord] = [],
-    hasOlderMessages: Bool
+    hasOlderMessages: Bool,
+    activityRevision: Int64? = nil,
+    activitiesAreDelta: Bool = false,
+    removedActivityIDs: [String] = [],
+    activityReadMetrics: ConversationActivityReadMetrics = .init(),
+    retainedMessages: [WorkspaceMessageRecord] = [],
+    retainedMessageIDs: [String]? = nil
   ) {
     self.conversationID = conversationID
     self.messages = messages
@@ -64,6 +77,12 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
     self.attachments = attachments
     self.references = references
     self.hasOlderMessages = hasOlderMessages
+    self.activityRevision = activityRevision
+    self.activitiesAreDelta = activitiesAreDelta
+    self.removedActivityIDs = removedActivityIDs
+    self.activityReadMetrics = activityReadMetrics
+    self.retainedMessages = retainedMessages
+    self.retainedMessageIDs = retainedMessageIDs
   }
 }
 
@@ -287,11 +306,23 @@ public actor DashboardStore {
         port: port
       )
     }
+    var environment = ProcessInfo.processInfo.environment
+    for key in resolved.launch.environmentKeysToRemove { environment.removeValue(forKey: key) }
+    for prefix in resolved.launch.environmentKeyPrefixesToRemove {
+      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
+    }
+    environment.merge(resolved.launch.environment) { _, configured in configured }
+    try await prepareLocalOpenClawResults(executable: resolved.launch.executableURL, environment: environment)
     _ = try await localOpenClawGateways.ensure(
       agentID: enrollmentID, identity: identity,
       launch: resolved.launch, workingDirectory: resolved.workingDirectory
     )
     return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
+  }
+
+  public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) async throws {
+    try await openClawGateway.setCLIConnectionProvider(provider)
+    try await localSessions.setCLIConnectionProvider(provider)
   }
 
   private func prepareLocalOpenClawResults(executable: URL, environment: [String: String]) async throws {
@@ -738,10 +769,16 @@ public actor DashboardStore {
   }
 
   public func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
-    let data = try await database.conversationExport(id: id, format: format)
     let stagedURL = FileManager.default.temporaryDirectory
       .appending(path: "wovenmatter-export-" + UUID().uuidString + "." + format.fileExtension)
     try Task.checkCancellation()
+    if format == .fullRun {
+      try await database.exportConversationArchive(id: id, to: stagedURL)
+      do { try Task.checkCancellation() }
+      catch { try? FileManager.default.removeItem(at: stagedURL); throw error }
+      return stagedURL
+    }
+    let data = try await database.conversationExport(id: id, format: format)
     // SQL and encoding ran on the reader worker. File I/O also stays off the
     // cooperative executor, and only the staging URL crosses backend IPC.
     do {
@@ -773,9 +810,14 @@ public actor DashboardStore {
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
+    limit: Int,
+    compactActivities: Bool = false,
+    activityCursor: Int64? = nil,
+    knownActivityRunIDs: [String] = [],
+    knownMessageIDs: [String] = []
   ) async throws -> WorkspaceConversationHistoryPage {
-    try await database.conversationHistoryPage(id: id, before: cursor, limit: limit)
+    try await database.conversationHistoryPage(id: id, before: cursor, limit: limit,
+      compactActivities: compactActivities, activityCursor: activityCursor, knownActivityRunIDs: knownActivityRunIDs, knownMessageIDs: knownMessageIDs)
   }
 
   @discardableResult
@@ -1106,6 +1148,9 @@ public actor DashboardStore {
       directLaunch: launch,
       directWorkspace: workspace
     )
+    if let configuration = runControls?.sessionConfiguration {
+      return try await configuration(conversationID)
+    }
     return try await localSessions.configuration(
       conversationID: conversationID,
       launch: context.launch,
@@ -1163,7 +1208,7 @@ public actor DashboardStore {
         LocalACPWorkspaceLaunchConfiguration(
           rootURL: resolved.workingDirectory,
           repositoriesURL: resolved.workingDirectory.appending(
-            path: "Repos",
+            path: "repos",
             directoryHint: .isDirectory
           )
         ),

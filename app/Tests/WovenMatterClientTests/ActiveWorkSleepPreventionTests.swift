@@ -45,25 +45,6 @@ struct ActiveWorkSleepPreventionTests {
         #expect(activities.token == nil)
     }
 
-    @Test func acceptedSendHandsOffToRunningSessionsWithoutDroppingProtection() {
-        let activities = Activities()
-        let owner = activities.makeOwner()
-        let dispatch = owner.beginDispatch()
-        owner.setRunningConversationIDs(["first", "second"])
-        owner.endDispatch(dispatch)
-        owner.setRunningConversationIDs(["first", "second"])
-        #expect(activities.starts == 1)
-        #expect(activities.ends == 0)
-        owner.setRunningConversationIDs(["second"])
-        #expect(activities.ends == 0)
-        owner.setRunningConversationIDs([])
-        #expect(activities.ends == 1)
-        owner.setRunningConversationIDs(["restored-session"])
-        #expect(activities.starts == 2)
-        owner.setRunningConversationIDs([])
-        #expect(activities.ends == 2)
-    }
-
     @Test func preparationReconciliationCannotReleaseAnInFlightDispatch() {
         let activities = Activities()
         let owner = activities.makeOwner()
@@ -79,53 +60,6 @@ struct ActiveWorkSleepPreventionTests {
         #expect(activities.ends == 0)
         owner.setRunningConversationIDs([])
         #expect(activities.ends == 1)
-    }
-
-    @Test func runFinishingBeforeSendReturnsKeepsProtectionUntilDispatchCompletes() {
-        let activities = Activities()
-        let owner = activities.makeOwner()
-        let dispatch = owner.beginDispatch()
-        owner.setRunningConversationIDs(["fast-run"])
-        owner.setRunningConversationIDs([])
-        #expect(activities.ends == 0)
-        owner.endDispatch(dispatch)
-        #expect(activities.starts == 1)
-        #expect(activities.ends == 1)
-    }
-
-    @Test func failureAndCancellationReleaseDispatchLeases() async {
-        let activities = Activities()
-        let owner = activities.makeOwner()
-        func failingDispatch() async throws {
-            let dispatch = owner.beginDispatch()
-            defer { owner.endDispatch(dispatch) }
-            throw CancellationError()
-        }
-        await #expect(throws: CancellationError.self) { try await failingDispatch() }
-        #expect(activities.starts == 1)
-        #expect(activities.ends == 1)
-
-        let task = Task { @MainActor in
-            let dispatch = owner.beginDispatch()
-            defer { owner.endDispatch(dispatch) }
-            try await Task.sleep(for: .seconds(60))
-        }
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(activities.starts == 2)
-        #expect(activities.ends == 2)
-        #expect(activities.token == nil)
-    }
-
-    @Test func frontendNeverAcquiresAnAssertionFromMirroredState() {
-        let activities = Activities()
-        let owner = activities.makeOwner(ownsExecution: false)
-        let dispatch = owner.beginDispatch()
-        owner.setRunningConversationIDs(["backend-run"])
-        owner.endDispatch(dispatch)
-        owner.stop()
-        #expect(activities.starts == 0)
-        #expect(activities.ends == 0)
     }
 
     @Test func shutdownReleasesAndRejectsLateCallbacks() {

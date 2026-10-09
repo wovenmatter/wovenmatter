@@ -27,6 +27,7 @@ extension ApplicationModel {
                 let defaults = calendarTaskDefaults(runtime: config.runtimeKind, workspaceID: config.workspaceID).configuration
                 config.model = defaults.model; config.thinking = defaults.thinking
                 config.permission = defaults.permission; config.tools = defaults.tools
+                config.usesProductPermissionDefault = defaults.usesProductPermissionDefault
                 config.nativeWorkingDirectory = defaults.nativeWorkingDirectory; config.selectionWorkspace = defaults.selectionWorkspace
                 config.nativeWorkspaceID = nil
             }
@@ -97,10 +98,13 @@ extension ApplicationModel {
         let directory = try? defaultToolWorkingDirectory(workspaceID: workspaceID)
         let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local:" + (directory ?? "")
         let selections = sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope)
-        let tools = selections.tools.flatMap { try? WorkspaceSessionTools(identifiers: $0) }
-            ?? WorkspaceSessionTools(enabled: agentTools?.settings.enabledByDefault ?? Set(WorkspaceToolGroup.allCases))
+        let settings = agentTools?.settings ?? WorkspaceToolSettings()
+        var tools = selections.tools.flatMap { try? WorkspaceSessionTools(identifiers: $0) }
+            ?? WorkspaceSessionTools(enabled: settings.enabledByDefault)
+        tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(prompt: "", configuration: .init(runtimeKind: runtime, workspaceID: workspaceID, title: title,
             model: selections.model, thinking: selections.thinking, permission: runtime == .pi ? nil : selections.permission,
+            usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
             selectionWorkspace: scope, nativeWorkingDirectory: directory, tools: tools))
     }
 
@@ -194,7 +198,8 @@ extension ApplicationModel {
         let selections = SessionSelections(model: config.model, thinking: config.thinking,
             permission: config.runtimeKind == .pi ? nil : config.permission, tools: config.tools.enabled.map(\.rawValue).sorted())
         sessionSelectionPreferences.stageCalendarSelections(id: run.sessionID, harness: config.runtimeKind.rawValue,
-            workspace: scope, selections: selections)
+            workspace: scope, selections: selections,
+            usesProductPermissionDefault: config.usesProductPermissionDefault ?? false)
         let existing = try await store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID })
         try dispatchFence.check()
         if existing == nil {
@@ -211,10 +216,10 @@ extension ApplicationModel {
                     throw ApplicationModelError.remoteHarnessUnavailable
                 }
                 created = await createRemoteACPSession(target: target, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: run.title, nativeWorkspaceID: config.nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID)
             } else {
                 created = await createLocalACPSession(runtimeKind: config.runtimeKind, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: run.title, nativeWorkspaceID: config.nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID)
             }
             try dispatchFence.check()
             guard created == run.sessionID else { throw WorkspaceToolError.invalid(localRunError ?? "The scheduled session could not be created.") }
@@ -392,7 +397,8 @@ extension ApplicationModel {
                 try await store.database.importRemoteCalendarTranscript(receiptID: entry.id, run: entry.run,
                     workspaceID: configuration.id, workspaceName: configuration.name, ownerDeviceID: owner,
                     nativeSessionID: entry.nativeSessionID, updates: entry.updates,
-                    error: entry.error, completedAt: entry.completedAt)
+                    error: entry.error, completedAt: entry.completedAt,
+                    updateOffset: entry.updateOffset, complete: entry.complete)
                 try requireCurrentRemoteCalendarConfiguration(configuration)
             }
             remoteCalendarResultCursors[configuration.id] = page.cursor

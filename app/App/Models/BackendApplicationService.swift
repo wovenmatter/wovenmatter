@@ -10,13 +10,25 @@ struct BackendAttachmentSource: Codable, Sendable {
     let mimeType: String
 }
 
+struct BuiltInSubagentArchiveRequest: Codable, Sendable {
+    let conversationID: String
+    let sourceID: String
+    let nativeSessionID: String
+    let nativeConversationID: String
+    var after: Int64 = 0
+    var eventID: String?
+    var offset: Int = 0
+}
+
 enum BackendApplicationCommand: Codable, Sendable {
     case companion(CompanionHostAction)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
     case toolsMutation(BackendToolsMutation)
-    case prepareSelections(conversationID: String, defaults: SessionSelections?)
+    case loadAgentDefaults(runtime: AgentRuntimeKind, workspace: String?)
+    case saveAgentDefault(runtime: AgentRuntimeKind, workspace: String?, field: SessionSelectionField, selections: SessionSelections)
+    case prepareSelections(conversationID: String, defaults: SessionSelections?, usesProductPermissionDefault: Bool?)
     case applySelections(conversationID: String)
     case recordSelections(conversationID: String, metadata: LocalACPSessionMetadata)
     case retrySelections(conversationID: String, selections: SessionSelections)
@@ -32,6 +44,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case sendMessageFenced(conversationID: String, input: AgentMessageInput, noteID: String?, admission: AgentDispatchAdmission)
     case cancelSessionFenced(conversationID: String, admission: AgentDispatchAdmission)
     case configureSession(conversationID: String, model: String?, thinking: String?, permission: String?)
+    case subagentHistory(BuiltInSubagentArchiveRequest)
     case setSessionTools(conversationID: String, tools: WorkspaceSessionTools, confirmedPausingTimers: Bool)
     case cancelSession(conversationID: String)
     case resolveSessionAccess(id: String, allowed: Bool)
@@ -54,8 +67,11 @@ struct BackendApplicationResult: Codable, Sendable {
     var noteResponse: NoteEditingResponse?
     var conversationID: String?
     var metadata: LocalACPSessionMetadata?
+    var selections: SessionSelections?
+    var resolvedSelections: SessionSelections?
     var attachments: [AgentMessageAttachmentDraft]?
     var requiresTimerPauseConfirmation: Bool = false
+    var history: GatewayJSONValue?
 }
 
 struct BackendApplicationReadiness: Codable, Sendable {
@@ -190,8 +206,16 @@ final class BackendApplicationService {
             return try await .init(attachments: model.stageMessageAttachments(files.map { (url: $0.url, mimeType: $0.mimeType) }))
         case let .toolsMutation(mutation):
             return try await executeToolsMutation(mutation)
-        case let .prepareSelections(id, defaults):
-            try await model.prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults)
+        case let .loadAgentDefaults(runtime, workspace):
+            let values = try await model.agentSelectionDefaults(runtime: runtime, workspace: workspace)
+            return .init(selections: values.stored, resolvedSelections: values.resolved)
+        case let .saveAgentDefault(runtime, workspace, field, selections):
+            let values = try await model.saveAgentSelectionDefault(runtime: runtime, workspace: workspace,
+                field: field, selections: selections)
+            return .init(selections: values.stored, resolvedSelections: values.resolved)
+        case let .prepareSelections(id, defaults, usesProductPermissionDefault):
+            try await model.prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults,
+                usesProductPermissionDefault: usesProductPermissionDefault)
         case let .applySelections(id):
             try await model.applyPendingSessionSelections(conversationID: id)
         case let .recordSelections(id, metadata):
@@ -250,6 +274,9 @@ final class BackendApplicationService {
         case let .configureSession(id, selectedModel, thinking, permission):
             await model.updateLocalACPSession(conversation: try conversation(id), model: selectedModel,
                 thinking: thinking, permission: permission)
+        case let .subagentHistory(request):
+            _ = try await conversation(request.conversationID)
+            return .init(history: try await model.builtInSubagentHistory(request))
         case let .setSessionTools(id, tools, confirmed):
             _ = try await conversation(id)
             guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }

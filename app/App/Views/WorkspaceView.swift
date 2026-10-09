@@ -115,7 +115,8 @@ struct WorkspaceView: View {
     @AppStorage(DashboardAgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
     @State private var selectedAgentID: UUID?
     @State private var chatPanels = DashboardChatPanelState()
-    @State private var selectedNoteID: String?
+    @State private var assets = WorkspaceAssetSession()
+    private var selectedNoteID: String? { assets.tabs.selectedNoteID }
     @State private var selectedFolderID: String?
     @State private var sidebarNavigation = DashboardSidebarNavigationState()
     @State private var destination = DashboardDestination.workspace
@@ -179,6 +180,9 @@ struct WorkspaceView: View {
 
     var body: some View {
         workspaceWithAttachments
+        .onChange(of: assets.notice) { _, message in
+            if let message { showNotice(message); assets.notice = nil }
+        }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
@@ -216,7 +220,7 @@ struct WorkspaceView: View {
 
     // Keep presentation and routing as separate opaque expressions so the
     // supported Xcode toolchains do not solve one enormous modifier chain.
-    private var workspaceSurface: some View {
+    private var workspaceLayout: some View {
         GeometryReader { geometry in
             let layout = DashboardLayoutState.resolve(
                 width: geometry.size.width,
@@ -236,7 +240,7 @@ struct WorkspaceView: View {
                     }
                 }
                 .background(theme.palette.workspace)
-                .alert("Built-in switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
+                .alert("Pi Durable switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
                     Button("OK") { model.defaultAgentFallbackNotice = nil }
                 } message: { Text(model.defaultAgentFallbackNotice ?? "") }
 
@@ -253,10 +257,6 @@ struct WorkspaceView: View {
                     DashboardNewChatDrawer(
                         model: model,
                         onClose: closeNewChatChooser,
-                        onOpenSettings: {
-                            closeNewChatChooser()
-                            openUtility(.settings)
-                        },
                         onSelect: startNewChat
                     )
                     .frame(width: min(440, max(360, geometry.size.width - 32)))
@@ -288,6 +288,31 @@ struct WorkspaceView: View {
         .preferredColorScheme(.light)
         .tint(DashboardPalette.primary)
         .foregroundStyle(DashboardPalette.foreground)
+    }
+
+    private var workspaceConversationIDs: [String] {
+        model.workspaceOverview?.conversations.map(\.id) ?? []
+    }
+
+    private var workspaceNoteIDs: [String] {
+        model.workspaceOverview?.notes.map(\.id) ?? []
+    }
+
+    private func reconcileConversations(oldIDs: [String], ids: [String]) {
+        let removed: Set<String> = Set(oldIDs).subtracting(ids)
+        for panel in chatPanels.panels where panel.conversationID.map(removed.contains) == true {
+            _ = chatPanels.setConversation(nil, in: panel.id)
+        }
+        selectDefaults()
+    }
+
+    private func reconcileNotes(oldIDs: [String], ids: [String]) {
+        let removed: Set<String> = Set(oldIDs).subtracting(ids)
+        for id in removed { assets.close(.note(id)) }
+    }
+
+    private var workspaceNavigation: some View {
+        workspaceLayout
         .onAppear {
             selectDefaults()
         }
@@ -296,20 +321,25 @@ struct WorkspaceView: View {
             if value != .workspace { DictationModel.shared.leaveWorkspace() }
         }
         .onChange(of: allAgents.map(\.id)) { _, _ in selectDefaults() }
-        .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { oldIDs, ids in
-            let removed = Set(oldIDs).subtracting(ids)
-            for panel in chatPanels.panels where panel.conversationID.map(removed.contains) == true {
-                _ = chatPanels.setConversation(nil, in: panel.id)
-            }
-            selectDefaults()
+        .onChange(of: workspaceConversationIDs) { oldIDs, ids in
+            reconcileConversations(oldIDs: oldIDs, ids: ids)
+        }
+        .onChange(of: workspaceNoteIDs) { oldIDs, ids in
+            reconcileNotes(oldIDs: oldIDs, ids: ids)
         }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
                 model.markConversationRead(id: conversationID)
             }
         }
-        .onChange(of: selectedNoteID) { _, noteID in
-            if noteID == nil {
+    }
+
+    private var workspaceSurface: some View {
+        workspaceNavigation
+        .onChange(of: assets.tabs.isPresented) { _, presented in
+            if !presented {
+                compactWorkspacePane = .chat
+                noteFocusMode = false
                 chatPanels.dismissAsset()
             } else {
                 chatPanels.presentAsset()
@@ -649,7 +679,8 @@ struct WorkspaceView: View {
         onLeftRail: @escaping () -> Void,
         onRightRail: @escaping () -> Void
     ) -> some View {
-        ZStack(alignment: .top) {
+        let presentsAssets = destination == .workspace && assets.tabs.isPresented
+        return ZStack(alignment: .top) {
             Group {
                 switch destination {
                 case .workspace:
@@ -658,7 +689,7 @@ struct WorkspaceView: View {
                         agents: allAgents,
                         conversations: model.workspaceOverview?.conversations ?? [],
                         chatPanels: chatPanels,
-                        note: selectedNote,
+                        assets: assets,
                         draftsByConversationID: $draftsByConversationID,
                         attachmentDraftsByConversation: attachmentDraftsByConversation,
                         submittingConversationIDs: submittingConversationIDs,
@@ -673,11 +704,6 @@ struct WorkspaceView: View {
                             if newlyCreatedNoteID == noteID {
                                 newlyCreatedNoteID = nil
                             }
-                        },
-                        onCloseNote: {
-                            selectedNoteID = nil
-                            compactWorkspacePane = .chat
-                            noteFocusMode = false
                         },
                         onActivatePanel: activatePanel,
                         onAddPanel: addPanel,
@@ -728,14 +754,41 @@ struct WorkspaceView: View {
 
             HStack {
                 if showLeftRailButton {
-                    DashboardRevealRailButton(side: .left, action: onLeftRail)
+                    DashboardRevealRailButton(side: .left,
+                        width: presentsAssets ? DashboardMetrics.assetToolbarControlWidth : 36,
+                        height: presentsAssets ? DashboardMetrics.assetToolbarControlHeight : 36,
+                        action: onLeftRail)
                 }
                 Spacer()
+                if destination == .workspace && !assets.tabs.isPresented {
+                    Button {
+                        let opened: Bool
+                        if let existing = assets.tabs.browserIDs.last {
+                            assets.tabs.select(.browser(existing))
+                            opened = true
+                        } else {
+                            opened = assets.openBrowser() != nil
+                        }
+                        if opened {
+                            compactWorkspacePane = .note
+                            compactDrawer = .none
+                        }
+                    } label: {
+                        Image(systemName: "globe").font(.system(size: 16)).frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(DashboardIconButtonStyle())
+                    .help("Open browser")
+                    .accessibilityLabel("Open browser")
+                }
                 if showRightRailButton {
-                    DashboardRevealRailButton(side: .right, action: onRightRail)
+                    DashboardRevealRailButton(side: .right,
+                        width: presentsAssets ? DashboardMetrics.assetToolbarControlWidth : 36,
+                        height: presentsAssets ? DashboardMetrics.assetToolbarControlHeight : 36,
+                        action: onRightRail)
                 }
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, presentsAssets ? DashboardMetrics.assetToolbarVerticalPadding : 12)
 
             if let notice {
                 Text(notice)
@@ -840,14 +893,19 @@ struct WorkspaceView: View {
     }
 
     private func selectNote(_ id: String) {
+        assets.openNote(id)
+        guard assets.tabs.selectedNoteID == id else { return }
         chatPanels.presentAsset()
-        selectedNoteID = id
         destination = .workspace
         compactWorkspacePane = .note
         compactDrawer = .none
     }
 
     private func createNote(kind: NoteArtifactKind = .note) {
+        guard assets.tabs.noteIDs.count < WorkspaceAssetTabs.maximumNotes else {
+            showNotice(WorkspaceAssetTabs.Capacity.notes.localizedDescription)
+            return
+        }
         model.clearNoteMutationError()
         Task {
             guard let noteID = await model.createNote(
@@ -962,11 +1020,7 @@ struct WorkspaceView: View {
                     try await model.mutateNote(id: note.id, mutation: .moveToFolder(folderID))
                 case .moveToTrash:
                     try await model.mutateNote(id: note.id, mutation: .moveToTrash)
-                    if selectedNoteID == note.id {
-                        selectedNoteID = nil
-                        noteFocusMode = false
-                        compactWorkspacePane = .chat
-                    }
+                    assets.close(.note(note.id))
                     showNotice("Note moved to Trash.")
                 case .export(let format):
                     let export = try await model.exportNote(id: note.id, format: format)
@@ -1109,8 +1163,8 @@ struct WorkspaceView: View {
             newPanelID: newPanelID,
             conversationID: conversationID
         ) else { return }
-        if selectedNoteID != nil {
-            selectedNoteID = nil
+        if assets.tabs.isPresented {
+            assets.tabs.hide()
             compactWorkspacePane = .chat
             noteFocusMode = false
         }
@@ -1148,14 +1202,25 @@ struct WorkspaceView: View {
             }
             let content = draftsByConversationID[conversationID, default: ""]
             let submittedAttachments = attachmentDraftsByConversation[conversationID] ?? []
+            let capturedNote = panelID == .primary && assets.tabs.isPresented ? selectedNote : nil
+            let capturedWorkspace = panelID == .primary
+                ? assets.snapshot(notes: model.workspaceOverview?.notes ?? [], title: { model.noteDraft(for: $0).title })
+                : nil
             Task { @MainActor in
+                let notesSaved = capturedWorkspace?.notes.isEmpty != false ? true : await model.flushNoteDrafts()
+                guard notesSaved else {
+                    submittingConversationIDs.remove(conversationID)
+                    showNotice("Save the open assets before sending. Your draft is preserved.")
+                    return
+                }
                 let accepted = await model.sendAgentMessage(
                     conversation: selectedConversation,
                     input: AgentMessageInput(
                         text: content,
-                        attachments: submittedAttachments
+                        attachments: submittedAttachments,
+                        visibleWorkspace: capturedWorkspace
                     ),
-                    note: panelID == .primary ? selectedNote : nil
+                    note: capturedNote
                 )
                 let result = DashboardSendResult.resolve(
                         submittedDraft: content,
@@ -1301,7 +1366,7 @@ struct DashboardWorkspaceSurface: View {
     let agents: [WorkspaceAgent]
     let conversations: [WorkspaceConversationRecord]
     let chatPanels: DashboardChatPanelState
-    let note: WorkspaceNoteRecord?
+    @Bindable var assets: WorkspaceAssetSession
     @Binding var draftsByConversationID: [String: String]
     let attachmentDraftsByConversation: [String: [AgentMessageAttachmentDraft]]
     let submittingConversationIDs: Set<String>
@@ -1313,7 +1378,6 @@ struct DashboardWorkspaceSurface: View {
     let reservesTrailingRailControlSpace: Bool
     let newlyCreatedNoteID: String?
     let onNewNoteFocusHandled: (String) -> Void
-    let onCloseNote: () -> Void
     let onActivatePanel: (DashboardChatPanelID) -> Void
     let onAddPanel: (DashboardChatPanelID) -> Void
     let onClosePanel: (DashboardChatPanelID) -> Void
@@ -1327,34 +1391,19 @@ struct DashboardWorkspaceSurface: View {
     var body: some View {
         GeometryReader { geometry in
             let splitCompact = geometry.size.width < DashboardMetrics.splitBreakpoint
-            if let note {
+            if assets.tabs.isPresented {
                 if splitCompact {
                     if compactPane == .note {
-                        DashboardNotePane(
-                            model: model,
-                            note: note,
-                            showBack: true,
-                            noteOnLeft: noteOnLeft,
-                            isFocused: true,
-                            reservesLeadingRailControlSpace: reservesLeadingRailControlSpace,
-                            reservesTrailingRailControlSpace: reservesTrailingRailControlSpace,
-                            focusesTitleOnAppear: note.id == newlyCreatedNoteID,
-                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
-                            onBack: { compactPane = .chat },
-                            onMove: { noteOnLeft.toggle() },
-                            onToggleFocus: {},
-                            onClose: onCloseNote
-                        )
-                        .id(note.id)
+                        assetPane(compact: true)
                     } else {
                         chatPanel(.primary, showNoteButton: true)
                     }
                 } else if noteFocusMode {
-                    notePane(note)
+                    assetPane()
                 } else {
                     HStack(spacing: 0) {
                         if noteOnLeft {
-                            notePane(note)
+                            assetPane()
                                 .frame(minWidth: DashboardMetrics.companionMinimumWidth)
                             splitSeparator(totalWidth: geometry.size.width)
                             chatPanel(.primary, showNoteButton: false)
@@ -1363,7 +1412,7 @@ struct DashboardWorkspaceSurface: View {
                             chatPanel(.primary, showNoteButton: false)
                                 .frame(width: chatWidth(for: geometry.size.width))
                             splitSeparator(totalWidth: geometry.size.width)
-                            notePane(note)
+                            assetPane()
                                 .frame(minWidth: DashboardMetrics.companionMinimumWidth)
                         }
                     }
@@ -1396,23 +1445,15 @@ struct DashboardWorkspaceSurface: View {
         return model.conversationState(for: conversation.id)
     }
 
-    private func notePane(_ note: WorkspaceNoteRecord) -> some View {
-        DashboardNotePane(
-            model: model,
-            note: note,
-            showBack: false,
-            noteOnLeft: noteOnLeft,
-            isFocused: noteFocusMode,
+    private func assetPane(compact: Bool = false) -> some View {
+        DashboardAssetPane(
+            model: model, assets: assets, compact: compact, noteOnLeft: $noteOnLeft,
+            focused: $noteFocusMode,
             reservesLeadingRailControlSpace: reservesLeadingRailControlSpace,
             reservesTrailingRailControlSpace: reservesTrailingRailControlSpace,
-            focusesTitleOnAppear: note.id == newlyCreatedNoteID,
-            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
-            onBack: {},
-            onMove: { noteOnLeft.toggle() },
-            onToggleFocus: { noteFocusMode.toggle() },
-            onClose: onCloseNote
+            newlyCreatedNoteID: newlyCreatedNoteID, onNewNoteFocusHandled: onNewNoteFocusHandled,
+            onBack: { compactPane = .chat }
         )
-        .id(note.id)
     }
 
     private func splitSeparator(totalWidth: CGFloat) -> some View {
@@ -1421,6 +1462,17 @@ struct DashboardWorkspaceSurface: View {
             noteOnLeft: noteOnLeft,
             chatWidthPercent: $chatWidthPercent
         )
+    }
+
+    private var workspaceContextLabel: String? {
+        _ = assets.pageRevision
+        var labels: [String] = []
+        let count = assets.tabs.noteIDs.count
+        if count > 0 { labels.append("\(count) open asset\(count == 1 ? "" : "s")") }
+        let pageCount = assets.tabs.browserIDs.compactMap { assets.pages[$0] }
+            .filter { $0.url.hasPrefix("https://") || $0.url.hasPrefix("http://") }.count
+        if pageCount > 0 { labels.append("\(pageCount) browser URL\(pageCount == 1 ? "" : "s")") }
+        return labels.isEmpty ? nil : labels.joined(separator: " · ")
     }
 
     private func chatPanel(
@@ -1444,9 +1496,8 @@ struct DashboardWorkspaceSurface: View {
                 activeRuns: conversationState?.content?.runs ?? [],
                 runActivities: conversationState?.runActivities ?? [],
                 runPresentations: conversationState?.runPresentations ?? [:],
-                attachedNoteTitle: panelID == .primary && model.canAgentEditOpenNote(conversation)
-                    ? note.map { model.noteDraft(for: $0).title }
-                    : nil,
+                attachedNoteTitle: panelID == .primary && assets.tabs.isPresented
+                    ? workspaceContextLabel : nil,
                 draft: draftBinding(for: panelID),
                 attachments: attachments,
                 sendInProgress: conversation.map {
@@ -1473,13 +1524,14 @@ struct DashboardWorkspaceSurface: View {
                 Button {
                     compactPane = .note
                 } label: {
-                    Label("Note", systemImage: "doc.text")
+                    Label("Assets", systemImage: "rectangle.on.rectangle")
                         .font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 10)
                         .frame(height: 32)
                 }
                 .buttonStyle(DashboardPillButtonStyle())
-                .padding(12)
+                .padding(.trailing, 52)
+                .padding(.top, 12)
             }
         }
         .task(id: conversation?.id) {

@@ -80,14 +80,14 @@ public struct LocalACPRuntimeReadinessProbe: Equatable, Sendable {
 public enum LocalACPRuntimeCatalog {
     public static let definitions: [LocalACPRuntimeDefinition] = {
         guard let catalog = try? HarnessCatalog.loadBundled() else { return [] }
-        return [LocalACPRuntimeDefinition(runtimeKind: .defaultAgent, displayName: "Built-in", commandName: "woven-default-agent", arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil, adapterPackage: nil, adapterDescription: "Built into Woven Matter.")] + catalog.harnesses.map { harness in
+        return [LocalACPRuntimeDefinition(runtimeKind: .defaultAgent, displayName: AgentRuntimeKind.defaultAgent.displayName, commandName: "woven-default-agent", arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil, adapterPackage: nil, adapterDescription: "Included with Woven Matter.")] + catalog.harnesses.map { harness in
             LocalACPRuntimeDefinition(
                 runtimeKind: harness.id,
                 displayName: harness.displayName,
                 commandName: harness.command,
                 alternativeCommandNames: harness.id == .claudeCode
                     ? ["claude-code-acp"]
-                    : [],
+                    : harness.id == .opencode ? ["opencode2"] : [],
                 arguments: harness.arguments,
                 environment: environment(for: harness.id),
                 underlyingCLIName: harness.adapterPackage == nil
@@ -113,7 +113,9 @@ public enum LocalACPRuntimeCatalog {
     ) -> [String: String] {
         switch runtimeKind {
         case .codex:
-            ["CODEX_CONFIG": #"{"approvals_reviewer":"auto_review"}"#]
+            // codex-acp passes these overrides through createSessionConfig on
+            // thread/start and thread/resume (including ACP session/load).
+            ["CODEX_CONFIG": #"{"approvals_reviewer":"auto_review","tools.update_plan.enabled":true}"#]
         default:
             [:]
         }
@@ -317,6 +319,7 @@ public struct LocalACPRuntimeWrappedCommand: Sendable {
 
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
     public var historyRecorder: WorkspaceWireRecorder? = nil
+    public var cliConnection: AgentCLIContext? = nil
     public let runtimeKind: AgentRuntimeKind
     public let executableURL: URL
     public let arguments: [String]

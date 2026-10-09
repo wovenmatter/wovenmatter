@@ -83,11 +83,14 @@ const maintenance = createRuntimeMaintenance({
 const releaseTaskOwner = runningAsService
   ? await acquireHostLock(resolve(workspaceRoot,'.wovenmatter/task-gateway.owner.lock'),harnessEnvironment(),workspaceRoot)
   : null
-const durableACP = createDurableACP({ catalog, workspaceRoot, environment:harnessEnvironment,
+const durableACP = createDurableACP({ catalog, workspaceRoot,
+  environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isEnabled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
-  execute:createTaskExecutor({catalog,workspaceRoot,environment:harnessEnvironment,defaultAgent,hermes,instances,
+  execute:createTaskExecutor({catalog,workspaceRoot,
+    environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
+    defaultAgent,hermes,instances,
     isEnabled:id => maintenance.isEnabled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
@@ -108,8 +111,8 @@ const server = createServer(async (request, response) => {
         id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
       })));
       const statuses = await signInStatuses(entries);
-      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Built-in', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
-        : agent.providers.map(p => ({ ...p, name: 'Built-in · ' + p.name }))));
+      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Pi Durable', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
+        : agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name }))));
       return json(response, 200, { statuses });
     }
     if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
@@ -174,7 +177,7 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/harnesses') {
       const statuses = await Promise.all([...catalog.values()].map(harnessStatus))
-      statuses.unshift({ id: 'default_agent', displayName: 'Built-in', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
+      statuses.unshift({ id: 'default_agent', displayName: 'Pi Durable', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
       return json(response, 200, { harnesses: statuses })
     }
 
@@ -485,7 +488,7 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
 function harnessRuntimeEnvironment(harness) {
   const environment = harnessEnvironment()
   if (harness.id === 'codex') {
-    environment.CODEX_CONFIG = '{"approvals_reviewer":"auto_review"}'
+    environment.CODEX_CONFIG = '{"approvals_reviewer":"auto_review","tools.update_plan.enabled":true}'
   } else if (harness.id === 'hermes') {
     environment.HERMES_ACP_SKIP_CONFIGURED_MCP = '0'
   }

@@ -63,12 +63,12 @@ class BundledCLITests(unittest.TestCase):
                 return result, captured[0]
 
     def test_help_for_all_groups_requires_no_endpoint(self):
-        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library"]:
+        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library", "executor"]:
             result = subprocess.run([str(CLI)] + ([group, "help"] if group else ["help"]),
                 env={**os.environ, "WOVENMATTER_SOCKET": "/nonexistent/wovenmatter-test.sock"},
                 capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("wovenmatter", result.stdout)
+            self.assertIn("wovenmatter", result.stdout.lower())
 
     def test_literal_flag_value_and_request_id_reach_bound_endpoint(self):
         identity = "10000000-0000-4000-8000-000000000001"
@@ -85,7 +85,7 @@ class BundledCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="wmcli-input-", dir="/tmp") as directory:
             document = Path(directory) / "fixture.html"
             document.write_text("<p>Fixture body</p>")
-            result, request = self.invoke(["notes", "set-html", "--file", str(document)],
+            result, request = self.invoke(["notes", "set-html", "--file", str(document), "--note-id", "note-fixture"],
                 {"success": True, "silent": False}, {"WOVENMATTER_NOTE_ID": "note-fixture"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(request["arguments"], ["notes", "set-html", "--html", "<p>Fixture body</p>", "--note-id", "note-fixture"])
@@ -96,6 +96,13 @@ class BundledCLITests(unittest.TestCase):
                 {"WOVENMATTER_NOTE_ID": "attached-note"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(request["arguments"], args)
+
+    def test_context_binding_is_carried_outside_command_arguments(self):
+        result, request = self.invoke(["context"], {"success": True, "silent": False, "result": "note-a"},
+            {"WOVENMATTER_CONTEXT_ID": "captured-input"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(request["arguments"], ["context"])
+        self.assertEqual(request["contextID"], "captured-input")
 
     def test_silent_capacity_response_and_explicit_errors(self):
         result, _ = self.invoke(["sessions", "send", "destination", "--text", "Fixture"],

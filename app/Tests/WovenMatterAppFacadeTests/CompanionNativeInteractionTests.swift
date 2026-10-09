@@ -22,6 +22,10 @@ struct CompanionNativeInteractionTests {
         #expect(changed.id != card.id)
         snapshot.permissions[0]["save"] = .array([])
         #expect(CompanionNativeInteractionProjection.pending(link: link, snapshot: snapshot, runID: nil).first?.options.map(\.id) == ["once", "reject"])
+        snapshot.permissions[0]["action"] = "credential.read"
+        let macOnly = try #require(CompanionNativeInteractionProjection.pending(link: link, snapshot: snapshot, runID: nil).first)
+        #expect(macOnly.title == "Continue on your Mac")
+        #expect(macOnly.options.isEmpty)
     }
 
     @Test func formsRemainOnMacAndFieldValuesCannotEnterPhoneCommandJournal() async throws {

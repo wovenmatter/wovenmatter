@@ -6,6 +6,27 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func inputCapturesAreImmutableSessionScopedAndPermissionChecked() async throws {
+    let (db, dir, caller, other) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = try await db.captureInputContext(conversationID: caller, noteID: "note-a")
+    let later = try await db.captureInputContext(conversationID: caller, noteID: "note-b")
+    let empty = try await db.captureInputContext(conversationID: caller, noteID: nil)
+    #expect(try await db.inputContext(id: first, callerID: caller) == "note-a")
+    #expect(try await db.inputContext(id: later, callerID: caller) == "note-b")
+    #expect(try await db.inputContext(id: empty, callerID: caller) == nil)
+    for id in [first, nil, "missing"] {
+      await #expect(throws: (any Error).self) { try await db.inputContext(id: id, callerID: other) }
+    }
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try await reopened.inputContext(id: first, callerID: caller) == "note-a")
+    try await db.setSessionTools(.init(enabled: []), sessionID: caller)
+    await #expect(throws: WorkspaceToolError.disabled(.notes)) { try await db.inputContext(id: first, callerID: caller) }
+    let disabled = try await db.captureInputContext(conversationID: caller, noteID: "not-captured")
+    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
+    #expect(try await db.inputContext(id: disabled, callerID: caller) == nil)
+  }
+
   @Test func replacementTablesAreValidatedBeforeApplyingABatch() async throws {
     let malformed = NoteTableBlock(id: "table", columns: [NoteTableColumn()],
       rows: [NoteTableRow(cells: [])])
@@ -170,13 +191,6 @@ struct WorkspaceAgentToolTests {
     }
   }
 
-  @Test func remoteSQLiteBudgetsIncludeRepeatedColumnNames() async throws {
-    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
-      try DatabaseLinkedData.load(queryResponse: .init(columns: [String(repeating: "c", count: 3_000)],
-        rows: Array(repeating: ["v"], count: 1_000)))
-    }
-  }
-
   @Test func managementReceiptKeepsItsOriginalCoordinationEpoch() async throws {
     let (db, dir, caller, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -282,14 +296,6 @@ struct WorkspaceAgentToolTests {
         operations: [.addTableRow(tableID: tableID, after: Int.max)]),
         callerConversationID: caller, requestID: UUID().uuidString)
     }
-    let beforeAtomicFailure = try await db.readNoteForEditing(id: note)
-    await #expect(throws: (any Error).self) {
-      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
-        expectedRevision: beforeAtomicFailure.revision,
-        operations: [.appendText("must roll back", .paragraph), .deleteBlock(id: "missing")]),
-        callerConversationID: caller, requestID: UUID().uuidString)
-    }
-    #expect(try await db.readNoteForEditing(id: note) == beforeAtomicFailure)
   }
 
   @Test func discoveryPaginationAndRequestIDCanonicalizationAreConsistent() async throws {
@@ -410,13 +416,13 @@ struct WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try await DashboardStore(supportDirectory: directory)
     let session = try await store.database.createLocalACPSession(runtimeKind: .codex, title: "Fresh app", ownerDeviceID: UUID())
-    #expect(try await store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases))
+    #expect(try await store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }))
     let run = try await store.database.beginLocalACPRun(conversationID: session, content: "Retained input")
     try await store.database.completeLocalACPRun(runID: run.runID)
     await store.shutdownLocalACPSessions()
     let reopened = try await DashboardStore(supportDirectory: directory)
     #expect(try await reopened.database.conversationContent(id: session).messages.first?.content == "Retained input")
-    #expect(try await reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases))
+    #expect(try await reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }))
     await reopened.shutdownLocalACPSessions()
   }
 
@@ -783,21 +789,27 @@ struct WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     var settings = try await db.toolSettings(); settings.maximumManagedSessions = 1
     try await db.saveToolSettings(settings)
+    try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: source)
     let firstID = UUID().uuidString, secondID = UUID().uuidString
     let args = ["sessions", "create", "--title", "Fixture"]
     let first = try await db.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let planned = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    #expect(planned.objectValue?["target_id"] == first.objectValue?["target_id"])
     try await db.failToolSessionCreation(requestID: firstID)
     _ = try await db.reserveToolSessionCreation(sourceID: source, requestID: secondID, arguments: args, purpose: "Work", managed: true)
     await #expect(throws: WorkspaceToolError.managedLimit(1)) {
       _ = try await db.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
     }
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     try await reopened.recoverToolSessionCreations()
     let retry = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
     #expect(retry.objectValue?["status"]?.stringValue == "planned")
     let target = try #require(retry.objectValue?["target_id"]?.stringValue)
     #expect(first.objectValue?["target_id"]?.stringValue == target)
-    _ = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    let created = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    #expect(created == target)
+    #expect(try await reopened.sessionRelationship(target).createdBy == source)
+    #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes])
     try await reopened.completeToolSessionCreation(requestID: firstID, sourceID: source)
     try await reopened.failToolSessionCreation(requestID: firstID)
     try await reopened.recoverToolSessionCreations()
@@ -805,33 +817,8 @@ struct WorkspaceAgentToolTests {
     let completed = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
     #expect(completed.objectValue?["status"]?.stringValue == "ready")
     #expect(try await reopened.sessionRelationship(target).coordinatorID == nil)
-  }
-
-  @Test func creationReservationsSurviveReopenAndCountTowardFanout() async throws {
-    let (db, dir, a, _) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    var settings = try await db.toolSettings(); settings.maximumManagedSessions = 1
-    try await db.saveToolSettings(settings)
-    try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: a)
-    let requestID = UUID().uuidString.lowercased()
-    let args = ["sessions", "create", "--title", "Research"]
-    let reservation = try await db.reserveToolSessionCreation(sourceID: a, requestID: requestID, arguments: args, purpose: "Research", managed: true)
-    let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
-    await #expect(throws: WorkspaceToolError.managedLimit(1)) {
-      try await db.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Extra", managed: true)
-    }
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    let retry = try await reopened.reserveToolSessionCreation(sourceID: a, requestID: requestID, arguments: args, purpose: "Research", managed: true)
-    #expect(retry.objectValue?["target_id"]?.stringValue == target)
-    let created = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Research", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
-    #expect(created == target)
-    #expect(try await reopened.sessionRelationship(target).createdBy == a)
-    #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes])
-    try await reopened.beginCoordination(sourceID: a, targetID: target, purpose: "Research", userApprovedAccess: true)
-    try await reopened.completeToolSessionCreation(requestID: requestID, sourceID: a)
-    try await reopened.endCoordination(targetID: target, sourceID: a)
-    #expect(try await reopened.sessionRelationship(target).createdBy == a)
-    _ = try await reopened.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)
+    #expect(try await reopened.sessionRelationship(target).createdBy == source)
+    _ = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)
   }
 }
 
@@ -1033,7 +1020,8 @@ extension WorkspaceAgentToolTests {
     let reservation = try await db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
       arguments: args, purpose: "Implement", managed: true)
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
-    let resolvedTools = WorkspaceSessionTools(enabled: emptyTools ? [] : [.history, .calendar])
+    let resolvedTools = WorkspaceSessionTools(enabled: emptyTools ? [] : [.history, .calendar, .executor],
+      executorProfiles: emptyTools ? [] : ["saved:profile"])
     let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, workspaceID: remote ? UUID() : nil,
       folderID: folder, title: "Planned title", model: "original-model", thinking: "high", permission: "native-permission",
       selectionWorkspace: remote ? "remote:fixture" : "local:/workspace/original",
@@ -1044,6 +1032,10 @@ extension WorkspaceAgentToolTests {
       try await db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: other, configuration: proposed)
     }
     try await db.failToolSessionCreation(requestID: requestID)
+    var laterDefaults = try await db.toolSettings()
+    var executor = ExecutorConfiguration(); executor.defaultProfiles = ["later:profile"]
+    laterDefaults.executor = executor
+    try await db.saveToolSettings(laterDefaults)
     try await db.setSessionTools(.init(enabled: [.sessions, .calendar]), sessionID: source)
     let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let retry = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID,

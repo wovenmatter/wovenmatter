@@ -48,7 +48,7 @@ extension DefaultAgentCredential {
 
 extension ProviderAccountCoordinator {
     /// App-wide consumers always resolve global connections, independently of
-    /// Built-in model enablement or a remote workspace's overrides.
+    /// Pi Durable model enablement or a remote workspace's overrides.
     public func appCredentials() async throws -> [String: DefaultAgentCredential] {
         try await prepare("global").credentials
     }

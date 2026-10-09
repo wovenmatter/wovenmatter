@@ -46,6 +46,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
   public let lastMessagePreview: String?
   public let openClawSessionKey: String?
   public let importedAt: String?
+  public let isScheduledTask: Bool
   public let lastMessageAt: String?
   public let folderID: String?
   public let isPinned: Bool
@@ -62,6 +63,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     case lastMessagePreview = "last_message_preview"
     case openClawSessionKey = "openclaw_session_key"
     case importedAt = "imported_at"
+    case isScheduledTask = "is_scheduled_task"
     case lastMessageAt = "last_message_at"
     case folderID = "folder_id"
     case isPinned = "is_pinned"
@@ -91,6 +93,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     lastMessagePreview = try values.decodeIfPresent(String.self, forKey: .lastMessagePreview)
     openClawSessionKey = try values.decodeIfPresent(String.self, forKey: .openClawSessionKey)
     importedAt = try values.decodeIfPresent(String.self, forKey: .importedAt)
+    isScheduledTask = try values.sqliteBoolIfPresent(forKey: .isScheduledTask) ?? false
     lastMessageAt = try values.decodeIfPresent(String.self, forKey: .lastMessageAt)
     folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
     isPinned = try values.sqliteBool(forKey: .isPinned)

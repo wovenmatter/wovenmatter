@@ -1,6 +1,6 @@
-# Built-in
+# Pi Durable
 
-**Built-in** is included with Woven Matter. Choose it in **New chat** to work in
+**Pi Durable** is included with Woven Matter. Choose it in **New chat** to work in
 your local agent workspace or a remote workspace.
 It includes Pi's file and shell tools, Woven Matter's existing note/workspace
 integration, and web search. You do not need to install Pi, Node, or Claude Code.
@@ -9,22 +9,22 @@ Open **Settings → Connections** to connect providers:
 
 - **OpenAI:** connect a ChatGPT subscription, an OpenAI API key, or both.
 - **OpenRouter / OpenCode Go:** add an API key. The global OpenRouter key is
-  shared with Usage and Built-in.
+  shared with Usage and Pi Durable.
 - **Claude:** use your Claude subscription through Anthropic’s native sign-in,
   an Anthropic API key, or both. They appear as separate model connections.
 - **Grok/xAI:** connect a Grok subscription or a separately billed xAI API key.
 - **Web search:** add an Exa key. Chat and workspace tools work without it.
 - **Local Model Server:** connect up to 12 OpenAI Responses-compatible servers.
-  Their models appear in the existing Built-in model picker.
+  Their models appear in the existing Pi Durable model picker.
 
-Open **Settings → Built-in Agent** to choose a default, show or hide models,
+Open **Settings → Pi Durable** to choose a default, show or hide models,
 change their selector order, and choose an ordered list of fallback models.
 Only the default model is shown initially; explicitly enable any others. Filter
 the catalog by connection type, model lab across connections, or subscriptions.
 
 See [Connections and dictation](connections-and-dictation.md) for account and microphone setup.
 
-Use **All workspaces** for shared Built-in settings. Choose a particular workspace and
+Use **All workspaces** for shared Pi Durable settings. Choose a particular workspace and
 turn off **Use settings from All workspaces** to override its preferences.
 Workspace-specific API keys override the global keys; otherwise global keys
 are reused. Changes synchronize to connected workspaces automatically. **Apply to workspaces** retries synchronization immediately.
@@ -32,7 +32,7 @@ New workspaces inherit these settings automatically. An offline workspace gets
 the current settings when it reconnects.
 
 SDK versions appear below **Settings for**. Expand a workspace to see its
-**Pi SDK** and **Claude SDK** versions. Use **Check for updates**, then **Update**
+**Pi Durable SDK** and **Claude SDK** versions. Use **Check for updates**, then **Update**
 for the SDK you want to update. **All workspaces** lists each location; choosing
 one workspace limits the list to that location. Collapsing a workspace hides its
 SDK details without discarding update progress.
@@ -49,13 +49,13 @@ model selector, and shows a popup explaining the switch. Ordinary transient
 rate limits do not trigger fallback. A turn that has already produced output or
 executed tools is not automatically replayed.
 
-Remote workspaces include the same helper. Their Built-in runs continue
+Remote workspaces include the same helper. Their Pi Durable runs continue
 when the Mac app disconnects, while the remote container and service remain
 running. Reopening the conversation recovers the completed response; reconnecting
 to an unfinished response waits for that remote turn to finish. A container or
 service restart interrupts active work and requires an explicit retry.
 
-Connections owns shared provider accounts for Built-in, Usage, and
+Connections owns shared provider accounts for Pi Durable, Usage, and
 Dictation. Subscription connections remain distinct from separately billed API
 keys. Signing in here does not sign in
 Codex, Claude Code, external Pi, or the other installed harnesses, and their
@@ -76,9 +76,17 @@ the Mac is offline. If borrowed access expires, it waits before the next model
 request until access is supplied again; it does not repeat completed tools.
 Starting a new turn can use your configured fallback instead.
 
+## Code mode and Executor
+
+**Code mode** in Pi Durable settings defaults to **On**, alongside ordinary
+tools. **Only** presents those tools through code mode; **Off** removes the code
+mode tool. Nested calls retain normal approval. User Pi extensions remain
+disabled. Executor Execute is independent and available when Executor is enabled
+in the conversation. See [Executor apps](executor.md).
+
 ## Credential storage
 
-App-managed Built-in credentials on the Mac, including OAuth refresh tokens, are
+App-managed Pi Durable credentials on the Mac, including OAuth refresh tokens, are
 stored in macOS Keychain. Each remote workspace has one encrypted credential
 store using AES-256-GCM. Its separate random key is kept in the Mac's Keychain
 and delivered over the authenticated SSH connection. The remote helper keeps
@@ -89,7 +97,7 @@ If the Mac's workspace key is lost, use **Reset workspace credentials** on that
 workspace in Connections. This removes independent ChatGPT/Grok sign-ins and
 restores shared connections. Claude’s native sign-in is separate; use its
 **Remove** button to disconnect that account. Files and conversations remain.
-Existing Built-in plaintext stores migrate after secure storage succeeds;
+Existing Pi Durable plaintext stores migrate after secure storage succeeds;
 older backups may still contain previous plaintext copies.
 
 Encryption protects stored credential files and disk backups. It does not
@@ -99,7 +107,7 @@ snapshots remain host responsibilities. Removing stored credentials does not
 revoke copies already obtained elsewhere; revoke those through the provider.
 
 Open **Local agent workspace** or a specific **Remote agent workspace** in
-Settings and select **Refresh sign-in status**. It checks Built-in and
+Settings and select **Refresh sign-in status**. It checks Pi Durable and
 independent harnesses without starting login. Results distinguish stored
 credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
 and failures. These checks do not verify remaining usage. Local harnesses whose
@@ -119,10 +127,11 @@ Connections refreshes when sign-in completes. Woven Matter bundles the unmodifie
 official runtime; this sign-in is separate from an independently installed Claude Code harness.
 An API key uses the separate **Claude API key** option and is billed separately.
 
-Claude provides model responses while Built-in retains its tools, approvals,
+Claude provides model responses while Pi Durable retains its tools, approvals,
 history, and compaction. The composer exposes model, thinking, permissions, and
-workspace-tool controls. Settings is titled **Built-in Agent**; the sidebar shows
-**Built-in Pi sdk** or **Built-in Claude SDK** for the most recently used backend.
+workspace-tool controls. The agent is named **Pi Durable** throughout the app,
+regardless of the selected model or provider. SDK management identifies its
+underlying libraries as **Pi Durable SDK** and **Claude SDK**.
 
 Claude owns subscription login, storage, and refresh. On this Mac, it uses its
 native Keychain entry; plaintext fallback is blocked if Keychain is unavailable.

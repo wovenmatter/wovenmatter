@@ -9,6 +9,7 @@ struct DashboardRunControlAdapters: Sendable {
   let accept: @Sendable (Route, String, AgentMessageInput, String?, AgentNoteContext?) async throws -> LocalACPRunIdentifiers
   let steer: @Sendable (Route, String, AgentMessageInput, String?, String?) async throws -> LocalACPSteeringIdentifiers
   let cancel: @Sendable (Route, String, String?) async throws -> Void
+  var sessionConfiguration: (@Sendable (String) async throws -> LocalACPSessionConfiguration)?
   var configureSession: (@Sendable (String, SessionSelections, LocalACPWorkspaceLaunchConfiguration?) async throws -> LocalACPSessionConfiguration)?
   var createGatewaySession: (@Sendable (UUID, String, URL, Bool) async throws -> Void)?
   var patchGatewaySession: (@Sendable (String, OpenClawSessionPreferences) async throws -> OpenClawSessionPreferences)?

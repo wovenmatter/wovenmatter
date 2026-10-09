@@ -56,7 +56,8 @@ extension ApplicationModel {
                 harness: configuration.runtimeKind.rawValue, workspace: scope, selections: selections)
         } else {
             sessionSelectionPreferences.captureConversation(id: id, harness: configuration.runtimeKind.rawValue,
-                workspace: scope, selections: selections, capturedDefaults: SessionSelections())
+                workspace: scope, selections: selections, capturedDefaults: SessionSelections(),
+                usesProductPermissionDefault: configuration.usesProductPermissionDefault ?? false)
         }
     }
 
@@ -81,14 +82,22 @@ extension ApplicationModel {
                     requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
             }
             for request in pendingLocalACPInteractions {
+                let requiresUserApproval: Bool = switch request.request {
+                case .plan: true
+                case .questions, .secret: false
+                }
                 if let delivery = try await database.recordCoordinationNeedsInput(sessionID: request.conversationID,
-                    requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
+                    requestID: request.id.uuidString, requiresUserApproval: requiresUserApproval) { notifications.append(delivery) }
             }
             for instance in openCodeInstances {
                 for (sessionID, snapshot) in instance.snapshots {
-                    for request in snapshot.permissions + snapshot.forms where !request["id"].text.isEmpty {
+                    for request in snapshot.permissions where !request["id"].text.isEmpty {
                         if let delivery = try await database.recordCoordinationNeedsInput(sessionID: sessionID,
                             requestID: "opencode:" + request["id"].text, requiresUserApproval: true) { notifications.append(delivery) }
+                    }
+                    for request in snapshot.forms where !request["id"].text.isEmpty {
+                        if let delivery = try await database.recordCoordinationNeedsInput(sessionID: sessionID,
+                            requestID: "opencode:" + request["id"].text, requiresUserApproval: false) { notifications.append(delivery) }
                     }
                 }
             }
@@ -164,7 +173,11 @@ extension ApplicationModel {
         let samples = try await recordedUsageSamples(from: start, to: end,
             limit: command.integer("limit", default: 100, range: 1...200),
             offset: command.integer("offset", default: 0, range: 0...(Int.max - 1)))
-        return try .value(samples)
+        struct UsageResult: Encodable {
+            let samples: [UsageSample]
+            let limits: [UsageLimitAccount]
+        }
+        return try .value(UsageResult(samples: samples, limits: localUsage?.limits ?? []))
     }
 
     private func toolConversation(_ id: String) async throws -> WorkspaceConversationRecord {
@@ -416,12 +429,16 @@ extension ApplicationModel {
             ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
         let explicit = SessionSelections(model: command.options["model"], thinking: command.options["thinking"])
         let resolved = explicit.overlaying(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope))
-        let tools: WorkspaceSessionTools
+        let settings = try await store.database.toolSettings()
+        var tools: WorkspaceSessionTools
         if let identifiers = resolved.tools { tools = try WorkspaceSessionTools(identifiers: identifiers) }
-        else { tools = try await WorkspaceSessionTools(enabled: store.database.toolSettings().enabledByDefault) }
+        else { tools = WorkspaceSessionTools(enabled: settings.enabledByDefault) }
+        tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
             title: title, model: resolved.model, thinking: resolved.thinking,
-            permission: runtime == .pi ? nil : resolved.permission, selectionWorkspace: scope,
+            permission: runtime == .pi ? nil : resolved.permission,
+            usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
+            selectionWorkspace: scope,
             nativeWorkingDirectory: directory,
             nativeWorkspaceID: runtime == .opencode && sameWorkspace && command.options["directory"] == nil
                 ? nativeLocation?["workspaceID"].string : nil, tools: tools)

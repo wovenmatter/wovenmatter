@@ -56,11 +56,20 @@ let package = Package(
       name: "WovenMatterClientTests",
       dependencies: ["WovenMatterClient"]
     ),
+    // A fail-closed bridge keeps provider-free facade tests independent of CEF.
+    // The native Xcode target still compiles and validates the production bridge.
+    .target(
+      name: "CompanionBrowserTestBridge",
+      path: "TestsSupport/CompanionBrowserTestBridge",
+      publicHeadersPath: "include",
+      cSettings: [.unsafeFlags(["-fobjc-arc"])],
+      linkerSettings: [.linkedFramework("AppKit")]
+    ),
     // Build the native app sources once without its executable entry point.
     // Both test suites exercise those same services without starting providers.
     .target(
       name: "WovenMatterAppFacade",
-      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
+      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
       path: "App",
       exclude: ["Assets.xcassets", "Info.plist", "Resources", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],

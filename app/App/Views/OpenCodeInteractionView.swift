@@ -23,8 +23,8 @@ struct OpenCodeInteractions: View {
                     ForEach(snapshot.forms, id: \.self) { form in
                         OpenCodeFormView(form: form) { answer in
                             model.perform {
-                                _ = try await model.sessionCall(conversationID, "/form/" + OpenCodeHTTPClient.segment(form["id"].text) + (answer == nil ? "/cancel" : "/reply"),
-                                    method: "POST", body: answer.map { ["answer": $0] })
+                                _ = try await model.sessionCall(conversationID, "/form/" + OpenCodeHTTPClient.segment(form["id"].text) + (answer == nil ? "" : "/reply"),
+                                    method: answer == nil ? "DELETE" : "POST", body: answer.map { ["answer": $0] })
                             }
                         }.id(form["id"].text)
                     }
@@ -54,7 +54,7 @@ struct OpenCodeFormView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(form["title"].text).fontWeight(.semibold)
-            ForEach(OpenCodeFormAnswers.activeFields(form["fields"].array, answers: answers), id: \.self) { field in
+            ForEach(OpenCodeFormAnswers.activeFields(form["fields"].array, answers: answers).filter { !$0["hidden"].bool }, id: \.self) { field in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(field["title"].string ?? field["key"].text)
                     if let description = field["description"].string { Text(description).font(.caption).foregroundStyle(.secondary) }
@@ -75,6 +75,7 @@ struct OpenCodeFormView: View {
         case "external":
             if let url = URL(string: field["url"].text), ["https", "http"].contains(url.scheme) {
                 Link("Open " + (field["title"].string ?? "verification"), destination: url)
+                    .foregroundStyle(DashboardPalette.success)
             }
             Toggle("I’ve completed this step", isOn: Binding(
                 get: { answers[key]?.bool ?? false }, set: { answers[key] = .bool($0) }

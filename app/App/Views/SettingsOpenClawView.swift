@@ -23,6 +23,8 @@ struct SettingsOpenClawView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsAgentDefaultsSection(model: model, runtime: .openclaw,
+                fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(
                     title: "Local agent workspace"

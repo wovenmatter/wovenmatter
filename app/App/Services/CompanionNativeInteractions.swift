@@ -28,7 +28,7 @@ enum CompanionNativeInteractionProjection {
                         runID: String?) -> [CompanionPendingInteraction] {
         let permissions = snapshot.permissions.compactMap { request -> CompanionPendingInteraction? in
             guard !request["id"].text.isEmpty, request["sessionID"].string == link.sessionID else { return nil }
-            let ordinary = OpenCodePermissionHandling.requestID(request, sessionID: link.sessionID, mode: "full") != nil
+            let ordinary = OpenCodePermissionHandling.companionRequestID(request, sessionID: link.sessionID) != nil
             var options: [CompanionInteractionOption] = ordinary ? [.init(id: "once", label: "Allow Once")] : []
             if ordinary, !request["save"].array.isEmpty { options.append(.init(id: "always", label: "Always Allow")) }
             if ordinary { options.append(.init(id: "reject", label: "Reject")) }
@@ -79,8 +79,12 @@ extension CompanionCommandService {
         if let request = snapshot.permissions.first(where: {
             CompanionNativeInteractionProjection.id(link: link, kind: "permission", request: $0) == interactionID
         }) {
+            let reply = response.cancelled ? "reject" : response.optionID ?? ""
+            guard reply == "reject" || OpenCodePermissionHandling.companionRequestID(request, sessionID: link.sessionID) != nil else {
+                throw CommandError.interactionResolved
+            }
             try await native.coordinator.replyToPermission(link, expectedRequest: request,
-                expectedRunID: command.runID, reply: response.cancelled ? "reject" : response.optionID ?? "")
+                expectedRunID: command.runID, reply: reply)
         } else if let request = snapshot.forms.first(where: {
             CompanionNativeInteractionProjection.id(link: link, kind: "form", request: $0) == interactionID
         }) {

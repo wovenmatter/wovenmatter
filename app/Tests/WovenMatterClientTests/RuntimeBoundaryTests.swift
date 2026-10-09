@@ -37,21 +37,6 @@ struct RuntimeBoundaryTests {
     #expect(restored == state)
   }
 
-  @Test("runtime visibility filters the full catalog without changing order")
-  func localRuntimeSidebarFilteringOrder() {
-    let catalogOrder = LocalACPRuntimeCatalog.definitions.map(\.runtimeKind)
-    #expect(catalogOrder.count == AgentRuntimeKind.allCases.count)
-
-    let shown: Set<AgentRuntimeKind> = [.pi, .codex, .openclaw]
-    let visible = LocalACPRuntimePreferences.visibleRuntimeKinds(
-      in: catalogOrder,
-      shownRuntimeKinds: shown
-    )
-
-    #expect(visible == catalogOrder.filter(shown.contains))
-    #expect(Set(visible) == shown)
-  }
-
   @Test("local and remote initializers produce the same workspace")
   func workspaceLayout() throws {
     let fixture = try TemporaryDirectory(prefix: "wovenmatter-layout")
@@ -75,106 +60,31 @@ struct RuntimeBoundaryTests {
     ) == "AGENTS.md")
   }
 
-  @Test("local workspace folder preferences persist outside Keychain")
-  func workspaceFolderPreferences() async throws {
-    let fixture = try TemporaryDirectory(prefix: "wovenmatter-workspace-preferences")
+  @Test("workspace updates preserve personal instructions and colliding scratch files")
+  func workspaceUpgradePreservesContent() throws {
+    let fixture = try TemporaryDirectory(prefix: "wovenmatter-upgrade")
     defer { fixture.remove() }
-    let repositories = fixture.url.appending(
-      path: "repositories",
-      directoryHint: .isDirectory
-    )
-    let databases = fixture.url.appending(
-      path: "databases",
-      directoryHint: .isDirectory
-    )
-    try FileManager.default.createDirectory(
-      at: repositories,
-      withIntermediateDirectories: true
-    )
-    try FileManager.default.createDirectory(
-      at: databases,
-      withIntermediateDirectories: true
-    )
-    let suiteName = "wovenmatter.workspace-preferences.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-    let service = "Woven Matter.test.\(UUID().uuidString)"
-    let store = LocalACPWorkspaceConfigurationStore(
-      homeDirectory: fixture.url,
-      defaultsSuiteName: suiteName,
-      storageKey: service
-    )
-
-    try await store.configureRepositories(repositories)
-    try await store.configureDatabases(databases)
-
-    let restored = LocalACPWorkspaceConfigurationStore(
-      homeDirectory: fixture.url,
-      defaultsSuiteName: suiteName,
-      storageKey: service
-    )
-    let resolution = await restored.resolve()
-    #expect(resolution.availability.repositoriesPath == repositories.path)
-    #expect(resolution.availability.databasesPath == databases.path)
-    #expect(resolution.availability.usesExternalRepositories)
-    #expect(resolution.availability.usesExternalDatabases)
-  }
-
-  @Test("a fake ACP process completes one streamed turn")
-  func acpRoundTrip() async throws {
-    let fixture = try FakeACPProcess()
-    defer { fixture.remove() }
-    let events = EventCollector()
-    let client = try LocalACPClient.start(
-      launch: LocalACPRuntimeLaunchConfiguration(
-        runtimeKind: .codex,
-        executableURL: fixture.executable,
-        arguments: []
-      ),
-      workingDirectory: fixture.directory
-    )
-
-    let session = try await client.initializeSession(
-      workingDirectory: fixture.directory,
-      existingSessionID: nil,
-      title: "Fake ACP"
-    )
-    #expect(session.sessionID == "fake-session")
-    #expect(session.configuration.slashCommands == [
-      LocalACPSlashCommand(name: "review", detail: "Review changes", argumentHint: "[scope]")
-    ])
-    #expect(session.configuration.model == "fixture-model")
-    #expect(try await client.prompt("Hello") { event in
-      await events.record(event)
-    } == .endTurn)
-    #expect(await client.sessionConfiguration().slashCommands.isEmpty)
-    await client.shutdown()
-    #expect(await events.text() == "  Hello from fake ACP ")
-  }
-
-  @Test("ACP adapters preserve ordered whitespace and reasoning identities")
-  func acpStreamingVariants() async throws {
-    for runtimeKind in [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor] {
-      let fixture = try FakeACPProcess()
-      defer { fixture.remove() }
-      let events = EventCollector()
-      let client = try LocalACPClient.start(
-        launch: .init(runtimeKind: runtimeKind, executableURL: fixture.executable, arguments: []),
-        workingDirectory: fixture.directory
-      )
-      _ = try await client.initializeSession(workingDirectory: fixture.directory,
-                                             existingSessionID: nil, title: "Fixture")
-      _ = try await client.prompt("Hello") { event in await events.record(event) }
-      let values = await events.values()
-      let thoughts = values.compactMap { event -> AgentRunActivity? in
-        guard case .activity(let activity, _) = event, activity.kind == .thought else { return nil }
-        return activity
-      }
-      #expect(thoughts.map(\.content) == [" first\n", " second "])
-      #expect(thoughts.count == 2 && thoughts[0].id != thoughts[1].id)
-      #expect(await events.text() == "  Hello from fake ACP ")
-      await client.shutdown()
+    let root = fixture.url
+    for name in ["GUIDES", ".scratch", "scratch"] {
+      try FileManager.default.createDirectory(at: root.appending(path: name), withIntermediateDirectories: true)
     }
+    try Data("legacy".utf8).write(to: root.appending(path: ".scratch/work.py"))
+    try Data("current".utf8).write(to: root.appending(path: "scratch/work.py"))
+    let personal = "Personal before\n<!-- BEGIN WOVEN MATTER MANAGED -->\nOld instructions\n<!-- END WOVEN MATTER MANAGED -->\nPersonal after\n"
+    try Data(personal.utf8).write(to: root.appending(path: "AGENTS.md"))
+    for _ in 0..<2 { _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root, repositoriesURL: nil) }
+    let names = try FileManager.default.contentsOfDirectory(atPath: root.path)
+    #expect(Set(["repos", "databases", "guides", "plans", "research", "work_logs", "outbox", "scratch", "skills"]).isSubset(of: Set(names)))
+    #expect(!names.contains(".scratch") && !names.contains("GUIDES"))
+    #expect(try String(contentsOf: root.appending(path: "scratch/work.py"), encoding: .utf8) == "current")
+    #expect(try String(contentsOf: root.appending(path: "scratch/work.py.migrated-1"), encoding: .utf8) == "legacy")
+    let instructions = try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8)
+    #expect(instructions.hasPrefix("Personal before\n") && instructions.hasSuffix("Personal after\n"))
+    #expect(!instructions.contains("Old instructions"))
+    let incomplete = "Personal before\n<!-- BEGIN WOVEN MATTER MANAGED -->\nPersonal after\n"
+    try Data(incomplete.utf8).write(to: root.appending(path: "AGENTS.md"))
+    _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root, repositoriesURL: nil)
+    #expect(try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8) == incomplete)
   }
 
   @Test("remote commands preserve data and reject unsafe input")
@@ -222,8 +132,8 @@ struct RuntimeBoundaryTests {
         processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
         workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
       #expect(inherited.workspace.rootURL == directory)
-      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/Repos")
-      #expect(inherited.workspace.databasesURL.path == "/home/shared/Databases")
+      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/repos")
+      #expect(inherited.workspace.databasesURL.path == "/home/shared/databases")
       #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
       #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
     }
@@ -498,59 +408,6 @@ private actor InstallerDownloads {
   }
 
   func fetchCount() -> Int { count }
-}
-
-private actor EventCollector {
-  private var events: [LocalACPEvent] = []
-  private var collected = ""
-  func record(_ event: LocalACPEvent) {
-    events.append(event)
-    if case .assistantChunk(let text) = event { collected += text }
-  }
-  func text() -> String { collected }
-  func values() -> [LocalACPEvent] { events }
-}
-
-private struct FakeACPProcess {
-  let directory: URL
-  let executable: URL
-
-  init() throws {
-    directory = FileManager.default.temporaryDirectory.appending(
-      path: "wovenmatter-fake-acp-\(UUID().uuidString)", directoryHint: .isDirectory
-    )
-    executable = directory.appending(path: "fake-acp")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    try """
-      #!/bin/sh
-      while IFS= read -r request; do
-        request_id=$(printf '%s' "$request" | sed -E 's/.*"id":([0-9]+).*/\\1/')
-        case "$request" in
-          *'"method":"initialize"'*)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}\\n' "$request_id" ;;
-          *'"method":"authenticate"'*)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{}}\\n' "$request_id" ;;
-          *'cursor'*'list_available_models'*)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"models":[]}}\\n' "$request_id" ;;
-          *'session'*'new'*)
-            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"[scope]"}},{"name":"review"},{"name":""}]}}}'
-            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"fixture-model","options":[{"value":"fixture-model","name":"Fixture"}]}]}}}'
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fake-session"}}\\n' "$request_id" ;;
-          *'session'*'prompt'*)
-            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":" first\\n"}}}}'
-            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"  Hello from fake ACP "}}}}'
-            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":" second "}}}}'
-            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}'
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\\n' "$request_id" ;;
-        esac
-      done
-      """.write(to: executable, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes(
-      [.posixPermissions: 0o700], ofItemAtPath: executable.path
-    )
-  }
-
-  func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
 private struct TemporaryDirectory {

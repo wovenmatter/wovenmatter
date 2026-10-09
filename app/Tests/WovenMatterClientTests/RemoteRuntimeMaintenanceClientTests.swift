@@ -54,7 +54,7 @@ struct RemoteRuntimeMaintenanceClientTests {
             transportStatus: "unavailable", transportError: "Start this workspace's server", setupMethods: [], detectedProviders: []
         )
         let running = RemoteWorkspaceInstanceStatus(kind: "opencode", state: "running", pid: 123,
-                                                   version: "0.0.0-beta-19278", endpointPath: "/v1/workspace-instances/opencode/api", lastError: nil)
+                                                   version: "2.0.22", endpointPath: "/v1/workspace-instances/opencode/api", lastError: nil)
         let started = stoppedSnapshot.reconcilingOpenCode(instance: running, installed: true)
         #expect(started.state == "ready")
         #expect(started.transportStatus == "ready")
@@ -161,7 +161,7 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         case "/v1/workspace-instances/opencode/start":
             #expect(!first)
             #expect(request.httpMethod == "POST")
-            value = #"{"kind":"opencode","state":"running","pid":123,"version":"0.0.0-beta-19278","endpointPath":"/v1/workspace-instances/opencode/api","lastError":null}"#
+            value = #"{"kind":"opencode","state":"running","pid":123,"version":"2.0.22","endpointPath":"/v1/workspace-instances/opencode/api","lastError":null}"#
         default:
             Issue.record("Unexpected remote route: \(path)")
             value = "{}"

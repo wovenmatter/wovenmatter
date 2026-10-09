@@ -111,14 +111,31 @@ public enum AgentMessageAttachmentDraft: Codable, Equatable, Identifiable, Senda
   }
 }
 
+/// Transport metadata, never rendered or added to the model's message text.
+public struct AgentCLIContext: Codable, Equatable, Sendable {
+  public let executablePath: String
+  public let socketPath: String?
+  public let captureID: String
+
+  public init(executablePath: String, socketPath: String?, captureID: String) {
+    self.executablePath = executablePath
+    self.socketPath = socketPath
+    self.captureID = captureID
+  }
+}
+
 public struct AgentMessageInput: Codable, Equatable, Sendable {
   public let text: String
   public private(set) var attachments: [AgentMessageAttachmentDraft]
 
+  public let visibleWorkspace: WorkspaceVisibleContext?
   public let historyDeliveryID: String?
+  public var cliContext: AgentCLIContext?
 
-  public init(text: String, attachments: [AgentMessageAttachmentDraft] = [], historyDeliveryID: String? = nil) {
+  public init(text: String, attachments: [AgentMessageAttachmentDraft] = [], historyDeliveryID: String? = nil, visibleWorkspace: WorkspaceVisibleContext? = nil, cliContext: AgentCLIContext? = nil) {
+    self.visibleWorkspace = visibleWorkspace
     self.historyDeliveryID = historyDeliveryID
+    self.cliContext = cliContext
     self.text = text
     self.attachments = attachments
   }
@@ -167,7 +184,7 @@ public struct AgentMessageInput: Codable, Equatable, Sendable {
   }
 
   public func transportText(deliveryText: String? = nil) -> String {
-    let baseText = deliveryText ?? text
+    let baseText = [deliveryText ?? text, visibleWorkspace?.promptContext].compactMap { $0 }.joined(separator: "\n\n")
     let references = references
     guard !references.isEmpty else { return baseText }
     var sections: [String] = []

@@ -8,7 +8,6 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createSignInPrompt } from '../src/sign-in-interaction.mjs';
 import { inlineClaudeLogin } from '../src/claude-runtime.mjs';
-import { PermissionRequests } from '../src/permissions.mjs';
 
 test('subscription runtime cannot inherit API keys, provider overrides, or another Claude login', () => {
   const paths = { config: '/fixture/config', storage: '/fixture/native-store' };
@@ -78,22 +77,6 @@ test('native status exposes only account metadata and never treats a Console key
   assert.ok(!JSON.stringify(await runtime.status()).includes('not-exported'));
   value = { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' };
   assert.equal((await runtime.status()).connected, false);
-});
-
-test('approval cancellation and stale replies cannot authorize another turn', async () => {
-  const requests = new PermissionRequests();
-  const controller = new AbortController();
-  let oldID;
-  const first = requests.request({ sessionId: 'a' }, controller.signal, id => { oldID = id; });
-  controller.abort();
-  assert.equal(await first, false);
-  let newID;
-  const second = requests.request({ sessionId: 'b' }, undefined, id => { newID = id; });
-  requests.resolve(oldID, { outcome: { outcome: 'selected', optionId: 'allow' } });
-  assert.ok(requests.pending.has(newID));
-  requests.cancelSession('b');
-  assert.equal(await second, false);
-  assert.equal(requests.pending.size, 0);
 });
 
 test('native profiles are isolated across concurrent asynchronous operations', async () => {

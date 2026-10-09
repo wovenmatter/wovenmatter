@@ -161,6 +161,35 @@ struct SettingsDestinationRow<Icon: View>: View {
     }
 }
 
+struct SettingsDisclosureGroupStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                configuration.isExpanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    DashboardLucideIcon(glyph: .chevronDown, size: 12)
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 0 : -90))
+                    configuration.label
+                    Spacer(minLength: 0)
+                }
+                .font(.body)
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: 30))
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+
+            if configuration.isExpanded {
+                configuration.content
+                    .disclosureGroupStyle(self)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 struct SettingsCard<Content: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let title: String
@@ -910,7 +939,7 @@ struct CredentialAccessDisclosureView: View {
             }
 
             DisclosureGroup("Keychain prompts") {
-                Text("macOS may ask when you explicitly connect or reconnect saved credentials. This app-wide choice stays saved; background refreshes stay silent.")
+                Text("macOS may ask when you use Credential access in General settings. This app-wide choice stays saved; opening the browser and background refreshes stay silent.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)

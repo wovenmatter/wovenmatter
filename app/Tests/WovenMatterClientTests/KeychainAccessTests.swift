@@ -6,6 +6,39 @@ import Testing
 
 @Suite("Noninteractive Keychain access")
 struct KeychainAccessTests {
+  @Test("only central recovery can enable UI after application startup")
+  func centralRecoveryOwnsInteraction() {
+    let fixture = PolicyFixture()
+    let policy = KeychainInteractionPolicy(operations: fixture.operations)
+    let keychain = KeychainAccess(policy: policy)
+    #expect(policy.enforceCentralAuthorization() == errSecSuccess)
+    #expect(!fixture.allowed)
+    _ = keychain.copyMatching([:], allowInteraction: true)
+    #expect(fixture.calls.last?.allowed == false)
+    KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+      _ = keychain.copyMatching([:], allowInteraction: true)
+      #expect(fixture.calls.last?.allowed == true)
+      #expect(!fixture.allowed)
+      _ = keychain.copyMatching([:])
+      #expect(fixture.calls.last?.allowed == false)
+    }
+    _ = keychain.copyMatching([:], allowInteraction: true)
+    #expect(fixture.calls.last?.allowed == false)
+    #expect(!fixture.allowed)
+  }
+
+  @Test("central recovery preserves an externally disabled policy")
+  func centralRecoveryDoesNotOverrideCaller() {
+    let fixture = PolicyFixture(initiallyAllowed: false)
+    let policy = KeychainInteractionPolicy(operations: fixture.operations)
+    let keychain = KeychainAccess(policy: policy)
+    #expect(policy.enforceCentralAuthorization() == errSecSuccess)
+    KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+      _ = keychain.copyMatching([:], allowInteraction: true)
+    }
+    #expect(fixture.calls.allSatisfy { !$0.allowed })
+  }
+
   @Test("reads and writes suppress both legacy and modern UI and restore after failures",
         arguments: [errSecSuccess, errSecAuthFailed])
   func allOperationsAreNoninteractive(status: OSStatus) {

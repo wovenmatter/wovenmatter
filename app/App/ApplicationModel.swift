@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Observation
+import OSLog
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -55,6 +56,11 @@ struct DashboardWorkspaceOverview: Equatable, Sendable {
 @MainActor
 @Observable
 final class ApplicationModel {
+    #if DEBUG
+    private static let conversationPerformanceLog = Logger(
+        subsystem: "wovenmatter.desktop.dev", category: "ConversationPerformance"
+    )
+    #endif
     enum State: Equatable {
         case starting
         case ready
@@ -66,6 +72,7 @@ final class ApplicationModel {
     private var backendBuzzDiscoveryEnabled = false
     private(set) var buzzWorkspaceAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
+    let executorRuntime = ExecutorRuntime()
     let remoteWorkspaces: RemoteWorkspacesModel
     private(set) var buzzWorkspaceSnapshot = BuzzWorkspaceSnapshot(
         links: [],
@@ -116,6 +123,9 @@ final class ApplicationModel {
                 instance.applyInitialSessionTools = { [weak self] id, tools in
                     guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
                     try await apply(id, tools)
+                }
+                await instance.coordinator.setCLIConnectionProvider { [weak self] id in
+                    try await self?.sessionCLIConnection(id)
                 }
                 remoteOpenCodes[configuration.id] = instance
                 instance.onChange = { [weak self, weak instance] id in
@@ -588,7 +598,17 @@ final class ApplicationModel {
             }, calendarTaskHandler: { [weak self] caller, command, existing in
                 guard let self else { throw CancellationError() }
                 return try await self.resolveCalendarTask(callerID: caller, command: command, existing: existing)
+            }, executorHandler: { [weak self] caller, command, request in
+                guard let self else { throw CancellationError() }
+                return try await self.handleExecutorTool(caller, command: command, request: request)
+            }, executorControl: { [weak self] control in
+                guard let self else { throw CancellationError() }
+                return try await self.executeExecutorControl(control)
             }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+        try await dashboardStore.setCLIConnectionProvider { [weak self] id in
+            try await self?.sessionCLIConnection(id)
+        }
+        try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
     }
 
@@ -619,6 +639,9 @@ final class ApplicationModel {
             openCode.applyInitialSessionTools = { [weak self] id, tools in
                 guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
                 try await apply(id, tools)
+            }
+            await openCode.coordinator.setCLIConnectionProvider { [weak self] id in
+                try await self?.sessionCLIConnection(id)
             }
             self.openCode = openCode
             openCode.onChange = { [weak self, weak openCode] id in
@@ -1241,64 +1264,78 @@ final class ApplicationModel {
         let generation = state.beginRefresh()
         do {
             guard let dashboardStore else { return }
+            let requestedWindow = state.presentation?.window
+            let knownMessageIDs = requestedWindow?.loadedOlderMessages == true
+                ? requestedWindow?.messages.map(\.id) ?? [] : []
+            #if DEBUG
+            let readStarted = ProcessInfo.processInfo.systemUptime
+            #endif
             let page = try await dashboardStore.conversationHistoryPage(
                 id: id,
-                limit: Self.initialConversationMessageLimit
+                limit: Self.initialConversationMessageLimit,
+                compactActivities: true,
+                activityCursor: state.activityRevision,
+                knownActivityRunIDs: requestedWindow?.runs.map(\.id) ?? [],
+                knownMessageIDs: knownMessageIDs
             )
+            #if DEBUG
+            let readMS = (ProcessInfo.processInfo.systemUptime - readStarted) * 1_000
+            let preparationStarted = ProcessInfo.processInfo.systemUptime
+            #endif
             guard !Task.isCancelled, page.conversationID == id else { return }
-            let previous = state.presentation
-            let renderTask = Task.detached(priority: .userInitiated) { () -> DashboardConversationPresentation? in
-                let window = previous?.window.refreshing(with: page)
-                    ?? DashboardConversationWindow(page: page)
-                guard previous?.window != window else { return nil }
-                let messagesByID: [String: DashboardMessagePresentation]
-                let runsByID: [String: DashboardRunPresentation]
-                if let previous, previous.window.loadedOlderMessages {
-                    var nextMessages = previous.messagesByID
-                    for (messageID, presentation) in Self.renderMessagePresentations(
-                        page.messages,
-                        activities: page.activities,
-                        runs: page.runs,
-                        reusing: previous.messagesByID
-                    ) {
-                        nextMessages[messageID] = presentation
+            let known = Set(knownMessageIDs)
+            var presentation: DashboardConversationPresentation?
+            var renderedRevision: UInt64
+            // An older page can land while the page loads or renders. Render
+            // from the latest presentation, again if one landed meanwhile, so
+            // applying this refresh never drops it.
+            repeat {
+                renderedRevision = state.presentationRevision
+                let previous = state.presentation
+                let renderTask = Task.detached(priority: .userInitiated) { () -> DashboardConversationPresentation? in
+                    let window = previous?.window.refreshing(with: page, knownMessageIDs: known)
+                        ?? DashboardConversationWindow(page: page)
+                    guard previous?.window != window else { return nil }
+                    let messagesByID = Self.renderMessagePresentations(window.messages,
+                        activities: window.activities, runs: window.runs,
+                        reusing: previous?.messagesByID ?? [:])
+                    let runsByID: [String: DashboardRunPresentation]
+                    if let previous, previous.window.loadedOlderMessages {
+                        var nextRuns = previous.runsByID
+                        for (runID, presentation) in Self.renderRunPresentations(
+                            page.runs,
+                            reusing: previous.runsByID
+                        ) {
+                            nextRuns[runID] = presentation
+                        }
+                        runsByID = nextRuns
+                    } else {
+                        runsByID = Self.renderRunPresentations(
+                            page.runs,
+                            reusing: previous?.runsByID ?? [:]
+                        )
                     }
-                    messagesByID = nextMessages
-                    var nextRuns = previous.runsByID
-                    for (runID, presentation) in Self.renderRunPresentations(
-                        page.runs,
-                        reusing: previous.runsByID
-                    ) {
-                        nextRuns[runID] = presentation
-                    }
-                    runsByID = nextRuns
-                } else {
-                    messagesByID = Self.renderMessagePresentations(
-                        page.messages,
-                        activities: page.activities,
-                        runs: page.runs,
-                        reusing: previous?.messagesByID ?? [:]
-                    )
-                    runsByID = Self.renderRunPresentations(
-                        page.runs,
-                        reusing: previous?.runsByID ?? [:]
+                    return DashboardConversationPresentation(
+                        window: window,
+                        messagesByID: messagesByID,
+                        runsByID: runsByID
                     )
                 }
-                return DashboardConversationPresentation(
-                    window: window,
-                    messagesByID: messagesByID,
-                    runsByID: runsByID
-                )
-            }
-            let presentation = await withTaskCancellationHandler {
-                await renderTask.value
-            } onCancel: {
-                renderTask.cancel()
-            }
-            guard !Task.isCancelled else { return }
-            guard conversationStatesByID[id] === state,
-                  state.isCurrentRefresh(generation) else { return }
+                presentation = await withTaskCancellationHandler {
+                    await renderTask.value
+                } onCancel: {
+                    renderTask.cancel()
+                }
+                guard !Task.isCancelled else { return }
+                guard conversationStatesByID[id] === state,
+                      state.isCurrentRefresh(generation) else { return }
+            } while state.presentationRevision != renderedRevision
+            state.activityRevision = page.activityRevision
             if let presentation { state.apply(presentation) }
+            #if DEBUG
+            let preparationMS = (ProcessInfo.processInfo.systemUptime - preparationStarted) * 1_000
+            Self.conversationPerformanceLog.debug("Refresh read_ms=\(readMS, privacy: .public) prepare_apply_ms=\(preparationMS, privacy: .public) summaries=\(page.activityReadMetrics.summaryRows, privacy: .public) full_decoded=\(page.activityReadMetrics.fullRowsDecoded, privacy: .public) activities=\(state.presentation?.window.activities.count ?? 0, privacy: .public)")
+            #endif
             touchConversationState(state)
             // Reloading saved messages must not erase a current execution error
             // projected by the backend; its next state snapshot owns clearing it.
@@ -1335,56 +1372,39 @@ final class ApplicationModel {
             let page = try await dashboardStore.conversationHistoryPage(
                 id: id,
                 before: cursor,
-                limit: Self.olderConversationMessageLimit
+                limit: Self.olderConversationMessageLimit,
+                compactActivities: true
             )
             guard !Task.isCancelled,
                   conversationStatesByID[id] === state else {
                 return false
             }
-            let renderTask = Task.detached(priority: .userInitiated) {
-                let messagesByID = Self.renderMessagePresentations(
-                    page.messages,
-                    activities: page.activities,
-                    runs: page.runs,
-                    reusing: current.messagesByID
-                )
-                let runsByID = Self.renderRunPresentations(
-                    page.runs,
-                    reusing: current.runsByID
-                )
-                return (messages: messagesByID, runs: runsByID)
-            }
-            let renderedPage = await withTaskCancellationHandler {
-                await renderTask.value
-            } onCancel: {
-                renderTask.cancel()
-            }
-            guard !Task.isCancelled,
-                  let latest = state.presentation,
-                  latest.window.conversationID == id else {
-                return false
-            }
-            var messagesByID = renderedPage.messages
-            for (messageID, presentation) in current.messagesByID {
-                messagesByID[messageID] = presentation
-            }
-            for (messageID, presentation) in latest.messagesByID {
-                messagesByID[messageID] = presentation
-            }
-            var runsByID = renderedPage.runs
-            for (runID, presentation) in current.runsByID {
-                runsByID[runID] = presentation
-            }
-            for (runID, presentation) in latest.runsByID {
-                runsByID[runID] = presentation
-            }
-            let expandedWindow = current.window.prepending(page)
-            state.apply(DashboardConversationPresentation(
-                window: expandedWindow.mergingNewer(latest.window),
-                messagesByID: messagesByID,
-                runsByID: runsByID
-            ))
+            var presentation: DashboardConversationPresentation
+            var renderedRevision: UInt64
+            repeat {
+                guard let latest = state.presentation else { return false }
+                renderedRevision = state.presentationRevision
+                let renderTask = Task.detached(priority: .userInitiated) {
+                    let window = latest.window.prepending(page, requestedFrom: current.window)
+                    return DashboardConversationPresentation(
+                        window: window,
+                        messagesByID: Self.renderMessagePresentations(window.messages,
+                            activities: window.activities, runs: window.runs, reusing: latest.messagesByID),
+                        runsByID: Self.renderRunPresentations(window.runs, reusing: latest.runsByID))
+                }
+                presentation = await withTaskCancellationHandler {
+                    await renderTask.value
+                } onCancel: { renderTask.cancel() }
+                guard !Task.isCancelled, conversationStatesByID[id] === state else { return false }
+            } while state.presentationRevision != renderedRevision
+            // A concurrent tail read may have advanced its cursor before this
+            // older run became known. Invalidate that read and catch every
+            // retained run up once, using cached compact summaries.
+            _ = state.beginRefresh()
+            state.activityRevision = nil
+            state.apply(presentation)
             touchConversationState(state)
+            await refreshConversation(id: id)
             workspaceError = nil
             return page.messages.isEmpty == false
         } catch is CancellationError {
@@ -1442,30 +1462,42 @@ final class ApplicationModel {
         result.reserveCapacity(messages.count)
         for message in messages {
             guard !Task.isCancelled else { return result }
-            // Older steering replies have no work disclosure of their own;
-            // retain their complete canonical text instead of hiding commentary.
-            let displayedBody = workRunsByReply[message.id].map { runID in
-                AssistantTranscriptProjection(messageID: message.id,
-                    content: message.content, activities: (activitiesByRun[runID] ?? []).map(\.activity)).body
-            } ?? message.content
-            if let existing = previous[message.id],
-               existing.source == message.content,
-               existing.displayedBody == displayedBody,
-               existing.status == message.status,
-               existing.createdAt == message.createdAt {
+            let work = workRunsByReply[message.id].map { activitiesByRun[$0] ?? [] } ?? []
+            if let existing = previous[message.id], existing.source == message.content,
+               existing.status == message.status, existing.createdAt == message.createdAt,
+               existing.activities == work {
                 result[message.id] = existing
                 continue
             }
+            // Earlier steering replies retain canonical text. Only the owning
+            // reply partitions commentary from the final/live response.
+            let workActivities = work.map(\.activity)
+            let partition = ConversationWorkTimeline.displayPartition(
+                AssistantTranscriptProjection(messageID: message.id,
+                    content: message.content, activities: workActivities),
+                activities: workActivities, isLive: message.status == "streaming")
+            let candidateBody = message.status == "streaming"
+                ? AssistantStreamingText.readyPrefix(of: partition.body) : partition.body
+            let existing = previous[message.id]
+            // The persistence invalidation stream already coalesces updates.
+            // Dropping a final append here without a trailing delivery leaves
+            // text stale until another provider event happens to arrive.
+            let displayedBody = candidateBody
+            let commentaryIDs = partition.commentaryIDs
             result[message.id] = DashboardMessagePresentation(
                 source: message.content,
                 displayedBody: displayedBody,
                 status: message.status,
                 createdAt: message.createdAt,
-                document: message.role == "assistant"
+                document: displayedBody == existing?.displayedBody ? existing?.document : message.role == "assistant"
                     ? ConversationMarkdownDocument(
                         RemoteNoteEditEnvelope.redactingEnvelopes(in: displayedBody)
                     )
-                    : nil
+                    : nil,
+                activities: work,
+                commentaryIDs: commentaryIDs,
+                workTimeline: ConversationWorkTimeline(records: work, commentaryIDs: commentaryIDs),
+                textDeliveredAt: displayedBody == existing?.displayedBody ? existing!.textDeliveredAt : Date()
             )
         }
         return result
@@ -2031,26 +2063,17 @@ final class ApplicationModel {
         }
         acknowledgeCredentialAccessDisclosure()
         do {
-            try await usage.authorizeSavedCredentials()
-            if remoteWorkspaces.isCredentialAccessEnabled {
-                for workspace in remoteWorkspaces.workspaces {
-                    try Task.checkCancellation()
-                    try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
+            try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                guard KeychainAccess.enforceCentralAuthorization() == 0 else {
+                    throw BrowserCredentialStore.AccessError.unavailable(-25308)
                 }
-            }
-            let links = openClawGatewayLinks.filter {
-                $0.location != .remoteWorkspace || remoteWorkspaces.isCredentialAccessEnabled
-            }
-            if !links.isEmpty {
-                guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-                for link in links {
-                    try Task.checkCancellation()
-                    guard openClawGatewayOperationAgentIDs.insert(link.agentID).inserted else {
-                        throw CancellationError()
+                try await Task.detached(priority: .userInitiated) {
+                    try KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                        try BrowserCredentialStore.shared.prepare(consented: true, authorize: true)
                     }
-                    defer { openClawGatewayOperationAgentIDs.remove(link.agentID) }
-                    try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
-                }
+                }.value
+                try await usage.authorizeSavedCredentials()
+                try await authorizeSavedConnections()
             }
             try Task.checkCancellation()
             await refreshLocalUsage(
@@ -2065,6 +2088,35 @@ final class ApplicationModel {
             credentialAccessStatus = "Credential recovery stopped. Automatic refreshes will stay silent."
         } catch {
             credentialAccessStatus = "Credential recovery stopped: \(error.localizedDescription)"
+        }
+    }
+
+    // Keep authorization in the process that owns connection caches. The
+    // frontend does not own a DashboardStore when background execution is on.
+    private func authorizeSavedConnections() async throws {
+        if isBackendFrontend {
+            _ = try await sendBackendWorkspaceService(.authorizeSavedConnections)
+            return
+        }
+        if remoteWorkspaces.isCredentialAccessEnabled {
+            for workspace in remoteWorkspaces.workspaces {
+                try Task.checkCancellation()
+                try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
+            }
+        }
+        let links = openClawGatewayLinks.filter {
+            $0.location != .remoteWorkspace || remoteWorkspaces.isCredentialAccessEnabled
+        }
+        if !links.isEmpty {
+            guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            for link in links {
+                try Task.checkCancellation()
+                guard openClawGatewayOperationAgentIDs.insert(link.agentID).inserted else {
+                    throw CancellationError()
+                }
+                defer { openClawGatewayOperationAgentIDs.remove(link.agentID) }
+                try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
+            }
         }
     }
 
@@ -2314,6 +2366,7 @@ final class ApplicationModel {
     /// before every new user, tool, and scheduled input for this conversation.
     @discardableResult
     func beginAgentStop(conversationID: String, retainFailure: Bool = true) -> Task<Void, any Error> {
+        executorRuntime.cancel(conversationID)
         cancelPendingAgentDispatch(conversationID: conversationID)
         for permissionID in pendingLocalACPPermissions.filter({ $0.conversationID == conversationID }).map(\.id) {
             resolveLocalACPPermission(id: permissionID, optionID: nil)
@@ -2462,8 +2515,8 @@ final class ApplicationModel {
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
-        let normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: input.attachments, historyDeliveryID: input.historyDeliveryID)
+        var normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
         for reference in normalized.references where reference.kind == .conversation {
             try await dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)
@@ -2481,8 +2534,10 @@ final class ApplicationModel {
         }
         let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
         if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
-        let discovery = try await agentTools.discovery(sessionID: conversation.id, remote: remote, noteID: context?.noteID)
-        let deliveryContent = discovery + "\n\n" + normalized.text
+        let capturedInputID = try await dashboardStore.database.captureInputContext(conversationID: conversation.id,
+            noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
+        normalized.cliContext = try await agentTools.cliContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
+        let deliveryContent = normalized.text
         try dispatchFence.check()
         if let deliveryID = normalized.historyDeliveryID {
             try await dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
@@ -2497,7 +2552,9 @@ final class ApplicationModel {
             if conversation.localRuntimeKind == .opencode {
                 guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
                 guard expectedRunID == nil else { throw LocalACPSessionDatabaseError.steeringUnsupported }
-                let receipt = try await openCode.send(conversation.id, input: normalized, discovery: discovery,
+                _ = try await dashboardStore.database.localACPSession(conversationID: conversation.id)
+                try dispatchFence.check()
+                let receipt = try await openCode.send(conversation.id, input: normalized,
                     requiresIdle: requiresIdle, dispatchFence: dispatchFence)
                 accepted = receipt.identifiers
             } else if steering {
@@ -2597,11 +2654,6 @@ final class ApplicationModel {
             }
         }
         try? await store.database.dismissTerminalRemoteNoteEdits()
-    }
-
-    func canAgentEditOpenNote(_ conversation: WorkspaceConversationRecord?) -> Bool {
-        guard let conversation else { return false }
-        return conversation.localRuntimeKind != nil && agentTools?.policy(for: conversation.id).enabled.contains(.notes) == true
     }
 
     private func acceptOpenClawGatewayMessage(
@@ -2892,6 +2944,52 @@ final class ApplicationModel {
         }
     }
 
+    /// Read one child's existing archive without contacting its execution host.
+    func builtInSubagentHistory(_ request: BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue {
+        if isBackendFrontend {
+            guard let history = try await sendBackendCommand(.subagentHistory(request)).history else {
+                throw BackendRPCError.remote("Subagent history is unavailable.")
+            }
+            return history
+        }
+        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let descriptor = try await database.localACPSession(conversationID: request.conversationID)
+        let sourcePrefix = "builtin-pi-durable:"
+        guard descriptor.runtimeKind == .defaultAgent,
+              request.after >= 0, request.offset >= 0, request.offset <= Int.max - 65536,
+              request.sourceID.hasPrefix(sourcePrefix),
+              UUID(uuidString: String(request.sourceID.dropFirst(sourcePrefix.count))) != nil,
+              UUID(uuidString: request.nativeSessionID) != nil,
+              let childID = Int(request.nativeConversationID), childID > 0 else {
+            throw BackendRPCError.remote("Invalid subagent archive identity.")
+        }
+        let hostPrefix = descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() + ":" } ?? "local:"
+        let sourceID = hostPrefix + request.sourceID
+        var query = WorkspaceHistoryQuery(command: "events", conversationID: request.conversationID,
+            after: request.after, limit: 30, sourceID: sourceID,
+            nativeSessionID: request.nativeSessionID, nativeConversationID: request.nativeConversationID)
+        if let eventID = request.eventID {
+            var eventQuery = WorkspaceHistoryQuery(command: "event", id: eventID, limit: 1)
+            eventQuery.offset = request.offset
+            let page = try await database.queryHistory(eventQuery)
+            guard let row = page.objectValue?["rows"]?.arrayValue?.first?.objectValue,
+                  row["conversation_id"]?.stringValue == request.conversationID,
+                  row["source_id"]?.stringValue == sourceID,
+                  row["native_session_id"]?.stringValue == request.nativeSessionID,
+                  let sequence = row["sequence"]?.intValue, sequence > 0 else {
+                throw BackendRPCError.remote("The archive event belongs to a different conversation.")
+            }
+            query.after = Int64(sequence - 1)
+            query.limit = 1
+            let membership = try await database.queryHistory(query)
+            guard membership.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == eventID else {
+                throw BackendRPCError.remote("The archive event belongs to a different subagent.")
+            }
+            return page
+        }
+        return try await database.queryHistory(query)
+    }
+
     /// Reads the retained usage index without refreshing providers or credentials.
     func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
         try await usage.recordedUsageSamples(from: start, to: end, limit: limit, offset: offset)
@@ -3030,8 +3128,10 @@ final class ApplicationModel {
             localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue,
-            workspace: "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path)
+        let selectionWorkspace = "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: runtimeKind.rawValue, workspace: selectionWorkspace)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -3060,7 +3160,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -3101,8 +3202,10 @@ final class ApplicationModel {
             localRunError = "This remote harness is not ready. Refresh it in Settings and try again."
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue,
-            workspace: "remote:" + target.configuration.id.uuidString.lowercased())
+        let selectionWorkspace = "remote:" + target.configuration.id.uuidString.lowercased()
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         do {
             if target.harness.id == .opencode {
                 await synchronizeRemoteOpenCodeInstances()
@@ -3146,7 +3249,8 @@ final class ApplicationModel {
                     unlinkedOpenClawAgentID = agentID
                 }
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -3156,6 +3260,14 @@ final class ApplicationModel {
             localRunError = error.localizedDescription
             return nil
         }
+    }
+
+    private func sessionCLIConnection(_ conversationID: String) async throws -> AgentCLIContext? {
+        guard let agentTools, let database = dashboardStore?.database else { return nil }
+        let session = try await database.localACPSession(conversationID: conversationID)
+        let remote = session.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
+        guard session.remoteWorkspaceID == nil || remote != nil else { throw ApplicationModelError.remoteHarnessUnavailable }
+        return try await agentTools.cliContext(sessionID: conversationID, remote: remote, captureID: "")
     }
 
     func directACPLaunchContext(
@@ -3183,7 +3295,7 @@ final class ApplicationModel {
                 let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "Repos"), databasesURL: workspaceRoot.appending(path: "Databases")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "repos"), databasesURL: workspaceRoot.appending(path: "databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
@@ -3231,8 +3343,11 @@ final class ApplicationModel {
             localRunError = "The selected Buzz agent is not available from its linked workspace."
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier,
-            workspace: "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased())
+        let selectionHarness = enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier
+        let selectionWorkspace = "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased()
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: selectionHarness, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: selectionHarness, workspace: selectionWorkspace)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -3253,7 +3368,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -3909,6 +4025,9 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        executorRuntime.setupTask?.cancel()
+        for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
+        Task { await executorRuntime.client?.shutdown() }
         activeWorkSleepPrevention.stop()
         closedLidProtection.stop()
         library.stop()
@@ -3934,7 +4053,7 @@ final class ApplicationModel {
         Task { for instance in openCodeInstances { await instance.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
     }
 
-    private func requestLocalACPPermission(
+    func requestLocalACPPermission(
         conversationID: String,
         request: LocalACPPermissionRequest
     ) async -> String? {
@@ -3961,7 +4080,7 @@ final class ApplicationModel {
         }
     }
 
-    private func requestLocalACPInteraction(
+    func requestLocalACPInteraction(
         conversationID: String,
         request: LocalACPInteractionRequest
     ) async -> LocalACPInteractionResponse {
@@ -5525,7 +5644,7 @@ extension ApplicationModel {
         || !openClawGatewayOperationAgentIDs.isEmpty || !openClawHeartbeatSavingAgentIDs.isEmpty
         || openClawCronBusy || !updatingDatabasePreferenceIDs.isEmpty
         || !checkingBuzzWorkspaceLinkIDs.isEmpty || !mutatingBuzzWorkspaceEnrollmentIDs.isEmpty
-        || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress
+        || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress || !executorRuntime.jobs.isEmpty || executorRuntime.isSettingUp
     }
 
 
@@ -5756,7 +5875,10 @@ extension ApplicationModel {
             guard ready else { throw BackendRPCError.remote("The background service did not become ready. Try reopening Woven Matter.") }
             let store = try await DashboardStore(supportDirectory: support, readOnlyProjection: true)
             dashboardStore = store
-            agentTools = try await WorkspaceAgentToolsModel(projection: store.database) { [weak self] mutation in
+            agentTools = try await WorkspaceAgentToolsModel(projection: store.database, executorControl: { [weak self] control in
+                guard let self else { throw CancellationError() }
+                return try await self.sendBackendCommand(.toolsMutation(.executor(control))).exportURL
+            }) { [weak self] mutation in
                 guard let self else { throw CancellationError() }
                 let result = try await self.sendBackendCommand(.toolsMutation(mutation))
                 if result.requiresTimerPauseConfirmation { throw WorkspaceToolError.timerPauseConfirmation }
@@ -5902,8 +6024,14 @@ extension ApplicationModel {
         }
         let wasSuspended = noteEditingSuspended
         suspendNoteEditing()
-        defer { if !isPreparedForExecutionRestart && !wasSuspended { resumeNoteEditing() } }
+        defer {
+            if !isPreparedForExecutionRestart {
+                WorkspaceAssetSession.cancelPreparedRestart()
+                if !wasSuspended { resumeNoteEditing() }
+            }
+        }
         guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
+        guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
         let previous = LocalBackgroundExecution.shared.isEnabled
         try await LocalExecutionTransition.perform(prepare: {
             if self.isBackendFrontend { try await self.prepareBackendForUpdate() }
@@ -6422,6 +6550,10 @@ extension ApplicationModel {
             guard let agent = openClawAgent(agentID: id) else { throw BackendRPCError.remote("This agent is no longer available.") }
             linkOpenClawGateway(agent: agent)
         case let .unlinkOpenClaw(id): unlinkOpenClawGateway(agentID: id)
+        case .authorizeSavedConnections:
+            try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                try await authorizeSavedConnections()
+            }
         case let .reconnectOpenClaw(id): reconnectOpenClawGateway(agentID: id)
         case let .restartOpenClaw(id): restartOpenClawGateway(agentID: id)
         case let .refreshOpenClaw(id): await refreshOpenClawGatewayStatus(agentID: id)

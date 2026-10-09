@@ -77,6 +77,7 @@ struct SettingsView: View {
                     model: model,
                     runtimeKind: runtimeKind,
                     workspaceID: workspaceID,
+                    isWorkspaceScoped: origin != .landing,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = origin.section }
                 )
@@ -230,8 +231,8 @@ struct SettingsView: View {
                     action: { section = .connections("global") }
                 )
                 SettingsDestinationRow(
-                    title: "Built-in Agent",
-                    detail: "Providers, search, and models across your workspaces.",
+                    title: AgentRuntimeKind.defaultAgent.displayName,
+                    detail: "Conversation defaults, subagents, providers, and models.",
                     icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
                     action: { section = .defaultAgent("global", .landing) }
                 )
@@ -330,6 +331,7 @@ private struct SettingsHarnessView: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
     var workspaceID: UUID?
+    var isWorkspaceScoped = false
     var reservesRailControlSpace = false
     let onBack: () -> Void
     @Environment(\.dashboardTheme) private var theme
@@ -348,12 +350,14 @@ private struct SettingsHarnessView: View {
     var body: some View {
         SettingsPage(
             title: runtimeKind.displayName,
-            detail: workspaceID == nil
-                ? "\(runtimeKind.displayName) on this Mac."
-                : remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." },
+            detail: isWorkspaceScoped
+                ? remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." } ?? "\(runtimeKind.displayName) on this Mac."
+                : "Conversation defaults and runtime settings.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsAgentDefaultsSection(model: model, runtime: runtimeKind,
+                fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if runtimeKind == .codex {
                 codexIconCard
             }

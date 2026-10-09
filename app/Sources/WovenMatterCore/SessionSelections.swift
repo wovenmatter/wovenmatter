@@ -76,23 +76,28 @@ public struct SessionSelectionSnapshot: Codable, Equatable, Sendable {
   public var desiredSelections: SessionSelections
   /// A new conversation retains pending application across process restarts.
   public var requiresApplication: Bool
+  /// Product Full Access applies only when the native adapter advertises it.
+  /// Explicit Settings or conversation choices keep their confirmation barrier.
+  public var usesProductPermissionDefault: Bool
 
   public init(
     harness: String,
     workspace: String,
     selections: SessionSelections,
     desiredSelections: SessionSelections = SessionSelections(),
-    requiresApplication: Bool = false
+    requiresApplication: Bool = false,
+    usesProductPermissionDefault: Bool = false
   ) {
     self.harness = harness
     self.workspace = workspace
     self.selections = selections
     self.desiredSelections = desiredSelections
     self.requiresApplication = requiresApplication
+    self.usesProductPermissionDefault = usesProductPermissionDefault
   }
 
   private enum CodingKeys: String, CodingKey {
-    case harness, workspace, selections, desiredSelections, requiresApplication
+    case harness, workspace, selections, desiredSelections, requiresApplication, usesProductPermissionDefault
   }
 
   public init(from decoder: any Decoder) throws {
@@ -103,5 +108,6 @@ public struct SessionSelectionSnapshot: Codable, Equatable, Sendable {
     desiredSelections = try container.decode(SessionSelections.self, forKey: .desiredSelections)
     // Older snapshots already represented captured sessions, not pending work.
     requiresApplication = try container.decodeIfPresent(Bool.self, forKey: .requiresApplication) ?? false
+    usesProductPermissionDefault = try container.decodeIfPresent(Bool.self, forKey: .usesProductPermissionDefault) ?? false
   }
 }

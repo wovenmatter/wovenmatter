@@ -48,8 +48,12 @@ final class CompanionUITests: XCTestCase {
     body.typeText(bodyText)
     let writtenBody = body.value as? String
     XCTAssertEqual(writtenBody?.lowercased(), bodyText.lowercased())
+    let dismissKeyboard = app.buttons["dismiss-keyboard"]
+    XCTAssertTrue(dismissKeyboard.waitForExistence(timeout: 5))
+    dismissKeyboard.tap()
+    XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
     let saved = app.staticTexts["note-save-state"]
-    let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on iPhone'")
+    let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on this device'")
     expectation(for: savedPredicate, evaluatedWith: saved)
     waitForExpectations(timeout: 10)
     app.terminate()
@@ -58,7 +62,7 @@ final class CompanionUITests: XCTestCase {
     let reopened = app.descendants(matching: .any)["note-title"].firstMatch
     XCTAssertTrue(reopened.waitForExistence(timeout: 10))
     XCTAssertTrue((reopened.value as? String ?? reopened.label).contains(marker.trimmingCharacters(in: .whitespaces)))
-    XCTAssertTrue(app.staticTexts["note-save-state"].label.contains("Saved on iPhone"))
+    XCTAssertTrue(app.staticTexts["note-save-state"].label.contains("Saved on this device"))
     let restoredBody = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
     XCTAssertTrue(restoredBody.waitForExistence(timeout: 5))
     XCTAssertEqual(restoredBody.value as? String, writtenBody)

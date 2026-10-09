@@ -12,11 +12,14 @@ public struct WovenMatterToolRequest: Codable, Sendable {
   public var requestID: String
   public var arguments: [String]
   public var noteEdit: NoteEditingRequest?
-  public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), noteEdit: NoteEditingRequest? = nil) {
+  /// Immutable input binding supplied by the native tool integration.
+  public var contextID: String?
+  public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), noteEdit: NoteEditingRequest? = nil, contextID: String? = nil) {
     self.schemaVersion = 1
     self.requestID = UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID
     self.arguments = arguments
     self.noteEdit = noteEdit
+    self.contextID = contextID
   }
   /// The transport's request ID is not part of the operation's arguments. A
   /// retry may add the returned ID without changing the original operation.
@@ -83,6 +86,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .notes: return !["list", "folders", "read", "versions", "version"].contains(action)
     case .history, .usage, .library: return false
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
+    case .executor: return action == "execute" || action == "cancel"
     case .timers: return action != "list"
     case .calendar: return !["list", "read", "occurrences"].contains(action)
     case nil: return false
@@ -100,6 +104,14 @@ public struct WovenMatterToolCommand: Sendable {
       return
     }
     let domain = args.removeFirst()
+    if domain == "context" {
+      guard args.isEmpty || [["help"], ["--help"], ["-h"]].contains(Array(args)) else {
+        throw WorkspaceToolError.invalid("Usage: wovenmatter context")
+      }
+      self.group = nil; self.action = "context"; self.positional = []; self.options = [:]
+      self.optionIndices = [:]; self.operationArguments = arguments; self.wantsHelp = !args.isEmpty
+      return
+    }
     guard let group = WorkspaceToolGroup(rawValue: domain) else {
       throw WorkspaceToolError.invalid("Unknown tool group '\(domain)'. Run wovenmatter help.")
     }
@@ -114,11 +126,12 @@ public struct WovenMatterToolCommand: Sendable {
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
+      .executor: ["execute", "search", "skills", "status", "cancel"],
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -163,6 +176,10 @@ public struct WovenMatterToolCommand: Sendable {
     let allowed: Set<String>
     let maximumPositionals: Int
     switch (group, action) {
+    case (.executor, "execute"): allowed = ["code", "file"] + request; maximumPositionals = 0
+    case (.executor, "search"): allowed = ["query", "limit"] + request; maximumPositionals = 0
+    case (.executor, "skills"): allowed = request; maximumPositionals = 0
+    case (.executor, "status"), (.executor, "cancel"): allowed = ["id"] + request; maximumPositionals = 1
     case (.notes, "list"): allowed = ["search", "folder", "sort"] + pagination; maximumPositionals = 0
     case (.notes, "folders"): allowed = pagination; maximumPositionals = 0
     case (.notes, "create"): allowed = ["title", "kind", "folder"] + request; maximumPositionals = 0
@@ -197,8 +214,8 @@ public struct WovenMatterToolCommand: Sendable {
       default: allowed = ["note-id", "table-id", "column"] + revision + request
       }
       maximumPositionals = 1
-    case (.history, "search"): allowed = ["search", "all-workspace", "conversation", "run", "harness", "folder", "kind", "since", "until"] + pagination; maximumPositionals = 1
-    case (.history, "events"): allowed = ["conversation", "run", "harness", "folder", "kind", "search", "since", "until"] + pagination; maximumPositionals = 0
+    case (.history, "search"): allowed = ["search", "all-workspace", "conversation", "run", "harness", "folder", "kind", "since", "until", "source-id", "native-session-id", "native-record-id", "native-conversation-id"] + pagination; maximumPositionals = 1
+    case (.history, "events"): allowed = ["conversation", "run", "harness", "folder", "kind", "search", "since", "until", "source-id", "native-session-id", "native-record-id", "native-conversation-id"] + pagination; maximumPositionals = 0
     case (.history, "trace"): allowed = ["id", "run", "kind", "since", "until"] + pagination; maximumPositionals = 1
     case (.history, "event"): allowed = ["id"] + bodyChunk; maximumPositionals = 1
     case (.history, "conversations"): allowed = ["search", "folder", "all-workspace", "sort"] + pagination; maximumPositionals = 0
@@ -250,7 +267,7 @@ public struct WovenMatterToolCommand: Sendable {
          (.timers, "update"), (.timers, "pause"), (.timers, "resume"), (.timers, "remove"),
          (.calendar, "read"), (.calendar, "occurrences"), (.calendar, "update"),
          (.calendar, "remove"), (.calendar, "copy"), (.calendar, "detach"),
-         (.library, "read"):
+         (.library, "read"), (.executor, "status"), (.executor, "cancel"):
       positionalAliases = ["id"]
     default: positionalAliases = []
     }
@@ -260,6 +277,9 @@ public struct WovenMatterToolCommand: Sendable {
     if group == .notes, ["apply", "set-html"].contains(action),
        options["file"] != nil, options[action == "apply" ? "json" : "html"] != nil {
       throw WorkspaceToolError.invalid("Pass inline content or --file, not both.")
+    }
+    if group == .executor, action == "execute", options["file"] != nil, options["code"] != nil {
+      throw WorkspaceToolError.invalid("Pass --code or --file, not both.")
     }
     if group == .calendar {
       for pair in [("all-day", "timed"), ("no-repeat", "repeat-unit"), ("no-repeat", "repeat-interval"), ("regular-event", "prompt")] {
@@ -297,19 +317,22 @@ public struct WovenMatterToolCommand: Sendable {
   }
 
   public static let usage = """
-    Usage: wovenmatter GROUP COMMAND [OPTIONS]
+    Use the WovenMatter CLI to access the tools below and get the most out of WovenMatter.
 
+      context     Read the open asset ID captured for the message being processed
       notes       Discover, read and edit notes, spreadsheets and HTML; recover versions
       history     Search conversations and read observed transcripts and traces
       sessions    Create, message and coordinate ordinary Woven Matter sessions
-      timers      Save one-time or recurring instructions for a session
-      usage       Read recorded usage
-      calendar    Read and maintain calendar events
+      timers      Wake an agent at a set time or interval to carry out instructions
+      usage       Read recorded usage analytics and available account usage limits
+      calendar    Read, create and maintain calendar events
       library     Inspect available retained Library items
+      executor    Search selected apps and execute scoped JavaScript programs
 
-    Run wovenmatter GROUP help for details. Tools must be enabled for this session.
-    Commands are scoped to the session that supplied WOVENMATTER_SOCKET.
-    Choose --request-id UUID before a mutation; reuse it with the same command after a lost response.
+    Tools must be enabled for this session. Commands run on behalf of this session
+    and use the permissions set by the user.
+    For commands that make changes, supply a UUID with --request-id.
+    If a response is lost, retry the same command in the same session with the same UUID.
     """ + "\n"
 
   public static func help(for group: WorkspaceToolGroup) -> String {
@@ -320,14 +343,16 @@ public struct WovenMatterToolCommand: Sendable {
       create --title TITLE [--kind note|spreadsheet|html] [--folder ID]
       read --note-id ID [--offset N --characters 1...65536]
       append --note-id ID --text TEXT [--revision REVISION]
-      apply --note-id ID --json OPERATIONS_JSON [--revision REVISION]
+      apply --note-id ID (--json OPERATIONS_JSON | --file PATH) [--revision REVISION]
       set-html --note-id ID --file PATH --revision REVISION
       table create|set-cell|add-row|remove-row|add-column|remove-column [OPTIONS]
       versions NOTE_ID | version VERSION_ID [--offset N --characters N]
       restore NOTE_ID --version VERSION_ID --revision CURRENT_REVISION
       Note edits also support insert, replace-block, delete-block, format, set-title, link and unlink.
       Use read to obtain the current document, block/table IDs and revision before editing.
-      Destructive edits and table insertions with --after require --revision. Appending rows or columns without --after is revision-optional.
+      Changes to existing content, titles, formatting or links require --revision.
+      Adding table rows or columns with --after also requires --revision.
+      Appending rows or columns without --after is revision-optional.
       Mutation retries accept --request-id UUID. A replayed edit/restore acknowledges its
       original revision without old content; read again for the current document.
       """
@@ -337,6 +362,8 @@ public struct WovenMatterToolCommand: Sendable {
       runs [--conversation ID] | trace RUN_ID | events [--conversation ID] | event ID
       Pagination: --after CURSOR --limit 1...200; body chunks: --offset N --characters 1...65536
       Filters: --harness NAME --kind TYPE --since ISO8601 --until ISO8601
+      Native identity: --source-id SOURCE --native-session-id SESSION --native-record-id RECORD
+      Child history: --source-id SOURCE --native-session-id SESSION --native-conversation-id CONVERSATION
       Search starts in this folder and broadens if nothing matches. Results are references;
       read only relevant records. Old transcripts can be partial. Attached/managed sessions
       remain readable when general history is off; an arbitrary ID does not grant access.
@@ -358,8 +385,8 @@ public struct WovenMatterToolCommand: Sendable {
       Only one coordinator may manage a destination. Existing unattached sessions require
       user access approval when history is off. A request awaiting approval returns
       state=pending immediately. Wait for the user; retry the same command with the returned
-      request ID to inspect its outcome without creating another prompt. App shutdown
-      cancels pending approvals. Messages steer busy sessions or queue when
+      request ID to inspect its outcome without creating another prompt. Server shutdown
+      or restart cancels pending approvals. Messages steer busy sessions or queue when
       steering is unsupported. Use release when the assignment is complete.
       """
     case .timers: """
@@ -367,12 +394,17 @@ public struct WovenMatterToolCommand: Sendable {
       create --text INSTRUCTION --at ISO8601 [--every SECONDS] [--session ID]
       update TIMER_ID --text INSTRUCTION --at ISO8601 [--every SECONDS] [--paused]
       pause TIMER_ID | resume TIMER_ID | remove TIMER_ID
-      Timers persist but execute only while Woven Matter runs. Missed recurring firings
-      coalesce into one. You may set a timer in this session or a session you coordinate.
+      Timers persist and run when the Woven Matter server is running. Missed recurring
+      firings coalesce into one. You may set a timer in this session or a session you coordinate.
       Mutation retries accept --request-id UUID and acknowledge the original operation;
       use list for the current state. A retry never reactivates a paused or removed timer.
       """
-    case .usage: "read [--since ISO8601 --until ISO8601 --offset N --limit 1...200]\nRead recorded usage. This tool cannot change usage or credentials."
+    case .usage: """
+      read [--since ISO8601 --until ISO8601 --offset N --limit 1...200]
+      Read recorded usage analytics and available account usage limits.
+      Date filters and pagination apply to recorded usage.
+      This tool cannot change usage, limits or credentials.
+      """
     case .calendar: """
       list [--since ISO8601 --until ISO8601 --after CURSOR --limit 1...200]
       read EVENT_ID | occurrences EVENT_ID --since ISO8601 --until ISO8601
@@ -386,31 +418,59 @@ public struct WovenMatterToolCommand: Sendable {
       --regular-event removes the task; --timed clears all-day. Tasks require a time and Session management access.
       Update changes the series. Detach retains the occurrence's settings as an independent one-time event.
       Copy creates an independent event. Each overdue one-time task runs; recurring tasks catch up once.
-      Task prompts run only while Woven Matter is open. Read returns attribution, revision, and session links.
-      Calendar access is set in General settings; read-only mode rejects mutations.
+      Scheduled tasks run when the Woven Matter server is running.
+      Read returns attribution, revision, and session links.
+      Read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
+      """
+    case .executor: """
+      search [--query TEXT --limit 1...100 --request-id UUID]
+      skills [--request-id UUID]
+      execute --code JAVASCRIPT | --file PATH [--request-id UUID]
+      status JOB_ID | cancel JOB_ID
+      Execute is available whenever Executor is enabled for this conversation.
+      Only selected app profiles are callable, including dynamic tool names.
+      Search returns exact paths and signatures. Use those paths in Execute.
+      Start returns a job ID immediately. Poll status until completed, cancelled or interrupted.
+      Completed means the program finished; inspect result.execution.ok for success.
+      Approvals and input appear in the conversation. Resume is managed by Woven Matter.
+      Reuse --request-id with identical code after a lost receipt. Never replay an interrupted
+      program automatically: earlier external effects may already have completed.
+      No imports, fetch, process or filesystem globals exist in Executor's sandbox.
       """
     case .library: "list [--search TEXT --workspace ID[,ID] --harness NAME[,NAME] --kind file|link|photo --sender me|agent --since ISO8601 --until ISO8601 --offset N --limit 1...200] | read ITEM_ID\nFiles, links, and photos from new exchanges. Results include source message IDs, original locations, and retention status. File contents are kept on disk; remote original paths belong to their source workspace."
     }
     return "Usage: wovenmatter \(group.rawValue) COMMAND [OPTIONS]\n\n" + body + "\n"
   }
 
+  public static let contextHelp = """
+    Usage: wovenmatter context
+
+    Read the ID of the note, spreadsheet or HTML asset that was open when the user
+    sent the message being processed. Each user message has its own captured ID.
+    Switching assets afterward does not change that message's capture.
+    No asset is returned if none was open, or if another session or a schedule sent the message.
+    Only the ID is returned. Use wovenmatter notes read --note-id ID to read its contents.
+    Requires Notes access for this session.
+    """ + "\n"
+
   public static func help(for command: WovenMatterToolCommand) -> String {
+    if command.action == "context" { return contextHelp }
     guard let group = command.group, command.action != "help" else {
       return command.group.map(help) ?? usage
     }
     let detail: String? = switch (group, command.action, command.subaction) {
     case (.notes, "apply", _): "Usage: wovenmatter notes apply --note-id ID (--json OPERATIONS_JSON | --file PATH) [--revision REVISION]\n\nOperations are a JSON array. Each object needs a type such as appendText, setTitle, setHTML, or createTable. Destructive operations require --revision. At most 128 operations and 1 MiB of resulting document data are accepted."
-    case (.notes, "table", "create"): "Usage: wovenmatter notes table create --note-id ID [--after BLOCK_ID --rows 1...1000 --columns 1...128 --header --revision REVISION]"
-    case (.notes, "table", "set-cell"): "Usage: wovenmatter notes table set-cell --note-id ID --table-id ID --row N --column N --text TEXT --revision REVISION"
-    case (.notes, "table", "add-row"): "Usage: wovenmatter notes table add-row --note-id ID --table-id ID [--after N --revision REVISION]"
-    case (.notes, "table", "remove-row"): "Usage: wovenmatter notes table remove-row --note-id ID --table-id ID --row N --revision REVISION"
-    case (.notes, "table", "add-column"): "Usage: wovenmatter notes table add-column --note-id ID --table-id ID [--after N --revision REVISION]"
-    case (.notes, "table", "remove-column"): "Usage: wovenmatter notes table remove-column --note-id ID --table-id ID --column N --revision REVISION"
-    case (.notes, "link", _): "Usage: wovenmatter notes link --note-id ID --source-id ID --database-id ID --path RELATIVE_PATH [--query READ_ONLY_SQL --table-id ID --revision REVISION]"
-    case (.notes, "unlink", _): "Usage: wovenmatter notes unlink --note-id ID [--table-id ID] --revision REVISION"
-    case (.sessions, "release", _): "Usage: wovenmatter sessions release SESSION_ID --epoch EPOCH [--request-id UUID]\n\nRead sessions status first and pass its coordinationEpoch. A retry can only release that assignment."
-    case (.sessions, "notifications", _): "Usage: wovenmatter sessions notifications SESSION_ID --epoch EPOCH --enabled true|false [--request-id UUID]"
+    case (.notes, "table", "create"): "Usage: wovenmatter notes table create --note-id ID [--after BLOCK_ID --rows 1...1000 --columns 1...128 --header --revision REVISION]\n\nCreate a table, optionally after an existing block. Defaults to 3 rows and 3 columns.\nUse --header to make the first row a header. A document can contain at most 100,000 table cells."
+    case (.notes, "table", "set-cell"): "Usage: wovenmatter notes table set-cell --note-id ID --table-id ID --row N --column N --text TEXT --revision REVISION\n\nReplace a cell's contents with text. Row and column numbers start at 0.\nUse notes read to obtain the current table ID and revision."
+    case (.notes, "table", "add-row"): "Usage: wovenmatter notes table add-row --note-id ID --table-id ID [--after N] [--revision REVISION]\n\nAppend a row, or insert one after row N. Row numbers start at 0; --after -1 inserts first.\nUsing --after requires --revision. Appending without --after does not."
+    case (.notes, "table", "remove-row"): "Usage: wovenmatter notes table remove-row --note-id ID --table-id ID --row N --revision REVISION\n\nRemove row N. Row numbers start at 0. A table must retain at least one row."
+    case (.notes, "table", "add-column"): "Usage: wovenmatter notes table add-column --note-id ID --table-id ID [--after N] [--revision REVISION]\n\nAppend a column, or insert one after column N. Column numbers start at 0; --after -1 inserts first.\nUsing --after requires --revision. Appending without --after does not."
+    case (.notes, "table", "remove-column"): "Usage: wovenmatter notes table remove-column --note-id ID --table-id ID --column N --revision REVISION\n\nRemove column N. Column numbers start at 0. A table must retain at least one column."
+    case (.notes, "link", _): "Usage: wovenmatter notes link --note-id ID --source-id ID --database-id ID --path RELATIVE_PATH --revision REVISION [--query READ_ONLY_SQL --table-id ID]\n\nSet the note's database link, or a table's link when --table-id is supplied.\nUse notes read to obtain the current revision."
+    case (.notes, "unlink", _): "Usage: wovenmatter notes unlink --note-id ID [--table-id ID] --revision REVISION\n\nRemove the note's database link, or a table's link when --table-id is supplied.\nUse notes read to obtain the current revision."
+    case (.sessions, "release", _): "Usage: wovenmatter sessions release SESSION_ID --epoch EPOCH [--request-id UUID]\n\nEnd your coordination of this session. This does not stop or delete the session.\nRead wovenmatter sessions status SESSION_ID and use its coordinationEpoch for --epoch.\nA retry can only release that assignment."
+    case (.sessions, "notifications", _): "Usage: wovenmatter sessions notifications SESSION_ID --epoch EPOCH --enabled true|false [--request-id UUID]\n\nEnable or disable automatic updates from a session you coordinate.\nRead wovenmatter sessions status SESSION_ID and use its coordinationEpoch for --epoch."
     default: nil
     }
     return detail.map { $0 + "\n" } ?? help(for: group)

@@ -34,12 +34,30 @@ struct WorkspaceCoordinationEventTests {
     #expect(deliveries.count == 1)
     let delivery = try #require(deliveries.first)
     #expect(delivery.sourceID == b && delivery.targetID == a && delivery.kind == .notification)
-    #expect(delivery.text.contains("Finished a turn") && delivery.text.contains("assignment remains managed"))
+    #expect(delivery.text == "Session “Worker” (\(b)): finished its turn. Run: \(run.runID).")
     #expect(try await db.sessionRelationship(b).coordinatorID == a)
     let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     #expect(try await reopened.collectCoordinationTurnNotifications().isEmpty)
     #expect(try await reopened.claimToolDelivery(id: delivery.id)?.id == delivery.id)
     try await reopened.validateClaimedToolDelivery(id: delivery.id)
+  }
+
+  @Test(arguments: ["accepted", "failed"])
+  func workerReplyReplacesFallbackOnlyWhenDelivered(status: String) async throws {
+    let (db, dir, a, b) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Work")
+    let run = try await db.beginLocalACPRun(conversationID: b, content: "Work",
+      createdAt: Date().addingTimeInterval(-1))
+    let reply = try await db.reserveToolDelivery(sourceID: b, targetID: a,
+      text: "Here is my result", requestID: UUID().uuidString)
+    try await db.completeLocalACPRun(runID: run.runID)
+    // Pending replies defer the fallback; a failed reply still needs one.
+    #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
+    try await db.setToolDeliveryStatus(id: reply.id, status: status)
+    let notifications = try await db.collectCoordinationTurnNotifications()
+    #expect(notifications.count == (status == "accepted" ? 0 : 1))
+    #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
   }
 
   @Test func notificationOnlyTurnIsSilentButWorkSteeredIntoItNotifies() async throws {
@@ -74,7 +92,7 @@ struct WorkspaceCoordinationEventTests {
     try await db.setCoordinationNotifications(sourceID: a, targetID: b, enabled: true)
     #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
     let pending = try #require(try await db.recordCoordinationNeedsInput(sessionID: b, requestID: "permission-1", requiresUserApproval: true))
-    #expect(pending.text.contains("user must answer"))
+    #expect(pending.text == "Session “Worker” (\(b)): needs user approval.")
     #expect(try await db.recordCoordinationNeedsInput(sessionID: b, requestID: "permission-1", requiresUserApproval: true) == nil)
     _ = try await db.claimToolDelivery(id: pending.id)
     try await db.endCoordination(targetID: b, sourceID: a)

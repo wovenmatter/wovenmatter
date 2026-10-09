@@ -2,7 +2,7 @@
 
 The iPhone and iPad use the running Mac's canonical workspace. Provider execution,
 credentials, SSH routes and concurrency remain on the Mac. PR #37 is integrated
-with monorepo main `224f299b99fe754e8e9bab4e00aa92aa1a48b2c0`.
+with monorepo main `5542b83ab2e11cc3c24037552883e2c6814bd596`.
 
 ## Implemented behavior
 
@@ -41,6 +41,8 @@ with monorepo main `224f299b99fe754e8e9bab4e00aa92aa1a48b2c0`.
 SQLite work uses the current async worker facade. Mac autosave, agent note edits and mobile writes retain one revision model, with pinning treated as presentation. Recovery copies route through the execution owner, and completion readers preserve newer local writing.
 
 The background service owns the HTTP listener, pairing store, Tailscale child and run control. Desktop Settings reads and controls that owner over local RPC. Standalone mode uses the same host controller in the application process. Library, Calendar/recurring scheduled tasks, session settings/tool policy, note/conversation management and native file/export previews are available on both phone and tablet. iPad uses an adaptive sidebar and supports every orientation. Calendar edits carry the series revision and original start; deleting an occurrence does not delete its series. Local and remote scheduled tasks inherit the Mac's saved configuration. Workspace retries retain their original command identity after a lost reply. Mobile Stop invalidates earlier preparation and joins the same native cancellation barrier as desktop Stop, while rejecting stale run identities.
+
+Main’s structured CLI context and native OpenCode allow/ask/deny policies remain authoritative. Mobile Executor changes use the same broker acknowledgement and cancellation path as the Mac, retaining selected profiles. The initial phone UI pass improves Home actions, selection visibility, touch targets, dark-mode contrast and keyboard dismissal; iPad uses the corresponding sidebar and bounded content layout.
 
 ## Components
 

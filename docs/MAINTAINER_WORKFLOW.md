@@ -10,16 +10,38 @@ available. Tests use temporary data and must not consume provider services.
 CI selects macOS and remote jobs by changed paths. Documentation-only changes
 run the public-tree scan and stable CI gate. Remote image builds run on Linux.
 Validation uses disposable GitHub-hosted runners without provider, signing, or
-deployment credentials. The `pull_request_target` classification workflows
-inspect metadata or inert Git data; they do not execute contributor code.
+deployment credentials. The `pull_request_target` author workflow inspects only
+GitHub metadata; it does not check out or execute contributor code.
 
 ## Contributions
 
-Pull requests target `main`; code-owner approval is the merge gate. The vouch
-workflow classifies contributors for review without granting write access.
-`.github/VOUCHED.td` entries use `github:username`, prefixed with `-` to denounce a
-contributor. Changes on `main` reclassify open pull requests; `/recheck-vouch`
-rechecks one pull request.
+Pull requests target `main`; code-owner approval is the merge gate. The PR Author
+workflow labels new and reopened pull requests; it does not run on pushed commits,
+draft transitions, or changes on `main`. Comment exactly `/recheck-author` on a PR
+to refresh classification, including after organization membership changes. The
+recheck fetches the PR author's current metadata rather than classifying the
+commenter. Existing PRs can be rechecked individually after this workflow lands.
+
+`author:organization` means GitHub reports the PR author's association as `MEMBER`
+or `OWNER` in this organization-owned repository, or the public organization
+membership endpoint positively verifies membership. This includes owners and
+agent accounts when their membership is verified. Collaborator permissions, bot
+status, and usernames are never sufficient on their own.
+
+`author:external-or-unverified` flags outside contributors and any author whose
+membership cannot be established for heavier review. The repository-scoped
+`GITHUB_TOKEN` cannot request the organization-level Members permission needed
+for authoritative private membership API checks. The public endpoint's `404`
+does not rule out private membership; lookup errors also keep the heavier-review
+flag. Private membership reported by GitHub as `MEMBER` is accepted; otherwise it
+remains unverified. No additional credentials or token scopes are required.
+See GitHub's [author association values](https://docs.github.com/en/graphql/reference/issues#commentauthorassociation)
+and [organization membership API](https://docs.github.com/en/rest/orgs/members#check-organization-membership-for-a-user).
+
+Author labels do not grant access or bypass code-owner review, branch protections,
+or required checks. The vouch action and trust list and the PR Size workflow are
+removed. On classification or recheck, obsolete vouch and size labels are removed
+from that PR; historical repository labels are not globally deleted.
 
 ## Builds and releases
 
@@ -40,6 +62,13 @@ working permission path for subsequent authorized release commands. If access
 still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
+
+Release from clean, current `origin/main`. Development/main CI validates source;
+release preparation never runs local suites, an unsigned Debug build, or another
+CI cycle. The release workflow records already-completed exact-source main CI
+when available, then builds and verifies a fresh production Release app. Missing
+CI metadata does not trigger tests. Immutable tags, signing, notarization,
+artifact verification, and exact approved release-copy gates still apply.
 
 A supplied or confirmed version authorizes building and verifying a private
 draft. Publication requires Trey's explicit manual approval of the exact release

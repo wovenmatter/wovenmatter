@@ -20,6 +20,16 @@ spec.loader.exec_module(tools)
 
 
 class RemoteToolTests(unittest.TestCase):
+    def test_executor_file_is_bounded_and_read_on_the_cli_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            file = Path(temporary) / "program.js"
+            file.write_text("return await tools.search({query:'fixture'});")
+            request = json.loads(tools.build_request(["executor", "execute", "--file", str(file)], {}))
+            self.assertEqual(request["arguments"][:3], ["executor", "execute", "--code"])
+            self.assertNotIn("session", request)
+            file.write_bytes(b"x" * 65537)
+            with self.assertRaises(ValueError): tools.build_request(["executor", "execute", "--file", str(file)], {})
+
     def test_transport_failure_retains_the_retry_identity(self):
         identity = "10000000-0000-4000-8000-000000000002"
         with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
@@ -36,7 +46,7 @@ class RemoteToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             file = Path(root) / "artifact.html"
             file.write_text("<h1>Remote body</h1>")
-            request = json.loads(tools.build_request(["notes", "set-html", "--file", str(file)], {"WOVENMATTER_NOTE_ID": "note-a"}))
+            request = json.loads(tools.build_request(["notes", "set-html", "--file", str(file), "--note-id", "note-a"], {"WOVENMATTER_NOTE_ID": "note-a"}))
             self.assertEqual(request["arguments"], ["notes", "set-html", "--html", "<h1>Remote body</h1>", "--note-id", "note-a"])
             self.assertNotIn("callerID", request)
             self.assertNotIn("sourceID", request)
@@ -51,7 +61,7 @@ class RemoteToolTests(unittest.TestCase):
         self.assertEqual(request["requestID"], request_id)
         args = ["notes", "append", "--text", "--note-id", "--request-id", request_id]
         request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "note-a"}))
-        self.assertEqual(request["arguments"], args + ["--note-id", "note-a"])
+        self.assertEqual(request["arguments"], args)
         args = ["notes", "append", "--text", "--request-id"]
         self.assertEqual(json.loads(tools.build_request(args, {}))["arguments"], args)
 
@@ -62,9 +72,14 @@ class RemoteToolTests(unittest.TestCase):
             self.assertEqual(request["arguments"], args)
         args = ["notes", "read", "--offset", "10"]
         request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "attached-note"}))
-        self.assertEqual(request["arguments"], args + ["--note-id", "attached-note"])
+        self.assertEqual(request["arguments"], args)
         with self.assertRaises(ValueError):
             tools.build_request(["notes", "list"] + [""] * 1023, {})
+
+    def test_context_binding_is_carried_outside_command_arguments(self):
+        request = json.loads(tools.build_request(["context"], {"WOVENMATTER_CONTEXT_ID": "captured-input"}))
+        self.assertEqual(request["arguments"], ["context"])
+        self.assertEqual(request["contextID"], "captured-input")
 
     def test_receive_deadline_cannot_be_extended_by_trickle_input(self):
         class TrickleConnection:
@@ -119,15 +134,31 @@ class RemoteToolTests(unittest.TestCase):
         self.assertLessEqual(max(connection.timeouts), 0.25)
         self.assertEqual(tools.RESPONSE_LIMIT, 1024 * 1024)
 
-    def test_relay_rejects_fifth_request_before_forwarding(self):
+    @contextlib.contextmanager
+    def relay_fixture(self):
         with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
             relay_dir = Path(root) / "relay"
             relay = subprocess.Popen([sys.executable, str(SOURCE), "--relay", str(relay_dir)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                self.assertTrue(select.select([relay.stdout], [], [], 5)[0], "Relay never became ready")
+                self.assertEqual(json.loads(relay.stdout.readline()), {"ready": True})
+                yield relay_dir, relay
+            finally:
+                if not relay.stdin.closed:
+                    relay.stdin.close()
+                try:
+                    relay.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    relay.kill()
+                    relay.wait()
+                for handle in [relay.stdin, relay.stdout, relay.stderr]:
+                    handle.close()
+
+    def test_relay_rejects_fifth_request_before_forwarding(self):
+        with self.relay_fixture() as (relay_dir, relay):
             connections = []
             try:
-                self.assertTrue(select.select([relay.stdout], [], [], 5)[0])
-                self.assertEqual(json.loads(relay.stdout.readline()), {"ready": True})
                 for _ in range(4):
                     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     connections.append(connection)
@@ -149,57 +180,27 @@ class RemoteToolTests(unittest.TestCase):
             finally:
                 for connection in connections:
                     connection.close()
-                relay.stdin.close()
-                if relay.poll() is None:
-                    try:
-                        relay.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        relay.kill()
-                        relay.wait()
-                for handle in [relay.stdout, relay.stderr]:
-                    handle.close()
 
     def test_relay_rejects_invalid_envelopes_without_forwarding(self):
-        with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
-            relay_dir = Path(root) / "relay"
-            relay = subprocess.Popen([sys.executable, str(SOURCE), "--relay", str(relay_dir)],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            try:
-                self.assertTrue(select.select([relay.stdout], [], [], 5)[0])
-                self.assertEqual(json.loads(relay.stdout.readline()), {"ready": True})
-                for request in [b'{}', json.dumps({"requestID": "x" * 100_000}).encode(),
-                                b'[' * 2000 + b']' * 2000]:
-                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                        connection.settimeout(5)
-                        connection.connect(str(relay_dir / "rpc.sock"))
-                        connection.sendall(request)
-                        connection.shutdown(socket.SHUT_WR)
-                        raw = tools.receive_all(connection, tools.RESPONSE_LIMIT, timeout=5)
-                    reply = json.loads(raw)
-                    self.assertEqual(reply["code"], "invalid_request")
-                    self.assertIsNone(reply.get("requestID"))
-                    self.assertLess(len(raw), 1024)
-                self.assertFalse(select.select([relay.stdout], [], [], 0)[0])
-            finally:
-                relay.stdin.close()
-                if relay.poll() is None:
-                    try:
-                        relay.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        relay.kill()
-                        relay.wait()
-                for handle in [relay.stdout, relay.stderr]:
-                    handle.close()
+        with self.relay_fixture() as (relay_dir, relay):
+            for request in [b'{}', json.dumps({"requestID": "x" * 100_000}).encode(),
+                            b'[' * 2000 + b']' * 2000]:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                    connection.settimeout(5)
+                    connection.connect(str(relay_dir / "rpc.sock"))
+                    connection.sendall(request)
+                    connection.shutdown(socket.SHUT_WR)
+                    raw = tools.receive_all(connection, tools.RESPONSE_LIMIT, timeout=5)
+                reply = json.loads(raw)
+                self.assertEqual(reply["code"], "invalid_request")
+                self.assertIsNone(reply.get("requestID"))
+                self.assertLess(len(raw), 1024)
+            self.assertFalse(select.select([relay.stdout], [], [], 0)[0])
 
     def test_relay_binds_private_endpoint_and_closes_with_app(self):
-        with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
-            relay_dir = Path(root) / "relay"
-            relay = subprocess.Popen([sys.executable, str(SOURCE), "--relay", str(relay_dir)],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with self.relay_fixture() as (relay_dir, relay):
             child = None
             try:
-                self.assertTrue(select.select([relay.stdout], [], [], 5)[0], "Relay never became ready")
-                self.assertEqual(json.loads(relay.stdout.readline()), {"ready": True})
                 self.assertEqual(relay_dir.stat().st_mode & 0o777, 0o700)
                 self.assertEqual((relay_dir / "rpc.sock").stat().st_mode & 0o777, 0o700)
                 environment = dict(os.environ)
@@ -223,11 +224,6 @@ class RemoteToolTests(unittest.TestCase):
                 if child is not None and child.poll() is None:
                     child.kill()
                     child.wait()
-                if relay.poll() is None:
-                    relay.kill()
-                    relay.wait()
-                for handle in [relay.stdin, relay.stdout, relay.stderr]:
-                    handle.close()
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const bundledRoot = fileURLToPath(new URL('../', import.meta.url));
 const definitions = [
-  { id: 'pi', name: 'Pi SDK', packages: ['@earendil-works/pi-coding-agent', '@earendil-works/pi-ai'] },
+  { id: 'pi', name: 'Pi Durable SDK', packages: ['@earendil-works/pi-durable', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent', '@earendil-works/chord'] },
   { id: 'claude', name: 'Claude SDK', packages: ['@anthropic-ai/claude-agent-sdk'] },
 ];
 const stableVersion = value => typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value);
@@ -116,8 +116,8 @@ async function registryVersion(name, signal, fetchImplementation = fetch) {
   return version;
 }
 function compatible(version, installed) {
-  // Claude's minor line is its SDK API compatibility boundary. Pi remains 0.x;
-  // allow its minor releases only after the provider-free contract check below.
+  // Pi 1.x updates stay on the reviewed major line and must pass the
+  // provider-free contract check below. Claude also keeps its minor boundary.
   return stableVersion(version) && stableVersion(installed) && version.split('.')[0] === installed.split('.')[0];
 }
 export async function checkSDKUpdates({ directory, id, signal, fetchImplementation } = {}) {
@@ -125,7 +125,7 @@ export async function checkSDKUpdates({ directory, id, signal, fetchImplementati
   const runtime = await resolveSDKRuntime({ directory });
   const previous = await readJSON(paths(directory).latest, null, 16384).catch(() => null);
   const versions = previous?.base === runtime.base ? { ...previous.versions } : {};
-  if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi SDK or Claude SDK.');
+  if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi Durable SDK or Claude SDK.');
   for (const definition of definitions.filter(value => id === undefined || value.id === id)) {
     const current = await packageVersion(runtime.root, definition.packages[0]);
     const latest = await registryVersion(definition.packages[0], signal, fetchImplementation);
@@ -185,7 +185,12 @@ async function npmCLI() {
 }
 const verificationSource = `
 const pi = await import('@earendil-works/pi-coding-agent');
-for (const name of ['createAgentSession','createCodingTools','DefaultResourceLoader','ModelRuntime','SessionManager','SettingsManager']) if (typeof pi[name] !== 'function') throw Error('Pi API unavailable');
+for (const name of ['createCodingTools','createCodemodeExtension','DefaultResourceLoader','ModelRuntime','SettingsManager']) if (typeof pi[name] !== 'function') throw Error('Pi API unavailable');
+const durable = await import('@earendil-works/pi-durable');
+for (const name of ['createRegistry','watchEvents','defineDoc','defineExtension']) if (typeof durable[name] !== 'function') throw Error('Durable API unavailable');
+if (typeof durable.Harness?.open !== 'function') throw Error('Durable API unavailable');
+const storage = await import('@earendil-works/pi-durable/storage/jsonl/node');
+if (typeof storage.openNodeJsonlStorage !== 'function') throw Error('Durable storage unavailable');
 const ai = await import('@earendil-works/pi-ai');
 for (const name of ['InMemoryCredentialStore','createAssistantMessageEventStream']) if (typeof ai[name] !== 'function') throw Error('Pi API unavailable');
 const transcript = await import('@earendil-works/pi-ai/utils/transcript');
@@ -200,7 +205,7 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
   signal = signal ? AbortSignal.any([signal, lockController.signal]) : lockController.signal;
   aborted(signal);
   const definition = definitions.find(value => value.id === id);
-  if (!definition) throw fail('Choose Pi SDK or Claude SDK.');
+  if (!definition) throw fail('Choose Pi Durable SDK or Claude SDK.');
   const p = paths(directory);
   await privateDirectory(p.root); await privateDirectory(p.generations);
   const unlock = await lock(p.lock, () => lockController.abort());

@@ -48,9 +48,19 @@ struct HermesGatewayRPCTests {
             #expect(await client.epoch == "wire-epoch")
             let answer = try await client.call("fixture.ask")
             #expect(answer == ["value": "fixture-answer"])
+            let configuration: HermesValue = ["command": "encoded-private-cli-binding"]
+            let configured = try await client.callConfiguration("shell.exec", configuration)
+            #expect(configured == configuration)
+            let ordinary = try await client.call("shell.exec", ["command": "ordinary-native-operation"])
+            #expect(ordinary["command"].text == "ordinary-native-operation")
             let captured = capture.values
+            #expect(!captured.contains { $0.1.contains("encoded-private-cli-binding") })
+            #expect(captured.contains { $0.1.contains("ordinary-native-operation") })
             #expect(captured.contains { $0.0 == "in" && $0.1.contains("srq-fixture") })
-            #expect(captured.contains { $0.0 == "out" && $0.1.contains("fixture-answer") })
+            // The peer receives the secret reply, but its credential value
+            // must be absent from retained transport observations.
+            #expect(captured.contains { $0.0 == "out" && $0.1.contains("srq-fixture") })
+            #expect(!captured.contains { $0.0 == "out" && $0.1.contains("fixture-answer") })
             #expect(!captured.contains { $0.1.contains("private-fixture-token") })
             await client.disconnect()
             // A server missing gateway.ready must not reuse a previous socket's epoch.
@@ -141,6 +151,7 @@ private actor HermesWireFixture {
         switch frame["method"].text {
         case "ping": result = ["pong": .bool(true)]
         case "config.get": result = ["home": "/tmp/hermes-wire"]
+        case "shell.exec": result = frame["params"]
         case "fixture.ask":
             requestID = frame["id"]
             await send(["jsonrpc": "2.0", "id": "srq-fixture", "method": "secret", "params": ["session_id": "live", "prompt": "Fixture"]], to: connection)

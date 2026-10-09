@@ -6,6 +6,7 @@ import CryptoKit
 final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
+    var prepareBrowserTermination: (@MainActor () async -> Bool)?
     static func requestTerminationAfterUpdate() {
         // AppKit's deferred termination enters a nested run loop. Leave the
         // initiating Swift task first so it cannot block main-actor cleanup.
@@ -33,7 +34,17 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return .terminateNow }
         // The explicit handoff already flushed notes and stopped the execution
         // owner. Do not issue a second flush to a backend that has exited.
-        if model.isPreparedForExecutionRestart { return .terminateNow }
+        if model.isPreparedForExecutionRestart {
+            guard let prepareBrowserTermination else { return .terminateNow }
+            guard !terminating else { return .terminateLater }
+            terminating = true
+            Task {
+                let allowed = await prepareBrowserTermination()
+                if !allowed { terminating = false }
+                sender.reply(toApplicationShouldTerminate: allowed)
+            }
+            return .terminateLater
+        }
         guard !terminating else { return .terminateLater }
         terminating = true
         model.suspendNoteEditing()
@@ -41,7 +52,8 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             Task {
                 let flushed = await model.flushNotesBeforeBackendClientQuit()
                 if !flushed { terminating = false; model.resumeNoteEditing() }
-                sender.reply(toApplicationShouldTerminate: flushed)
+                if flushed { await finishTermination(sender) }
+                else { sender.reply(toApplicationShouldTerminate: false) }
             }
             return .terminateLater
         }
@@ -54,11 +66,11 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
             do {
                 try await model.prepareOpenCodeInstancesToQuit()
-                sender.reply(toApplicationShouldTerminate: true)
+                await finishTermination(sender)
             } catch {
                 if LocalExecutionRole.current == .backend {
                     NSLog("Woven Matter backend cleanup failed: %@", error.localizedDescription)
-                    sender.reply(toApplicationShouldTerminate: true)
+                    await finishTermination(sender)
                     return
                 }
                 let alert = NSAlert()
@@ -67,14 +79,28 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                 alert.addButton(withTitle: "Cancel quit")
                 alert.addButton(withTitle: "Quit anyway")
                 let quit = alert.runModal() == .alertSecondButtonReturn
-                terminating = false
-                if !quit { model.resumeNoteEditing() }
-                sender.reply(toApplicationShouldTerminate: quit)
-                if !quit { await model.restoreOpenCodeInstances() }
+                if quit {
+                    await finishTermination(sender)
+                } else {
+                    terminating = false
+                    model.resumeNoteEditing()
+                    sender.reply(toApplicationShouldTerminate: false)
+                    await model.restoreOpenCodeInstances()
+                }
             }
         }
         return .terminateLater
     }
+    private func finishTermination(_ sender: NSApplication) async {
+        let allowed = await prepareBrowserTermination?() ?? true
+        if !allowed {
+            terminating = false
+            model?.resumeNoteEditing()
+            if LocalExecutionRole.current.ownsExecution { await model?.restoreOpenCodeInstances() }
+        }
+        sender.reply(toApplicationShouldTerminate: allowed)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if LocalExecutionRole.current.ownsExecution {
             // The asynchronous termination barrier already flushed note drafts.

@@ -135,7 +135,7 @@ struct WorkspaceFolderRecoveryTests {
         defer { f.remove() }
         let store = f.store("databases")
         _ = await store.resolve()
-        let databases = f.workspace.appending(path: "Databases")
+        let databases = f.workspace.appending(path: "databases")
         try Data("data".utf8).write(to: databases.appending(path: "important.sqlite"))
         let destination = try f.directory("destination")
         do {
@@ -165,9 +165,8 @@ struct WorkspaceFolderRecoveryTests {
         #expect((await store.resolve()).availability.isReady)
         #expect((await store.resolve()).availability.isReady) // migration is idempotent
         let names = try FileManager.default.contentsOfDirectory(atPath: f.workspace.path)
-        #expect(names.contains("Repos"))
+        #expect(names.contains("repos"))
         #expect(try Data(contentsOf: f.repos.appending(path: "repository")) == Data("keep".utf8))
-        #expect(try Data(contentsOf: legacy.appending(path: "repository")) == Data("keep".utf8))
         if linked { #expect(f.repos.resolvingSymlinksInPath() == target) }
     }
 
@@ -234,7 +233,7 @@ struct WorkspaceFolderRecoveryTests {
         defer { f.remove() }
         let store = f.store("obstruction")
         _ = await store.resolve()
-        let databases = f.workspace.appending(path: "Databases")
+        let databases = f.workspace.appending(path: "databases")
         try FileManager.default.removeItem(at: databases)
         try Data("keep".utf8).write(to: databases)
         let external = try f.directory("external")
@@ -444,7 +443,7 @@ private final class Fixture {
     private var suites: [String] = []
     let home: URL
     var workspace: URL { home.appending(path: ".woven-matter") }
-    var repos: URL { workspace.appending(path: "Repos") }
+    var repos: URL { workspace.appending(path: "repos") }
     init() throws {
         home = FileManager.default.temporaryDirectory.appending(path: "workspace-recovery-\(UUID().uuidString)").resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

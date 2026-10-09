@@ -11,7 +11,7 @@ struct EmptyNotePane: View {
       Image(systemName: "doc.text").font(.system(size: 44)).foregroundStyle(.secondary)
       Text("A place for your next idea").font(.title2.bold())
       Text("Create a note here or choose one in Folders. Your writing works offline.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-      Button("New note") { Task { await model.newNote() } }.buttonStyle(.borderedProminent).foregroundStyle(.white)
+      Button("New note") { Task { await model.newNote() } }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white)
     }.padding(30)
   }
 }
@@ -49,13 +49,13 @@ struct NotePane: View {
             change { try RichDocumentEditing.togglingBold(in: content, blockID: id) }
           }
           Button("Add paragraph", systemImage: "plus") { change { try RichDocumentEditing.appendingParagraph(to: content) } }
-        } label: { Text("Aa").font(.title3.weight(.medium)).frame(width: 36, height: 44) }.disabled(!editable).accessibilityLabel("Note formatting")
+        } label: { Text("Aa").font(.title3.weight(.medium)).frame(width: 44, height: 44) }.disabled(!editable).accessibilityLabel("Note formatting")
         Menu {
           Button("Details, move and export") { detailsPresented = true }.disabled(!model.online)
           Button("Reference in new chat", systemImage: "bubble.left") { model.newChat(); model.referencedNoteID = note.id }.disabled(!editable)
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
-        } label: { Image(systemName: "ellipsis").frame(width: 30, height: 44) }.accessibilityLabel("Note actions")
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("Note actions")
       }.padding(.horizontal, 20).padding(.top, 14)
       HStack(spacing: 6) {
         Image(systemName: model.state.conflicts[note.id] != nil ? "exclamationmark.circle" : "checkmark")
@@ -66,8 +66,8 @@ struct NotePane: View {
         Button { conflictsPresented = true } label: { Label("Your writing is safe. Review the Mac version.", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(MobileTheme.surface) }.padding(.horizontal, 20)
       }
       if model.state.uncachedNoteIDs.contains(note.id) {
-        ContentUnavailableView("Not saved on this iPhone", systemImage: "icloud.and.arrow.down", description: Text("Connect to your Mac to open the full document. Its title and folder are available offline."))
-        if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(.borderedProminent).foregroundStyle(.white).padding() }
+        ContentUnavailableView("Not saved on this device", systemImage: "icloud.and.arrow.down", description: Text("Connect to your Mac to open the full document. Its title and folder are available offline."))
+        if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white).padding() }
       } else if let document {
         if document.kind == .html {
           Text("HTML asset · read only").font(.caption).foregroundStyle(.secondary)
@@ -114,7 +114,7 @@ struct NotePane: View {
         ScrollView {
           VStack(alignment: .leading, spacing: 16) {
             Label("Read only · original format preserved", systemImage: "lock.doc").font(.subheadline.weight(.medium))
-            Text("This document uses a format this iPhone cannot edit. Open it on your Mac or export the original document.").foregroundStyle(.secondary)
+            Text("This document uses a format this device cannot edit. Open it on your Mac or export the original document.").foregroundStyle(.secondary)
             Text(content).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
           }.padding(20)
         }
@@ -157,7 +157,7 @@ private struct ConflictPane: View {
           version("Your iPhone version", note: conflict.local)
           version("Mac version", note: conflict.remote)
           version("Common saved version", note: conflict.base)
-          Button("Keep iPhone version as a new note") { Task { await model.preserveConflict(id); dismiss() } }.buttonStyle(.borderedProminent).foregroundStyle(.white)
+          Button("Keep iPhone version as a new note") { Task { await model.preserveConflict(id); dismiss() } }.buttonStyle(.borderedProminent).tint(MobileTheme.action).foregroundStyle(.white)
           Text("The Mac version keeps its original identity. Your writing becomes a new note, so a deleted note is never silently restored.").font(.caption).foregroundStyle(.secondary)
         }.padding(20)
       }.navigationTitle("Saved conflict").navigationBarTitleDisplayMode(.inline)

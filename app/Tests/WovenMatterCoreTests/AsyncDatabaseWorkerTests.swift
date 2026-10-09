@@ -77,7 +77,10 @@ struct AsyncDatabaseWorkerTests {
     #expect(ids.count == 50)
     for id in ids {
       let content = try await database.conversationContent(id: id)
-      #expect(content.messages.last?.content == "0,1,2,3,4,5,6,7,8,9,")
+      // This fixture verifies persistence, not timestamp/UUID ordering when
+      // the prompt and reply happen to share the same timestamp.
+      #expect(content.messages.filter { $0.role == "assistant" }.map(\.content)
+              == ["0,1,2,3,4,5,6,7,8,9,"])
     }
     let reopened = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
     #expect(try await reopened.workspaceOverview().conversations.count == 50)

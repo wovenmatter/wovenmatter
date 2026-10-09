@@ -12,10 +12,13 @@ struct ACPActiveInputTests {
         let client = try f.client(kind)
         _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
         let events = ActiveInputEvents()
-        let prompt = Task { try await client.prompt("start", onEvent: { await events.record($0) }) }
+        func input(_ text: String) -> AgentMessageInput {
+            .init(text: text, cliContext: .init(executablePath: "/tmp/wovenmatter", socketPath: "/tmp/session.sock", captureID: text))
+        }
+        let prompt = Task { try await client.prompt(input("start"), onEvent: { await events.record($0) }) }
         try await f.waitForPrompt()
         for text in ["first", "second", "finish"] {
-            let receipt = try await client.beginActiveInput(text)
+            let receipt = try await client.beginActiveInput(input(text))
             if kind != .cursor { #expect(try await receipt.completion.value == nil) }
         }
         #expect(try await prompt.value == .endTurn)
@@ -24,6 +27,15 @@ struct ACPActiveInputTests {
         let requests = try f.requests()
         #expect(requests.filter { $0["method"] as? String == "session/new" }.count == 1)
         #expect(!requests.contains { $0["method"] as? String == "session/cancel" })
+        let inputs = requests.filter { ["session/prompt", "_session/steering", "_x.ai/interject"].contains($0["method"] as? String ?? "") }
+        #expect(inputs.count == 4)
+        for (request, expected) in zip(inputs, ["start", "first", "second", "finish"]) {
+            let params = try #require(request["params"] as? [String: Any])
+            let metadata = try #require(params["_meta"] as? [String: Any])
+            #expect((metadata["wovenTools"] as? [String: Any])?["captureID"] as? String == expected)
+            let blocks = params["prompt"] as? [[String: Any]]
+            #expect((params["text"] as? String ?? blocks?.first?["text"] as? String) == expected)
+        }
     }
 
     @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "command-only", "fallback"])

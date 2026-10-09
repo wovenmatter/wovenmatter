@@ -38,10 +38,11 @@ struct CompanionFacadeTests {
         #expect(delivery.context?.noteID == noteID)
         #expect(delivery.context?.remoteEditNonce == nil)
         #expect(delivery.context?.revision == String(revision))
-        #expect(delivery.delivery?.contains("<wovenmatter-tools>") == true)
-        #expect(delivery.delivery?.contains("WOVENMATTER_NOTE_ID") == true)
-        #expect(delivery.delivery?.hasSuffix("\n\nUse the selected note") == true)
-        #expect(delivery.delivery?.contains(remote ? "unset WOVENMATTER_SOCKET" : "export WOVENMATTER_SOCKET=") == true)
+        #expect(delivery.delivery == "Use the selected note")
+        let cli = try #require(delivery.input.cliContext)
+        #expect(cli.executablePath == (remote ? "/fixture/remote/wovenmatter" : fixture.directory.appending(path: "wovenmatter-fixture").path))
+        #expect((cli.socketPath == nil) == remote)
+        #expect(try await fixture.database.inputContext(id: cli.captureID, callerID: conversationID) == noteID)
         #expect(await fixture.model.canonicalActiveRunID(conversationID: conversationID) == sent.runID)
         let stop = CompanionCommand(deviceID: fixture.device, kind: .stop,
             conversationID: conversationID, runID: sent.runID)
@@ -86,9 +87,9 @@ struct CompanionFacadeTests {
         #expect(await fixture.model.sendAgentMessage(conversation: conversation, input: .init(text: "Desktop follow-up"), note: note))
         let desktop = try #require(await fixture.recorder.deliveries.first)
         #expect(desktop.route == (gateway ? .gateway : .localACP))
-        #expect(desktop.delivery?.contains("<wovenmatter-tools>") == true)
-        #expect(desktop.delivery?.hasSuffix("\n\nDesktop follow-up") == true)
-        #expect(desktop.delivery?.contains("export WOVENMATTER_NOTE_ID='\(noteID)'") == true)
+        #expect(desktop.delivery == "Desktop follow-up")
+        let desktopCLI = try #require(desktop.input.cliContext)
+        #expect(try await fixture.database.inputContext(id: desktopCLI.captureID, callerID: id) == noteID)
         #expect(desktop.context == nil)
         #expect(await fixture.recorder.deliveries.count == 1)
         let revision = try #require(try await fixture.database.companionNote(id: noteID)?.revision)
@@ -96,9 +97,10 @@ struct CompanionFacadeTests {
             runID: run.runID, text: "Phone follow-up", noteID: noteID, noteRevision: revision)
         #expect(try await fixture.model.companionCommands.execute(mobile, deviceID: fixture.device).status == .completed)
         let phone = try #require(await fixture.recorder.deliveries.last)
-        #expect(phone.context == nil && phone.delivery?.hasSuffix("\n\nPhone follow-up") == true)
-        #expect(phone.delivery?.contains("unset WOVENMATTER_NOTE_ID") == true)
-        #expect(phone.delivery?.contains("export WOVENMATTER_NOTE_ID=") == false)
+        #expect(phone.context == nil && phone.delivery == "Phone follow-up")
+        let phoneCLI = try #require(phone.input.cliContext)
+        #expect(phoneCLI.captureID != desktopCLI.captureID)
+        #expect(try await fixture.database.inputContext(id: phoneCLI.captureID, callerID: id) == nil)
         #expect(phone.input.references.first?.contentSnapshot == raw)
         #expect(try await fixture.database.conversationContent(id: id).runs.count == 1)
         let wrong = CompanionCommand(deviceID: fixture.device, kind: .stop, conversationID: id, runID: UUID().uuidString)
@@ -197,8 +199,8 @@ struct CompanionFacadeTests {
         let delivery = try #require(await fixture.recorder.deliveries.first)
         #expect(delivery.route == (route == "gateway" ? .gateway : .localACP))
         #expect(delivery.context == nil && delivery.input.references.first?.contentSnapshot == raw)
-        #expect(delivery.delivery?.contains("enabled app tools are: history.") == true)
-        #expect(delivery.delivery?.contains("unset WOVENMATTER_NOTE_ID") == true)
+        #expect(delivery.input.cliContext != nil)
+        #expect(try await fixture.database.sessionTools(id).enabled == [.history])
         let tools = try #require(fixture.model.agentTools)
         let deniedNote = await tools.handle(.init(arguments: ["notes", "read", noteID]), callerID: id)
         #expect(!deniedNote.success)
@@ -299,6 +301,7 @@ struct CompanionFacadeTests {
             accept: { route, id, input, delivery, context in try await recorder.accept(route, id, input, delivery, context) },
             steer: { route, id, input, delivery, runID in try await recorder.steer(route, id, input, delivery, runID) },
             cancel: { route, id, runID in try await recorder.cancel(route, id, runID) },
+            sessionConfiguration: { id in try await recorder.sessionConfiguration(id) },
             configureSession: { id, selections, workspace in
                 try await recorder.configureSession(id, selections: selections, directory: workspace?.rootURL.path)
             },
@@ -400,6 +403,11 @@ actor FacadeRecorder {
     }
     func confirmModelAs(_ value: String?) { confirmedModel = value }
     func rejectConfiguration(_ value: Bool) { configurationRejected = value }
+    func sessionConfiguration(_ id: String) async throws -> LocalACPSessionConfiguration {
+        let native = try await database.localACPSession(conversationID: id)
+        return .init(model: native.model, thinking: native.thinking, permission: native.permission,
+            permissionOptions: ["fixture-permission"])
+    }
     func configureSession(_ id: String, selections: SessionSelections, directory: String?) async throws -> LocalACPSessionConfiguration {
         configurations.append(.init(conversationID: id, selections: selections, directory: directory))
         if configurationRejected { throw FixtureError.configurationRejected }

@@ -5,6 +5,28 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPPermissionLifecycleTests {
+  @Test(arguments: [(false, nil as String?), (true, nil), (false, "existing-cursor")])
+  func cursorNativeFullAccessRestartPreservesDraftOrSavedIdentity(remote: Bool, existing: String?) async throws {
+    let fixture = try await PermissionLifecycleFixture(runtime: .cursor, remote: remote)
+    defer { fixture.cleanUp() }
+    if let existing { try await fixture.database.updateLocalACPSessionID(conversationID: fixture.id, sessionID: existing) }
+    let native = try await fixture.coordinator.configuration(
+      conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace)
+    #expect(native.permission == "native-default")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == existing)
+    let full = try await fixture.coordinator.updateConfiguration(conversationID: fixture.id,
+      permission: "force", launch: fixture.launch, workspace: fixture.workspace)
+    #expect(full.permission == "force")
+    #expect(full.model == native.model && full.thinking == native.thinking)
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "force")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == existing)
+    #expect(fixture.factory.drivers.map(\.launchPermission) == [nil, "force"])
+    #expect(fixture.factory.drivers[0].shutdownCount == 1)
+    #expect(fixture.factory.drivers[1].existingSessionID == existing)
+    #expect(fixture.factory.drivers.allSatisfy { $0.promptCount == 0 })
+    await fixture.coordinator.shutdown()
+  }
+
   @Test func storedPermissionBelongsToTheSessionAndSurvivesDatabaseReopen() async throws {
     let fixture = try await PermissionLifecycleFixture(runtime: .grokBuild)
     defer { fixture.cleanUp() }
@@ -162,6 +184,23 @@ struct ACPPermissionLifecycleTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test func unchangedPermissionAllowsReplacingAMissingCodexDraftHint() async throws {
+    let fixture = try await PermissionLifecycleFixture(runtime: .codex, forkedLaunchPermission: "default")
+    defer { fixture.cleanUp() }
+    try await fixture.database.updateLocalACPSessionID(conversationID: fixture.id, sessionID: "unmaterialized-draft")
+    try await fixture.database.updateLocalACPSessionConfiguration(
+      conversationID: fixture.id, model: nil, thinking: nil, permission: "default"
+    )
+    let changed = try await fixture.coordinator.updateConfiguration(
+      conversationID: fixture.id, model: "selected-model", permission: "default",
+      launch: fixture.launch, workspace: fixture.workspace
+    )
+    #expect(changed.model == "selected-model")
+    #expect(changed.permission == "default")
+    #expect(fixture.factory.drivers.first?.promptCount == 0)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func permissionsCannotChangeDuringAnActivePrompt() async throws {
     let gate = PermissionLifecycleGate()
@@ -290,6 +329,7 @@ private struct PermissionLifecycleFixture: Sendable {
 
   init(
     runtime: AgentRuntimeKind,
+    remote: Bool = false,
     failingLaunchPermission: String? = nil,
     forkedLaunchPermission: String? = nil,
     unconfirmedPermission: String? = nil,
@@ -301,7 +341,12 @@ private struct PermissionLifecycleFixture: Sendable {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     databaseURL = directory.appending(path: "workspace.sqlite")
     database = try await WorkspaceDatabase(url: databaseURL)
-    id = try await database.createLocalACPSession(runtimeKind: runtime, title: "Permission fixture", ownerDeviceID: UUID())
+    if remote {
+      id = try await database.createRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
+        remoteWorkspaceName: "Fixture remote", title: "Permission fixture", ownerDeviceID: UUID())
+    } else {
+      id = try await database.createLocalACPSession(runtimeKind: runtime, title: "Permission fixture", ownerDeviceID: UUID())
+    }
     launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-permission-fixture"), arguments: [],
       requestedPermission: "bypassPermissions"
@@ -389,7 +434,9 @@ private final class PermissionLifecycleFactory: @unchecked Sendable {
           throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
         if driver.configuration.permission == permission { return driver.configuration }
-        if launch.runtimeKind == .grokBuild { throw LocalACPClientError.permissionChangeRequiresRestart }
+        if launch.runtimeKind == .grokBuild || launch.runtimeKind == .cursor {
+          throw LocalACPClientError.permissionChangeRequiresRestart
+        }
         let result = driver.select(permission: permission == unconfirmedPermission ? "default" : permission)
         await driver.emit(result)
         return result
@@ -419,8 +466,9 @@ private final class PermissionLifecycleDriver: @unchecked Sendable {
     current = LocalACPSessionConfiguration(
       model: "default-model", thinking: "low", modelOptions: ["default-model", "selected-model", "no-effort"],
       thinkingOptions: ["low", "high"],
-      permission: launch.runtimeKind == .grokBuild ? launch.requestedPermission ?? "default" : "default",
-      permissionOptions: ["default", "auto", "dontAsk"]
+      permission: launch.runtimeKind == .cursor ? launch.requestedPermission ?? "native-default"
+        : launch.runtimeKind == .grokBuild ? launch.requestedPermission ?? "default" : "default",
+      permissionOptions: launch.runtimeKind == .cursor ? ["native-default", "force"] : ["default", "auto", "dontAsk"]
     )
   }
 

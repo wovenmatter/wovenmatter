@@ -15,7 +15,13 @@ import SwiftUI
 }
 
 enum MobileTheme {
-  static let green = Color(red: 0, green: 0.259, blue: 0.145)
+  static let green = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+    ? .init(red: 0.43, green: 0.78, blue: 0.60, alpha: 1)
+    : .init(red: 0, green: 0.259, blue: 0.145, alpha: 1) })
+  static let action = Color(red: 0, green: 0.259, blue: 0.145)
+  static let selection = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+    ? .init(red: 0.16, green: 0.24, blue: 0.19, alpha: 1)
+    : .init(red: 0.89, green: 0.93, blue: 0.90, alpha: 1) })
   static let ink = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .init(red: 0.9, green: 0.95, blue: 0.92, alpha: 1) : .init(red: 0.039, green: 0.122, blue: 0.086, alpha: 1) })
   static let surface = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .secondarySystemBackground : .init(red: 0.969, green: 0.965, blue: 0.953, alpha: 1) })
   static let muted = Color.secondary
@@ -28,37 +34,59 @@ struct CompanionShell: View {
   var body: some View {
     HStack(spacing: 0) {
       if sizeClass == .regular {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 8) {
-          Text("Woven Matter").font(.title2.bold()).padding(.vertical, 16)
-          ForEach(CompanionModel.Tab.allCases, id: \.self) { tab in
-            WorkspaceRow(icon: tab.icon, title: tab.rawValue, selected: model.tab == tab) { model.tab = tab }
-              .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
+        VStack(alignment: .leading, spacing: 0) {
+          Label("Woven Matter", systemImage: "square.stack.3d.up")
+            .font(.title3.weight(.semibold)).padding(24)
+          ScrollView {
+            VStack(spacing: 4) {
+              ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in sidebarRow(tab) }
+              GroupLabel(text: "Workspace")
+              ForEach(Array(CompanionModel.Tab.allCases.dropFirst(5)), id: \.self) { tab in sidebarRow(tab) }
+            }.padding(.horizontal, 12)
           }
-          Spacer()
-          Text(model.connectionLabel).font(.caption).foregroundStyle(.secondary)
-          }.padding(16)
-        }.frame(width: 245).frame(maxHeight: .infinity, alignment: .top).background(MobileTheme.surface)
+          Button { model.pairingPresented = true } label: {
+            Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
+              .font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(20)
+          }.buttonStyle(.plain).accessibilityLabel("Mac connection: " + model.connectionLabel)
+        }.frame(width: 260).background(MobileTheme.surface)
         Divider()
       }
       VStack(spacing: 0) {
-        pane.frame(maxWidth: .infinity, maxHeight: .infinity)
+        if sizeClass != .regular && !CompanionModel.Tab.allCases.prefix(5).contains(model.tab) {
+          HStack {
+            Button { model.tab = .home } label: { Label("Home", systemImage: "chevron.left").frame(minHeight: 44) }
+              .accessibilityIdentifier("back-home")
+            Spacer()
+          }.padding(.horizontal, 20)
+        }
+        pane.frame(maxWidth: 960, maxHeight: .infinity).frame(maxWidth: .infinity)
+        if keyboardVisible {
+          HStack {
+            Spacer()
+            Button("Done") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+              .font(.subheadline.weight(.semibold)).frame(minWidth: 60, minHeight: 44)
+              .accessibilityIdentifier("dismiss-keyboard")
+          }.padding(.horizontal, 16).background(MobileTheme.surface)
+        }
         if sizeClass != .regular && !keyboardVisible {
           HStack(spacing: 0) {
             ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in
               Button { model.tab = tab } label: {
                 VStack(spacing: 5) {
-                  Image(systemName: tab.icon).font(.system(size: 23)).frame(height: 26)
-                  Text(tab.rawValue).font(.caption2)
+                  Image(systemName: tab.icon).font(.system(size: 21, weight: .medium))
+                    .frame(width: 54, height: 30)
+                    .background(isSelected(tab) ? MobileTheme.selection : .clear, in: Capsule())
+                  Text(tab.rawValue).font(.caption2.weight(isSelected(tab) ? .semibold : .regular))
                 }.frame(maxWidth: .infinity).padding(.vertical, 11)
-                  .foregroundStyle(model.tab == tab ? MobileTheme.ink : MobileTheme.muted)
+                  .foregroundStyle(isSelected(tab) ? MobileTheme.ink : MobileTheme.muted)
               }.accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
-                .accessibilityAddTraits(model.tab == tab ? .isSelected : [])
+                .accessibilityAddTraits(isSelected(tab) ? .isSelected : [])
             }
-          }.background(MobileTheme.surface)
+          }.background(MobileTheme.surface).overlay(alignment: .top) { Divider() }
         }
       }
     }
+    .scrollIndicators(.never)
     .foregroundStyle(MobileTheme.ink).tint(MobileTheme.green)
     .background(Color(uiColor: .systemBackground))
     .sheet(isPresented: $model.pairingPresented) { PairingPane(model: model) }
@@ -67,6 +95,13 @@ struct CompanionShell: View {
     } message: { Text(model.errorMessage ?? "") }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
+  }
+  private func isSelected(_ tab: CompanionModel.Tab) -> Bool {
+    model.tab == tab || (tab == .home && !CompanionModel.Tab.allCases.prefix(5).contains(model.tab))
+  }
+  private func sidebarRow(_ tab: CompanionModel.Tab) -> some View {
+    WorkspaceRow(icon: tab.icon, title: tab.rawValue, selected: model.tab == tab) { model.tab = tab }
+      .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
   }
   @ViewBuilder private var pane: some View {
     switch model.tab {
@@ -88,7 +123,7 @@ struct CompanionShell: View {
 struct PaneHeader<Trailing: View>: View {
   let title: String
   @ViewBuilder var trailing: Trailing
-  var body: some View { HStack(alignment: .center) { Text(title).font(.largeTitle.bold()).accessibilityIdentifier("pane-heading-" + title.lowercased()); Spacer(); trailing }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 14) }
+  var body: some View { HStack(alignment: .center) { Text(title).font(.title.weight(.bold)).accessibilityIdentifier("pane-heading-" + title.lowercased()); Spacer(); trailing }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 14) }
 }
 struct WorkspaceRow: View {
   var icon: String
@@ -103,9 +138,9 @@ struct WorkspaceRow: View {
         Text(title).font(.body).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
         if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
       }.padding(.horizontal, 14).padding(.vertical, 13).frame(minHeight: 48)
-        .background(selected ? MobileTheme.surface : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+        .background(selected ? MobileTheme.selection : Color.clear, in: RoundedRectangle(cornerRadius: 12))
         .contentShape(Rectangle())
-    }.buttonStyle(.plain)
+    }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
   }
 }
 struct GroupLabel: View {
@@ -122,19 +157,29 @@ struct HomePane: View {
       }
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          VStack(alignment: .leading, spacing: 10) {
-            Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle.fill" : "laptopcomputer").font(.subheadline.weight(.medium))
-            Text(model.online ? "Your Mac owns this workspace. Keep it running to use agents from your iPhone." : "Capture ideas and edit saved notes here. Reconnect to your running Mac to sync and use agents.")
-              .font(.subheadline).foregroundStyle(.secondary)
-            if model.credential == nil && !model.fixture { Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(.borderedProminent).foregroundStyle(.white) }
-            else { Button(model.connecting ? "Connecting…" : "Reconnect") { Task { await model.refresh() } }.disabled(model.connecting || model.fixture) }
-          }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 16))
-          WorkspaceRow(icon: "square.and.pencil", title: "New chat") { model.newChat() }
-          WorkspaceRow(icon: "doc.badge.plus", title: "New note", detail: "Works offline") { Task { await model.newNote() } }.accessibilityIdentifier("action-new-note")
-          ForEach([CompanionModel.Tab.library, .calendar, .trash], id: \.self) { tab in
-            WorkspaceRow(icon: tab.icon, title: tab.rawValue, detail: "On your Mac") { model.tab = tab }
-              .accessibilityIdentifier("open-\(tab.rawValue.lowercased())")
-          }
+          HStack(alignment: .top, spacing: 12) {
+            Image(systemName: model.fixture ? "iphone.gen3" : model.online ? "checkmark.circle.fill" : "laptopcomputer")
+              .font(.title3).foregroundStyle(MobileTheme.green)
+            VStack(alignment: .leading, spacing: 6) {
+              Text(model.connectionLabel).font(.subheadline.weight(.semibold))
+              Text(model.fixture ? "Explore your workspace with sample notes and conversations."
+                : model.online ? "Your workspace is connected. Agents run on your Mac."
+                : "Your notes stay available here. Connect to your Mac to sync and use agents.")
+                .font(.subheadline).foregroundStyle(.secondary)
+              if !model.fixture && !model.online {
+                if model.credential == nil {
+                  Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(.borderedProminent).tint(MobileTheme.action)
+                } else {
+                  Button(model.connecting ? "Connecting…" : "Reconnect") { Task { await model.refresh() } }.disabled(model.connecting)
+                }
+              }
+            }
+          }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { quickActions }
+            VStack(spacing: 12) { quickActions }
+          }.padding(.vertical, 12)
           if !model.pending.isEmpty {
             GroupLabel(text: "Needs your attention")
             ForEach(model.pending) { request in WorkspaceRow(icon: "hand.raised", title: request.title, detail: "Respond") { Task { await model.selectConversation(request.conversationID) } } }
@@ -165,13 +210,34 @@ struct HomePane: View {
             }
           }
           GroupLabel(text: "Recent notes")
-          ForEach(model.notes.prefix(5)) { note in WorkspaceRow(icon: "doc.text", title: note.title, detail: model.state.isDirty(note.id) ? "On iPhone" : nil) { Task { await model.openNote(note.id) } } }
+          ForEach(model.notes.prefix(5)) { note in WorkspaceRow(icon: "doc.text", title: note.title, detail: model.state.isDirty(note.id) ? "On device" : nil) { Task { await model.openNote(note.id) } } }
           if model.notes.isEmpty { Text("Your ideas start here. Create a note, even before pairing.").foregroundStyle(.secondary).padding(14) }
+          GroupLabel(text: "Workspace")
+          ForEach([CompanionModel.Tab.library, .calendar, .trash], id: \.self) { tab in
+            WorkspaceRow(icon: tab.icon, title: tab.rawValue) { model.tab = tab }
+              .accessibilityIdentifier("open-\(tab.rawValue.lowercased())")
+          }
           if !model.state.outbox.isEmpty { Text("\(model.state.outbox.count) saved changes waiting to sync").font(.caption).foregroundStyle(.secondary).padding(14) }
         }.padding(.horizontal, 18).padding(.bottom, 20)
       }.refreshable { await model.refresh() }
     }
   }
+  @ViewBuilder private var quickActions: some View {
+    quickAction("New chat", icon: "square.and.pencil", detail: "Continue your work") { model.newChat() }
+    quickAction("New note", icon: "doc.badge.plus", detail: "Capture an idea") { Task { await model.newNote() } }
+      .accessibilityIdentifier("action-new-note")
+  }
+  private func quickAction(_ title: String, icon: String, detail: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 8) {
+        Image(systemName: icon).font(.title2).foregroundStyle(MobileTheme.green)
+        Text(title).font(.headline)
+        Text(detail).font(.caption).foregroundStyle(.secondary)
+      }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+    }.buttonStyle(.plain)
+  }
+
 }
 
 struct FoldersPane: View {
@@ -197,7 +263,7 @@ struct FoldersPane: View {
             WorkspaceRow(icon: "bubble.left", title: conversation.title, detail: conversation.activeRunID == nil ? nil : "Running") { Task { await model.selectConversation(conversation.id) } }
           }
           ForEach(model.notes.filter { model.selectedFolderID == nil || $0.folderID == model.selectedFolderID }) { note in
-            WorkspaceRow(icon: "doc.text", title: note.title, detail: model.state.isDirty(note.id) ? "On iPhone" : nil) { Task { await model.openNote(note.id) } }
+            WorkspaceRow(icon: "doc.text", title: note.title, detail: model.state.isDirty(note.id) ? "On device" : nil) { Task { await model.openNote(note.id) } }
           }
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
@@ -206,7 +272,7 @@ struct FoldersPane: View {
       TextField("Folder name", text: $folderName)
       Button("Create") { let name = folderName; folderName = ""; Task { await model.newFolder(name: name) } }
       Button("Cancel", role: .cancel) { folderName = "" }
-    } message: { Text("Saved on this iPhone first, then synced to your Mac.") }
+    } message: { Text("Saved on this device first, then synced to your Mac.") }
   }
 }
 

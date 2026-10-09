@@ -222,7 +222,7 @@ def sqlite_query(parent, filename, query):
 
 def operation(root, request):
     action = request.get('action')
-    with directory(root) as workspace, directory('Databases', workspace) as databases:
+    with directory(root) as workspace, directory('databases', workspace) as databases:
         if action == 'list':
             result = []
             # Scandir avoids allocating an unbounded list from an agent-controlled directory.

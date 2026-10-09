@@ -9,8 +9,14 @@ fi
 cache_root="${WOVENMATTER_CONVERSATION_TEST_CACHE_DIR:-/private/tmp/wovenmatter-conversation-layout-tests}"
 mkdir -p "$cache_root/ModuleCache"
 xcrun swiftc -parse-as-library -module-cache-path "$cache_root/ModuleCache" \
-  "$repo_root/app/App/Models/ConversationMarkdownDocument.swift" \
   "$repo_root/app/App/Models/ConversationMessageLayout.swift" \
   "$repo_root/scripts/test-support/ConversationMessageLayoutTests.swift" \
   -o "$cache_root/ConversationMessageLayoutTests"
 "$cache_root/ConversationMessageLayoutTests"
+
+xcrun swiftc -parse-as-library -module-cache-path "$cache_root/ModuleCache" \
+  "$repo_root/app/App/Models/ConversationMarkdownDocument.swift" \
+  "$repo_root/app/App/Views/ConversationResponse.swift" \
+  "$repo_root/scripts/test-support/ConversationResponseTests.swift" \
+  -o "$cache_root/ConversationResponseTests"
+"$cache_root/ConversationResponseTests"

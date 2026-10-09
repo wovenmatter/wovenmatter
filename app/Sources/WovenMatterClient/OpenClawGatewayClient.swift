@@ -134,6 +134,10 @@ public actor OpenClawGatewayClient {
   private var socket: (any OpenClawGatewaySocket)?
   private var capabilities: OpenClawGatewayCapabilities?
   private var pending: [String: CheckedContinuation<GatewayJSONValue, any Error>] = [:]
+  private var observationMethods: [String: String] = [:]
+  private var nativeSessionIncarnations: [String: String] = [:]
+  private var reconciledArchiveSources: Set<String> = []
+  private var reconcilingArchiveKeys: Set<String> = []
   private var requestTimeouts: [String: Task<Void, Never>] = [:]
   private var receiver: Task<Void, Never>?
   private var connecting: Task<OpenClawGatewayCapabilities, any Error>?
@@ -412,6 +416,7 @@ public actor OpenClawGatewayClient {
     let previous = socket
     socket = nil
     capabilities = nil
+    reconciledArchiveSources.removeAll()
     failPending(OpenClawGatewayClientError.connectionClosed)
     await previous?.close()
   }
@@ -431,8 +436,9 @@ public actor OpenClawGatewayClient {
     try Task.checkCancellation()
     let id = UUID().uuidString.lowercased()
     let requestGeneration = generation
-    return try await withCheckedThrowingContinuation { continuation in
+    let result: GatewayJSONValue = try await withCheckedThrowingContinuation { continuation in
       pending[id] = continuation
+      observationMethods[id] = method
       requestTimeouts[id] = Task {
         do { try await Task.sleep(for: timeout) }
         catch { return }
@@ -449,6 +455,89 @@ public actor OpenClawGatewayClient {
         catch { self.resumePending(id: id, with: .failure(error)) }
       }
     }
+    if let key = params.objectValue?["sessionKey"]?.stringValue ?? params.objectValue?["key"]?.stringValue {
+      if let physicalID = result.objectValue?["sessionId"]?.stringValue
+        ?? result.objectValue?["sessionInfo"]?.objectValue?["sessionId"]?.stringValue {
+        nativeSessionIncarnations[key] = physicalID
+      }
+      if let batch = try Self.nativeHistoryBatch(method: method, params: params, value: result,
+        sourceID: archiveSourceID(key: key), nativeSessionID: key) {
+        try await historyRecorder?("native", NativeHarnessArchive.encode(batch))
+      }
+      if method == "chat.history", (params.objectValue?["offset"]?.intValue ?? 0) == 0 {
+        try await reconcileArchiveHistory(key: key, first: result, connectionGeneration: requestGeneration)
+      }
+    }
+    return result
+  }
+
+  private func archiveSourceID(key: String) -> String {
+    "openclaw:" + NativeHarnessArchive.digest(Data(credentialScope.utf8))
+      + ":" + (nativeSessionIncarnations[key] ?? "unresolved-session")
+  }
+
+  private func reconcileArchiveHistory(key: String, first: GatewayJSONValue, connectionGeneration: UUID) async throws {
+    guard historyRecorder != nil else { return }
+    let source = archiveSourceID(key: key) + ":" + key
+    guard !reconciledArchiveSources.contains(source), reconcilingArchiveKeys.insert(key).inserted else { return }
+    defer { reconcilingArchiveKeys.remove(key) }
+    var page = first
+    var previousOffset = 0
+    let physicalID = nativeSessionIncarnations[key]
+    while true {
+      try Task.checkCancellation()
+      guard connectedGeneration == connectionGeneration else { throw CancellationError() }
+      for message in page.objectValue?["messages"]?.arrayValue ?? [] {
+        guard let preview = OpenClawGatewayHistoryMessage(payload: message), preview.isTruncated,
+              let messageID = preview.nativeMessageID else { continue }
+        do {
+          _ = try await request("chat.message.get", params: .object([
+            "sessionKey": .string(key), "messageId": .string(messageID), "maxChars": .number(500_000)
+          ]), expectedConnectionGeneration: connectionGeneration)
+        } catch OpenClawGatewayClientError.rejected {
+          // Native pruning can remove the original behind an exposed preview.
+          // Keep that preview's truthful coverage instead of inventing a full row.
+        } catch OpenClawGatewayClientError.unsupportedCapability {
+          // Older gateways may only expose their bounded history previews.
+        }
+      }
+      guard page.objectValue?["hasMore"]?.boolValue == true else { break }
+      guard let next = page.objectValue?["nextOffset"]?.intValue, next > previousOffset else { throw OpenClawGatewayClientError.malformedFrame }
+      previousOffset = next
+      page = try await request("chat.history", params: .object([
+        "sessionKey": .string(key), "limit": .number(100), "offset": .number(Double(next)),
+        "maxBytes": .number(524_288), "maxChars": .number(500_000)
+      ]), expectedConnectionGeneration: connectionGeneration)
+      guard physicalID == nativeSessionIncarnations[key] else {
+        throw OpenClawGatewayClientError.rejected("The native session changed while archiving history. Refresh it to reconcile the available records.")
+      }
+    }
+    reconciledArchiveSources.insert(source)
+  }
+
+  /// History responses may include previews. Preserve their coverage honestly;
+  /// subsequent chat.message.get records retain the full exposed value as a new
+  /// revision of the same native identity.
+  static func nativeHistoryBatch(method: String, params: GatewayJSONValue, value: GatewayJSONValue,
+                                sourceID: String, nativeSessionID: String) throws -> WorkspaceNativeRunRecordBatch? {
+    guard ["chat.history", "chat.message.get"].contains(method), let row = value.objectValue else { return nil }
+    let messages = row["messages"]?.arrayValue ?? row["message"].map { [$0] } ?? []
+    var records = try messages.enumerated().map { index, message -> WorkspaceNativeRunRecord in
+      let bytes = try NativeHarnessArchive.encode(message)
+      let parsed = OpenClawGatewayHistoryMessage(payload: message)
+      let metadata = message.objectValue?["__openclaw"]?.objectValue
+      let nativeID = parsed?.transcriptIdentity ?? metadata?["id"]?.stringValue
+        ?? message.objectValue?["id"]?.stringValue ?? "exposed:" + String(index) + ":" + NativeHarnessArchive.digest(bytes)
+      return NativeHarnessArchive.record(id: "message:" + nativeID, kind: "message", data: bytes,
+        completeness: parsed?.isTruncated == true ? "native-preview" : "native-export")
+    }
+    // Page state retains compaction/context, pending input and lifecycle fields
+    // without reducing them to rendered transcript rows.
+    let offset = params.objectValue?["offset"]?.intValue ?? row["offset"]?.intValue ?? 0
+    records.append(NativeHarnessArchive.record(id: method == "chat.history" ? "history.page:" + String(offset)
+      : "history.message:" + (params.objectValue?["messageId"]?.stringValue ?? "unknown"),
+      kind: "session", data: try NativeHarnessArchive.encode(value), completeness: "available-history"))
+    return WorkspaceNativeRunRecordBatch(sourceID: sourceID, nativeSessionID: nativeSessionID, records: records)
   }
 
   public func sessionPreferences(key: String) async throws -> OpenClawSessionPreferences {
@@ -500,6 +589,14 @@ public actor OpenClawGatewayClient {
             }
             lastEventSequence = seq
           }
+          if Self.recordsRunTransport(method: name), let key = frame.payload?.objectValue?["sessionKey"]?.stringValue
+            ?? frame.payload?.objectValue?["key"]?.stringValue {
+            let record = NativeHarnessArchive.record(id: "event:" + generation.uuidString.lowercased() + ":"
+                + (frame.seq.map(String.init) ?? UUID().uuidString.lowercased()), kind: name,
+              data: try NativeHarnessArchive.encode(frame), contentMode: "event")
+            try await NativeHarnessArchive.capture(sourceID: archiveSourceID(key: key), sessionID: key,
+              records: [record], recorder: historyRecorder)
+          }
           await eventHandler(OpenClawGatewayEvent(name: name, payload: frame.payload, sequence: frame.seq))
         }
       }
@@ -507,6 +604,7 @@ public actor OpenClawGatewayClient {
       guard generation == attempt else { return }
       self.socket = nil
       capabilities = nil
+      reconciledArchiveSources.removeAll()
       watchdog?.cancel()
       watchdog = nil
       failPending(error)
@@ -542,7 +640,7 @@ public actor OpenClawGatewayClient {
       throw OpenClawGatewayClientError.rejected("Request exceeds the Gateway payload limit.")
     }
     // Never retain the authentication handshake in the history journal.
-    if frame.method != "connect" { try await historyRecorder?("out", data) }
+    if Self.recordsRunTransport(method: frame.method ?? "") { try await historyRecorder?("out", data) }
     try Task.checkCancellation()
     guard attempt == generation else { throw OpenClawGatewayClientError.connectionClosed }
     if frame.method != "connect", let id = frame.id, pending[id] == nil {
@@ -555,12 +653,25 @@ public actor OpenClawGatewayClient {
 
   private func receiveFrame(from socket: any OpenClawGatewaySocket) async throws -> Frame {
     let data = try await socket.receive()
-    if capabilities != nil { try await historyRecorder?("in", data) }
-    return try JSONDecoder().decode(Frame.self, from: data)
+    let frame = try JSONDecoder().decode(Frame.self, from: data)
+    if capabilities != nil {
+      let method = frame.id.flatMap { observationMethods.removeValue(forKey: $0) }
+      if frame.type == "event" && Self.recordsRunTransport(method: frame.event ?? "")
+        || method.map(Self.recordsRunTransport) == true {
+        try await historyRecorder?("in", data)
+      }
+    }
+    return frame
+  }
+
+  static func recordsRunTransport(method: String) -> Bool {
+    method != "connect" && !method.hasPrefix("connect.") && !method.hasPrefix("config.")
+      && !method.hasPrefix("auth.") && !method.hasPrefix("secrets.")
   }
 
   private func resumePending(id: String, with result: Result<GatewayJSONValue, any Error>) {
     guard let continuation = pending.removeValue(forKey: id) else { return }
+    observationMethods.removeValue(forKey: id)
     requestTimeouts.removeValue(forKey: id)?.cancel()
     continuation.resume(with: result)
   }
@@ -568,6 +679,7 @@ public actor OpenClawGatewayClient {
   private func failPending(_ error: any Error) {
     let continuations = pending.values
     pending.removeAll()
+    observationMethods.removeAll()
     for timeout in requestTimeouts.values { timeout.cancel() }
     requestTimeouts.removeAll()
     for continuation in continuations { continuation.resume(throwing: error) }

@@ -105,6 +105,8 @@ struct DashboardInlineError: View {
 struct DashboardRevealRailButton: View {
     enum Side { case left, right }
     let side: Side
+    var width: CGFloat = 36
+    var height: CGFloat = 36
     let action: () -> Void
 
     var body: some View {
@@ -113,7 +115,7 @@ struct DashboardRevealRailButton: View {
                 glyph: side == .left ? .rightCollapse : .leftCollapse,
                 size: 18
             )
-            .frame(width: 36, height: 36)
+            .frame(width: width, height: height)
         }
         .buttonStyle(DashboardIconButtonStyle())
         .help(side == .left ? "Show agents" : "Show workspace")
@@ -562,6 +564,11 @@ struct DashboardConversationHoverCard: View {
                 if let workspace = meta.buzzWorkspaceLabel {
                     hoverRow(icon: .panelTop, text: workspace)
                 }
+                if presentation.conversation.isScheduledTask {
+                    Text("Scheduled Task")
+                        .font(.system(size: 12))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }
             }
 
             WorkspaceSessionProvenance(sessionID: presentation.id)
@@ -741,7 +748,7 @@ struct DashboardPillButtonStyle: ButtonStyle {
 
 func dashboardAgentPresentation(_ agent: WorkspaceAgent) -> DashboardAgentPresentation {
     DashboardAgentPresentation(
-        displayName: agent.runtimeKind == .defaultAgent ? "Built-in" : agent.displayName,
+        displayName: agent.runtimeKind == .defaultAgent ? agent.runtimeKind.displayName : agent.displayName,
         iconKey: agent.iconKey
     )
 }

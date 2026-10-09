@@ -3,10 +3,6 @@ import Security
 import WovenMatterCore
 
 public enum DefaultAgentSupport {
-    public static let lastEngineKey = "wovenmatter.built-in.last-engine"
-    public static func sidebarName(engine: String) -> String {
-        engine == "claude" ? "Built-in Claude SDK" : "Built-in Pi sdk"
-    }
     public static let settingsKey = "wovenmatter.default-agent.settings.v1"
     private static let settingsLock = NSLock()
     private static func readSettings() -> DefaultAgentSettingsScope {
@@ -46,11 +42,11 @@ public enum DefaultAgentSupport {
         let ready = executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
         return LocalACPRuntimeResolution(
             availability: .init(
-                runtimeKind: .defaultAgent, displayName: "Built-in",
+                runtimeKind: .defaultAgent, displayName: AgentRuntimeKind.defaultAgent.displayName,
                 state: ready ? .ready : .executableUnavailable,
                 detail: ready
-                    ? "Built into Woven Matter. Manage connections in Settings → Connections."
-                    : "The bundled Built-in helper is missing. Rebuild or reinstall Woven Matter.",
+                    ? "Included with Woven Matter. Manage connections in Settings → Connections."
+                    : "The bundled Pi Durable helper is missing. Rebuild or reinstall Woven Matter.",
                 executablePath: executable?.path),
             launchConfiguration: ready
                 ? .init(

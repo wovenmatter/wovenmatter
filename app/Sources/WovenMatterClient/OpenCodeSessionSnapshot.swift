@@ -9,7 +9,7 @@ public enum OpenCodeComposerMetadata {
         return model["providerID"].text.isEmpty ? id : model["providerID"].text + "/" + id
     }
 
-    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = [], commands: [OpenCodeValue] = [], approvalMode: String = "normal") -> LocalACPSessionMetadata {
+    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = [], commands: [OpenCodeValue] = []) -> LocalACPSessionMetadata {
         let selected = modelKey(session["model"]).isEmpty ? defaultModel : session["model"]
         let key = modelKey(selected)
         let option = models.first { modelKey($0) == key }
@@ -38,7 +38,7 @@ public enum OpenCodeComposerMetadata {
             slashCommands: slashCommands(commands),
             modelOptionMetadata: modelMetadata,
             thinkingOptionMetadata: thinkingMetadata,
-            permission: OpenCodePermissionHandling.normalized(approvalMode),
+            permission: OpenCodePermissionHandling.nativeMode(session: session),
             permissionOptions: OpenCodePermissionHandling.options,
             permissionOptionMetadata: OpenCodePermissionHandling.metadata)
     }
@@ -94,8 +94,6 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
     public var info: OpenCodeValue = .null
     public var messages: [OpenCodeValue] = []
     public var permissions: [OpenCodeValue] = []
-    /// Woven Matter's local request handling, separate from native session.info.
-    public var approvalMode: String?
     public var forms: [OpenCodeValue] = []
     public var inbox: [OpenCodeValue] = []
     public var active = false
@@ -182,7 +180,7 @@ public enum OpenCodeFormAnswers {
         for field in activeFields(fields, answers: answers) {
             let key = field["key"].text
             let title = field["title"].string ?? key
-            var value = answers[key] ?? field["default"]
+            var value = field["hidden"].bool ? field["default"] : answers[key] ?? field["default"]
             if field["type"].text == "external" {
                 guard value == .bool(true) else { throw OpenCodeError.message("Complete and confirm \(title).") }
             } else if field["type"].text == "boolean", value.isNull {
@@ -220,7 +218,7 @@ public enum OpenCodeFormAnswers {
             }
             if visible {
                 let key = field["key"].text
-                var value = answers[key] ?? field["default"]
+                var value = field["hidden"].bool ? field["default"] : answers[key] ?? field["default"]
                 if value.isNull, field["type"].text == "boolean" { value = .bool(false) }
                 if ["number", "integer"].contains(field["type"].text), let text = value.string {
                     if let number = Double(text), number.isFinite { value = .number(number) }

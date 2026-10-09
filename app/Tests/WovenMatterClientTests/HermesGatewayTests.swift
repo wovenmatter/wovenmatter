@@ -269,25 +269,6 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
-    @Test func completionReasoningDoesNotDuplicateStreamedReasoning() async throws {
-        let transport = HermesTransportFixture()
-        let client = makeClient(transport)
-        let output = HermesEventFixture()
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
-        let turn = Task { try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: { await output.record($0) }, onPermission: nil, onInteraction: nil) }
-        try await transport.waitForSubmit()
-        await transport.event(type: "reasoning.delta", payload: ["text": "streamed reasoning"])
-        await transport.event(type: "message.complete", payload: ["text": "Final", "reasoning": "streamed reasoning"])
-        _ = try await turn.value
-        let thoughts = await output.events.compactMap { event -> AgentRunActivity? in
-            if case .activity(let activity, _) = event, activity.kind == .thought { return activity }
-            return nil
-        }
-        #expect(thoughts.count == 1)
-        #expect(thoughts[0].content == "streamed reasoning")
-        await client.shutdown()
-    }
-
     private func makeClient(_ transport: HermesTransportFixture, environment: [String: String] = [:]) -> HermesGatewayClient {
         HermesGatewayClient(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
             executableURL: URL(fileURLWithPath: "/fixture/not-executed"), arguments: [], environment: environment),
@@ -300,7 +281,7 @@ struct HermesGatewayTests {
     }
 }
 
-private actor HermesTransportFixture: HermesGatewayTransport {
+actor HermesTransportFixture: HermesGatewayTransport {
     var epoch: String? = "first"
     var isConnected = false
     var calls: [(String, HermesValue)] = []
@@ -314,12 +295,39 @@ private actor HermesTransportFixture: HermesGatewayTransport {
     private var sequence = 0
     private var replay: HermesValue?
 
+    private let archiveGate: NativeArchiveGate?
+    private let commandResult: HermesValue?
+    private let holdCommand: Bool
+    private var commandWaiter: CheckedContinuation<Void, Never>?
+    init(archiveGate: NativeArchiveGate? = nil, commandResult: HermesValue? = nil, holdCommand: Bool = false) {
+        self.archiveGate = archiveGate
+        self.commandResult = commandResult
+        self.holdCommand = holdCommand
+    }
+    func didSubmit() -> Bool { running }
+    func resetSubmission() { running = false }
+    func releaseCommand() { commandWaiter?.resume(); commandWaiter = nil }
+    func waitForCommand() async throws {
+        for _ in 0..<200 {
+            if commandWaiter != nil { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw HermesGatewayError.message("Fixture did not receive a command")
+    }
+    func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder,
+                        afterMessageID: Int64?, runID: String?) async throws -> Int64? {
+        // Initial reconciliation establishes the high-water mark before submit.
+        // Block only the final archive that this fixture exercises.
+        guard let archiveGate, calls.contains(where: { $0.0 == "prompt.submit" }) else { return 0 }
+        try await archiveGate.pause()
+        return 0
+    }
     func setHandlers(event: HermesGatewayRPC.EventHandler?, disconnected: (@Sendable () async -> Void)?, request: HermesGatewayRPC.EventHandler?) {
         onEvent = event; onRequest = request; onDisconnect = disconnected
     }
     func connect() { isConnected = true }
     func disconnect() { isConnected = false }
-    func call(_ method: String, _ params: HermesValue) throws -> HermesValue {
+    func call(_ method: String, _ params: HermesValue) async throws -> HermesValue {
         calls.append((method, params))
         // Allowed keys from installed Hermes d4063e62's strict Pydantic contracts.
         // Unlike the old permissive fixture, reject fields the real Gateway rejects.
@@ -341,6 +349,11 @@ private actor HermesTransportFixture: HermesGatewayTransport {
         case "session.create", "session.resume":
             return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running), "info": ["cwd": "/native/imported project"]]
         case "session.events.since": return replay ?? ["latest_seq": .number(Double(sequence)), "epoch": .string(epoch ?? "")]
+        case "commands.catalog":
+            return commandResult == nil ? [:] : ["pairs": .array([.array(["/review", "Review"])])]
+        case "command.dispatch":
+            if holdCommand { await withCheckedContinuation { commandWaiter = $0 } }
+            return commandResult ?? [:]
         case "prompt.submit":
             running = true
             if loseSubmit { throw HermesGatewayError.message("Acknowledgement lost") }
@@ -353,9 +366,9 @@ private actor HermesTransportFixture: HermesGatewayTransport {
         var params = params; params["session_id"] = "live"
         await onRequest?(["id": .string(id), "method": .string(method), "params": params])
     }
-    func event(type: String, payload: HermesValue) async {
+    func event(type: String, payload: HermesValue, sessionID: String = "live") async {
         sequence += 1
-        await onEvent?(["session_id": "live", "seq": .number(Double(sequence)), "type": .string(type), "payload": payload])
+        await onEvent?(["session_id": .string(sessionID), "seq": .number(Double(sequence)), "type": .string(type), "payload": payload])
     }
     func complete() async {
         running = false

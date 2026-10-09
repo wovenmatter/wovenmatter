@@ -10,6 +10,7 @@ public struct DefaultAgentSDKStatus: Codable, Equatable, Sendable {
         public let updateAvailable: Bool
         public let notice: String?
         public let consistent: Bool?
+        public var displayName: String { id == "pi" ? "Pi Durable SDK" : name }
     }
     public let sdks: [SDK]
     public let generation: String?
@@ -31,7 +32,7 @@ public struct DefaultAgentSDKRequest: Codable, Equatable, Sendable {
 public enum DefaultAgentSDKControl {
     public static func run(_ request: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
         guard let root = DefaultAgentSupport.resources else {
-            throw DefaultAgentError.message("The bundled Built-in helper is unavailable.")
+            throw DefaultAgentError.message("The bundled Pi Durable helper is unavailable.")
         }
         return try await run(request, executable: root.appending(path: "bin/node"),
             arguments: [root.appending(path: "src/sdk-control.mjs").path],
@@ -139,7 +140,7 @@ public enum DefaultAgentSDKControl {
             if !reachedEOF {
                 let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
                 if count > 0 {
-                    guard response.count + count <= 1_048_576 else { throw DefaultAgentError.message("The Built-in helper returned too much data.") }
+                    guard response.count + count <= 1_048_576 else { throw DefaultAgentError.message("The Pi Durable helper returned too much data.") }
                     response.append(contentsOf: buffer.prefix(count))
                 } else if count == 0 { reachedEOF = true }
                 else if errno != EAGAIN && errno != EINTR { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }

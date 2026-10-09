@@ -1,17 +1,17 @@
 # Connections and dictation
 
 Open **Settings → Connections**, immediately below General, to manage shared
-accounts. Account/status links in Usage, Built-in, and General lead here.
+accounts. Account/status links in Usage, Pi Durable, and General lead here.
 
 The page groups **Model providers**, **Web search**, and **Local models**.
 Expand a provider, then its subscription or API-key section. OpenAI, Anthropic,
-Grok/xAI, OpenRouter, and OpenCode connections power Built-in. Cursor is for
+Grok/xAI, OpenRouter, and OpenCode connections power Pi Durable. Cursor is for
 Usage limits only and keeps its single native account on this Mac.
 
 Save up to four connections per type. Saved rows show account identity or a key
 label and date added, never the secret. Older connections show “Existing
 connection” when their original date is unknown. Choose **Use first**, then
-arrange the remaining accounts as backups. Built-in tries these before the next
+arrange the remaining accounts as backups. Pi Durable tries these before the next
 configured fallback model when authentication fails or allowance is exhausted.
 It does not switch for ordinary throttling or replay after output/tools begin.
 
@@ -22,13 +22,20 @@ use encrypted storage; native Claude credentials stay with Claude. A remote
 workspace can also own one independent ChatGPT/Grok sign-in ahead of its shared
 accounts. **Use shared sign-in** removes that independent override.
 
-Workspace overrides apply to Built-in. Usage and Dictation use global accounts.
+Workspace overrides apply to Pi Durable. Usage and Dictation use global accounts.
 In **Usage → Usage limits**, each provider's **Account** selector chooses whose
 limits to display without changing the preferred inference account or fallback
 order. API keys without a supported limits endpoint show that limitation rather
 than subscription quota. External harnesses keep their separate sign-ins.
 Disabling a feature keeps its connection; removing a connection affects the
 features using it.
+
+## Executor
+
+Connections also manages one local or remote Linux Executor runtime, shared by
+every agent through Woven’s CLI. Configure apps in its dashboard, choose defaults,
+and select apps per conversation. See [Executor apps](executor.md) for setup,
+permissions and recovery.
 
 ## Dictation
 
@@ -62,7 +69,7 @@ At the bottom of Connections, enter a **Server URL** and **API key**, then click
 No advanced settings are needed. Add up to 12 servers.
 
 Connect discovers models and verifies the Responses endpoint with a small test
-request. Available models then appear in Built-in's model preferences. Enable the ones
+request. Available models then appear in Pi Durable's model preferences. Enable the ones
 you want in the conversation selector; the default model is always included. Reconnect after loading different models to refresh the
 catalog. A failed check leaves an existing saved connection intact. Editing a
 server address requires a new connection, keeping existing sessions and keys

@@ -25,9 +25,9 @@ allowing you the freedom to work across the harnesses and models of your choice.
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
 [Website](https://wovenmatter.com)
 
-The **Built-in** agent is ready in local and remote workspaces. Connect your providers,
+The **Pi Durable** agent is ready in local and remote workspaces. Connect your providers,
 choose models and fallbacks, and add an Exa search key in Settings.
-See [Built-in](docs/guide/default-agent.md).
+See [Pi Durable](docs/guide/default-agent.md).
 
 ## Your agents, working in the same place
 
@@ -132,17 +132,18 @@ Both use this initial layout:
 .woven-matter/
   AGENTS.md
   CLAUDE.md -> AGENTS.md
-  Repos/
-  Databases/
-  GUIDES/
-  PLANS/
-  RESEARCH/
-  WORK_LOGS/
-  OUTBOX/
-  .scratch/
+  repos/
+  databases/
+  guides/
+  plans/
+  research/
+  work_logs/
+  outbox/
+  scratch/
+  skills/
 ```
 
-Adapt the contents to your work. On your Mac, `Repos` and `Databases` can link
+Adapt the contents to your work. On your Mac, `repos` and `databases` can link
 to folders you already use. Initialization preserves an existing `CLAUDE.md`
 instead of replacing it. See [Workspaces and storage](docs/guide/workspaces.md)
 for folder setup and the distinction between workspace files and app records.

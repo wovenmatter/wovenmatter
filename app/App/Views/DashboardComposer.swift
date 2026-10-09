@@ -25,6 +25,9 @@ struct DashboardPanelControlButton: View {
 }
 
 struct DashboardComposer: View {
+    /// Inset above and below the content; the bottom control row ends here.
+    static let verticalPadding: CGFloat = 10
+
     let placeholder: String
     @Binding var draft: String
     let attachedNoteTitle: String?
@@ -46,12 +49,17 @@ struct DashboardComposer: View {
     let onSelectPermission: ((String) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
+    let onOpenAttachment: (AgentFileAttachmentDraft) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onUnavailableAction: (String) -> Void
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
+    var onStop: (() -> Void)? = nil
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTaskProgress) private var taskProgress
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var localTasksExpanded = false
     @State private var selectedSlashCommandID: String?
     @State private var slashCommandsDismissed = false
     @State private var slashNavigationRequest = 0
@@ -75,13 +83,13 @@ struct DashboardComposer: View {
                     Image(systemName: "doc.text")
                     Text(attachedNoteTitle)
                         .lineLimit(1)
-                    Text("available to agent")
+                    Text("shared on send")
                         .foregroundStyle(DashboardPalette.mutedForeground)
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(DashboardPalette.foreground)
-                .accessibilityLabel("Open note \(attachedNoteTitle) is available to the agent")
+                .accessibilityLabel("\(attachedNoteTitle) shared with the agent when you send")
             }
             if !attachments.isEmpty {
                 ScrollView(.horizontal) {
@@ -89,7 +97,10 @@ struct DashboardComposer: View {
                         ForEach(attachments) { attachment in
                             DashboardDraftAttachmentChip(
                                 attachment: attachment,
-                                onRemove: { onRemoveAttachment(attachment.id) }
+                                onRemove: { onRemoveAttachment(attachment.id) },
+                                onOpen: {
+                                    if case .file(let file) = attachment { onOpenAttachment(file) }
+                                }
                             )
                         }
                     }
@@ -140,7 +151,7 @@ struct DashboardComposer: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, Self.verticalPadding)
         .glassEffect(
             .regular.interactive(),
             in: RoundedRectangle(
@@ -173,6 +184,13 @@ struct DashboardComposer: View {
                     focused = true
                 }
         }
+        .conversationTasksBadge(taskProgress, isExpanded: Binding(
+            get: { transcriptState?.tasksExpanded ?? localTasksExpanded },
+            set: { if let transcriptState { transcriptState.tasksExpanded = $0 } else { localTasksExpanded = $0 } }
+        ), onInteraction: {
+            onActivate()
+            focused = true
+        })
         .background {
             DashboardComposerClickAwayMonitor(isActive: focused || openMenu != nil) {
                 focused = false
@@ -549,20 +567,24 @@ struct DashboardComposer: View {
     }
 
     private var sendControl: some View {
-        Button {
+        let showsStop = onStop != nil && !canSend
+        return Button {
             onActivate()
-            onSend()
+            if showsStop { onStop?() } else { onSend() }
         } label: {
-            DashboardLucideIcon(glyph: .arrowUp, size: 16)
+            Group {
+                if showsStop { Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold)) }
+                else { DashboardLucideIcon(glyph: .arrowUp, size: 16) }
+            }
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(DashboardPalette.primary)
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!canSend)
-        .opacity(canSend ? 1 : 0.4)
-        .accessibilityLabel("Send")
+        .disabled(!canSend && !showsStop)
+        .opacity(canSend || showsStop ? 1 : 0.4)
+        .accessibilityLabel(showsStop ? "Stop" : "Send")
     }
 
     private var permissionTitle: String {
@@ -823,13 +845,18 @@ enum DashboardAttachmentPickerKind: String, Identifiable {
 struct DashboardDraftAttachmentChip: View {
     let attachment: AgentMessageAttachmentDraft
     let onRemove: () -> Void
+    let onOpen: () -> Void
 
     var body: some View {
         HStack(spacing: 7) {
-            preview
-            Text(attachment.displayName)
-                .font(.system(size: 11.5, weight: .medium))
-                .lineLimit(1)
+            if case .file = attachment {
+                Button(action: onOpen) { attachmentLabel }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(attachment.displayName)")
+                    .help("Open \(attachment.displayName)")
+            } else {
+                attachmentLabel
+            }
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -843,6 +870,17 @@ struct DashboardDraftAttachmentChip: View {
         .frame(height: 34)
         .background(DashboardPalette.foreground.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var attachmentLabel: some View {
+        HStack(spacing: 7) {
+            preview
+            Text(attachment.displayName)
+                .font(.system(size: 11.5, weight: .medium))
+                .lineLimit(1)
+        }
+        .frame(height: 34)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

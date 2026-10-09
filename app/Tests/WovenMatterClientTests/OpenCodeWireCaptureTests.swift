@@ -34,7 +34,7 @@ struct OpenCodeWireCaptureTests {
     }
     #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/permission/p/reply", body: ["reply": "reject"]))
     #expect(OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/reply", body: ["answer": "yes"]))
-    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/cancel", body: nil))
+    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "DELETE", suffix: "/form/f", body: nil))
   }
 
   @Test func preservesUnknownHTTPAndSSEFieldsWithoutCredentials() async throws {
@@ -50,7 +50,7 @@ struct OpenCodeWireCaptureTests {
       #expect(value["future_payload"]["unknown"].text == "preserved")
     }
     await #expect(throws: OpenCodeError.http(422)) { try await client.call("GET", "/api/failure") }
-    let entries = try capture.values.map { (direction: $0.0, frame: try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: $0.1)) }
+    let entries = try capture.values.filter { $0.0 != "native" }.map { (direction: $0.0, frame: try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: $0.1)) }
     #expect(entries.contains { $0.direction == "out" && $0.frame.body.contains("hello") })
     #expect(entries.contains { $0.direction == "in" && $0.frame.body.contains("future_response") })
     #expect(entries.contains { $0.frame.status == 422 && $0.frame.body.contains("fixture rejection") })
@@ -58,6 +58,8 @@ struct OpenCodeWireCaptureTests {
     #expect(rawStream == CaptureFixtureProtocol.stream)
     #expect(!entries.contains { $0.frame.body.contains("credential-do-not-retain") })
     #expect(!capture.values.contains { String(decoding: $0.1, as: UTF8.self).contains("Authorization") })
+    let native = try capture.values.filter { $0.0 == "native" }.map { try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: $0.1) }
+    #expect(native.contains { $0.nativeSessionID == "ses_fixture" && $0.records.contains { $0.id == "event:native-1" && $0.payload.contains("future_payload") } })
   }
 }
 

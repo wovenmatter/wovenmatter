@@ -114,7 +114,46 @@ test('ACP executor confirms settings, binds recurring session before one prompt,
  const config={...task().task.configuration,model:'b'}
  await assert.rejects(()=>execute({run:{id:'run',title:'Fixture',task:{...task().task,configuration:config}},nativeSessionID:'native-1',signal:new AbortController().signal,publish:()=>{},bindSession:id=>bound.push(id)}),error=>error.needsApproval===true)
  assert.equal(messages.filter(m=>m.method==='session/prompt').length,1)
- assert.ok(messages.find(m=>m.method==='session/prompt').params.prompt[0].text.includes('require the Mac app'))
+ assert.equal(messages.find(m=>m.method==='session/prompt').params.prompt[0].text,task().task.prompt)
+})
+
+test('scheduled Cursor retains owning todo notifications and publishes full native replace/merge/clear payloads',async()=>{
+ const {EventEmitter}=await import('node:events')
+ const {PassThrough,Writable}=await import('node:stream')
+ const {createTaskExecutor}=await import('../src/task-gateway-runner.mjs')
+ const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
+ child.kill=()=>{queueMicrotask(()=>child.emit('exit',0));return true}
+ const reply=message=>child.stdout.write(JSON.stringify(message)+'\n')
+ const todos=Array.from({length:140},(_,index)=>({id:`todo-${index}`,content:'Same label',status:'pending'}))
+ const params={sessionId:'native',toolCallId:'first',merge:false,todos}
+ const notifications=[params,{...params,toolCallId:'merge',merge:true,todos:[{id:'todo-0',content:'Same label',status:'completed'}]},
+   {...params,toolCallId:'clear',todos:[]}]
+ child.stdin=new Writable({write(bytes,_encoding,done){
+   const message=JSON.parse(String(bytes))
+   queueMicrotask(()=>{
+     if(message.method==='initialize')reply({id:message.id,result:{protocolVersion:1}})
+     if(message.method==='session/new'){
+       reply({method:'cursor/update_todos',params}) // Setup history is not this task's progress.
+       reply({id:message.id,result:{sessionId:'native'}})
+     }
+     if(message.method==='session/prompt'){
+       reply({method:'cursor/update_todos',params:{...params,sessionId:'child'}})
+       reply({method:'cursor/update_todos',params:{...params,sessionId:undefined}})
+       for(const params of notifications)reply({method:'cursor/update_todos',params})
+       reply({id:message.id,result:{stopReason:'end_turn'}})
+       reply({method:'cursor/update_todos',params}) // Late native event remains archived only.
+     }
+   });done()
+ }})
+ const updates=[]
+ const execute=createTaskExecutor({catalog:new Map([['cursor',{id:'cursor',transport:'acp',command:'fixture',arguments:[]}]]),workspaceRoot:'/tmp',environment:()=>({}),launch:()=>child})
+ await execute({run:{id:'run',title:'Fixture',task:{prompt:'fixture',configuration:{runtimeKind:'cursor'}}},
+   signal:new AbortController().signal,publish:update=>updates.push(update),bindSession:()=>{}})
+ const projected=updates.filter(update=>update.sessionUpdate==='woven_cursor_todos')
+ assert.deepEqual(projected.map(update=>update.payload),notifications)
+ assert.ok(projected.every(update=>update.nativeSessionID==='native'))
+ const records=updates.flatMap(update=>update.recordBatch?.records??[]).filter(record=>record.kind==='cursor/update_todos')
+ assert.deepEqual(records.map(record=>JSON.parse(record.payload)),[...notifications,params].map(params=>({method:'cursor/update_todos',params})))
 })
 
 test('re-enabling cannot run stale schedules until a fresh publication fences local edits',async t=>{
@@ -136,13 +175,18 @@ test('scheduled output batches sync and is complete before the terminal result i
  }})
  const started=performance.now()
  gateway.publish({publicationID:'batch',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
- const result=gateway.results().entries[0]
- assert.equal(result.updates.length,1000)
+ let page=gateway.results(), count=0
+ const result=page.entries[0]
+ while(page.entries.length){count+=page.entries.reduce((sum,entry)=>sum+entry.updates.length,0);page=gateway.results(page.cursor)}
+ assert.equal(count,1000)
+ assert.equal(JSON.parse(await readFile(resolve(directory,`result-${result.id}.json`),'utf8')).updates,undefined)
  assert.ok(syncs<10,`stream used ${syncs} syncs`)
  assert.equal((await readFile(resolve(directory,`run-${result.id}.jsonl`),'utf8')).trim().split('\n').length,1000)
  t.diagnostic(`1000 scheduled chunks: ${syncs} journal syncs, ${(performance.now()-started).toFixed(1)}ms`)
  const restarted=createTaskGateway({directory,execute:async()=>{throw new Error('no replay')}})
- assert.equal(restarted.results().entries[0].updates.length,1000)
+ page=restarted.results();count=0
+ while(page.entries.length){count+=page.entries.reduce((sum,entry)=>sum+entry.updates.length,0);page=restarted.results(page.cursor)}
+ assert.equal(count,1000)
 })
 
 
@@ -169,20 +213,43 @@ test('changing a recurring task to new sessions never resumes its previous nativ
 })
 
 
-test('every scheduled harness has a bounded retained response and preserves its earlier output', async t => {
-  const { gateway } = await fixture(t, { now: () => Date.parse('2026-01-02T15:00:00Z'), maximumOutputBytes: 256,
+test('scheduled native output above 64 MiB is retained and retrieved in bounded pages', async t => {
+  const text = 'quoted " unicode 🙂\n'.repeat(24000)
+  const records = Math.ceil((65 * 1024 * 1024) / Buffer.byteLength(JSON.stringify({text})))
+  const { directory, gateway } = await fixture(t, { now: () => Date.parse('2026-01-02T15:00:00Z'),
     execute: async ({ publish }) => {
-      publish({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'kept' } })
-      publish({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x'.repeat(256) } })
+      for (let i=0;i<records;i++) publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text},sequence:i})
     },
   })
-  gateway.publish({ publicationID: 'bounded', schedules: [task()], knownRuns: [] })
-  gateway.tick(); await settled(gateway)
-  const result = gateway.results().entries[0]
-  assert.equal(result.run.status, 'uncertain')
-  assert.match(result.error, /response limit/)
-  assert.equal(result.updates.length, 1)
-  assert.equal(result.updates[0].content.text, 'kept')
+  gateway.publish({publicationID:'paged',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
+  const restarted=createTaskGateway({directory,execute:async()=>assert.fail('replayed')})
+  let cursor='0', observed=0, pages=0, last
+  while(true){
+    const page=restarted.results(cursor)
+    if(!page.entries.length)break
+    assert.ok(Buffer.byteLength(JSON.stringify(page))<1048576)
+    assert.notEqual(page.cursor,cursor)
+    for(const entry of page.entries){
+      assert.equal(entry.run.status,'accepted');assert.equal(entry.updateOffset,observed)
+      for(const update of entry.updates){assert.equal(update.sequence,observed++);assert.equal(update.content.text,text)}
+      last=entry
+    }
+    cursor=page.cursor;pages++
+  }
+  assert.equal(observed,records);assert.ok(pages>1);assert.equal(last.complete,true)
+  assert.ok((await readFile(resolve(directory,`result-${last.id}.json`))).length<4096)
+  assert.throws(()=>restarted.results('0:invalid:0'),/Invalid result cursor/)
+})
+
+test('oversized atomic envelopes fail closed without imposing a cumulative archive cap', async t => {
+  const {gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:async({publish})=>{
+    publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'kept'}})
+    publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'x'.repeat(2*1024*1024)}})
+  }})
+  gateway.publish({publicationID:'invalid-envelope',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
+  const result=gateway.results().entries[0]
+  assert.equal(result.run.status,'uncertain');assert.match(result.error,/oversized update envelope/)
+  assert.equal(result.updates.length,1);assert.equal(result.updates[0].content.text,'kept')
 })
 
 test('Built-in cancels accepted work when its output consumer fails', async () => {

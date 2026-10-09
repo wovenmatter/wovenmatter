@@ -20,7 +20,7 @@ WOVENMATTER_IOS_DEVICE_ID=<registered-device-id> scripts/build-ios.sh --device
 
 1. Run the development Mac app with its isolated workspace. Open Settings → iPhone & iPad, enable sharing, and create a pairing code.
 2. Connect both devices to the same tailnet. In the iPhone or iPad Home screen, select Pair your Mac and scan the code or paste the pairing link. Its endpoint is the Tailscale HTTPS URL; the short-lived code is exchanged for a per-device credential stored only in Keychain.
-3. Create a folder and an ordinary note while the Mac is unavailable. The note reports **Saved on iPhone** only after durable local storage commits. Terminate and reopen the app to check that writing persists.
+3. Create a folder and an ordinary note while the Mac is unavailable. The note reports **Saved on this device** only after durable local storage commits. Terminate and reopen the app to check that writing persists.
 4. Reconnect and wait for **Saved · synced with Mac**. The note's client-created ID is preserved. Reference it in a new chat; the app flushes the note before binding its canonical revision to the run.
 5. Open the same conversation on the Mac, respond to a pending approval/question on either device, and verify the other sees the first accepted response. Disconnecting the phone never stops a Mac-owned run.
 
@@ -44,7 +44,7 @@ Agent routes and controls come from the Mac's provider catalog and live per-sess
 
 Library searches files, links and photos from the Mac, opens retained files with native preview/share, and links back to their conversation. File downloads and exports are capped at 32 MB. Calendar supports events, recurring series, scheduled prompts, occurrence/series deletion, and task conversations. Agent configuration and credentials remain on the Mac. Conversation and note detail sheets expose rename, pin/unpin, move, trash, restore and export. Session settings use negotiated model, thinking, permission and workspace-tool choices, including timer-pause confirmation.
 
-On iPad, a persistent sidebar replaces the phone tab bar and remains available while editing; compact windows use the phone layout. UI styling remains a follow-up refinement. Changes requiring the Mac are disabled offline, and the sheets retain entered values when a request fails.
+On iPad, a persistent sidebar replaces the phone tab bar and remains available while editing; compact windows use the phone layout. The first phone UI pass is in place; further styling follows simulator feedback. Changes requiring the Mac are disabled offline, and the sheets retain entered values when a request fails.
 
 Pair each phone/tablet with a fresh code. Up to 16 devices can use one canonical Mac, each with independent revocation. Protocol 3 requires compatible Mac and mobile builds; existing local notes and stored pairing credentials are retained on upgrade. When background execution is enabled, the service owns sharing and the Settings window controls it over the existing local RPC connection. When disabled, keep the Mac app running.
 
@@ -60,4 +60,27 @@ For targeted simulator diagnosis, set `WOVENMATTER_IOS_TEST_ONLY=CompanionUITest
 6. On iPad, repeat navigation and editing in portrait, landscape, and a compact window. With Mac background execution enabled, quit/reopen its frontend and confirm sharing remains owned by the background service.
 7. Move to physical devices after simulator refinement. `scripts/build-ios.sh --device-compile` checks the hardware target without signing or installation; `--device` uses existing local signing assets for the selected registered device. Physical pairing, real provider behavior and OS/network transitions are acceptance checks for that session.
 
-Automated fixtures do not use provider services or a personal workspace. A successful build is separate from live Tailscale/provider acceptance. UI appearance and editing ergonomics remain the next refinement pass.
+Automated fixtures do not use provider services or a personal workspace. A successful build is separate from live Tailscale/provider acceptance. UI appearance and editing ergonomics are ready for the next simulator feedback pass.
+
+## October UI iteration baseline
+
+The companion is integrated with main's structured per-input CLI context and native
+OpenCode permission policies. Mobile Executor enablement follows the Mac's broker
+acknowledgement path and retains its selected profiles. The native browser stays
+on the Mac; provider-free facade tests compile against its production Objective-C
+interface with an unavailable browser implementation, while the Xcode build and
+browser lifecycle suite validate the actual bridge.
+
+The first UI pass focuses on phone navigation, Home actions, chat controls, and
+note editing. Tablets retain a separate sidebar, visible selection, and bounded
+content width; compact windows use phone navigation. Persistence labels refer to
+this device on both iPhone and iPad. The keyboard's Done button returns to navigation
+without losing writing. Preview mode uses sample content and never sends agent work.
+
+For visual iteration, build with `scripts/build-ios.sh`, then install its
+`WovenMatterCompanion.app` in a dedicated simulator. Launch with
+`SIMCTL_CHILD_WOVENMATTER_UI_FIXTURE=1`, a stable
+`SIMCTL_CHILD_WOVENMATTER_UI_FIXTURE_NAMESPACE`, and
+`SIMCTL_CHILD_WOVENMATTER_UI_TAB=Home` (or `Chat` / `Note`). Retaining the namespace
+preserves preview writing between builds. Xcode 27 uses Device Hub to show the
+simulator. Use a separate simulator without fixture variables for real pairing.

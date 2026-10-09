@@ -30,6 +30,7 @@ struct LocalACPSessionDriver: Sendable {
     let setRunID: (@Sendable (String) async throws -> Void)?
     let setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)?
     let finishRun: (@Sendable () async -> Void)?
+    let awaitIdle: (@Sendable () async throws -> Void)?
     let shutdown: @Sendable () async -> Void
     let fencedPrompt: (@Sendable (AgentMessageInput, LocalACPClient.EventHandler?, LocalACPClient.PermissionHandler?, LocalACPClient.InteractionHandler?, AgentDispatchFence) async throws -> LocalACPStopReason)?
     let fencedActiveInput: (@Sendable (AgentMessageInput, AgentDispatchFence) async throws -> LocalACPActiveInputReceipt)?
@@ -63,6 +64,7 @@ struct LocalACPSessionDriver: Sendable {
         finishRun: (@Sendable () async -> Void)? = nil,
         setRunID: (@Sendable (String) async throws -> Void)? = nil,
         setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)? = nil,
+        awaitIdle: (@Sendable () async throws -> Void)? = nil,
         fencedPrompt: (@Sendable (AgentMessageInput, LocalACPClient.EventHandler?, LocalACPClient.PermissionHandler?, LocalACPClient.InteractionHandler?, AgentDispatchFence) async throws -> LocalACPStopReason)? = nil,
         fencedActiveInput: (@Sendable (AgentMessageInput, AgentDispatchFence) async throws -> LocalACPActiveInputReceipt)? = nil
     ) {
@@ -77,6 +79,7 @@ struct LocalACPSessionDriver: Sendable {
         self.cancel = cancel
         self.setRunID = setRunID
         self.setResumePermissionHandler = setResumePermissionHandler
+        self.awaitIdle = awaitIdle
         self.shutdown = shutdown
         self.finishRun = finishRun
         self.fencedPrompt = fencedPrompt
@@ -128,6 +131,7 @@ struct LocalACPSessionDriver: Sendable {
                 activeInputCapability: { .hermesGateway },
                 cancel: { try await client.cancel() },
                 shutdown: { await client.shutdown() },
+                setRunID: { await client.setRunID($0) },
                 fencedPrompt: { input, event, permission, interaction, fence in
                     try await client.prompt(input, onEvent: event, onPermission: permission,
                         onInteraction: interaction, dispatchFence: fence)
@@ -194,6 +198,12 @@ struct LocalACPSessionDriver: Sendable {
             launch: launch,
             workingDirectory: workingDirectory
         )
+        let awaitIdle: (@Sendable () async throws -> Void)?
+        if launch.runtimeKind == .defaultAgent {
+            awaitIdle = { @Sendable in try await client.awaitIdle() }
+        } else {
+            awaitIdle = nil
+        }
         return Self(
             initializeSession: { workingDirectory, existingSessionID, title, systemPrompt in
                 try await client.initializeSession(
@@ -243,6 +253,7 @@ struct LocalACPSessionDriver: Sendable {
             setResumePermissionHandler: { handler in
                 await client.setResumePermissionHandler(handler)
             },
+            awaitIdle: awaitIdle,
             fencedPrompt: { input, event, permission, interaction, fence in
                 try await client.prompt(input, onEvent: event, onPermission: permission,
                     onInteraction: interaction, dispatchFence: fence)
@@ -280,9 +291,10 @@ public actor LocalACPSessionCoordinator {
         let runtimeKind: AgentRuntimeKind
         let nativeSessionID: String
         let remoteWorkspaceID: UUID?
-        // Cursor returns a session ID before it has created the durable
-        // store.db needed by session/load. Keep a newly created Cursor ID
-        // attached to this live process until its first prompt succeeds.
+        // Codex and Cursor allocate IDs before creating their durable session
+        // history. Keep those draft IDs attached to this process until the
+        // first prompt succeeds, so a configuration probe cannot persist an
+        // identity that session/load cannot yet reopen.
         var pendingDurableSessionID: String?
         // Actor methods reenter while an adapter call is awaiting a response.
         // Only sessions with no such caller may be evicted.
@@ -331,6 +343,10 @@ public actor LocalACPSessionCoordinator {
     private let onChange: ChangeHandler?
     private let onUsage: (@Sendable (UsageRunRecorder.Observation) async -> Void)?
     private var resumePermissionHandler: ResumePermissionHandler?
+    private var cliConnectionProvider: (@Sendable (String) async throws -> AgentCLIContext?)?
+    public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) {
+        cliConnectionProvider = provider
+    }
     private var activeSessions: [String: ActiveSession] = [:]
     // Losing a client after an unsuccessful Stop is not evidence that native
     // work ended. Only that client's successful cancellation can clear this.
@@ -342,13 +358,14 @@ public actor LocalACPSessionCoordinator {
     private var failedStopSessionIDs: [String: FailedStopIdentity] = [:]
     private var runTasks: [String: Task<Void, any Error>] = [:]
     private var runIDsByConversation: [String: String] = [:]
+    private var idleSessionRetirements: [UUID: Task<Void, Never>] = [:]
     private var admissionDispatchFences: [String: AgentDispatchFence] = [:]
     private var runDispatchFences: [String: [AgentDispatchFence]] = [:]
     private var admittingConversations: Set<String> = []
     private var cancelledAdmissions: Set<String> = []
     private var cancellationRequestedRunIDs: Set<String> = []
-    private var durableRemoteRunIDs: Set<String> = []
-    private var uncertainRemoteInputRunIDs: Set<String> = []
+    private var durableRunIDs: Set<String> = []
+    private var uncertainDurableInputRunIDs: Set<String> = []
     private var streamWritersByRunID: [String: LocalACPAssistantStreamWriter] = [:]
     private var eventBuffersByRunID: [String: LocalACPRunEventBuffer] = [:]
     private var acceptingActiveInputRunIDs: Set<String> = []
@@ -531,7 +548,9 @@ public actor LocalACPSessionCoordinator {
             let deliveryInput = AgentMessageInput(
                 text: deliveryContent ?? input.text,
                 attachments: input.attachments,
-                historyDeliveryID: input.historyDeliveryID
+                historyDeliveryID: input.historyDeliveryID,
+                visibleWorkspace: input.visibleWorkspace,
+                cliContext: input.cliContext
             )
             publishChange(
                 conversationID: conversationID,
@@ -539,9 +558,9 @@ public actor LocalACPSessionCoordinator {
                 phase: .content
             )
             acceptingActiveInputRunIDs.insert(run.runID)
-            if descriptor.remoteWorkspaceID != nil,
-               descriptor.runtimeKind == .defaultAgent || launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
-                durableRemoteRunIDs.insert(run.runID)
+            if descriptor.runtimeKind == .defaultAgent
+                || (descriptor.remoteWorkspaceID != nil && launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1") {
+                durableRunIDs.insert(run.runID)
             }
             runDispatchFences[run.runID] = [operationFence]
             let task = Task { [self] in
@@ -586,6 +605,9 @@ public actor LocalACPSessionCoordinator {
                 runID: run.runID
             )
         }
+        let uncertainOutcomeDetail = descriptor.runtimeKind == .defaultAgent
+            ? "The connection ended before the native outcome was confirmed. Review the native session history before starting new work."
+            : "The connection ended before the native outcome was confirmed. Reconnect this conversation to recover its result."
         do {
             try Task.checkCancellation()
             try dispatchFence?.check()
@@ -597,7 +619,7 @@ public actor LocalACPSessionCoordinator {
                 systemPrompt: systemPrompt,
                 runID: run.runID
             )
-            if durableRemoteRunIDs.contains(run.runID), let workspaceID = descriptor.remoteWorkspaceID {
+            if durableRunIDs.contains(run.runID), let workspaceID = descriptor.remoteWorkspaceID {
                 let stored = try await database.localACPSession(conversationID: descriptor.conversationID)
                 guard let sessionID = activeSessions[descriptor.conversationID]?.pendingDurableSessionID ?? stored.acpSessionID else {
                     throw LocalACPClientError.sessionNotInitialized
@@ -713,10 +735,10 @@ public actor LocalACPSessionCoordinator {
                     dispatchFence: dispatchFence)
                 initialResult = .success(reason)
             } catch {
-                if durableRemoteRunIDs.contains(run.runID),
+                if durableRunIDs.contains(run.runID),
                    dispatchFence?.hasDispatched ?? promptDispatchAttempted,
                    !Self.isDefinitiveSteeringRejection(error) {
-                    uncertainRemoteInputRunIDs.insert(run.runID)
+                    uncertainDurableInputRunIDs.insert(run.runID)
                 }
                 initialResult = .failure(error)
             }
@@ -739,9 +761,9 @@ public actor LocalACPSessionCoordinator {
             )
             try await streamWriter.finish()
             await client.finishRun?()
-            if uncertainRemoteInputRunIDs.contains(run.runID) {
+            if uncertainDurableInputRunIDs.contains(run.runID) {
                 try await database.markLocalACPRunUncertain(runID: run.runID,
-                    detail: "The connection ended before the remote outcome was confirmed. Reconnect this conversation to recover its result.")
+                    detail: uncertainOutcomeDetail)
             } else { switch stopReason {
             case .endTurn, .maxTokens, .maxTurnRequests:
                 try await database.completeLocalACPRun(runID: run.runID)
@@ -758,7 +780,7 @@ public actor LocalACPSessionCoordinator {
                 runID: run.runID,
                 phase: .terminal
             )
-            if uncertainRemoteInputRunIDs.contains(run.runID),
+            if uncertainDurableInputRunIDs.contains(run.runID),
                let active = activeSessions.removeValue(forKey: descriptor.conversationID) {
                 await shutDownSession(active, conversationID: descriptor.conversationID)
             } else {
@@ -770,9 +792,9 @@ public actor LocalACPSessionCoordinator {
             if let writer = streamWritersByRunID[run.runID] {
                 try? await writer.finish()
             }
-            if uncertainRemoteInputRunIDs.contains(run.runID) {
+            if uncertainDurableInputRunIDs.contains(run.runID) {
                 try? await database.markLocalACPRunUncertain(runID: run.runID,
-                    detail: "The connection ended before the remote outcome was confirmed. Reconnect this conversation to recover its result.")
+                    detail: uncertainOutcomeDetail)
             } else if cancellationRequestedRunIDs.contains(run.runID) || error is CancellationError {
                 try? await database.cancelLocalACPRun(runID: run.runID)
             } else {
@@ -796,8 +818,8 @@ public actor LocalACPSessionCoordinator {
     }
 
     private func finishAcceptedRun(conversationID: String, runID: String) {
-        durableRemoteRunIDs.remove(runID)
-        uncertainRemoteInputRunIDs.remove(runID)
+        durableRunIDs.remove(runID)
+        uncertainDurableInputRunIDs.remove(runID)
         runTasks.removeValue(forKey: runID)
         for fence in runDispatchFences.removeValue(forKey: runID) ?? [] { fence.cancel() }
         streamWritersByRunID.removeValue(forKey: runID)
@@ -904,7 +926,7 @@ public actor LocalACPSessionCoordinator {
             launch: launch,
             workspace: workspace,
             systemPrompt: systemPrompt,
-            requiredSessionID: permission == nil ? nil : stored.acpSessionID
+            requiredSessionID: permission != nil && permission != stored.permission ? stored.acpSessionID : nil
         )
         do {
             var configuration = await client.configuration()
@@ -926,9 +948,17 @@ public actor LocalACPSessionCoordinator {
                     configuration = try await setPermission(permission)
                 } catch LocalACPClientError.permissionChangeRequiresRestart {
                     let latest = try await database.localACPSession(conversationID: conversationID)
-                    guard let sessionID = latest.acpSessionID,
-                          let active = activeSessions[conversationID],
+                    guard let active = activeSessions[conversationID],
                           active.activeUseCount == 1 else {
+                        throw LifecycleError.sessionBusy
+                    }
+                    let sessionID = latest.acpSessionID
+                    // Cursor does not durably save a configuration-only draft.
+                    // It can be recreated before its first prompt with the new
+                    // native process flag. Saved native sessions must still load
+                    // their exact identity rather than silently forking history.
+                    guard sessionID != nil || (latest.runtimeKind == .cursor
+                        && active.pendingDurableSessionID != nil) else {
                         throw LifecycleError.sessionBusy
                     }
                     activeSessions.removeValue(forKey: conversationID)
@@ -1039,7 +1069,7 @@ public actor LocalACPSessionCoordinator {
     // Called only after typed, fenced recovery confirms this exact native
     // session is idle and its durable runs have been reconciled.
     private func confirmRecoveredStop(
-        conversationID: String, nativeSessionID: String, remoteWorkspaceID: UUID
+        conversationID: String, nativeSessionID: String, remoteWorkspaceID: UUID?
     ) {
         guard let failed = failedStopSessionIDs[conversationID],
               failed.nativeSessionID == nativeSessionID,
@@ -1126,7 +1156,9 @@ public actor LocalACPSessionCoordinator {
             try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
                 sessionID: active.configurationObservationID, dispatchFence: operationFence)
             dispatchStarted = true
-            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text, attachments: input.attachments)
+            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text,
+                attachments: input.attachments, visibleWorkspace: input.visibleWorkspace,
+                cliContext: input.cliContext)
             let receipt: LocalACPActiveInputReceipt
             if let fencedInput = active.client.fencedActiveInput {
                 receipt = try await fencedInput(deliveryInput, operationFence)
@@ -1147,8 +1179,8 @@ public actor LocalACPSessionCoordinator {
             }
             // Dispatch may have succeeded. Keep the durable input and let the
             // run report the error; restoring its draft would invite a duplicate.
-            if durableRemoteRunIDs.contains(runID) {
-                uncertainRemoteInputRunIDs.insert(runID)
+            if durableRunIDs.contains(runID) {
+                uncertainDurableInputRunIDs.insert(runID)
             }
             completion = Task { throw error }
         }
@@ -1241,8 +1273,8 @@ public actor LocalACPSessionCoordinator {
                     }
                 } catch {
                     initialError = error
-                    if durableRemoteRunIDs.contains(runID), !Self.isDefinitiveSteeringRejection(error) {
-                        uncertainRemoteInputRunIDs.insert(runID)
+                    if durableRunIDs.contains(runID), !Self.isDefinitiveSteeringRejection(error) {
+                        uncertainDurableInputRunIDs.insert(runID)
                     }
                     try? await database.completeLocalACPAssistantMessage(
                         runID: runID,
@@ -1329,6 +1361,9 @@ public actor LocalACPSessionCoordinator {
         pendingSessionStarts.removeAll()
         let pendingShutdowns = pendingSessionShutdowns.values
         pendingSessionShutdowns.removeAll()
+        let idleRetirements = idleSessionRetirements.values
+        idleSessionRetirements.removeAll()
+        for retirement in idleRetirements { retirement.cancel() }
         for pending in pendingStarts {
             pending.task.cancel()
         }
@@ -1343,9 +1378,11 @@ public actor LocalACPSessionCoordinator {
         for pending in pendingShutdowns {
             await pending.task.value
         }
+        for retirement in idleRetirements { await retirement.value }
         for run in runs {
             _ = try? await run.value
         }
+
     }
 
     private func acquireOperationLease(
@@ -1419,9 +1456,9 @@ public actor LocalACPSessionCoordinator {
             // client idle. Cross-process coordinators cannot retain that
             // client after releasing their operation lease because another
             // app may advance the shared session before its next use.
-            await releaseIdleSessionIfNeeded(
-                conversationID: descriptor.conversationID
-            )
+            if !(await retainSessionUntilNativeIdle(conversationID: descriptor.conversationID)) {
+                await releaseIdleSessionIfNeeded(conversationID: descriptor.conversationID)
+            }
             throw error
         }
         useSequence &+= 1
@@ -1504,9 +1541,59 @@ public actor LocalACPSessionCoordinator {
             useSequence &+= 1
             activeSessions[conversationID]?.lastUsedSequence = useSequence
             if remainingUseCount == 0 {
+                if await retainSessionUntilNativeIdle(conversationID: conversationID) { return }
                 await releaseIdleSessionIfNeeded(
                     conversationID: conversationID
                 )
+                return
+            }
+        }
+        await evictIdleSessionsIfNeeded()
+    }
+
+    /// A primary response can end while Durable still owns compaction or other
+    /// background work. Retain this exact process without delaying its UI result.
+    private func retainSessionUntilNativeIdle(conversationID: String) async -> Bool {
+        guard !isShutDown, pendingSessionStarts[conversationID] == nil,
+              let session = activeSessions[conversationID], session.activeUseCount == 0,
+              session.runtimeKind == .defaultAgent, let awaitIdle = session.client.awaitIdle,
+              idleSessionRetirements[session.configurationObservationID] == nil else { return false }
+        activeSessions[conversationID]?.activeUseCount = 1
+        let lease: LocalACPProcessLeaseAcquisition?
+        do { lease = try await acquireOperationLease() }
+        catch {
+            if activeSessions[conversationID]?.configurationObservationID == session.configurationObservationID {
+                activeSessions[conversationID]?.activeUseCount = 0
+            }
+            return false
+        }
+        guard !isShutDown,
+              activeSessions[conversationID]?.configurationObservationID == session.configurationObservationID else {
+            releaseOperationLease(lease)
+            return false
+        }
+        let task = Task { [self] in
+            // An interrupted idle wait cannot prove quiescence. Closing this
+            // retired attachment preserves the native checkpoint for reopen.
+            try? await awaitIdle()
+            await completeIdleSessionRetirement(conversationID: conversationID,
+                observationID: session.configurationObservationID, lease: lease)
+        }
+        idleSessionRetirements[session.configurationObservationID] = task
+        return true
+    }
+
+    private func completeIdleSessionRetirement(conversationID: String,
+        observationID: UUID, lease: LocalACPProcessLeaseAcquisition?) async {
+        defer { releaseOperationLease(lease) }
+        guard idleSessionRetirements.removeValue(forKey: observationID) != nil,
+              !isShutDown,
+              activeSessions[conversationID]?.configurationObservationID == observationID else { return }
+        if let count = activeSessions[conversationID]?.activeUseCount {
+            let remaining = max(0, count - 1)
+            activeSessions[conversationID]?.activeUseCount = remaining
+            if remaining == 0 {
+                await releaseIdleSessionIfNeeded(conversationID: conversationID)
                 return
             }
         }
@@ -1599,12 +1686,9 @@ public actor LocalACPSessionCoordinator {
     ) async throws -> LocalACPSessionDriver {
         let model = descriptor.model
         let thinking = descriptor.thinking
+        let observationID = UUID()
         let (started, initialized) = try await startInitializedSession(
-            descriptor: descriptor,
-            launch: launch,
-            workspace: workspace,
-            systemPrompt: systemPrompt
-        )
+            descriptor: descriptor, launch: launch, workspace: workspace, systemPrompt: systemPrompt)
         do {
             try Task.checkCancellation()
             guard !isShutDown else {
@@ -1615,7 +1699,7 @@ public actor LocalACPSessionCoordinator {
                 throw LifecycleError.sessionIdentityChanged
             }
             if initialized.sessionID != descriptor.acpSessionID {
-                // Cursor, Pi and Hermes allocate IDs before their session stores
+                // Codex, Cursor, Pi and Hermes allocate IDs before their session stores
                 // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
                     || initialized.loadedExistingSession {
@@ -1626,7 +1710,7 @@ public actor LocalACPSessionCoordinator {
                     )
                 }
             }
-            if let workspaceID = descriptor.remoteWorkspaceID,
+            if descriptor.runtimeKind != .defaultAgent, let workspaceID = descriptor.remoteWorkspaceID,
                initialized.loadedExistingSession,
                initialized.sessionID == descriptor.acpSessionID,
                initialized.confirmedRemoteIdleSessionID == initialized.sessionID {
@@ -1636,7 +1720,7 @@ public actor LocalACPSessionCoordinator {
                 confirmRecoveredStop(conversationID: descriptor.conversationID,
                     nativeSessionID: initialized.sessionID, remoteWorkspaceID: workspaceID)
                 publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
-            } else if !initialized.recoveredDefaultAgentRuns.isEmpty {
+            } else if descriptor.runtimeKind != .defaultAgent, !initialized.recoveredDefaultAgentRuns.isEmpty {
                 try await database.recoverRemoteAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
                 publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
             }
@@ -1658,7 +1742,6 @@ public actor LocalACPSessionCoordinator {
                 }
             }
             if let model,
-               !(descriptor.runtimeKind == .defaultAgent && initialized.loadedExistingSession),
                model != configuration.model {
                 guard configuration.modelOptions.contains(model) else {
                     publishChange(conversationID: descriptor.conversationID, runID: runID ?? "",
@@ -1697,7 +1780,6 @@ public actor LocalACPSessionCoordinator {
             )
             try Task.checkCancellation()
             guard !isShutDown else { throw LifecycleError.shutDown }
-            let observationID = UUID()
             activeSessions[descriptor.conversationID] = ActiveSession(
                 client: started,
                 configurationObservationID: observationID,
@@ -1749,6 +1831,9 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
+        let cliConnection: AgentCLIContext?
+        if let provider = cliConnectionProvider { cliConnection = try await provider(descriptor.conversationID) }
+        else { cliConnection = launch.cliConnection }
         // The launch descriptor is shared across conversations; permission is not.
         var launch = LocalACPRuntimeLaunchConfiguration(
             runtimeKind: launch.runtimeKind, executableURL: launch.executableURL,
@@ -1759,8 +1844,11 @@ public actor LocalACPSessionCoordinator {
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
         )
+        launch.cliConnection = cliConnection
         launch.historyRecorder = database.historyWireRecorder(
-            conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue
+            conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,
+            sourceScope: [.defaultAgent, .codex, .claudeCode, .grokBuild, .cursor].contains(descriptor.runtimeKind)
+                ? nil : descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local"
         )
         let started = try clientFactory(launch, workspace.rootURL)
         do {
@@ -1837,7 +1925,7 @@ public actor LocalACPSessionCoordinator {
     private static func defersNewSessionPersistence(
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
-        runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
+        runtimeKind == .codex || runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
     }
 
     private func persistConfiguration(

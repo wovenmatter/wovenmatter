@@ -16,7 +16,7 @@ mkdir -p "$swift_scratch" "$derived_data"
 
 run_static_checks() {
   local file
-  for file in harnesses/initialize-workspace.sh remote/entrypoint.sh scripts/*.sh; do
+  for file in harnesses/initialize-workspace.sh remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
     bash -n "$file"
   done
   scripts/test-release.sh
@@ -27,7 +27,10 @@ run_static_checks() {
   scripts/test-note-editor.sh
   scripts/test-note-drafts.sh
   scripts/test-note-socket.sh
+  python3 scripts/test-support/test_executor_deployment.py
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
+  node --test scripts/test-support/native-cli.test.mjs
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_hermes_cli.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
@@ -38,7 +41,14 @@ run_static_checks() {
 
 run_package_tests() {
   local suite
-  local process_suites=(DefaultAgentSDKControlTests RemoteAttachmentStagingTests)
+  local process_suites=(
+    DefaultAgentSDKControlTests
+    RemoteAttachmentStagingTests
+    NativeHarnessArchiveTests
+    NativeFramePrivacyTests
+    NativeJSONSearchProjectionTests
+    WorkspaceNativeRunArchiveTests
+  )
   local isolated_filter
   printf -v isolated_filter '%s|' "${process_suites[@]}"
   isolated_filter="${isolated_filter%|}"
@@ -46,11 +56,13 @@ run_package_tests() {
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
     swift test --package-path app --scratch-path "$swift_scratch")
-  # These fixtures measure OS-process startup, deadlines, and reaping. The SDK
-  # suite also deliberately saturates the shared dispatch pool. Keep them out of
-  # the aggregate runner so unrelated parallel tests cannot consume their timing
-  # budgets. Every excluded suite runs below, with its original bounds and its
-  # explicit concurrency tests intact, using the same compiled test artifacts.
+  # Process fixtures measure startup, deadlines, and reaping; the SDK suite also
+  # deliberately saturates the shared dispatch pool. Large archive fixtures
+  # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
+  # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
+  # toolchains that combine every test target in one parallel runner. Every
+  # excluded suite runs below with its original bounds and explicit concurrency
+  # tests intact, using the same compiled test artifacts.
   "${test_command[@]}" --skip "$isolated_filter"
   for suite in "${process_suites[@]}"; do
     "${test_command[@]}" --skip-build --filter "$suite"
@@ -81,6 +93,10 @@ run_app_build() {
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
   python3 scripts/test-support/test_wovenmatter_cli.py \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app/Contents/Resources/wovenmatter"
+  # The fixture substitutes CEF entry points; it does not launch Chromium.
+  local browser_build="${derived_data}/Build/Intermediates.noindex/WovenMatter.build/Debug/WovenMatter.build/DerivedSources/cef-${host_arch}"
+  make -C "$browser_build" WovenBrowserLifecycleTests >/dev/null
+  "$browser_build/WovenBrowserLifecycleTests"
 }
 
 run_companion() {
