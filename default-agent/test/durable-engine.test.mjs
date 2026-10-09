@@ -63,10 +63,11 @@ test('attached completion includes child reports and children spawned during par
       ? [{ type: 'toolCall', id: name, name: 'subagent', arguments: { action: 'spawn', name, task: 'Return a short result.' } }]
       : [{ type: 'text', text: `Parent response ${parentCalls}` }]);
   };
+  const updates = [], runID = randomUUID();
   const result = await engine.handle('session/prompt', {
     sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Complete the attached work.' }],
-    _meta: { wovenRunID: randomUUID(), wovenInputID: randomUUID() },
-  });
+    _meta: { wovenRunID: runID, wovenInputID: randomUUID() },
+  }, update => updates.push(update));
   assert.equal(result.stopReason, 'end_turn');
   assert.equal(childCalls, 2);
   assert.equal(parentCalls, 5);
@@ -80,6 +81,13 @@ test('attached completion includes child reports and children spawned during par
   const inspection = await record.harness.inspect(BACKGROUND_CONTEXT);
   assert.equal(inspection.tasks.length, 0);
   assert.equal(inspection.submissions.length, 0);
+  const statuses = updates.filter(update => update.sessionUpdate === 'woven_program_status');
+  assert.ok(statuses.every(update => update._meta.wovenRunID === runID));
+  assert.deepEqual(statuses.filter(update => !update.status.id).slice(0, 2).map(update => update.status.state), ['clear', 'working']);
+  assert.equal(statuses.at(-1).status.state, 'done');
+  assert.equal(statuses.at(-1).status.id, undefined);
+  assert.ok(statuses.some(update => /^children\/\d+$/.test(update.status.id) && update.status.state === 'working'));
+  assert.equal(statuses.filter(update => !update.status.id && update.status.state === 'done').length, 1);
 });
 
 test('stable logical input receipts survive account reorder and conflicting payloads are rejected', async t => {
@@ -175,13 +183,16 @@ test('Stop cancels native bash children before uncertain effects can run', async
   const record = await engine.create(), events = [];
   let started; const ready = new Promise(resolve => { started = resolve; });
   record.streamFunction = model => stream(model, [{ type: 'toolCall', id: 'slow-bash', name: 'bash', arguments: { command: 'sleep 3; touch cancelled-marker' } }]);
-  const run = engine.prompt(record, 'Stop this command', update => { events.push(update); if (update.sessionUpdate === 'tool_call') started(); });
+  const run = engine.prompt(record, 'Stop this command', update => { events.push(update); if (update.sessionUpdate === 'tool_call') started(); }, undefined, { runID: randomUUID(), inputID: randomUUID() });
   await ready;
   const time = Date.now();
   await engine.handle('session/cancel', { sessionId: record.session.sessionId });
   assert.equal((await run).stopReason, 'cancelled');
   assert.ok(Date.now() - time < 2000);
   await assert.rejects(readFile(join(root, 'cancelled-marker')), { code: 'ENOENT' });
+  const statuses = events.filter(update => update.sessionUpdate === 'woven_program_status' && !update.status.id);
+  assert.equal(statuses.at(-1).status.state, 'idle');
+  assert.ok(!statuses.some(update => update.status.state === 'done'));
 });
 
 test('native final snapshots replace nonprefix streamed text instead of appending it', { timeout: 10000 }, async t => {

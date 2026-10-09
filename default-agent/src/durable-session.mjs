@@ -20,6 +20,7 @@ import { NativeContext, contextOverflowDiagnostic, credentialRouteIdentity, nati
 import { createNativeCompactionRegistry } from './native-compaction-registry.mjs';
 import { createSubagentContext } from './subagent-context.mjs';
 import { ChildContext, Subagents, createSubagents } from './subagents.mjs';
+import { reportProgramStatus } from './program-status.mjs';
 
 const context = BACKGROUND_CONTEXT;
 const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
@@ -122,7 +123,8 @@ export async function openDurableSession(engine, id, requested) {
       if (scope !== record && ((account.owned === true) !== scope.connectionPin.accountOwned || credentialRouteIdentity(record, account) !== scope.connectionPin.credentialIdentity)) throw new DefaultAgentError('The child connection changed or became unavailable. Choose an available connection explicitly; no account fallback was attempted.');
       return account;
     };
-    const withAccount = (model, account, operation) => engine.credentials.runWithAccount(model.provider, account, () => model.provider === 'claude-subscription' && engine.claude.withProfile ? engine.claude.withProfile(account.credential?.accountId, operation) : operation());
+    const withAccount = (model, account, operation, scope = record) => engine.programStatusContext.run({ record, scope }, () =>
+      engine.credentials.runWithAccount(model.provider, account, () => model.provider === 'claude-subscription' && engine.claude.withProfile ? engine.claude.withProfile(account.credential?.accountId, operation) : operation()));
     const currentRoute = async (api, ctx) => {
       const scope = await prepareScope(api, ctx);
       const reference = (await api.snapshot(AgentDoc, api.conversationId, ctx)).model;
@@ -134,7 +136,7 @@ export async function openDurableSession(engine, id, requested) {
         const scope = modelScope(options);
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         try {
-          const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) })));
+          const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }), scope));
           if (message.usage) scope.reportUsage?.(message.usage);
           return message;
         }
@@ -154,7 +156,7 @@ export async function openDurableSession(engine, id, requested) {
               const native = (scope.streamFunction ?? target.streamSimple.bind(target))(model, { ...input, messages: scope.nativeBridge.filterTools(input.messages) }, resolved);
               for await (const event of native) result.push({ ...event, ...(event.partial ? { partial: tag(event.partial) } : {}), ...(event.message ? { message: tag(event.message) } : {}), ...(event.error ? { error: tag(event.error) } : {}) });
               result.end(tag(await native.result()));
-            });
+            }, scope);
           } catch (error) {
             const message = { role: 'assistant', ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}), provider: model.provider, api: model.api, model: model.id, timestamp: Date.now(), content: [], stopReason: options?.signal?.aborted ? 'aborted' : 'error', errorMessage: safeNativeFailure(error).message, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
             result.push({ type: 'error', reason: message.stopReason, error: message }); result.end(message);
@@ -312,18 +314,20 @@ export async function openDurableSession(engine, id, requested) {
     registry.install(defineExtension({ name: 'woven-builtin', tasks: record.subagents.tasks, tools: [...adapted, codeTool, record.subagents.tool], hooks: [
       { task: 'pi.generation', handlers: { beforeRequest: async (request, api, ctx) => {
         const scope = await prepareScope(api, ctx);
+        reportProgramStatus(record, { state: 'working', ...(scope !== record ? { id: `children/${scope.conversation.id}` } : {}) }, scope.runID);
         scope.nativePrepared = undefined;
         try {
           const { model, account, route } = await currentRoute(api, ctx);
-          scope.nativePrepared = await withAccount(model, account, () => scope.nativeBridge.prepare(request.messages, route, api.taskId, ctx));
+          scope.nativePrepared = await withAccount(model, account, () => scope.nativeBridge.prepare(request.messages, route, api.taskId, ctx), scope);
           return { messages: scope.nativePrepared.messages };
         } catch (error) { if (ctx.abortSignal.aborted) throw error; scope.nativeContextFailure = safeNativeFailure(error); return undefined; }
       } } },
       { task: 'pi.compaction', handlers: { beforeCompact: async (compaction, api, ctx) => {
         const scope = await prepareScope(api, ctx);
+        reportProgramStatus(record, { state: 'working', ...(scope !== record ? { id: `children/${scope.conversation.id}` } : {}), msg: 'Compacting context' }, scope.runID);
         try {
           const { model, account, route } = await currentRoute(api, ctx);
-          return await withAccount(model, account, () => scope.nativeBridge.beforeCompact(compaction, route, api, ctx));
+          return await withAccount(model, account, () => scope.nativeBridge.beforeCompact(compaction, route, api, ctx), scope);
         } catch (error) { if (ctx.abortSignal.aborted) throw error; scope.nativeContextFailure = safeNativeFailure(error); return undefined; }
       } } },
     ], sections: [section('workspace', () => loader.getAgentsFiles().agentsFiles.map(f => f.content).join('\n\n'), { tag: false })] }));

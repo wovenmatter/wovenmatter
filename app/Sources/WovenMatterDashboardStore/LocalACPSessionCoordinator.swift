@@ -641,7 +641,13 @@ public actor LocalACPSessionCoordinator {
             if let onPermission {
                 permissionHandler = { request in
                     try? await streamWriter.finishSegmentForDecision()
-                    return await onPermission(request)
+                    let source = "permission:" + UUID().uuidString
+                    try? await self.database.recordProgramStatus(ProgramStatus(state: .blocked, kind: .permission), runID: run.runID, source: source)
+                    await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
+                    let response = await onPermission(request)
+                    try? await self.database.recordProgramStatus(ProgramStatus(state: .clear), runID: run.runID, source: source)
+                    await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
+                    return response
                 }
             } else {
                 permissionHandler = nil
@@ -650,7 +656,18 @@ public actor LocalACPSessionCoordinator {
             if let onInteraction {
                 interactionHandler = { request in
                     try? await streamWriter.finishSegmentForDecision()
-                    return await onInteraction(request)
+                    let source = "interaction:" + UUID().uuidString
+                    let kind: ProgramStatus.Kind = switch request {
+                    case .questions: .question
+                    case .plan: .permission
+                    case .secret: .auth
+                    }
+                    try? await self.database.recordProgramStatus(ProgramStatus(state: .blocked, kind: kind), runID: run.runID, source: source)
+                    await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
+                    let response = await onInteraction(request)
+                    try? await self.database.recordProgramStatus(ProgramStatus(state: .clear), runID: run.runID, source: source)
+                    await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
+                    return response
                 }
             } else {
                 interactionHandler = nil
@@ -658,6 +675,11 @@ public actor LocalACPSessionCoordinator {
             try await client.setRunID?(run.runID)
             let eventBuffer = LocalACPRunEventBuffer(deliver: { event in
                 switch event {
+                case .programStatus(let report, let reportedRunID):
+                    guard reportedRunID == nil || reportedRunID == run.runID else { return }
+                    // Advisory persistence must not fail the native event stream.
+                    try? await self.database.recordProgramStatus(report, runID: run.runID)
+                    await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
                 case .assistantAsset(let asset):
                     try await streamWriter.finishSegment()
                     try await self.database.recordLibraryOutput(runID: run.runID, asset: asset)

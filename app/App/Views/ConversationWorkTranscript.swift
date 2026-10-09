@@ -191,11 +191,11 @@ struct ConversationWorkTranscript: View {
         } else if run.status == "running" {
             Text("Working")
         } else if run.status == "completed" {
-            Text("Worked for \(presentation?.completedDuration ?? "a moment")")
+            Text("Done after \(presentation?.completedDuration ?? "a moment")")
         } else if run.status == "failed" {
-            Text("Run failed\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
+            Text("Error\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
         } else if run.status == "cancelled" {
-            Text("Stopped\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
+            Text("Idle (cancelled)\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
         } else if run.status == "uncertain" {
             Text("Waiting to confirm the remote outcome")
         } else {

@@ -4,6 +4,29 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct ACPHarnessStreamingReviewTests {
+  @Test("Pi Durable status records retain run identity and reject malformed reports")
+  func builtInProgramStatusWireReplay() async throws {
+    let fixture = try ACPHarnessFixture(kind: .defaultAgent,
+      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"status"}"#, extras: ["woven/configure": "{}"], promptOverride: """
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"status","update":{"sessionUpdate":"woven_program_status","status":{"state":"blocked","id":"children/1","kind":"auth","msg":"Waiting for authentication"},"_meta":{"wovenRunID":"owner-run"}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"status","update":{"sessionUpdate":"woven_program_status","status":{"state":"working","id":"bad//path"},"_meta":{"wovenRunID":"owner-run"}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"status","update":{"sessionUpdate":"woven_program_status","status":{"state":"done"}}}}'
+        respond "$id" '{"stopReason":"end_turn"}'; continue
+        """)
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let events = ACPReviewEvents()
+    _ = try await client.prompt("Replay") { await events.record($0) }
+    await client.shutdown()
+    let reports = await events.values().compactMap { event -> ProgramStatus? in
+      guard case .programStatus(let status, let runID) = event else { return nil }
+      #expect(runID == "owner-run")
+      return status
+    }
+    #expect(reports.count == 1 && reports.first?.kind == .auth && reports.first?.id == "children/1")
+  }
+
   @Test("Cursor child checklists and proposals cannot replace their parent")
   func cursorChecklistOwnership() async throws {
     let fixture = try ACPHarnessFixture(kind: .cursor,

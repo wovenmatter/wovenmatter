@@ -153,6 +153,12 @@ extension WorkspaceDatabaseConnection {
         revision_snapshot TEXT NOT NULL DEFAULT '', origin_device_id TEXT,
         created_at TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS desktop_program_status (
+        run_id TEXT NOT NULL REFERENCES dashboard_runs(id) ON DELETE CASCADE,
+        source TEXT NOT NULL, records_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(run_id, source)
+      );
       CREATE TABLE IF NOT EXISTS desktop_remote_note_edits (
         run_id TEXT PRIMARY KEY, assistant_message_id TEXT NOT NULL,
         note_id TEXT NOT NULL, expected_revision TEXT NOT NULL,
@@ -444,8 +450,11 @@ extension WorkspaceDatabaseConnection {
       "dashboard_messages",
       "notes",
       "dashboard_runs",
+      "desktop_program_status",
       "dashboard_calendar_items",
       "desktop_local_acp_sessions",
+      "desktop_opencode_sessions",
+      "desktop_opencode_submissions",
       "desktop_buzz_workspace_links",
       "desktop_buzz_agent_enrollments",
       "desktop_openclaw_gateway_links",

@@ -10,11 +10,14 @@ import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
 import { SessionCLIContext } from './cli-context.mjs';
+import { reportProgramStatus } from './program-status.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
     this.claude = claude ?? new ClaudeRuntime(directory);
+    this.programStatusContext = new AsyncLocalStorage();
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -44,8 +47,17 @@ export class DefaultAgentEngine {
         }
         // Borrowers do not call refresh. Keep valid access usable during a
         // transient renewal failure. Expired access pauses between requests.
-        while (credential?.borrowed && credential.expires <= Date.now()) {
+        let waiting = false;
+        const statusScope = this.programStatusContext.getStore();
+        const reportAuth = state => {
+          if (statusScope) reportProgramStatus(statusScope.record, { state, kind: 'auth',
+            ...(statusScope.scope !== statusScope.record ? { id: `children/${statusScope.scope.conversation.id}` } : {}),
+            ...(state === 'blocked' ? { msg: 'Waiting for authentication' } : {}),
+          }, statusScope.scope.runID);
+        };
+        try { while (credential?.borrowed && credential.expires <= Date.now()) {
           if (options.allowWait === false) throw new Error('Authentication required.');
+          if (!waiting) { waiting = true; reportAuth('blocked'); }
           options.signal?.throwIfAborted();
           await new Promise((resolve, reject) => {
             const done = () => { clearTimeout(timer); options.signal?.removeEventListener('abort', abort); resolve(); };
@@ -55,7 +67,7 @@ export class DefaultAgentEngine {
           });
           if (this.requestCredentials) await this.apply(await this.requestCredentials());
           credential = await this.credentials.read(provider);
-        }
+        } } finally { if (waiting) reportAuth('working'); }
         if (!credential) throw new Error('Authentication required.');
         if (credential.borrowed) return { auth: await this.runtime.getProvider(provider).auth.oauth.toAuth(credential), source: 'OAuth' };
       }
@@ -243,12 +255,16 @@ export class DefaultAgentEngine {
     let steered = false;
     const usage = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
     let unsubscribe = () => {};
+    let statusStarted = false, statusError, statusOutcome;
     try {
       controller.signal.throwIfAborted();
       await record.subagents.beginGroup(nextRunID);
       record.runID = nextRunID;
       if (identity !== undefined) record.inputID = identity.inputID;
       record.emit = emit;
+      statusStarted = true;
+      reportProgramStatus(record, { state: 'clear' });
+      reportProgramStatus(record, { state: 'working' });
       record.allowFallback = false;
       record.lastError = undefined; record.lastCommandOutcome = undefined; record.nativeContextFailure = undefined;
       record.nativeVisible = false;
@@ -359,7 +375,9 @@ export class DefaultAgentEngine {
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn', usage };
           };
-          return await withAccount(run);
+          const result = await withAccount(run);
+          statusOutcome = result.stopReason;
+          return result;
         } catch (error) {
           if (controller.signal.aborted) return { stopReason: 'cancelled' };
           if (record.nativeContextFailure) throw new DefaultAgentError(record.nativeContextFailure.message);
@@ -374,8 +392,15 @@ export class DefaultAgentEngine {
       throw new DefaultAgentError('No configured connection has access. Open Settings → Connections to sign in or update an API key.');
     } catch (error) {
       if (controller.signal.aborted) return { stopReason: 'cancelled' };
+      statusError = error;
       throw error;
     } finally {
+      if (statusStarted) reportProgramStatus(record, {
+        state: controller.signal.aborted || statusOutcome === 'cancelled' ? 'idle' : statusError ? 'error' : 'done',
+        // Diagnostics are already sanitized by the native/provider boundary.
+        // Never include prompts, tool results or credentials in status text.
+        msg: controller.signal.aborted || statusOutcome === 'cancelled' ? 'Cancelled' : statusError ? 'The model request failed.' : undefined,
+      });
       unsubscribe();
       record.cli.finish();
       record.busy = false;

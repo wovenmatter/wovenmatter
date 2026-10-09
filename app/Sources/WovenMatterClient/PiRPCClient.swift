@@ -1236,7 +1236,13 @@ public actor PiRPCClient {
         switch string(object["type"]) {
         case "agent_start":
             sawAgentStart = true
-            return []
+            return [.programStatus(ProgramStatus(state: .working, app: "pi"), runID: nil)]
+        case "auto_compaction_start":
+            return [.programStatus(ProgramStatus(state: .working, app: "pi", message: "Compacting context"), runID: nil)]
+        case "auto_compaction_end", "auto_retry_end":
+            return [.programStatus(ProgramStatus(state: .working, app: "pi"), runID: nil)]
+        case "auto_retry_start":
+            return [.programStatus(ProgramStatus(state: .working, app: "pi", message: "Retrying request"), runID: nil)]
         case "extension_ui_request":
             guard string(object["method"]) == "notify",
                   let message = object["message"] as? String else { return [] }

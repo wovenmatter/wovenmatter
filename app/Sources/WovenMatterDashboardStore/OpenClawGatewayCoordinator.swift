@@ -1074,11 +1074,13 @@ public actor OpenClawGatewayCoordinator {
     guard isCurrentConnection(agentID, generation: generation), activeRuns[runID] != nil else { return }
     if let approval = projection.approval {
       if approval.resolvedDecision != nil {
+        try? await database.recordProgramStatus(ProgramStatus(state: .clear), runID: runID, source: "approval:" + approval.id)
         approvalTasks[approval.id]?.cancel()
       } else if approvalTasks[approval.id] == nil,
                 let approvalClient = clients[agentID],
                 let transportGeneration = await approvalClient.connectedGeneration,
                 isCurrentConnection(agentID, generation: generation) {
+        try? await database.recordProgramStatus(ProgramStatus(state: .blocked, app: "openclaw", kind: .permission), runID: runID, source: "approval:" + approval.id)
         approvalRunIDs[approval.id] = runID
         approvalTasks[approval.id] = Task {
           await self.relayApproval(approval, runID: runID, client: approvalClient,
@@ -1222,6 +1224,7 @@ public actor OpenClawGatewayCoordinator {
       _ = try await client.request(Self.approvalResolveMethod(kind: approval.kind), params: .object([
         "id": .string(approval.id), "decision": .string(decision)
       ]), expectedConnectionGeneration: transportGeneration)
+      try? await database.recordProgramStatus(ProgramStatus(state: .clear), runID: runID, source: "approval:" + approval.id)
     } catch {
       guard !Task.isCancelled else { return }
       let message = error.localizedDescription
