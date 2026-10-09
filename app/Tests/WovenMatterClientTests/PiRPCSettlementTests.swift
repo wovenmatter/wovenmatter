@@ -665,3 +665,112 @@ private final class PiWireCapture: @unchecked Sendable {
     lock.withLock { captured.append((direction,String(decoding:data,as:UTF8.self))) }
   }
 }
+
+@Suite(.timeLimit(.minutes(1)))
+struct PiQuestionAndCompactionTests {
+  @Test(arguments: ["select", "input", "editor", "empty", "confirm", "stop", "timeout"])
+  func nativeDialogsPreserveValuesAndStopUnansweredUI(method: String) async throws {
+    let fixture = PiPipeFixture()
+    let opened = AsyncStream<Void>.makeStream()
+    let server = Task { try await serve(fixture, method: method) }
+    try await fixture.initialize()
+    let prompt = Task { try await fixture.client.prompt("fixture", onPermission: { _ in
+      #expect(method == "confirm"); return "reject"
+    }, onInteraction: { request in
+      guard case .form(let form) = request else { Issue.record("Expected question form"); return .cancelled }
+      #expect(method != "confirm" && method != "timeout")
+      if method == "stop" {
+        opened.continuation.yield(())
+        try? await Task.sleep(for: .seconds(30))
+        return .formValues(["value": .string("late answer")])
+      }
+      if method == "editor" {
+        #expect(form.fields.first?.multiline == true)
+        #expect(form.fields.first?.initialValue == .string("  initial\ntext  "))
+      }
+      return .formValues(["value": .string(method == "select" ? "reject" : method == "empty" ? "" : "  answer\ntext  ")])
+    }) }
+    if method == "stop" {
+      for await _ in opened.stream { break }
+      try await fixture.client.stop()
+    }
+    #expect(try await prompt.value == (method == "stop" ? .cancelled : .endTurn))
+    await fixture.client.shutdown(); opened.continuation.finish(); try await server.value
+  }
+  @Test func eofCancelsQueuedDialogsWithoutHoldingSettlement() async throws {
+    let fixture = PiPipeFixture()
+    let server = Task {
+      let reader = FixtureCommandReader(handle: fixture.commands.fileHandleForReading)
+      defer { try? fixture.events.fileHandleForWriting.close() }
+      while let line = try await reader.next() {
+        let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
+        let type = command["type"] as? String
+        let data: [String: Any] = type == "get_state" ? ["sessionId": "fixture-session", "isStreaming": true, "isCompacting": false, "pendingMessageCount": 0] : [:]
+        try fixture.emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
+        if type == "prompt" {
+          try fixture.emit(["type": "agent_start"])
+          for id in ["first", "queued"] { try fixture.emit(["type": "extension_ui_request", "id": id, "method": "editor", "title": id]) }
+          try fixture.emit(["type": "agent_settled"])
+          return
+        }
+      }
+    }
+    try await fixture.initialize()
+    _ = try? await fixture.client.prompt("fixture", onInteraction: { request in
+      if case .form(let form) = request { #expect(form.message != "queued") }
+      try? await Task.sleep(for: .seconds(30)); return .cancelled
+    })
+    await fixture.client.shutdown(); try await server.value
+  }
+  @Test func nativeCompactionProjectsProgressWithoutSettlingAndAbortedSettlementWins() async throws {
+    let fixture = PiPipeFixture()
+    let server = Task { try await serve(fixture, method: "compaction") }
+    try await fixture.initialize()
+    let events = PiEventCollector()
+    #expect(try await fixture.client.prompt("fixture", onEvent: { await events.record($0) }) == .cancelled)
+    #expect(await events.values().contains(.programStatus(ProgramStatus(state: .working, app: "pi", message: "Compacting context"), runID: nil)))
+    #expect(await events.values().contains { if case .activity(let activity, _) = $0 { return activity.status == "failed" && activity.content?.contains("secret.example") == false }; return false })
+    await fixture.client.shutdown(); try await server.value
+  }
+  private func serve(_ fixture: PiPipeFixture, method: String) async throws {
+    defer { try? fixture.events.fileHandleForWriting.close() }
+    let reader = FixtureCommandReader(handle: fixture.commands.fileHandleForReading)
+    var started = false, uiAnswered = false, abortID: Any?
+    while let line = try await reader.next() {
+      let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
+      let type = command["type"] as? String
+      if type == "extension_ui_response" {
+        #expect(command["id"] as? String == "question")
+        uiAnswered = true
+        if method == "stop" || method == "timeout" { #expect(command["cancelled"] as? Bool == true) }
+        else if method == "confirm" { #expect(command["confirmed"] as? Bool == false); #expect(command["cancelled"] == nil) }
+        else { #expect(command["value"] as? String == (method == "select" ? "reject" : method == "empty" ? "" : "  answer\ntext  ")); #expect(command["cancelled"] == nil) }
+        if method != "stop" { try fixture.emit(["type": "agent_settled"]); continue }
+      } else if type == "abort" { abortID = command["id"] }
+      else {
+        var data: [String: Any] = [:]
+        if type == "get_entries" { data = ["entries": []] }
+        if type == "get_state" { data = ["sessionId": "fixture-session", "isStreaming": started, "isCompacting": false, "pendingMessageCount": 0] }
+        try fixture.emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
+        if type == "prompt" {
+          started = true
+          try fixture.emit(["type": "agent_start"])
+          if method == "compaction" {
+            try fixture.emit(["type": "compaction_start"])
+            try fixture.emit(["type": "compaction_end", "errorMessage": "Failure https://secret.example/token"])
+            try fixture.emit(["type": "message_end", "message": ["role": "assistant", "content": "answer", "stopReason": "error", "errorMessage": "Prior error before abort"]])
+            try fixture.emit(["type": "agent_settled", "aborted": true])
+          } else {
+            try fixture.emit(["type": "extension_ui_request", "id": "question", "method": ["empty", "stop", "timeout"].contains(method) ? "input" : method,
+                "title": "Question", "options": ["reject", "other"], "prefill": "  initial\ntext  ", "timeout": method == "timeout" ? 0 : 60000])
+          }
+        }
+      }
+      if method == "stop", uiAnswered, let abortID {
+        try fixture.emit(["type": "response", "id": abortID, "success": true, "data": [:]])
+        try fixture.emit(["type": "agent_settled", "aborted": true])
+        return
+      }
+    }
+  }
+}

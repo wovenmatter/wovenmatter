@@ -899,6 +899,8 @@ struct DashboardLocalInteractionCard: View {
 
     var body: some View {
         switch interaction.request {
+        case .form(let request):
+            DashboardLocalFormCard(request: request, onResolve: onResolve)
         case .questions(let request):
             DashboardLocalQuestionCard(request: request, onResolve: onResolve)
         case .plan(let request):
@@ -1307,5 +1309,109 @@ struct DashboardPersistedAttachmentChip: View {
         .padding(.vertical, 7)
         .background(DashboardPalette.background.opacity(0.75))
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+}
+
+struct DashboardLocalFormCard: View {
+    @Environment(\.dashboardTheme) private var theme
+    let request: LocalACPFormRequest
+    let onResolve: (LocalACPInteractionResponse) -> Void
+    @State private var included: Set<String> = []
+    @State private var text: [String: String] = [:]
+    @State private var flags: [String: Bool] = [:]
+    @State private var selections: [String: Set<String>] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(request.message).font(.system(size: 13, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(request.fields) { field in
+                VStack(alignment: .leading, spacing: 7) {
+                    if field.required { Text(field.title).font(.system(size: 12.5, weight: .medium)) }
+                    else {
+                        Toggle(field.title, isOn: Binding(get: { included.contains(field.id) }, set: { value in
+                            if value { included.insert(field.id) } else { included.remove(field.id) }
+                        })).toggleStyle(DashboardSwitchToggleStyle())
+                    }
+                    if let detail = field.detail { Text(detail).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
+                    Group {
+                        switch field.kind {
+                        case .boolean:
+                            Toggle("Yes", isOn: Binding(get: { flags[field.id] ?? false }, set: { included.insert(field.id); flags[field.id] = $0 }))
+                                .toggleStyle(DashboardSwitchToggleStyle())
+                        case .singleChoice, .multipleChoice:
+                            ForEach(field.options) { option in
+                                Button {
+                                    var selected = selections[field.id] ?? []
+                                    if field.kind == .singleChoice { selected = [option.id] }
+                                    else if selected.contains(option.id) { selected.remove(option.id) }
+                                    else { selected.insert(option.id) }
+                                    included.insert(field.id)
+                                    selections[field.id] = selected
+                                } label: {
+                                    HStack(alignment: .top, spacing: 7) {
+                                        Image(systemName: selections[field.id]?.contains(option.id) == true ? "checkmark.circle.fill" : "circle")
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(option.label)
+                                            if let detail = option.detail { Text(detail).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground) }
+                                        }
+                                        Spacer(minLength: 0)
+                                    }.font(.system(size: 12.5)).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                            }
+                        case .text, .number, .integer:
+                            if field.multiline {
+                                TextEditor(text: textBinding(field.id)).frame(minHeight: 90, maxHeight: 200)
+                                    .scrollIndicators(.never)
+                            } else {
+                                TextField(field.placeholder ?? "Answer", text: textBinding(field.id)).textFieldStyle(.roundedBorder)
+                            }
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                Button("Submit") { if let values { onResolve(.formValues(values)) } }
+                    .buttonStyle(DashboardPrimaryButtonStyle()).disabled(values == nil)
+                Button("Cancel", role: .cancel) { onResolve(.cancelled) }.buttonStyle(DashboardQuietButtonStyle())
+            }
+        }
+        .padding(13).frame(maxWidth: 768, alignment: .leading)
+        .background(theme.palette.themeWhisper).clipShape(DashboardShapes.card)
+        .overlay { DashboardShapes.card.stroke(theme.palette.border, lineWidth: 1) }
+        .onAppear {
+            for field in request.fields {
+                guard let value = field.initialValue else { continue }
+                included.insert(field.id)
+                switch value {
+                case .string(let value):
+                    if field.kind == .singleChoice { selections[field.id] = [value] } else { text[field.id] = value }
+                case .strings(let values): selections[field.id] = Set(values)
+                case .number(let value): text[field.id] = String(value)
+                case .boolean(let value): flags[field.id] = value
+                }
+            }
+        }
+    }
+
+    private func textBinding(_ id: String) -> Binding<String> {
+        Binding(get: { text[id] ?? "" }, set: { included.insert(id); text[id] = $0 })
+    }
+    private var values: [String: LocalACPFormValue]? {
+        var result: [String: LocalACPFormValue] = [:]
+        for field in request.fields where field.required || included.contains(field.id) {
+            switch field.kind {
+            case .text: result[field.id] = .string(text[field.id] ?? "")
+            case .number, .integer:
+                guard let value = Double(text[field.id] ?? ""), value.isFinite else { return nil }
+                result[field.id] = .number(value)
+            case .boolean: result[field.id] = .boolean(flags[field.id] ?? false)
+            case .singleChoice:
+                guard let value = selections[field.id]?.first else { return nil }; result[field.id] = .string(value)
+            case .multipleChoice:
+                result[field.id] = .strings(field.options.filter { selections[field.id]?.contains($0.id) == true }.map(\.id))
+            }
+        }
+        return request.accepts(result) ? result : nil
     }
 }
