@@ -35,17 +35,17 @@ public struct LocalACPManagedNodeArtifact: Equatable, Sendable {
     public static var current: LocalACPManagedNodeArtifact {
         #if arch(arm64)
         LocalACPManagedNodeArtifact(
-            version: "v24.18.0",
+            version: "v24.21.0",
             platform: "darwin-arm64",
-            archiveFileName: "node-v24.18.0-darwin-arm64.tar.gz",
-            sha256: "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1"
+            archiveFileName: "node-v24.21.0-darwin-arm64.tar.gz",
+            sha256: "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057"
         )
         #elseif arch(x86_64)
         LocalACPManagedNodeArtifact(
-            version: "v24.18.0",
+            version: "v24.21.0",
             platform: "darwin-x64",
-            archiveFileName: "node-v24.18.0-darwin-x64.tar.gz",
-            sha256: "dfd0dbd3e721503434df7b7205e719f61b3a3a31b2bcf9729b8b91fea240f080"
+            archiveFileName: "node-v24.21.0-darwin-x64.tar.gz",
+            sha256: "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097"
         )
         #else
         #error("Woven Matter's managed Node runtime supports macOS arm64 and x86_64.")
@@ -512,6 +512,7 @@ public actor LocalACPRuntimeInstaller {
     private let managedNodeRuntime: LocalACPManagedNodeRuntime
     private let npmExecutableURL: URL?
     private let installerFetcher: InstallerFetcher?
+    private let metadataFetcher: RuntimeMaintenance.Fetch
     private let executableResolver: (@Sendable (String) -> URL?)?
 
     public init(
@@ -519,12 +520,14 @@ public actor LocalACPRuntimeInstaller {
         managedNodeRuntime: LocalACPManagedNodeRuntime = LocalACPManagedNodeRuntime(),
         npmExecutableURL: URL? = nil,
         installerFetcher: InstallerFetcher? = nil,
+        metadataFetcher: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata,
         executableResolver: (@Sendable (String) -> URL?)? = nil
     ) {
         self.installPrefix = installPrefix
         self.managedNodeRuntime = managedNodeRuntime
         self.npmExecutableURL = npmExecutableURL
         self.installerFetcher = installerFetcher
+        self.metadataFetcher = metadataFetcher
         self.executableResolver = executableResolver
     }
 
@@ -532,15 +535,13 @@ public actor LocalACPRuntimeInstaller {
         _ definition: LocalACPRuntimeDefinition,
         fetch: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata
     ) async throws -> LocalACPInstallerPreview {
-        if var packageSpec = definition.cliNpmPackageSpec {
-            if definition.runtimeKind == .opencode, packageSpec == "@opencode/cli@latest" {
-                let version = try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: fetch)
-                guard OpenCodeConnection.supportsVersion(version) else { throw OpenCodeError.incompatible(version) }
-                packageSpec = "@opencode/cli@" + version
-            }
-            guard Self.isExactPackageSpec(packageSpec) else {
+        if let selector = definition.cliNpmPackageSpec {
+            guard let separator = selector.lastIndex(of: "@"), separator != selector.startIndex else {
                 throw LocalACPRuntimeInstallError.unpinnedPackage
             }
+            let package = String(selector[..<separator])
+            let version = try await RuntimeMaintenance.registryVersion(package, fetch: fetch)
+            let packageSpec = package + "@" + version
             guard let source = definition.cliInstallerSource,
                   LocalACPBoundedHTTPSDownloader.isSafeHTTPS(source)
             else { throw LocalACPRuntimeInstallError.unsafeSource }
@@ -592,18 +593,17 @@ public actor LocalACPRuntimeInstaller {
         expectedSourceSHA256: String?,
         expectedPackageSpec: String?
     ) async throws -> URL {
-        if var packageSpec = definition.cliNpmPackageSpec {
-            if definition.runtimeKind == .opencode, packageSpec == "@opencode/cli@latest" {
-                guard let expectedPackageSpec, expectedPackageSpec.hasPrefix("@opencode/cli@"),
-                      OpenCodeConnection.supportsVersion(String(expectedPackageSpec.dropFirst("@opencode/cli@".count))) else {
-                    throw LocalACPRuntimeInstallError.confirmationRequired
-                }
-                packageSpec = expectedPackageSpec
+        if let selector = definition.cliNpmPackageSpec {
+            guard let separator = selector.lastIndex(of: "@"), separator != selector.startIndex,
+                  let packageSpec = expectedPackageSpec, Self.isExactPackageSpec(packageSpec),
+                  packageSpec.hasPrefix(String(selector[..<separator]) + "@") else {
+                throw LocalACPRuntimeInstallError.confirmationRequired
             }
-            guard Self.isExactPackageSpec(packageSpec) else {
-                throw LocalACPRuntimeInstallError.unpinnedPackage
+            let version = String(packageSpec[packageSpec.index(after: packageSpec.lastIndex(of: "@")!)...])
+            if definition.runtimeKind == .opencode, !OpenCodeConnection.supportsVersion(version) {
+                throw OpenCodeError.incompatible(version)
             }
-            guard expectedPackageSpec == packageSpec else {
+            if definition.runtimeKind == .pi, !version.hasPrefix("1.") || version.contains("-") {
                 throw LocalACPRuntimeInstallError.confirmationRequired
             }
             return try await installNpmPackage(
@@ -659,11 +659,10 @@ public actor LocalACPRuntimeInstaller {
     private func installAdapter(
         _ definition: LocalACPRuntimeDefinition
     ) async throws -> URL {
-        guard let package = definition.adapterPackage,
-              let version = definition.minimumAdapterVersion,
-              Self.isExactSemanticVersion(version)
-        else {
-            throw LocalACPRuntimeInstallError.notInstallable
+        guard let package = definition.adapterPackage else { throw LocalACPRuntimeInstallError.notInstallable }
+        let version = try await RuntimeMaintenance.registryVersion(package, fetch: metadataFetcher)
+        if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {
+            throw RuntimeMaintenanceError.unavailable
         }
         let packageSpec = "\(package)@\(version)"
         return try await installNpmPackage(
@@ -821,7 +820,7 @@ public actor LocalACPRuntimeInstaller {
     }
 
     static func isExactSemanticVersion(_ value: String) -> Bool {
-        // Exact prerelease versions are pinned too; ranges and moving tags are not.
+        // Concrete transaction versions exclude ranges and moving tags.
         value.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"#, options: .regularExpression) != nil
     }
 
@@ -864,7 +863,7 @@ public enum LocalACPRuntimeInstallError: LocalizedError, Sendable, Equatable {
         case .sourceDigestChanged:
             "The installer changed after review, so Woven Matter refused to run it."
         case .unpinnedPackage:
-            "The npm package must use an exact semantic version."
+            "Resolve a concrete npm release before installation."
         case .installFailed(let detail):
             "The runtime could not be installed: \(detail)"
         case .executableMissing(let command):

@@ -1,3 +1,4 @@
+import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
 // cross the session CLI. Executor is used unchanged through its public local API.
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
@@ -11,7 +12,8 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { writePrivateJSON } from '../config.mjs';
 
-export const executorVersion = '2.0.0-beta.7';
+export const supportsExecutorVersion = version => releaseVersion(version) && version.startsWith('2.');
+export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', { major: 2, prerelease: true, fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 export function validateConfiguration(config) {
@@ -24,8 +26,8 @@ export function validateConfiguration(config) {
   return config;
 }
 export class ExecutorBroker {
-  constructor(directory, { fetcher = fetch, connect } = {}) {
-    this.directory = directory; this.fetch = fetcher; this.connectOverride = connect;
+  constructor(directory, { fetcher = fetch, connect, spawnProcess = spawn } = {}) {
+    this.directory = directory; this.fetch = fetcher; this.connectOverride = connect; this.spawnProcess = spawnProcess;
     this.jobs = new Map(); this.clients = new Map(); this.connectingClients = new Map(); this.clientGeneration = 0;
     this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve();
   }
@@ -58,12 +60,23 @@ export class ExecutorBroker {
     return { body: await response.json(), headers: response.headers };
   }
   async configure(config, install = false) {
+    if (this.installing) throw new Error("Executor setup is already running.");
+    this.installing = install;
+    try {
+      return await this.configureRuntime(config, install);
+    } finally { this.installing = false; }
+  }
+  async configureRuntime(config, install = false) {
     validateConfiguration(config);
+    if (install && [...this.jobs.values()].some(job => job.busy || !["completed", "cancelled", "interrupted"].includes(job.status))) {
+      throw new Error("Stop active Executor work before installing an update.");
+    }
     if (this.config && this.config.id !== config.id) {
       for (const job of this.jobs.values()) if (!['completed', 'cancelled', 'interrupted'].includes(job.status)) await this.cancel(job);
       await this.shutdownClients();
       if (config.location !== 'local') { this.child?.kill('SIGTERM'); this.child = null; }
     }
+    if (this.config?.id !== config.id) this.runtimeVersion = null;
     this.config = config;
     let server = this.state.servers[config.id];
     if (server && server.location !== config.location) throw new Error('Create a new connection before changing runtime location.');
@@ -85,7 +98,7 @@ export class ExecutorBroker {
       }
     }
     await this.request('/v1/apps'); // Readiness and key ownership, never fall back to unscoped MCP.
-    return { ready: true, version: executorVersion, origin: this.origin };
+    return { ready: true, version: this.runtimeVersion ?? null, origin: this.origin };
   }
   async run(executable, args, input, environment = process.env) {
     await new Promise((resolve, reject) => {
@@ -97,36 +110,73 @@ export class ExecutorBroker {
     });
   }
   async startLocal(install) {
-    if (this.child?.exitCode === null && this.child.signalCode === null) return;
-    const root = join(this.directory, 'runtime');
+    if (this.child?.exitCode === null && this.child.signalCode === null && !install) return;
+    const previousGeneration = this.server?.runtimeGeneration;
+    let generation = previousGeneration;
+    let root = generation && uuid(generation) ? join(this.directory, 'runtime/generations', generation) : join(this.directory, 'runtime');
     if (install) {
+      const version = await latestExecutorVersion(this.fetch);
+      generation = randomUUID(); root = join(this.directory, 'runtime/generations', generation);
       await mkdir(root, { recursive: true, mode: 0o700 });
       const npm = resolve(dirname(fileURLToPath(import.meta.url)), '../../lib/npm/bin/npm-cli.js');
-      await this.run(process.execPath, [npm, 'install', '--prefix', root, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `executor@${executorVersion}`], undefined,
+      await this.run(process.execPath, [npm, 'install', '--prefix', root, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `executor@${version}`], undefined,
         { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin` });
+      const staged = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8'));
+      if (staged.version !== version) throw new Error('Executor installation did not match the selected release. Existing runtime was retained.');
     }
     const packageJSON = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => { throw new Error('Install Executor in Settings → Connections first.'); }));
-    if (packageJSON.version !== executorVersion) throw new Error('This Executor runtime version is unsupported. Reinstall it in Connections.');
-    this.child = spawn(process.execPath, [join(root, 'node_modules/executor/bin.mjs'), 'serve'], { stdio: 'ignore', env: {
-      ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, EXECUTOR_DATA_DIR: join(this.directory, 'data'),
-      EXECUTOR_PORT: String(this.server.port), EXECUTOR_API_KEY: this.server.apiKey, EXECUTOR_ENCRYPTION_KEY: this.server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
-    } });
-    this.child.on('error', () => {});
-    const until = Date.now() + 90000;
-    while (Date.now() < until) {
-      try { await this.request('/v1/apps'); return; } catch { }
-      if (this.child.exitCode !== null || this.child.signalCode !== null) break;
-      await pause(400);
+    if (!supportsExecutorVersion(packageJSON.version)) throw new Error('This Executor runtime version is unsupported. Reinstall it in Connections.');
+    const hadRunningRuntime = this.child?.exitCode === null && this.child.signalCode === null;
+    if (hadRunningRuntime) {
+      await this.shutdownClients();
+      await this.retireLocalChild();
     }
-    throw new Error('Executor did not become ready. A different service may already own port 4312.');
+    try {
+      this.runtimeVersion = packageJSON.version;
+      this.child = this.spawnProcess(process.execPath, [join(root, 'node_modules/executor/bin.mjs'), 'serve'], { stdio: 'ignore', env: {
+        ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, EXECUTOR_DATA_DIR: join(this.directory, 'data'),
+        EXECUTOR_PORT: String(this.server.port), EXECUTOR_API_KEY: this.server.apiKey, EXECUTOR_ENCRYPTION_KEY: this.server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
+      } });
+      this.child.on('error', () => {});
+      const until = Date.now() + 90000;
+      while (true) {
+        try { await this.request('/v1/apps'); break; } catch { }
+        if (Date.now() >= until || this.child.exitCode !== null || this.child.signalCode !== null) throw new Error('Executor did not become ready. Check port 4312 and retry setup.');
+        await pause(400);
+      }
+      if (install) { this.server.runtimeGeneration = generation; await this.save(); }
+    } catch (error) {
+      await this.retireLocalChild();
+      this.server.runtimeGeneration = previousGeneration;
+      this.runtimeVersion = null;
+      if (install && hadRunningRuntime) {
+        try { await this.startLocal(false); }
+        catch { throw new Error('Executor update and rollback could not become ready. Existing data and runtime generations were retained.'); }
+      }
+      throw error;
+    }
+  }
+  async retireLocalChild() {
+    const child = this.child;
+    if (child?.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Executor did not stop. Existing runtime was retained.')), 10000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        child.kill('SIGTERM');
+      });
+    }
+    this.child = null;
   }
   async deployRemote() {
     const script = await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/executor-deploy.sh'), 'utf8');
     // Payload goes over SSH stdin, not shell arguments, logs, or agent-visible metadata.
-    const dockerfile = await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/Executor.Dockerfile'), 'utf8');
-    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, dockerfile });
+    const version = await latestExecutorVersion(this.fetch);
+    const dockerfile = (await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/Executor.Dockerfile'), 'utf8'))
+      .replace('ARG EXECUTOR_VERSION', `ARG EXECUTOR_VERSION=${version}`);
+    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, version, dockerfile });
     const command = `set -eu\numask 077\nwm_payload=$(mktemp)\ntrap 'rm -f "$wm_payload"' EXIT\ncat > "$wm_payload" <<'WOVEN_EXECUTOR_SETUP_JSON'\n${payload}\nWOVEN_EXECUTOR_SETUP_JSON\n${script}\n`;
     await this.run('/usr/bin/ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
+    this.runtimeVersion = version;
   }
   async pair(context = this) {
     return (await this.request('/auth/pair', { method: 'POST' }, context)).body.url;
@@ -265,6 +315,7 @@ export class ExecutorBroker {
     await this.save();
   }
   async start({ id, session, code, action = 'execute', scope }) {
+    if (this.installing) throw new Error('Executor setup is still running.');
     if (!uuid(id) || typeof code !== 'string' || Buffer.byteLength(code) > 65536) throw new Error('Execute requires a UUID and at most 64 KiB of JavaScript.');
     const digest = createHash('sha256').update(action + '\n' + code).digest('hex');
     const previous = this.jobs.get(id);
@@ -286,6 +337,7 @@ export class ExecutorBroker {
     } catch { return { valid: false }; }
   }
   async advance(job, response) {
+    if (this.installing) throw new Error("Executor setup is still running.");
     if (!this.validateResponse(job, response).valid) throw new Error('Executor input does not match its requested form.');
     if (job.status === 'cancelled' || job.status === 'completed' || job.status === 'interrupted') return;
     if (job.busy) throw new Error('This program already has a pending operation.');

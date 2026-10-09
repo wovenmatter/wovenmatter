@@ -1,6 +1,7 @@
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -217,4 +218,46 @@ test('an in-flight grant stays bound to its original origin and is discarded aft
   await assert.rejects(pending, /connection changed/);
   assert.equal(visited.length, 6);
   assert.equal(scope.grant, undefined); assert.equal(broker.clients.size, 0);
+});
+
+test('local updates stage before retirement and roll back failed startup', async t => {
+  for (const outcome of ['registry', 'npm', 'startup', 'success']) {
+    const { broker, directory } = await fixture(t, async () => ({}));
+    const root = join(directory, 'runtime');
+    await mkdir(join(root, 'node_modules/executor'), { recursive: true });
+    await writeFile(join(root, 'node_modules/executor/package.json'), JSON.stringify({ version: '2.0.0-beta.7' }));
+    const actions = [];
+    const child = running => Object.assign(new EventEmitter(), { exitCode: running ? null : 1, signalCode: null,
+      kill() { actions.push('retire'); this.signalCode = 'SIGTERM'; queueMicrotask(() => this.emit('exit', null)); } });
+    const original = child(true); broker.child = original; broker.runtimeVersion = '2.0.0-beta.7';
+    broker.fetch = async url => {
+      if (outcome === 'registry') throw Error('offline');
+      return new Response(JSON.stringify(url.endsWith('/latest') ? { version: '1.6.10' } : { versions: { '2.0.0-beta.12': {} } }));
+    };
+    broker.run = async (_, args) => {
+      actions.push('stage'); if (outcome === 'npm') throw Error('download failed');
+      const stage = args[args.indexOf('--prefix') + 1];
+      await mkdir(join(stage, 'node_modules/executor'), { recursive: true });
+      await writeFile(join(stage, 'node_modules/executor/package.json'), JSON.stringify({ version: '2.0.0-beta.12' }));
+    };
+    broker.spawnProcess = (_, args) => { actions.push(args[0].includes('/generations/') ? 'new' : 'old'); return child(outcome !== 'startup' || !args[0].includes('/generations/')); };
+    broker.request = async () => { if (outcome === 'startup' && broker.runtimeVersion === '2.0.0-beta.12') throw Error('not ready'); return { body: {} }; };
+    if (outcome === 'success') {
+      await broker.startLocal(true);
+      assert.equal(broker.runtimeVersion, '2.0.0-beta.12'); assert.ok(broker.server.runtimeGeneration);
+    } else {
+      await assert.rejects(broker.startLocal(true));
+      assert.equal(broker.runtimeVersion, '2.0.0-beta.7'); assert.equal(broker.server.runtimeGeneration, undefined);
+      if (outcome !== 'startup') assert.equal(broker.child, original);
+      else assert.ok(actions.includes('old'));
+    }
+    if (actions.includes('retire')) assert.ok(actions.indexOf('stage') < actions.indexOf('retire'));
+    await broker.stop();
+  }
+});
+test('existing remote connections never report the previous local runtime version', async t => {
+  const { broker } = await fixture(t, async () => ({}));
+  broker.runtimeVersion = '2.0.0-beta.12';
+  const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' });
+  assert.equal(result.version, null);
 });

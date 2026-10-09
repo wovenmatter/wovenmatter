@@ -23,7 +23,7 @@ public enum OpenCodeServiceLauncher {
         LocalACPRuntimeDefinition(runtimeKind: .opencode, displayName: "OpenCode v2", commandName: "opencode", alternativeCommandNames: ["opencode2"],
             arguments: [], underlyingCLIName: nil,
             cliInstallerSource: URL(string: "https://registry.npmjs.org/@opencode%2fcli"),
-            cliInstallerInterpreter: nil, cliNpmPackageSpec: "@opencode/cli@latest",
+            cliInstallerInterpreter: nil, cliNpmPackageSpec: "@opencode/cli@2",
             adapterPackage: nil, adapterDescription: "Local OpenCode v2 service")
     }
 

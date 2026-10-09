@@ -284,8 +284,8 @@ struct RuntimeBoundaryTests {
         shift
       done
       mkdir -p "$prefix/bin"
-      printf '#!/bin/sh\\necho 1.2.3\\n' > "$prefix/bin/fake-acp"
-      printf '#!/bin/sh\\necho 4.5.6\\n' > "$prefix/bin/fake-cli"
+      printf '#!/bin/sh\\necho 1.2.4\\n' > "$prefix/bin/fake-acp"
+      printf '#!/bin/sh\\necho 1.5.6\\n' > "$prefix/bin/fake-cli"
       chmod 700 "$prefix/bin/fake-acp"
       chmod 700 "$prefix/bin/fake-cli"
       """.write(to: npm, atomically: true, encoding: .utf8)
@@ -296,7 +296,8 @@ struct RuntimeBoundaryTests {
     let prefix = fixture.url.appending(path: "prefix")
     let installer = LocalACPRuntimeInstaller(
       installPrefix: prefix,
-      npmExecutableURL: npm
+      npmExecutableURL: npm,
+      metadataFetcher: { _ in Data(#"{"version":"1.2.4","bin":{"cli":"bin.js"}}"#.utf8) }
     )
     let definition = LocalACPRuntimeDefinition(
       runtimeKind: .codex,
@@ -316,7 +317,7 @@ struct RuntimeBoundaryTests {
     let arguments = try String(contentsOf: argumentsFile, encoding: .utf8)
       .split(whereSeparator: \.isNewline)
       .map(String.init)
-    #expect(arguments.last == "@example/fake-acp@1.2.3")
+    #expect(arguments.last == "@example/fake-acp@1.2.4")
     #expect(LocalACPRuntimeInstaller.isExactSemanticVersion("1.2.3"))
     #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("latest"))
     #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("^1.2.3"))
@@ -329,12 +330,12 @@ struct RuntimeBoundaryTests {
       underlyingCLIName: nil,
       cliInstallerSource: URL(string: "https://www.npmjs.com/package/@example/fake-cli"),
       cliInstallerInterpreter: nil,
-      cliNpmPackageSpec: "@example/fake-cli@4.5.6",
+      cliNpmPackageSpec: "@example/fake-cli@1",
       adapterPackage: nil,
       adapterDescription: "Fake CLI"
     )
-    let preview = try await installer.prepareCLIInstall(cliDefinition)
-    #expect(preview.packageSpec == "@example/fake-cli@4.5.6")
+    let preview = try await installer.prepareCLIInstall(cliDefinition, fetch: { _ in Data(#"{"version":"1.5.6","bin":{"cli":"bin.js"}}"#.utf8) })
+    #expect(preview.packageSpec == "@example/fake-cli@1.5.6")
     #expect(preview.verification == "npm-registry-integrity")
     do {
       _ = try await installer.install(cliDefinition, component: .cli)
@@ -350,9 +351,9 @@ struct RuntimeBoundaryTests {
     let cliArguments = try String(contentsOf: argumentsFile, encoding: .utf8)
       .split(whereSeparator: \.isNewline)
       .map(String.init)
-    #expect(cliArguments.last == "@example/fake-cli@4.5.6")
+    #expect(cliArguments.last == "@example/fake-cli@1.5.6")
     #expect(LocalACPRuntimeInstaller.isExactPackageSpec(
-      "@example/fake-cli@4.5.6"
+      "@example/fake-cli@1.5.6"
     ))
     #expect(!LocalACPRuntimeInstaller.isExactPackageSpec(
       "@example/fake-cli@latest"

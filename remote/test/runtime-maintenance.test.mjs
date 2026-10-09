@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.mjs'
 
-const pi = {id:'pi',displayName:'Pi',command:'pi',cliCommand:'pi',install:{kind:'npm-global',package:'@earendil-works/pi-coding-agent@1.0.0'}}
+const pi = {id:'pi',displayName:'Pi',command:'pi',cliCommand:'pi',install:{kind:'npm-global',package:'@earendil-works/pi-coding-agent@1'}}
 async function fixture(t, overrides = {}) {
   const root = await mkdtemp(resolve(tmpdir(),'wm-maintenance-'))
   t.after(() => rm(root, {recursive:true,force:true}))
@@ -16,10 +16,10 @@ async function fixture(t, overrides = {}) {
       assert.equal(cwd,root); assert.equal(env.HOME,root); calls.push(command)
       if(command==='ps -eo pid=,args=') return {code:0,output:''}
       if(command.startsWith('command -v')) return {code:installed?0:1,output:root+'/pi'}
-      if(command.endsWith('--version')) return {code:0,output:'pi 0.84.4'}
+      if(command.endsWith('--version')) return {code:0,output:'pi 1.1.0'}
       if(command.startsWith('npm install')) { executions++; installed=true; return {code:0,output:'installed'} }
       throw Error('Unexpected command: '+command)
-    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>({version:'0.84.5'})}},...overrides}
+    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>({version:'1.1.1'})}},...overrides}
   return {root,service:createRuntimeMaintenance(options),options,calls,install:()=>{installed=true},get executions(){return executions},get requests(){return requests}}
 }
 async function finished(service) {
@@ -87,7 +87,7 @@ test('active host conversation or instance prevents mutation and two failures yi
   assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123',{SECRET_TOKEN:'very-secret-token'}),'[redacted] [URL redacted] [redacted]')
 })
 test('OpenCode updates refuse active canonical and compatibility-alias processes', async t => {
-  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
   for (const process of ['opencode', 'opencode2', '/host/bin/opencode2', 'node /host/bin/opencode2.js']) {
     let installs = 0
     const f = await fixture(t, { catalog: new Map([['opencode', harness]]),
@@ -220,10 +220,10 @@ test('Hermes check is explicit, bounded and reports allowlisted status without a
 })
 
 test('reviewed Pi preview pins execution even when registry latest changes', async t => {
-  let version = '0.84.4'
+  let version = '1.1.0'
   const f = await fixture(t, { fetchImplementation: async () => ({ ok: true, json: async () => ({ version }) }) })
   const preview = await f.service.npmPreview(pi)
-  assert.equal(preview.packageSpec, '@earendil-works/pi-coding-agent@0.84.4')
+  assert.equal(preview.packageSpec, '@earendil-works/pi-coding-agent@1.1.0')
   assert.ok(preview.command.includes(preview.packageSpec))
   version = '0.85.0'
   await f.service.start(pi, 'install', { confirmed: true, packageSpec: preview.packageSpec })
@@ -234,7 +234,7 @@ test('reviewed Pi preview pins execution even when registry latest changes', asy
 
 test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releases stay fixed for each operation', async t => {
   const f = await fixture(t)
-  for (const packageSpec of ['@foreign/package@0.84.4', '@earendil-works/pi-coding-agent@latest', '@earendil-works/pi-coding-agent@0.84.4;touch /tmp/unsafe']) {
+  for (const packageSpec of ['@foreign/package@1.1.0', '@earendil-works/pi-coding-agent@latest', '@earendil-works/pi-coding-agent@1.1.0;touch /tmp/unsafe']) {
     await f.service.start(pi, 'install', { confirmed: true, packageSpec })
     const value = await finished(f.service)
     assert.equal(value.operation.status, 'failed')
@@ -243,8 +243,8 @@ test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releas
   assert.equal(f.executions, 0)
   await f.service.start(pi, 'install', { confirmed: true })
   await finished(f.service)
-  assert.ok(f.calls.some(c => c.includes("'@earendil-works/pi-coding-agent@1.0.0'")))
-  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  assert.ok(f.calls.some(c => c.includes("'@earendil-works/pi-coding-agent@1.1.1'")))
+  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
   const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => ({ version: '2.1.0' }) }) })
   const preview = await other.service.npmPreview(h)
   assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
@@ -305,7 +305,7 @@ test('Hermes performs the official bounded update only on a clean idle checkout 
 test('OpenCode latest previews and updates accept newer v2 releases independently', async t => {
   const root = await mkdtemp(resolve(tmpdir(), 'wm-opencode-update-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
   let installed = '2.0.22', latest = '2.1.7'
   const service = createRuntimeMaintenance({ catalog: new Map([['opencode', harness]]), workspaceRoot: root,
     environment: () => ({ HOME: root }), acquireLock: async () => () => {},
@@ -326,5 +326,5 @@ test('OpenCode latest previews and updates accept newer v2 releases independentl
   latest = '2.99.0'
   assert.equal((await service.npmPreview(harness)).packageSpec, '@opencode/cli@2.99.0')
   latest = '1.18.29'
-  await assert.rejects(service.npmPreview(harness), /version_incompatible/)
+  await assert.rejects(service.npmPreview(harness), /latest_package_version_unavailable/)
 })

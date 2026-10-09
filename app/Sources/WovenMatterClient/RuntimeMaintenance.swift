@@ -275,18 +275,30 @@ public enum RuntimeMaintenance {
 
     public static func registryVersion(_ package: String, tag: String = "latest", fetch: Fetch = fetchMetadata) async throws -> String {
         let encoded = package.replacingOccurrences(of: "/", with: "%2f")
-        let data = try await fetch(URL(string: "https://registry.npmjs.org/\(encoded)/\(tag)")!)
+        let base = "https://registry.npmjs.org/\(encoded)"
+        let supportedMajor = package == "@opencode/cli" ? 2 : package == "@earendil-works/pi-coding-agent" ? 1 : nil
+        func supported(_ version: String) -> Bool {
+            guard LocalACPRuntimeInstaller.isExactSemanticVersion(version) else { return false }
+            guard let supportedMajor else { return true }
+            return !version.contains("-") && version.split(separator: ".").first == Substring(String(supportedMajor))
+        }
+        let data = try await fetch(URL(string: "\(base)/\(tag)")!)
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let version = object?["version"] as? String,
-              LocalACPRuntimeInstaller.isExactSemanticVersion(version),
-              object?["bin"] != nil else { throw RuntimeMaintenanceError.unavailable }
-        return version
+        if let version = object?["version"] as? String, supported(version), object?["bin"] != nil { return version }
+        // A moving upstream tag can advance beyond the API family we implement.
+        // Choose the newest stable release in that family rather than an old pin.
+        guard supportedMajor != nil else { throw RuntimeMaintenanceError.unavailable }
+        let metadata = try JSONSerialization.jsonObject(with: await fetch(URL(string: base)!)) as? [String: Any]
+        let versions = metadata?["versions"] as? [String: [String: Any]] ?? [:]
+        guard let newest = versions.keys.filter({ supported($0) && versions[$0]?["bin"] != nil })
+            .sorted(by: { version($0, precedes: $1) }).last else { throw RuntimeMaintenanceError.unavailable }
+        return newest
     }
 
     public static func fetchMetadata(_ url: URL) async throws -> Data {
         let file = FileManager.default.temporaryDirectory.appending(path: "runtime-metadata-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: file) }
-        _ = try await LocalACPBoundedHTTPSDownloader.download(url, to: file, maximumBytes: 2 * 1_024 * 1_024)
+        _ = try await LocalACPBoundedHTTPSDownloader.download(url, to: file, maximumBytes: 32 * 1_024 * 1_024)
         return try Data(contentsOf: file)
     }
 

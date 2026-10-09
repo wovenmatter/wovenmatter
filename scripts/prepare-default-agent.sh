@@ -2,12 +2,12 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 agent_root="$repo_root/default-agent"
-version=24.18.0
+version=24.21.0
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi
 case "$arch" in
-  arm64) node_arch=arm64; checksum=e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1 ;;
-  x86_64) node_arch=x64; checksum=dfd0dbd3e721503434df7b7205e719f61b3a3a31b2bcf9729b8b91fea240f080 ;;
+  arm64) node_arch=arm64; checksum=bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057 ;;
+  x86_64) node_arch=x64; checksum=1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097 ;;
   *) printf 'Unsupported Built-in architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 cache="${TMPDIR:-/tmp}/wovenmatter-node-$version-$node_arch"
