@@ -2,12 +2,12 @@
 
 The iPhone and iPad use the running Mac's canonical workspace. Provider execution,
 credentials, SSH routes and concurrency remain on the Mac. PR #37 is integrated
-with monorepo main `5542b83ab2e11cc3c24037552883e2c6814bd596`.
+with monorepo main `729800a7cda6321d0431ea19f621d5fc1d5c163b`.
 
 ## Implemented behavior
 
-- Native Home, Folders, Chats, Notes and Settings tabs share the desktop's forest-green
-  theme. Rich text edits preserve document/block identities, styling and tables.
+- Native Home, Folders, Chats, Notes and Settings tabs share the desktop's Lucide
+  icons, harness logos, Green/Cognac themes and reusable controls. Rich text edits preserve document/block identities, styling and tables.
   Unsupported attributes and future formats remain intact and read only.
 - Ordinary notes and flat folders work offline. A protected local store commits
   immutable content blobs before replacing its durable index/outbox. Saved state
@@ -42,7 +42,7 @@ SQLite work uses the current async worker facade. Mac autosave, agent note edits
 
 The background service owns the HTTP listener, pairing store, Tailscale child and run control. Desktop Settings reads and controls that owner over local RPC. Standalone mode uses the same host controller in the application process. Library, Calendar/recurring scheduled tasks, session settings/tool policy, note/conversation management and native file/export previews are available on both phone and tablet. iPad uses an adaptive sidebar and supports every orientation. Calendar edits carry the series revision and original start; deleting an occurrence does not delete its series. Local and remote scheduled tasks inherit the Mac's saved configuration. Workspace retries retain their original command identity after a lost reply. Mobile Stop invalidates earlier preparation and joins the same native cancellation barrier as desktop Stop, while rejecting stale run identities.
 
-Main’s structured CLI context and native OpenCode allow/ask/deny policies remain authoritative. Mobile Executor changes use the same broker acknowledgement and cancellation path as the Mac, retaining selected profiles. The initial phone UI pass improves Home actions, selection visibility, touch targets, dark-mode contrast and keyboard dismissal; iPad uses the corresponding sidebar and bounded content layout.
+Main’s structured CLI context and native OpenCode allow/ask/deny policies remain authoritative. Mobile Executor changes use the same broker acknowledgement and cancellation path as the Mac, retaining selected profiles. Main’s advisory program-status persistence and settlement fencing remain on the Mac; mobile run commands still target canonical run IDs. The phone UI uses the shared desktop styling with Dynamic Type, touch targets, dark-mode contrast and keyboard dismissal; iPad uses the corresponding sidebar and bounded content layout.
 
 ## Components
 
@@ -51,7 +51,10 @@ Main’s structured CLI context and native OpenCode allow/ask/deny policies rema
 HTTP transport and process supervision to the existing workspace SQLite store.
 `app/App/Services` owns host lifecycle and canonical command routing. `ios/` contains
 native SwiftUI/UIKit views, the portable mobile client/store and generated Xcode
-project. `integration/` crosses those real client/server/store boundaries using fake
+project. Both app targets compile `app/App/Views/DashboardStyle.swift` and bundle
+`app/App/SharedAssets.xcassets` directly, so icons, tokens and common controls have
+one source. The portable Foundation packages remain independent of SwiftUI.
+`integration/` crosses those real client/server/store boundaries using fake
 provider execution and controlled network failures.
 
 ## Pairing and transport
