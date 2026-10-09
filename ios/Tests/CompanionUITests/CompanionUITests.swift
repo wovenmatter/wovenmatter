@@ -23,12 +23,22 @@ final class CompanionUITests: XCTestCase {
     app.buttons["tab-home"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["action-new-note"].waitForExistence(timeout: 5))
-    app.buttons["tab-content"].tap()
+    XCTAssertFalse(app.buttons["tab-content"].exists)
+    app.buttons["tab-folders"].tap()
+    app.buttons["folder-inbox"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.textFields["Search notes and conversations"].exists)
-    app.buttons["tab-chat"].tap()
+    XCTAssertTrue(app.buttons.containing(.staticText, identifier: "Launch Plan").firstMatch.exists)
+    app.buttons["tab-settings"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-settings"].waitForExistence(timeout: 5))
+    app.buttons["tab-folders"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
+    app.buttons["back-folders"].tap()
+    XCTAssertTrue(app.buttons["folder-inbox"].waitForExistence(timeout: 5))
+    app.buttons["tab-chats"].tap()
     XCTAssertTrue(app.staticTexts["Summarize the launch plan."].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
-    app.buttons["tab-note"].tap()
+    app.buttons["tab-notes"].tap()
     XCTAssertTrue(app.descendants(matching: .any)["note-title"].firstMatch.waitForExistence(timeout: 5))
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
@@ -57,7 +67,7 @@ final class CompanionUITests: XCTestCase {
     expectation(for: savedPredicate, evaluatedWith: saved)
     waitForExpectations(timeout: 10)
     app.terminate()
-    app.launchEnvironment["WOVENMATTER_UI_TAB"] = "Note"
+    app.launchEnvironment["WOVENMATTER_UI_TAB"] = "Notes"
     app.launch()
     let reopened = app.descendants(matching: .any)["note-title"].firstMatch
     XCTAssertTrue(reopened.waitForExistence(timeout: 10))
@@ -73,6 +83,9 @@ final class CompanionUITests: XCTestCase {
     let name = "Offline " + String(UUID().uuidString.prefix(6))
     app.alerts.textFields["Folder name"].typeText(name)
     app.alerts.buttons["Create"].tap()
+    XCTAssertTrue(app.buttons["back-folders"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["This folder is empty. Add a note or start a chat."].exists)
+    app.buttons["back-folders"].tap()
     XCTAssertTrue(app.buttons.containing(.staticText, identifier: name).firstMatch.waitForExistence(timeout: 5))
   }
   @MainActor func testWorkspaceSurfacesAndRotation() {
@@ -87,7 +100,7 @@ final class CompanionUITests: XCTestCase {
       XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Connect to your Mac'")).firstMatch.waitForExistence(timeout: 5))
     }
     XCUIDevice.shared.orientation = .landscapeLeft
-    app.buttons["tab-note"].tap()
+    app.buttons["tab-notes"].tap()
     XCTAssertTrue(app.descendants(matching: .any)["note-title"].firstMatch.waitForExistence(timeout: 5))
     XCUIDevice.shared.orientation = .portrait
     app.buttons["tab-home"].tap()

@@ -4,8 +4,8 @@ import CompanionClient
 import WovenMatterCompanion
 
 @MainActor @Observable final class CompanionModel {
-  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", content = "Content", chat = "Chat", note = "Note", library = "Library", calendar = "Calendar", trash = "Trash"
-    var icon: String { switch self { case .home: "house"; case .folders: "folder"; case .content: "rectangle.stack"; case .chat: "bubble.left"; case .note: "doc.text"; case .library: "books.vertical"; case .calendar: "calendar"; case .trash: "trash" } }
+  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", library = "Library", calendar = "Calendar", trash = "Trash"
+    var icon: String { switch self { case .home: "house"; case .folders: "folder"; case .chat: "bubble.left"; case .note: "doc.text"; case .settings: "gearshape"; case .library: "books.vertical"; case .calendar: "calendar"; case .trash: "trash" } }
   }
   var tab: Tab = .home
   var state = MobileStoreState()
@@ -15,6 +15,7 @@ import WovenMatterCompanion
   var historyPages: [String: CompanionTranscript] = [:]
   var loadingHistory = false
   var selectedFolderID: String?
+  var folderContentsPresented = false
   var selectedNoteID: String?
   var selectedConversationID: String?
   var providerID = ""
@@ -161,9 +162,13 @@ import WovenMatterCompanion
       await reload()
     }
   }
+  func openFolder(_ id: String?) {
+    selectedFolderID = id; folderContentsPresented = true; tab = .folders
+  }
+  func closeFolder() { selectedFolderID = nil; folderContentsPresented = false }
   func newFolder(name: String) async {
     guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    do { selectedFolderID = try await store.createFolder(name: name).id; await reload() }
+    do { let folder = try await store.createFolder(name: name); await reload(); openFolder(folder.id) }
     catch { errorMessage = error.localizedDescription }
   }
   func newNote() async {

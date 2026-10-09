@@ -14,7 +14,7 @@ scripts/build-ios.sh --device-compile
 WOVENMATTER_IOS_DEVICE_ID=<registered-device-id> scripts/build-ios.sh --device
 ```
 
-`--package` (the default) runs portable client/store tests. `--simulator` adds an unsigned simulator build and app-hosted model tests; `--ui` also runs the native interaction suite. `--all-devices` runs it on both disposable iPhone and iPad simulators, including rotation. `--device-compile` verifies the physical-device architecture without signing. Device builds use existing local signing assets; they do not initiate account setup. Simulator test modes create and remove a disposable device by default. `WOVENMATTER_IOS_SIMULATOR_DESTINATION` explicitly selects an existing test device; `WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE` and `WOVENMATTER_IOS_SIMULATOR_RUNTIME` customize disposable creation. These commands use isolated temporary build caches. The app-hosted XCTest process detects its test bundle before opening any store or Keychain, creates a unique temporary library, and suppresses automatic connection. Package and UI tests use temporary stores and fake adapters; they never consume provider services. UI tests seed an isolated local fixture library in Debug builds using `WOVENMATTER_UI_FIXTURE=1`. `WOVENMATTER_UI_TAB=Home|Folders|Content|Chat|Note|Library|Calendar|Trash` chooses the initial fixture screen. Fixture mode does not pair or run agents.
+`--package` (the default) runs portable client/store tests. `--simulator` adds an unsigned simulator build and app-hosted model tests; `--ui` also runs the native interaction suite. `--all-devices` runs it on both disposable iPhone and iPad simulators, including rotation. `--device-compile` verifies the physical-device architecture without signing. Device builds use existing local signing assets; they do not initiate account setup. Simulator test modes create and remove a disposable device by default. `WOVENMATTER_IOS_SIMULATOR_DESTINATION` explicitly selects an existing test device; `WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE` and `WOVENMATTER_IOS_SIMULATOR_RUNTIME` customize disposable creation. These commands use isolated temporary build caches. The app-hosted XCTest process detects its test bundle before opening any store or Keychain, creates a unique temporary library, and suppresses automatic connection. Package and UI tests use temporary stores and fake adapters; they never consume provider services. UI tests seed an isolated local fixture library in Debug builds using `WOVENMATTER_UI_FIXTURE=1`. `WOVENMATTER_UI_TAB=Home|Folders|Chats|Notes|Settings|Library|Calendar|Trash` chooses the initial fixture screen. Fixture mode does not pair or run agents.
 
 ## Pairing and test workflow
 
@@ -81,6 +81,10 @@ For visual iteration, build with `scripts/build-ios.sh`, then install its
 `WovenMatterCompanion.app` in a dedicated simulator. Launch with
 `SIMCTL_CHILD_WOVENMATTER_UI_FIXTURE=1`, a stable
 `SIMCTL_CHILD_WOVENMATTER_UI_FIXTURE_NAMESPACE`, and
-`SIMCTL_CHILD_WOVENMATTER_UI_TAB=Home` (or `Chat` / `Note`). Retaining the namespace
+`SIMCTL_CHILD_WOVENMATTER_UI_TAB=Home` (or `Chats` / `Notes`). Retaining the namespace
 preserves preview writing between builds. Xcode 27 uses Device Hub to show the
 simulator. Use a separate simulator without fixture variables for real pairing.
+
+The primary tabs are Home, Folders, Chats, Notes, and Settings. Opening a folder
+shows its searchable notes and chats within Folders; Back to Folders returns to
+the folder list. Settings contains Mac connection and sync controls.

@@ -6,7 +6,7 @@ with monorepo main `5542b83ab2e11cc3c24037552883e2c6814bd596`.
 
 ## Implemented behavior
 
-- Native Home, Folders, Content, Chat and Note tabs share the desktop's forest-green
+- Native Home, Folders, Chats, Notes and Settings tabs share the desktop's forest-green
   theme. Rich text edits preserve document/block identities, styling and tables.
   Unsupported attributes and future formats remain intact and read only.
 - Ordinary notes and flat folders work offline. A protected local store commits

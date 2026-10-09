@@ -107,7 +107,7 @@ struct CompanionShell: View {
     switch model.tab {
     case .home: HomePane(model: model)
     case .folders: FoldersPane(model: model)
-    case .content: ContentPane(model: model)
+    case .settings: CompanionSettingsPane(model: model)
     case .chat: ChatPane(model: model)
     case .note:
       if let note = model.selectedNote { NotePane(model: model, note: note).id(note.id) }
@@ -245,28 +245,29 @@ struct FoldersPane: View {
   @State private var newFolderPresented = false
   @State private var folderName = ""
   var body: some View {
-    VStack(spacing: 0) {
-      PaneHeader(title: "Folders") { EmptyView() }
-      ScrollView {
+    Group {
+      if model.folderContentsPresented {
+        FolderContentsPane(model: model)
+      } else {
         VStack(spacing: 0) {
-          WorkspaceRow(icon: "square.and.pencil", title: "New chat") { model.newChat() }
-          WorkspaceRow(icon: "doc.text", title: "New note") { Task { await model.newNote() } }.accessibilityIdentifier("action-new-note")
-          GroupLabel(text: "Folders")
-          WorkspaceRow(icon: "plus", title: "New folder") { newFolderPresented = true }
-          WorkspaceRow(icon: "folder", title: "All workspace", selected: model.selectedFolderID == nil) { model.selectedFolderID = nil }
-          ForEach(model.folders) { folder in
-            WorkspaceRow(icon: "folder", title: folder.name,
-              detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count), selected: model.selectedFolderID == folder.id) { model.selectedFolderID = folder.id }
-          }
-          GroupLabel(text: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? "Recents")
-          ForEach(model.conversations.filter { model.selectedFolderID == nil || $0.folderID == model.selectedFolderID }) { conversation in
-            WorkspaceRow(icon: "bubble.left", title: conversation.title, detail: conversation.activeRunID == nil ? nil : "Running") { Task { await model.selectConversation(conversation.id) } }
-          }
-          ForEach(model.notes.filter { model.selectedFolderID == nil || $0.folderID == model.selectedFolderID }) { note in
-            WorkspaceRow(icon: "doc.text", title: note.title, detail: model.state.isDirty(note.id) ? "On device" : nil) { Task { await model.openNote(note.id) } }
-          }
-        }.padding(.horizontal, 18).padding(.bottom, 24)
-      }.refreshable { await model.refresh() }
+          PaneHeader(title: "Folders") { EmptyView() }
+          ScrollView {
+            VStack(spacing: 0) {
+              WorkspaceRow(icon: "square.and.pencil", title: "New chat") { model.newChat() }
+              WorkspaceRow(icon: "doc.text", title: "New note") { Task { await model.newNote() } }.accessibilityIdentifier("action-new-note")
+              GroupLabel(text: "Folders")
+              WorkspaceRow(icon: "plus", title: "New folder") { newFolderPresented = true }
+              WorkspaceRow(icon: "folder", title: "All workspace") { model.openFolder(nil) }
+                .accessibilityIdentifier("folder-all")
+              ForEach(model.folders) { folder in
+                WorkspaceRow(icon: "folder", title: folder.name,
+                  detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
+                  .accessibilityIdentifier("folder-" + folder.id)
+              }
+            }.padding(.horizontal, 18).padding(.bottom, 24)
+          }.refreshable { await model.refresh() }
+        }
+      }
     }
     .alert("New folder", isPresented: $newFolderPresented) {
       TextField("Folder name", text: $folderName)
@@ -276,31 +277,93 @@ struct FoldersPane: View {
   }
 }
 
-struct ContentPane: View {
+struct FolderContentsPane: View {
   @Bindable var model: CompanionModel
   @State private var search = ""
+  private var notes: [CompanionNote] {
+    model.notes.filter { (model.selectedFolderID == nil || $0.folderID == model.selectedFolderID)
+      && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
+  }
+  private var conversations: [CompanionConversation] {
+    model.conversations.filter { (model.selectedFolderID == nil || $0.folderID == model.selectedFolderID)
+      && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
+  }
   var body: some View {
     VStack(spacing: 0) {
-      PaneHeader(title: "Content") { Button { Task { await model.newNote() } } label: { Image(systemName: "plus").font(.title2) }.accessibilityLabel("New note") }
+      HStack {
+        Button { model.closeFolder() } label: { Label("Folders", systemImage: "chevron.left").frame(minHeight: 44) }
+          .accessibilityLabel("Back to Folders").accessibilityIdentifier("back-folders")
+        Spacer()
+      }.padding(.horizontal, 20)
+      PaneHeader(title: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? "All workspace") {
+        Menu {
+          Button("New chat", systemImage: "square.and.pencil") { model.newChat() }
+          Button("New note", systemImage: "doc.badge.plus") { Task { await model.newNote() } }
+        } label: { Image(systemName: "plus").font(.title2).frame(width: 44, height: 44) }
+          .accessibilityLabel("Add to folder")
+      }
       HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Search notes and conversations", text: $search).textInputAutocapitalization(.never) }
         .padding(12).background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 20)
       ScrollView {
         VStack(spacing: 0) {
-          GroupLabel(text: "Notes & assets")
-          ForEach(model.notes.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { note in
-            WorkspaceRow(icon: noteIcon(note), title: note.title, detail: model.state.uncachedNoteIDs.contains(note.id) ? "Online" : nil) { Task { await model.openNote(note.id) } }
+          if notes.isEmpty && conversations.isEmpty {
+            Text(search.isEmpty ? "This folder is empty. Add a note or start a chat." : "No matching notes or chats.")
+              .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 24).padding(.horizontal, 14)
           }
-          GroupLabel(text: "Conversations")
-          ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
-            WorkspaceRow(icon: "bubble.left", title: conversation.title, detail: conversation.runtimeKind) { Task { await model.selectConversation(conversation.id) } }
+          if !notes.isEmpty {
+            GroupLabel(text: "Notes & assets")
+            ForEach(notes) { note in
+              WorkspaceRow(icon: noteIcon(note), title: note.title, detail: model.state.uncachedNoteIDs.contains(note.id) ? "Online" : nil) { Task { await model.openNote(note.id) } }
+            }
           }
+          if !conversations.isEmpty {
+            GroupLabel(text: "Chats")
+            ForEach(conversations) { conversation in
+              WorkspaceRow(icon: "bubble.left", title: conversation.title, detail: conversation.runtimeKind) { Task { await model.selectConversation(conversation.id) } }
+            }
+          }
+        }.padding(.horizontal, 18).padding(.bottom, 24)
+      }.refreshable { await model.refresh() }
+    }
+  }
+  private func noteIcon(_ note: CompanionNote) -> String {
+    guard let document = RichDocumentEditing.document(note.content) else { return "doc.text" }
+    return document.kind == .spreadsheet ? "tablecells" : document.kind == .html ? "chevron.left.forwardslash.chevron.right" : "doc.text"
+  }
+}
+
+struct CompanionSettingsPane: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    VStack(spacing: 0) {
+      PaneHeader(title: "Settings") { EmptyView() }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 8) {
+          GroupLabel(text: "Mac connection")
+          VStack(alignment: .leading, spacing: 8) {
+            Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
+              .font(.headline)
+            Text(model.fixture ? "You’re exploring sample content. Pairing is available in the regular app."
+              : "Connect to your Mac to sync your workspace and use agents.")
+              .font(.subheadline).foregroundStyle(.secondary)
+          }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+          if !model.fixture {
+            WorkspaceRow(icon: "qrcode", title: model.credential == nil ? "Pair your Mac" : "Pairing") { model.pairingPresented = true }
+            WorkspaceRow(icon: "arrow.clockwise", title: model.connecting ? "Connecting…" : "Sync now") { Task { await model.refresh() } }
+              .disabled(model.credential == nil || model.connecting)
+          }
+          GroupLabel(text: "Sync")
+          Text(model.state.outbox.isEmpty ? "No saved changes waiting to sync." : "\(model.state.outbox.count) saved changes waiting to sync.")
+            .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 14)
+          if !model.state.conflicts.isEmpty {
+            WorkspaceRow(icon: "doc.on.doc", title: "Review saved conflicts", detail: String(model.state.conflicts.count)) { model.tab = .home }
+          }
+          Text("Notes are saved on this device and remain available offline.")
+            .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 8)
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }
     }
-  }
-  private func noteIcon(_ note: WovenMatterCompanion.CompanionNote) -> String {
-    guard let document = CompanionClient.RichDocumentEditing.document(note.content) else { return "doc.text" }
-    return document.kind == .spreadsheet ? "tablecells" : document.kind == .html ? "chevron.left.forwardslash.chevron.right" : "doc.text"
   }
 }
 
