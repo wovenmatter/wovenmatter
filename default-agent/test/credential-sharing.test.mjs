@@ -57,13 +57,18 @@ test('expired borrowed auth waits between model requests and resumes without rep
   await service.configure({ ...base, revision: 'old', credentials: { xai: { type: 'oauth', access: 'expired', expires: 0 } } });
   const engine = await service.engine();
   let settled = false;
-  const auth = engine.runtime.getAuth('xai', { signal: AbortSignal.timeout(5000) }).then(value => { settled = true; return value; });
+  const statuses = [], record = { runID: 'fixture-run', emit: update => statuses.push(update) };
+  const auth = engine.programStatusContext.run({ record, scope: record }, () =>
+    engine.runtime.getAuth('xai', { signal: AbortSignal.timeout(5000) })).then(value => { settled = true; return value; });
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(settled, false);
   await service.configure({ ...base, revision: 'new', credentials: { xai: { type: 'oauth', access: 'renewed', expires: Date.now() + 3600000 } } });
   assert.equal((await auth).auth.apiKey, 'renewed');
   // No model calls or tools are submitted by credential recovery.
   assert.equal(engine.sessions.size, 0);
+  assert.deepEqual(statuses.map(update => update.status.state), ['blocked', 'working']);
+  assert.equal(statuses[0].status.kind, 'auth');
+  assert.ok(statuses.every(update => update._meta.wovenRunID === record.runID));
 });
 
 test('status checks never start login and do not equate a timeout with sign-out', async () => {

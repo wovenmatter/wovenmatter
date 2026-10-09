@@ -52,14 +52,40 @@ extension WorkspaceDatabaseConnection {
         let replied = replies.contains { $0.objectValue?["status"]?.stringValue == "accepted" }
         let detail: String
         if status == "completed" {
-          detail = "finished its turn."
+          detail = "done."
         } else {
           let error = row["error"]?.stringValue.map { " " + String(WorkspaceHistoryPrivacy.redactingToolEndpoints($0).prefix(2_000)) } ?? ""
-          detail = "turn \(status == "failed" ? "failed" : "stopped").\(error)"
+          detail = "\(status == "failed" ? "error" : "idle (cancelled)").\(error)"
         }
         if let delivery = try recordCoordinationObservationUnlocked(sessionID: session, eventID: "run:" + id,
             detail: detail + " Run: " + id + ".", suppress: notificationOnly || replied) {
           deliveries.append(delivery)
+        }
+      }
+      // Native authentication waits have no permission/question UI callback.
+      // Observe their explicit reports through the same durable notification
+      // ledger; no polling heuristic or additional delivery mechanism is needed.
+      let native = try historyRowsUnlocked("""
+        SELECT r.id,r.conversation_id,p.records_json FROM desktop_program_status p
+        JOIN dashboard_runs r ON r.id=p.run_id AND r.status='running'
+        JOIN workspace_session_relationships m ON m.session_id=r.conversation_id AND m.coordinator_id IS NOT NULL
+        WHERE p.source='native' AND EXISTS (
+          SELECT 1 FROM json_each(p.records_json,'$.records') WHERE json_extract(value,'$.state')='blocked')
+        ORDER BY p.updated_at LIMIT ?
+        """, values: [String(min(max(limit, 1), 200))])
+      for row in native {
+        guard let fields = row.objectValue, let runID = fields["id"]?.stringValue,
+              let session = fields["conversation_id"]?.stringValue,
+              let json = fields["records_json"]?.stringValue,
+              let records = try? JSONDecoder().decode(ProgramStatusRecords.self, from: Data(json.utf8)) else { continue }
+        for report in records.records where report.state == .blocked {
+          guard deliveries.count < min(max(limit, 1), 200) else { break }
+          let kind = report.kind.map { " (" + $0.rawValue + ")" } ?? ""
+          if let delivery = try recordCoordinationObservationUnlocked(sessionID: session,
+              eventID: "blocked:" + runID + ":" + (report.id ?? "root") + kind,
+              detail: "blocked" + kind + ". Run: " + runID + ".", suppress: false) {
+            deliveries.append(delivery)
+          }
         }
       }
       return deliveries
@@ -68,13 +94,11 @@ extension WorkspaceDatabaseConnection {
 
   /// The app observes a live user-facing request; this never answers it or
   /// transfers approval authority to another agent.
-  public func recordCoordinationNeedsInput(sessionID: String, requestID: String, requiresUserApproval: Bool) throws -> WorkspaceSessionDelivery? {
+  public func recordCoordinationNeedsInput(sessionID: String, requestID: String, requiresUserApproval: Bool, kind: ProgramStatus.Kind? = nil) throws -> WorkspaceSessionDelivery? {
     try transaction {
       try retireUnavailableCoordinationUnlocked(sessionID: sessionID)
       return try recordCoordinationObservationUnlocked(sessionID: sessionID, eventID: "input:" + requestID,
-        detail: requiresUserApproval
-          ? "needs user approval."
-          : "needs input.",
+        detail: "blocked (\((kind ?? (requiresUserApproval ? .permission : .question)).rawValue)).",
         suppress: false)
     }
   }
@@ -114,7 +138,7 @@ extension WorkspaceDatabase {
     try await write { try $0.collectCoordinationTurnNotifications(limit: limit) }
   }
 
-  public func recordCoordinationNeedsInput(sessionID: String, requestID: String, requiresUserApproval: Bool) async throws -> WorkspaceSessionDelivery? {
-    try await write { try $0.recordCoordinationNeedsInput(sessionID: sessionID, requestID: requestID, requiresUserApproval: requiresUserApproval) }
+  public func recordCoordinationNeedsInput(sessionID: String, requestID: String, requiresUserApproval: Bool, kind: ProgramStatus.Kind? = nil) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.recordCoordinationNeedsInput(sessionID: sessionID, requestID: requestID, requiresUserApproval: requiresUserApproval, kind: kind) }
   }
 }

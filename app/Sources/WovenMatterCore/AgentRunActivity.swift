@@ -100,6 +100,7 @@ public struct AgentRunSubagent: Codable, Equatable, Identifiable, Sendable {
   public let accessKind: String?
   public let thinking: String?
   public let state: String?
+  public let executionStatus: String?
   public let result: String?
   public let detail: String?
   public let activity: [AgentRunSubagentActivity]?
@@ -111,6 +112,17 @@ public struct AgentRunSubagent: Codable, Equatable, Identifiable, Sendable {
   public var isActive: Bool {
     !["idle", "completed", "done", "succeeded", "failed", "error", "cancelled", "canceled", "stopped", "aborted"]
       .contains(state?.lowercased() ?? "")
+  }
+
+  public var programStatus: ProgramStatus? { ProgramStatus.run(state) }
+
+  public var statusLabel: String? {
+    let label = programStatus?.label ?? state?.replacingOccurrences(of: "_", with: " ").capitalized
+    switch executionStatus?.lowercased() ?? state?.lowercased() {
+    case "cancelling": return "Working (cancelling)"
+    case "cancelled", "canceled", "stopped", "aborted": return "Idle (cancelled)"
+    default: return label
+    }
   }
 }
 

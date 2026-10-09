@@ -571,6 +571,11 @@ extension WorkspaceDatabaseConnection {
         )
       }
 
+      let statuses = try programStatusSnapshotsUnlocked()
+      for index in conversations.indices {
+        conversations[index].programStatus = statuses[conversations[index].id]
+          ?? ProgramStatusSnapshot(status: ProgramStatus(state: .idle))
+      }
       let revisionStatement = try prepareUnlocked(
         "SELECT revision FROM desktop_dashboard_revision WHERE singleton = 1"
       )
