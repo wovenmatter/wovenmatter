@@ -17,14 +17,16 @@ export function compareVersions(a, b) {
   }
   return 0;
 }
-export async function latestSupportedPackage(name, { major, minor, prerelease = false, signal, fetchImplementation = fetch } = {}) {
+export async function latestSupportedPackage(name, { major, minor, prerelease = false, executable, signal, fetchImplementation = fetch } = {}) {
   const supported = version => releaseVersion(version) && (prerelease || !version.includes('-'))
     && (major === undefined || Number(version.split('.')[0]) === major)
     && (minor === undefined || Number(version.split('.')[1]) === minor);
+  const usable = metadata => metadata && !metadata.deprecated && (executable === undefined
+    || typeof metadata.bin === 'string' || typeof metadata.bin?.[executable] === 'string');
   const request = async suffix => {
     const response = await fetchImplementation(`https://registry.npmjs.org/${encodeURIComponent(name)}${suffix}`, {
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
-      headers: { Accept: 'application/vnd.npm.install-v1+json' },
+      headers: { Accept: suffix ? 'application/json' : 'application/vnd.npm.install-v1+json' },
     });
     if (!response.ok) throw new Error('The package update source is unavailable.');
     if (!response.body) return response.json(); // Injected metadata fixtures.
@@ -36,10 +38,11 @@ export async function latestSupportedPackage(name, { major, minor, prerelease = 
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   };
-  const latest = (await request('/latest')).version;
-  if (supported(latest) && !latest.includes('-')) return latest;
+  const latestMetadata = await request('/latest');
+  const latest = latestMetadata.version;
+  if (supported(latest) && !latest.includes('-') && usable(latestMetadata)) return latest;
   const metadata = await request('');
-  const versions = Object.keys(metadata.versions ?? {}).filter(supported).sort(compareVersions);
+  const versions = Object.keys(metadata.versions ?? {}).filter(version => supported(version) && usable(metadata.versions[version])).sort(compareVersions);
   // Prefer stable releases; Executor currently needs its published V2 beta line.
   const stable = versions.filter(version => !version.includes('-'));
   const selected = stable.at(-1) ?? versions.at(-1);

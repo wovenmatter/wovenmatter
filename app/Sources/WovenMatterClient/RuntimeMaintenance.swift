@@ -284,13 +284,13 @@ public enum RuntimeMaintenance {
         }
         let data = try await fetch(URL(string: "\(base)/\(tag)")!)
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let version = object?["version"] as? String, supported(version), object?["bin"] != nil { return version }
+        if let version = object?["version"] as? String, supported(version), object?["bin"] != nil, object?["deprecated"] == nil { return version }
         // A moving upstream tag can advance beyond the API family we implement.
         // Choose the newest stable release in that family rather than an old pin.
         guard supportedMajor != nil else { throw RuntimeMaintenanceError.unavailable }
         let metadata = try JSONSerialization.jsonObject(with: await fetch(URL(string: base)!)) as? [String: Any]
         let versions = metadata?["versions"] as? [String: [String: Any]] ?? [:]
-        guard let newest = versions.keys.filter({ supported($0) && versions[$0]?["bin"] != nil })
+        guard let newest = versions.keys.filter({ supported($0) && versions[$0]?["bin"] != nil && versions[$0]?["deprecated"] == nil })
             .sorted(by: { version($0, precedes: $1) }).last else { throw RuntimeMaintenanceError.unavailable }
         return newest
     }

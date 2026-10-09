@@ -232,7 +232,7 @@ test('local updates stage before retirement and roll back failed startup', async
     const original = child(true); broker.child = original; broker.runtimeVersion = '2.0.0-beta.7';
     broker.fetch = async url => {
       if (outcome === 'registry') throw Error('offline');
-      return new Response(JSON.stringify(url.endsWith('/latest') ? { version: '1.6.10' } : { versions: { '2.0.0-beta.12': {} } }));
+      return new Response(JSON.stringify(url.endsWith('/latest') ? { version: '1.6.10' } : { versions: { '2.0.0-beta.12': { bin: { executor: 'bin.mjs' } } } }));
     };
     broker.run = async (_, args) => {
       actions.push('stage'); if (outcome === 'npm') throw Error('download failed');

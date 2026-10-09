@@ -30,7 +30,7 @@ struct RuntimeMaintenanceTests {
     @Test func newestSupportedMajorSurvivesLatestTagMoving() async throws {
         let version = try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: { url in
             if url.absoluteString.hasSuffix("/latest") { return Data(#"{"version":"3.0.0","bin":{"cli":"bin.js"}}"#.utf8) }
-            return Data(#"{"versions":{"2.0.9":{"bin":{}},"2.0.26":{"bin":{}},"2.1.0-beta.1":{"bin":{}},"3.0.0":{"bin":{}}}}"#.utf8)
+            return Data(#"{"versions":{"2.0.9":{"bin":{}},"2.0.26":{"bin":{}},"2.0.27":{"bin":{},"deprecated":"Withdrawn release"},"2.1.0-beta.1":{"bin":{}},"3.0.0":{"bin":{}}}}"#.utf8)
         })
         #expect(version == "2.0.26")
     }

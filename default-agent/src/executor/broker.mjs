@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { writePrivateJSON } from '../config.mjs';
 
 export const supportsExecutorVersion = version => releaseVersion(version) && version.startsWith('2.');
-export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', { major: 2, prerelease: true, fetchImplementation });
+export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', { major: 2, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 export function validateConfiguration(config) {
