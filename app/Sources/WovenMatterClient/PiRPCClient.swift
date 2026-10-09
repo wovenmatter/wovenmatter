@@ -1253,7 +1253,7 @@ public actor PiRPCClient {
         case "compaction_end", "auto_compaction_end":
             if let error = object["errorMessage"] as? String {
                 let safe = ProgramStatus.message(error)?.replacingOccurrences(of: #"https?://[^\s]+"#,
-                    with: "[URL redacted]", options: .regularExpression) ?? "Context compaction failed."
+                    with: "[URL redacted]", options: [.regularExpression, .caseInsensitive]) ?? "Context compaction failed."
                 return [.programStatus(ProgramStatus(state: .working, app: "pi", message: "Context compaction failed"), runID: nil),
                     .activity(AgentRunActivity(id: "pi-compaction", kind: .activity, phase: "end", title: "Context compaction",
                         status: "failed", content: safe, contentIsDelta: false), appendsContent: false)]

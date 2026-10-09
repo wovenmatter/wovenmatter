@@ -779,7 +779,7 @@ struct PiQuestionAndCompactionTests {
           try fixture.emit(["type": "agent_start"])
           if method == "compaction" {
             try fixture.emit(["type": "compaction_start"])
-            try fixture.emit(["type": "compaction_end", "errorMessage": "Failure https://secret.example/token"])
+            try fixture.emit(["type": "compaction_end", "errorMessage": "Failure https://secret.example/token and HTTPS://secret.example/other"])
             try fixture.emit(["type": "message_end", "message": ["role": "assistant", "content": "answer", "stopReason": "error", "errorMessage": "Prior error before abort"]])
             try fixture.emit(["type": "agent_settled", "aborted": true])
           } else {
