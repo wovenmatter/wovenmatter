@@ -90,13 +90,15 @@ if [ "$wm_current" = false ]; then
 fi
 # Require authenticated readiness before publishing the route or deleting the
 # rollback container. Keys stay inside the private payload, never command args.
-python3 - "$wm_payload" <<'PY_READY'
+wm_wait_ready() {
+python3 - "$wm_payload" "$1" <<'PY_READY'
 import json, sys, time, urllib.request
 payload=json.load(open(sys.argv[1]))
+origin='http://127.0.0.1:4312' if sys.argv[2]=='local' else payload['origin'].rstrip('/')
 deadline=time.monotonic()+90
 while True:
     try:
-        request=urllib.request.Request('http://127.0.0.1:4312/v1/apps', headers={'Authorization':'Bearer '+payload['apiKey']})
+        request=urllib.request.Request(origin+'/v1/apps', headers={'Authorization':'Bearer '+payload['apiKey']})
         with urllib.request.urlopen(request, timeout=3) as response:
             assert response.status==200
         break
@@ -104,9 +106,14 @@ while True:
         if time.monotonic()>=deadline: raise SystemExit(69)
         time.sleep(.5)
 PY_READY
+}
+wm_wait_ready local
 # Tailscale Serve is private to the tailnet. Never enable Funnel/public exposure.
 if tailscale serve --bg --https=8443 http://127.0.0.1:4312 >/dev/null 2>&1; then :
 elif sudo -n tailscale serve --bg --https=8443 http://127.0.0.1:4312 >/dev/null 2>&1; then :
 else exit 69; fi
+# Serve accepting configuration does not prove TLS or the private route works.
+# Keep rollback available until the authenticated HTTPS endpoint responds.
+wm_wait_ready private
 wm_healthy=true
 if [ "$wm_previous" = true ]; then $wm_docker rm wovenmatter-executor-previous >/dev/null; fi
