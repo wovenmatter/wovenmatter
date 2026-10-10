@@ -32,6 +32,11 @@ struct InferenceRequestBuilder {
     system.append(contentsOf: sectionOrder.compactMap { sections[$0] })
     let prompt = system.joined(separator: "\n\n"), inventory = toolOrder.compactMap { tools[$0] }
     let messages = transcript.filter { $0["role"] as? String != "system" && !["error", "aborted"].contains($0["stopReason"] as? String ?? "") }
+    // These formatters currently support text-only tool results. Never silently discard
+    // image data or send a partial transcript when a tool returned an image.
+    if ["openai-responses", "openai-completions"].contains(model.api), messages.contains(where: {
+      $0["role"] as? String == "toolResult" && inferenceContent($0).contains { $0["type"] as? String == "image" }
+    }) { throw InferenceError.unsupportedToolImages }
     var body: InferenceObject = ["model": model.id, "stream": true]
     let maxTokens = min(options["maxTokens"] as? Int ?? model.maxTokens, model.maxTokens)
     guard maxTokens > 0 else { throw InferenceError.invalidConfiguration }

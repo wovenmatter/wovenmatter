@@ -66,6 +66,8 @@ Use a separate non-fixture simulator for connected testing; keep the existing fi
 6. Revoke a device on the central Mac. Direct access revocation is queued durably for unreachable workspaces and remains visibly pending until those workspaces reconnect. After a reachable workspace restart, approved encrypted device grants can unlock its configured provider vault without the central Mac; expired borrowed subscription credentials may still require their original account owner to reconnect.
 7. Pair a secondary Mac and switch it to client mode. Its prior library remains on disk. Optionally enable a separate local execution workspace; changing roles or quitting requires pending local work to finish safely.
 
+Direct Responses and Chat Completions connections currently accept text-only tool results. If a tool returns an image, the app reports the limitation before sending a model request; it never silently omits the image. Anthropic and authorized inference-host adapter behavior is unchanged.
+
 Portable tests cover controlled provider streams and real SDK/tool persistence. Live provider accounts, Tailscale ACLs, physical-device suspension, and human UI acceptance are separate checks.
 
 ## First testing session

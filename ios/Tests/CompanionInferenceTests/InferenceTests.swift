@@ -151,6 +151,25 @@ final class InferenceTests: XCTestCase {
     let requests = await transport.requests
     XCTAssertEqual(requests.count, 1)
   }
+  func testUnsupportedDirectToolImagesFailBeforeAnyProviderRequest() async throws {
+    for (provider, api) in [("openai", "openai-responses"), ("openrouter", "openai-completions")] {
+      let model = try XCTUnwrap(InferenceCatalog.models(provider: provider).first { $0.api == api })
+      let connection = InferenceConnection(name: "Fixture", provider: provider, route: .direct, modelID: model.id)
+      let transport = FixtureTransport([])
+      let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport)
+      let request = try inferenceJSONString(["model": ["id": model.id, "provider": provider], "context": ["messages": [
+        ["role": "toolResult", "toolCallId": "read-image", "content": [
+          ["type": "text", "text": "Image follows"], ["type": "image", "mimeType": "image/png", "data": "Zml4dHVyZQ=="]
+        ]]
+      ]]])
+      do {
+        try await service.stream(requestJSON: request, emit: { _ in XCTFail("Unsupported tool image produced a model event") })
+        XCTFail("Unsupported tool image was silently discarded")
+      } catch { XCTAssertEqual(error as? InferenceError, .unsupportedToolImages) }
+      let requests = await transport.requests
+      XCTAssertTrue(requests.isEmpty, "Unsupported content must be rejected before any HTTP request")
+    }
+  }
   func testAdapterRequiresTerminalEventEvenWhenTransportEndsNormally() async throws {
     let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m")
     let transport = FixtureTransport([.response(200), .line("{\"type\":\"start\",\"partial\":{\"content\":[]}}")])
