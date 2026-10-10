@@ -242,10 +242,14 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   async function perform(command) {
     if (command.kind === 'createSession') {
       if (db.prepare('SELECT id FROM conversations WHERE id=?').get(command.conversationID)) throw fail(409, 'Conversation already exists.')
-      const selected = command.runtimeKind ?? 'default_agent'
-      const native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: command.providerID, workspaceID: identity.id })
+      const providers = await runtime.providers()
+      const route = command.providerID ?? command.routeID ?? command.runtimeKind ?? 'default_agent'
+      const provider = providers.find(item => item.id === route)
+      if (!provider?.available || provider.canStart === false || (command.runtimeKind && command.runtimeKind !== provider.runtimeKind)) throw fail(409, 'The selected agent route is unavailable or does not match its runtime.')
+      const selected = provider.runtimeKind
+      const native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id })
       const record = { native, pending: [], conversation: { id: command.conversationID, title: 'New conversation', preview: '', runtimeKind: selected,
-        ...(command.providerID ? {providerID: command.providerID} : {}), routeID: identity.id, workspaceID: identity.id, updatedAt: date() },
+        providerID: provider.id, routeID: identity.id, workspaceID: identity.id, ...(command.folderID ? {folderID: command.folderID} : {}), updatedAt: date() },
         transcript: { conversationID: command.conversationID, messages: [], activities: [] } }
       return transaction(() => { publish(record); return receipt(command, 'completed') })
     }
@@ -405,10 +409,18 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     conversations: () => db.prepare('SELECT body FROM conversations').all().map(row => JSON.parse(row.body).conversation),
     transcript: (id, before) => {
       const value = getRecord(id).transcript
-      const offset = before == null ? value.messages.length : Number(before)
-      if (!Number.isSafeInteger(offset) || offset < 0 || offset > value.messages.length) throw fail(400, 'Invalid transcript cursor.')
-      const start = Math.max(0, offset - 40)
-      return {...value,messages:value.messages.slice(start,offset),activities:value.activities.slice(-40),...(start ? {olderCursor:String(start)} : {})}
+      let end = {messages:value.messages.length,activities:value.activities.length}
+      if (before != null) {
+        try {
+          if (typeof before !== 'string' || before.length > 2048) throw Error()
+          end = /^\d+$/.test(before) ? {...end,messages:Number(before)} : JSON.parse(Buffer.from(before,'base64url').toString('utf8'))
+        } catch { throw fail(400, 'Invalid transcript cursor.') }
+      }
+      if (!end || !Number.isSafeInteger(end.messages) || end.messages < 0 || end.messages > value.messages.length
+        || !Number.isSafeInteger(end.activities) || end.activities < 0 || end.activities > value.activities.length) throw fail(400, 'Invalid transcript cursor.')
+      const start = {messages:Math.max(0,end.messages-40),activities:Math.max(0,end.activities-40)}
+      return {...value,messages:value.messages.slice(start.messages,end.messages),activities:value.activities.slice(start.activities,end.activities),
+        ...(start.messages || start.activities ? {olderCursor:Buffer.from(JSON.stringify(start)).toString('base64url')} : {})}
     },
     interactions: () => db.prepare('SELECT body FROM conversations').all().flatMap(row => JSON.parse(row.body).pending),
     providers: () => runtime.providers(),

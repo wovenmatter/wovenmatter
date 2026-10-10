@@ -169,3 +169,39 @@ test('an active native run uses its pinned descriptor across a catalog refresh a
     assert.equal(engine.resolveModel(config.defaultModel).name, 'Refreshed');
   } finally { release(); await record.session.dispose(); }
 });
+
+test('an attached child keeps its configured saved model when refresh removes that catalog entry', { timeout: 15000 }, async t => {
+  const root = await directory(t);
+  const config = { providers: ['openai'], defaultModel: 'openai/fixture-chat' };
+  const engine = await new DefaultAgentEngine({ cwd: root, directory: root, config,
+    credentials: { openai: { type: 'api_key', key: 'offline-test-only' } },
+    claude: { models: [], loadModels: async () => {} } }).initialize();
+  engine.publishProviderModels('openai', [descriptor()]);
+  await writeFile(join(root, 'fixture.txt'), 'fixture');
+  const record = await engine.create();
+  t.after(() => record.session.dispose());
+  let parentCalls = 0, childCalls = 0, followUp = false;
+  engine.runtime.streamSimple = (model, input, options) => {
+    const child = options.wovenNativeContext.sessionID !== record.session.sessionId;
+    const call = child ? ++childCalls : ++parentCalls;
+    if (child && call === 1) engine.publishProviderModels('openai', [descriptor({ id: 'replacement', name: 'Replacement' })]);
+    const content = child && call === 1 ? [{ type: 'toolCall', id: 'read-fixture', name: 'read', arguments: { path: 'fixture.txt' } }]
+      : !child && call === 1 ? [{ type: 'toolCall', id: 'delegate', name: 'subagent', arguments: followUp ? { action: 'message', name: 'reader', message: 'Use your pinned model again.' } : { action: 'spawn', name: 'reader', task: 'Read the fixture.' } }]
+      : [{ type: 'text', text: 'Completed' }];
+    const message = { role: 'assistant', content, provider: model.provider, api: model.api, model: model.id, timestamp: Date.now(), stopReason: content[0].type === 'toolCall' ? 'toolUse' : 'stop',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    const output = createAssistantMessageEventStream();
+    output.push({ type: 'start', partial: message }); output.push({ type: 'done', reason: message.stopReason, message }); output.end(message);
+    return output;
+  };
+  await engine.prompt(record, 'Delegate the fixture reading', () => {});
+  assert.equal(childCalls, 2);
+  assert.equal(record.session.model.id, 'fixture-chat');
+  followUp = true; parentCalls = 0;
+  await engine.prompt(record, 'Follow up with the existing child', () => {});
+  assert.equal(childCalls, 3);
+  await engine.apply({ config: { ...config, providers: [] } });
+  parentCalls = 0;
+  await assert.rejects(engine.prompt(record, 'Follow up after disabling the connection', () => {}), /No configured connection/);
+  assert.equal(childCalls, 3);
+});

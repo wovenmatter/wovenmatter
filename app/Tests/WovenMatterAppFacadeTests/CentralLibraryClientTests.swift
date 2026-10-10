@@ -6,6 +6,31 @@ import WovenMatterCompanion
 
 @MainActor @Suite(.serialized)
 struct CentralLibraryClientTests {
+    @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MobileStore(file: root.appending(path: "library.json"))
+        try await store.cache(.init(conversationID: "A", messages: [.init(id: "latest-a", conversationID: "A", role: "assistant", content: "A")],
+            activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "running") }, olderCursor: "older"))
+        try await store.cache(.init(conversationID: "B", messages: [.init(id: "latest-b", conversationID: "B", role: "assistant", content: "B")]))
+        let transport = MacClientFakeCentral()
+        let model = CentralLibraryClientModel(store: store, transport: transport)
+        await model.initialize(); model.selectedConversationID = "A"
+        let loading = Task { await model.olderMessages() }
+        for _ in 0..<100 { if await transport.historyWaiting { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await transport.historyWaiting)
+        model.selectedConversationID = "B"
+        await transport.releaseHistory(); await loading.value
+        #expect(model.transcript?.messages.map(\.id) == ["latest-b"])
+        model.selectedConversationID = "A"
+        #expect(model.transcript?.messages.map(\.id) == ["older-a", "latest-a"])
+        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
+        try await store.cache(.init(conversationID: "A", activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "completed") }))
+        await model.reload()
+        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
+        #expect(model.transcript?.activities.last?.status == "completed")
+    }
+
     @Test func offlineReplicaEditsSurviveRelaunchAndSync() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -77,6 +102,15 @@ struct CentralLibraryClientTests {
 }
 
 private actor MacClientFakeCentral: CompanionTransport {
+    var historyWaiting = false
+    var historyContinuation: CheckedContinuation<Void, Never>?
+    func releaseHistory() { historyContinuation?.resume(); historyContinuation = nil }
+    func transcript(_ id: String, before: String) async -> CompanionTranscript {
+        historyWaiting = true
+        await withCheckedContinuation { historyContinuation = $0 }
+        return .init(conversationID: id, messages: [.init(id: "older-a", conversationID: id, role: "assistant", content: "Older A")],
+            activities: (0..<5).map { .init(id: "tool-\($0)", runID: "run", title: "Older", status: "completed") })
+    }
     var notes: [String: CompanionNote] = [:]
     var folders: [String: CompanionFolder] = [:]
     var receipts: [String: CompanionCommandReceipt] = [:]

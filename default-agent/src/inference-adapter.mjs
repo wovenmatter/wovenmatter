@@ -47,9 +47,15 @@ export function createInferenceAdapter(engine) {
       || !validID(request?.accountID) || !Array.isArray(request?.context?.messages)
       || Buffer.byteLength(JSON.stringify(request)) > 8 * 1024 * 1024) throw new DefaultAgentError('Invalid client inference request.');
     const conversationKey = hash({ principalID, conversation: request.scope.conversationID });
-    const modelPath = join(root, conversationKey, 'selected-model.json');
-    const savedModel = await readJSON(modelPath, null);
     const reference = `${request.model?.provider}/${request.model?.id}`;
+    // An explicit model switch is allowed between turns. Retain each selection
+    // independently so returning to it or replaying a receipt needs no catalog.
+    const modelPath = join(root, conversationKey, `selected-model-${hash(reference)}.json`);
+    let savedModel = await readJSON(modelPath, null);
+    if (!savedModel) {
+      const previous = await readJSON(join(root, conversationKey, 'selected-model.json'), null);
+      if (previous && `${previous.provider}/${previous.id}` === reference) savedModel = previous;
+    }
     const model = engine.ensureModel ? await engine.ensureModel(reference, savedModel) : engine.runtime.getModels().find(model => model.id === request.model?.id && model.provider === request.model?.provider);
     if (!model || !engine.config.providers.includes(model.provider)) throw new DefaultAgentError('The selected model is unavailable. No model fallback was attempted.');
     if (!savedModel) await writePrivateJSON(modelPath, model);

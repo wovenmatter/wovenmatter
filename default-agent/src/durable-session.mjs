@@ -112,7 +112,7 @@ export async function openDurableSession(engine, id, requested) {
     };
     const currentAccount = async (model, scope = record) => {
       if (!model) throw new DefaultAgentError('The selected model is unavailable. Choose a model in Settings.');
-      if ((scope !== record || record.resuming) && !engine.modelOptions().some(option => option.id === `${model.provider}/${model.id}`)) throw new DefaultAgentError('The pinned native model or connection is no longer enabled. No fallback was attempted.');
+      if ((scope !== record || record.resuming) && !engine.isModelEnabled(model)) throw new DefaultAgentError('The pinned native model or connection is no longer enabled. No fallback was attempted.');
       const accounts = await engine.credentials.candidates(model.provider);
       if (scope === record && record.resuming && !record.accountID) throw new DefaultAgentError('The interrupted native run has no pinned connection. Stop it before starting a new input.');
       const scoped = engine.credentials.context.getStore();

@@ -12,9 +12,11 @@ struct FederatedConversationPane: View {
     let sendInProgress: Bool
     let onSend: () -> Void
     @State private var olderMessages: [CompanionMessage] = []
+    @State private var olderActivities: [CompanionActivity] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
     @State private var hasLoadedEarlier = false
+    @State private var historyGeneration = UUID()
     private var snapshot: FederatedExecutionSnapshot? { model.federatedExecutionSnapshots[conversation.id] }
     private var runID: String? { snapshot?.transcript?.activeRunID }
     private var messages: [CompanionMessage] {
@@ -23,6 +25,11 @@ struct FederatedConversationPane: View {
         }
         let ids = Set(current.map(\.id))
         return olderMessages.filter { !ids.contains($0.id) } + current
+    }
+    private var activities: [CompanionActivity] {
+        let current = snapshot?.transcript?.activities ?? []
+        let ids = Set(current.map(\.id))
+        return olderActivities.filter { !ids.contains($0.id) } + current
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -47,7 +54,7 @@ struct FederatedConversationPane: View {
                                     .textSelection(.enabled)
                             }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
                         }
-                        ForEach(snapshot?.transcript?.activities ?? []) { activity in
+                        ForEach(activities) { activity in
                             DisclosureGroup(activity.title) {
                                 if let detail = activity.detail { Text(detail).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                             }.font(.subheadline)
@@ -94,10 +101,12 @@ struct FederatedConversationPane: View {
         .onChange(of: snapshot?.online) { _, _ in
             // Switching between the owner's live history and the central archive
             // also switches the opaque pagination cursor's authority.
-            olderMessages = []; olderCursor = nil; hasLoadedEarlier = false
+            olderMessages = []; olderActivities = []; olderCursor = nil; hasLoadedEarlier = false
+            historyGeneration = UUID(); loadingOlder = false
         }
         .task(id: conversation.id) {
-            olderMessages = []; olderCursor = nil; hasLoadedEarlier = false
+            olderMessages = []; olderActivities = []; olderCursor = nil; hasLoadedEarlier = false
+            historyGeneration = UUID(); loadingOlder = false
             while !Task.isCancelled {
                 await model.refreshFederatedConversation(conversation.id)
                 do { try await Task.sleep(for: .seconds(snapshot?.online == true ? 1 : 5)) } catch { return }
@@ -114,11 +123,15 @@ struct FederatedConversationPane: View {
         }
     }
     private func loadEarlier(_ cursor: String) async {
-        loadingOlder = true; defer { loadingOlder = false }
-        await model.actOnFederatedConversation(.earlier(conversationID: conversation.id, before: cursor), conversationID: conversation.id)
-        if let page = snapshot?.transcript {
+        let generation = historyGeneration
+        loadingOlder = true; defer { if historyGeneration == generation { loadingOlder = false } }
+        let result = await model.actOnFederatedConversation(.earlier(conversationID: conversation.id, before: cursor), conversationID: conversation.id)
+        guard historyGeneration == generation else { return }
+        if let page = result?.transcript {
             let ids = Set(olderMessages.map(\.id))
             olderMessages = page.messages.filter { !ids.contains($0.id) } + olderMessages
+            let activityIDs = Set(olderActivities.map(\.id))
+            olderActivities = page.activities.filter { !activityIDs.contains($0.id) } + olderActivities
             olderCursor = page.olderCursor; hasLoadedEarlier = true
         }
         await model.refreshFederatedConversation(conversation.id)

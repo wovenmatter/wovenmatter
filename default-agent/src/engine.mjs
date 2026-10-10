@@ -40,7 +40,7 @@ export class DefaultAgentEngine {
     const resolveAuth = this.runtime.getAuth.bind(this.runtime);
     this.runtime.getAuth = async (model, options = {}) => {
       const provider = typeof model === 'string' ? model : model.provider;
-      if (typeof model === 'object' && providerEndpoints[provider]) validatePublicModel(model);
+      if (typeof model === 'object') this.validateModelDestination(model);
       if (isClaude(provider + '/')) return resolveAuth(model, options);
       let credential = await this.credentials.read(provider);
       if (credential?.borrowed) {
@@ -121,7 +121,7 @@ export class DefaultAgentEngine {
   async ensureModel(reference, selectedModel) {
     if (selectedModel) {
       if (modelRef(selectedModel) !== reference) throw new DefaultAgentError('The saved model does not match this conversation.');
-      if (providerEndpoints[selectedModel.provider]) validatePublicModel(selectedModel);
+      this.validateModelDestination(selectedModel);
       return structuredClone(selectedModel);
     }
     let model = this.resolveModel(reference);
@@ -139,6 +139,15 @@ export class DefaultAgentEngine {
     if (!model && reference) throw new DefaultAgentError('The selected model is unavailable. Refresh its provider or choose a model explicitly.');
     return model;
   }
+  validateModelDestination(model) {
+    if (providerEndpoints[model.provider]) validatePublicModel(model);
+    else if (model.provider.startsWith('local-server-')) {
+      const server = this.config.customServers.find(server => server.id === model.provider);
+      if (!server || model.baseUrl !== server.url || model.api !== 'openai-responses') {
+        throw new DefaultAgentError('The selected model server endpoint changed. Start a new conversation on the updated connection.');
+      }
+    }
+  }
   providerName(id) { return providerNames[id] ?? this.config.customServers.find(s => s.id === id)?.url ?? id; }
   async status({ signal } = {}) {
     signal?.throwIfAborted();
@@ -153,6 +162,11 @@ export class DefaultAgentEngine {
     const defaultModel = [this.config.defaultModel, all[0]?.id].find(id => all.some(m => m.id === id));
     if (defaultModel && !ids.includes(defaultModel)) ids.unshift(defaultModel);
     return ids.flatMap(id => all.filter(m => m.id === id));
+  }
+  isModelEnabled(model) {
+    const reference = modelRef(model);
+    return this.config.providers.includes(model.provider) &&
+      (this.config.models.includes(reference) || this.config.defaultModel === reference || this.modelOptions().some(option => option.id === reference));
   }
   normalizeSelection(record) {
     if (record.codeModeState) {

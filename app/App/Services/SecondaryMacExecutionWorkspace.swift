@@ -122,9 +122,12 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             }
         } else { try await reconcileLibrary() }
         let receipt = try await model.companionCommands.execute(command, deviceID: command.deviceID)
-        if let id = receipt.conversationID {
-            _ = try await origin.append(workspaceID: descriptor.id, receipt: receipt)
-            if request.kind == .createSession { try await recordConversation(id) }
+        if let id = receipt.conversationID,
+           var conversation = try await database.companionSnapshot().conversations.first(where: { $0.id == id }) {
+            conversation.workspaceID = descriptor.id; conversation.libraryID = descriptor.libraryID
+            // Publish identity before the receipt in one journal transaction.
+            // A rejected creation has no conversation and stays in the command ledger.
+            _ = try await origin.append(workspaceID: descriptor.id, conversation: conversation, receipt: receipt)
         }
         try await capture()
         return receipt
@@ -209,12 +212,6 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             if records.count < 32 { return }
         }
     }
-    private func recordConversation(_ id: String) async throws {
-        if let conversation = try await database.companionSnapshot().conversations.first(where: { $0.id == id }) {
-            _ = try await origin.append(workspaceID: descriptor.id, conversation: conversation)
-        }
-    }
-
     /// Reconcile outbound tool edits before accepting a fresh inbound projection.
     /// A concurrent replica edit goes through MobileStore's revision ancestry and
     /// produces a retained conflict instead of overwriting either version.

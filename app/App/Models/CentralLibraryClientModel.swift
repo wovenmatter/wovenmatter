@@ -106,7 +106,9 @@ final class CentralLibraryClientModel {
         guard var earlier = olderTranscripts[id], let current else { return current }
         let ids = Set(current.messages.map(\.id))
         earlier.messages = earlier.messages.filter { !ids.contains($0.id) } + current.messages
-        earlier.activities = current.activities; earlier.activeRunID = current.activeRunID
+        let activityIDs = Set(current.activities.map(\.id))
+        earlier.activities = earlier.activities.filter { !activityIDs.contains($0.id) } + current.activities
+        earlier.activeRunID = current.activeRunID
         return earlier
     }
     var activeRunID: String? { transcript?.activeRunID ?? selectedConversation?.activeRunID }
@@ -436,15 +438,17 @@ final class CentralLibraryClientModel {
         catch { /* The persisted transcript remains readable offline. */ }
     }
     func olderMessages() async {
-        guard let id = selectedConversationID, let cursor = transcript?.olderCursor else { return }
+        guard let id = selectedConversationID, let current = transcript, let cursor = current.olderCursor else { return }
         do {
             let page: CompanionTranscript
             if let owner = executionOwner(for: id), let client = directClients[owner] { page = try await client.earlierTranscript(id, before: cursor) }
             else if let engine { page = try await engine.earlierTranscript(id, before: cursor) }
             else { throw MobileConnectionError.offline }
-            var combined = transcript ?? page
+            var combined = olderTranscripts[id] ?? current
             let ids = Set(combined.messages.map(\.id))
             combined.messages = page.messages.filter { !ids.contains($0.id) } + combined.messages
+            let activityIDs = Set(combined.activities.map(\.id))
+            combined.activities = page.activities.filter { !activityIDs.contains($0.id) } + combined.activities
             combined.olderCursor = page.olderCursor; olderTranscripts[id] = combined
         } catch { errorMessage = error.localizedDescription }
     }

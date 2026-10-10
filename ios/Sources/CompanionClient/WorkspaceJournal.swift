@@ -33,7 +33,7 @@ public struct WorkspaceJournalState: Codable, Equatable, Sendable {
 /// origin records survive process death and lost central acknowledgements.
 public actor WorkspaceJournal {
   public enum Failure: Error, LocalizedError {
-    case incompatibleStore, wrongLibrary, replayGap, reusedIdentity, invalidAcknowledgement, storageFull, deletedWorkspace
+    case incompatibleStore, wrongLibrary, replayGap, reusedIdentity, invalidAcknowledgement, storageFull, deletedWorkspace, recordTooLarge
     public var errorDescription: String? {
       switch self {
       case .incompatibleStore: "This workspace journal requires a newer application."
@@ -43,6 +43,7 @@ public actor WorkspaceJournal {
       case .invalidAcknowledgement: "The central library returned an incomplete acknowledgement. History remains saved locally."
       case .storageFull: "The local execution history is full. Saved work has been retained."
       case .deletedWorkspace: "This execution workspace has been removed."
+      case .recordTooLarge: "This execution history record exceeds the synchronization limit."
       }
     }
   }
@@ -84,7 +85,10 @@ public actor WorkspaceJournal {
   @discardableResult public func append(workspaceID: String, conversation: CompanionConversation? = nil,
     transcript: CompanionTranscript? = nil, receipt: CompanionCommandReceipt? = nil) throws -> [CompanionJournalEntry] {
     var recorded: [CompanionJournalEntry] = []
-    var transcript = transcript
+    var conversation = conversation
+    let preview = String((conversation?.preview ?? "").unicodeScalars.prefix(512))
+    conversation?.preview = preview
+    var transcript = transcript.map { Self.boundedRows($0, previous: state.transcripts[$0.conversationID]) }
     // Streaming UI rows are transient. The runtime emits their durable final
     // messages with stable native IDs; retaining both would duplicate output.
     transcript?.messages.removeAll { $0.status == "streaming" }
@@ -103,7 +107,12 @@ public actor WorkspaceJournal {
         try Self.insert(entry, into: &next); next.pendingEventIDs.insert(entry.eventID); recorded.append(entry)
       }
       if let conversation, next.conversations[conversation.id] != conversation { try add(.conversation, id: conversation.id, runID: conversation.activeRunID) }
-      if let transcript, next.transcripts[transcript.conversationID] != transcript { try add(.transcript, id: transcript.conversationID, runID: transcript.activeRunID) }
+      if let delta = transcript {
+        for page in try Self.transcriptPages(delta) {
+          transcript = page
+          try add(.transcript, id: page.conversationID, runID: page.activeRunID)
+        }
+      }
       if let receipt, let id = receipt.conversationID { try add(.receipt, id: id, runID: receipt.runID) }
     }
     return recorded
@@ -115,8 +124,60 @@ public actor WorkspaceJournal {
   }
   public func restoreConversation(workspaceID: String, conversation: CompanionConversation) throws {
     guard state.deletedConversationIDs.contains(conversation.id) else { return }
+    var conversation = conversation
+    conversation.preview = String(conversation.preview.unicodeScalars.prefix(512))
     try record(.init(workspaceID: workspaceID, originSequence: (state.originSequences[workspaceID] ?? 0) + 1,
       conversationID: conversation.id, kind: .restoredConversation, conversation: conversation))
+  }
+  // Rows may contain an entire tool result. Split by Unicode scalar so even
+  // JSON-escaped text is bounded, with stable IDs across capture/replay. Clear
+  // any old trailing parts when a mutable activity becomes shorter.
+  private static func parts(_ text: String, id: String, previousIDs: [String]) -> [(String, String)] {
+    let prefix = "chunk-" + SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined() + "-"
+    var values: [String] = [], start = text.unicodeScalars.startIndex
+    while start < text.unicodeScalars.endIndex {
+      let end = text.unicodeScalars.index(start, offsetBy: 16_384, limitedBy: text.unicodeScalars.endIndex) ?? text.unicodeScalars.endIndex
+      values.append(String(text.unicodeScalars[start..<end])); start = end
+    }
+    if values.isEmpty { values = [""] }
+    let count = max(values.count, (previousIDs.compactMap { $0.hasPrefix(prefix) ? Int($0.dropFirst(prefix.count)) : nil }.max() ?? 0) + 1)
+    return (0..<count).map { index in (index == 0 ? id : prefix + String(index), index < values.count ? values[index] : "") }
+  }
+  private static func boundedRows(_ value: CompanionTranscript, previous: CompanionTranscript?) -> CompanionTranscript {
+    var value = value
+    let messageIDs = previous?.messages.map(\.id) ?? [], activityIDs = previous?.activities.map(\.id) ?? []
+    value.messages = value.messages.flatMap { row in
+      parts(row.content, id: row.id, previousIDs: messageIDs).map { id, content in
+        var row = row; row.id = id; row.content = content; return row
+      }
+    }
+    value.activities = value.activities.flatMap { row in
+      parts(row.detail ?? "", id: row.id, previousIDs: activityIDs).map { id, detail in
+        var row = row; row.id = id; row.title = String(row.title.unicodeScalars.prefix(1_024))
+        row.detail = row.detail == nil && detail.isEmpty ? nil : detail; return row
+      }
+    }
+    return value
+  }
+  private static func transcriptPages(_ delta: CompanionTranscript) throws -> [CompanionTranscript] {
+    var pages: [CompanionTranscript] = [], page = delta
+    page.messages = []; page.activities = []
+    var bytes = 0
+    let budget = CompanionFederationProtocol.maximumEntryBytes / 2
+    for row in delta.messages {
+      let size = try JSONEncoder().encode(row).count
+      guard size < budget else { throw Failure.recordTooLarge }
+      if bytes + size > budget { pages.append(page); page.messages = []; page.activities = []; bytes = 0 }
+      page.messages.append(row); bytes += size
+    }
+    for row in delta.activities {
+      let size = try JSONEncoder().encode(row).count
+      guard size < budget else { throw Failure.recordTooLarge }
+      if bytes + size > budget { pages.append(page); page.messages = []; page.activities = []; bytes = 0 }
+      page.activities.append(row); bytes += size
+    }
+    pages.append(page)
+    return pages
   }
   /// Preserve complete native history, without truncating it to a UI transcript.
   /// A recordID identifies one immutable native record in the workspace. The
@@ -197,6 +258,7 @@ public actor WorkspaceJournal {
   }
   private static func commandKey(_ workspaceID: String, _ commandID: String) -> String { workspaceID + ":" + commandID }
   private static func insert(_ entry: CompanionJournalEntry, into next: inout WorkspaceJournalState) throws {
+    guard try JSONEncoder().encode(entry).count <= CompanionFederationProtocol.maximumEntryBytes else { throw Failure.recordTooLarge }
     if let existing = next.entries[entry.eventID] {
       guard existing == entry else { throw Failure.reusedIdentity }; return
     }

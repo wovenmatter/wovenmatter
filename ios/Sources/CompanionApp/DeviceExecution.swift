@@ -372,7 +372,7 @@ extension CompanionModel {
     guard record.isTrashed != true else { return }
     let conversation = CompanionConversation(id: record.id, title: record.title, folderID: record.folderID,
       providerID: "pi-durable-device", routeID: deviceWorkspaceID, runtimeKind: "pi", activeRunID: record.status == "running" ? record.runID : nil,
-      preview: transcript?.messages.last?.content ?? state.conversations[record.id]?.preview ?? "", updatedAt: record.updatedAt, isPinned: record.isPinned)
+      preview: String((transcript?.messages.last?.content ?? state.conversations[record.id]?.preview ?? "").unicodeScalars.prefix(512)), updatedAt: record.updatedAt, isPinned: record.isPinned)
     try await store?.adoptExecution(conversation: conversation, transcript: transcript)
     // The durable workspace journal also retains history for central synchronization.
     try await recordDeviceHistory(conversation: conversation, transcript: transcript)

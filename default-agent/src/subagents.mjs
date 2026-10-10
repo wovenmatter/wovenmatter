@@ -3,7 +3,7 @@ import { Type } from 'typebox';
 import { AgentDoc, InboxDoc, LiveDoc, configure, defineDoc, defineTask, defineTool } from '@earendil-works/pi-durable';
 import { DefaultAgentError, operationErrorMessage } from './config.mjs';
 import { credentialRouteIdentity } from './native-context.mjs';
-import { catalogSubagentRoutes, publicSubagentRoute, resolveSubagentRoute, validatePinnedSubagentAccount } from './subagent-routes.mjs';
+import { catalogSubagentRoutes, publicSubagentRoute, resolveSubagentRoute, pinnedSubagentRoute } from './subagent-routes.mjs';
 import { reportProgramStatus } from './program-status.mjs';
 
 // These documents describe native child ownership and the selected connection.
@@ -315,11 +315,7 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
           model: args.model, connection: args.connection, thinking: args.thinking, userInstruction: args.userInstruction, trustedInstructions: await trusted() });
         else {
           const pin = metadata.get(found.conversationId) ?? await api.snapshot(ChildContext, found.conversationId, ctx);
-          const supported = (await catalogSubagentRoutes(engine, { parentRoute: route })).find(value => value.provider === pin.provider && value.modelId === pin.modelId && value.accountID === pin.accountID);
-          if (!supported || !supported.supportedThinking.includes(pin.thinking)) throw new DefaultAgentError('The child\'s pinned model or thinking level is no longer enabled. It will not change models or connections.');
-          const model = engine.resolveModel(`${pin.provider}/${pin.modelId}`);
-          const account = await validatePinnedSubagentAccount(engine, model, pin, record);
-          chosen = { ...supported, model, account, thinking: pin.thinking };
+          chosen = await pinnedSubagentRoute(engine, pin, record);
         }
       } catch (error) { return reply(operationErrorMessage(error), { ...(error.code ? { code: error.code } : {}), ...(error.choices ? { choices: error.choices } : {}) }, true); }
 

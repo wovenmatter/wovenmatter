@@ -6,6 +6,7 @@ public enum CompanionFederationProtocol {
   public static let capability = "library.federation.v1"
   public static let maximumBatchEntries = 200
   public static let maximumBatchBytes = 8 * 1_024 * 1_024
+  public static let maximumEntryBytes = 1_024 * 1_024
   public static let maximumArtifactChunkBytes = 1_024 * 1_024
 }
 

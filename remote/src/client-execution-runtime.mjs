@@ -14,7 +14,7 @@ const deferred = () => { let resolve,reject; const promise = new Promise((a,b)=>
 // ownership over the run or replaying a prompt on reconnect.
 export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog, workspaceRoot, harnessStatus,
   environment, hermes, instances, isExecutionEnabled = () => true }) {
-  const channels = new Map(), builtIn = new Map(), nativeJobs = new Map()
+  const channels = new Map(), builtIn = new Map(), nativeJobs = new Map(), activeRuns = new Map()
   const nativeExecutor = createNativeTaskExecutor({workspaceRoot,environment,hermes,instances})
   const nativeSessions = createNativeClientSessions({workspaceRoot,environment,hermes,instances})
   let closed = false
@@ -164,12 +164,22 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     await attach(result,runtimeKind)
     return result
   }
-  async function run({native,runtimeKind,command,publish,interaction}) {
+  async function run(options) {
+    const fence = { stopped: false, stopping: null }
+    activeRuns.set(options.command.runID, fence)
+    try { return await runAccepted(options, fence) }
+    finally { activeRuns.delete(options.command.runID) }
+  }
+  function requireActive(fence) {
+    if (closed || fence.stopped) throw fail('This run stopped before native dispatch.')
+  }
+  async function runAccepted({native,runtimeKind,command,publish,interaction}, fence) {
     if(!isExecutionEnabled())throw fail('Background execution is disabled for this workspace.')
     if(runtimeKind==='default_agent') {
       const job={native,command};builtIn.set(command.runID,job)
       try {
         await ensureBuiltIn(native)
+        await fence.stopping?.promise; requireActive(fence)
         publish({sessionUpdate:'woven_execution_binding',native})
         const reply=await defaultAgent.invoke({operationID:command.runID,method:'session/prompt',attachmentToken:native.attachmentToken,
           params:{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,wovenInputID:command.commandID}}})
@@ -223,6 +233,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
           return snapshot.entries.at(-1)?.id
         }
         const cursor=await captureEntries(false)
+        await fence.stopping?.promise; requireActive(fence)
         await rpc(channel,'prompt',{message:command.text,_meta:{wovenRunID:command.runID}},command.commandID)
         await completion.promise
         await archive.drain()
@@ -230,6 +241,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       }
       else await Promise.race([(async()=>{
         let failure
+        await fence.stopping?.promise; requireActive(fence)
         try {await rpc(channel,'session/prompt',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID}},command.commandID)} catch(error){failure=error}
         while(!closed&&!channel.stopped&&(channel.busy||channel.pendingInputs))await delay(25)
         if(closed||channel.stopped)throw fail('The native workspace session stopped.')
@@ -237,7 +249,15 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       })(),completion.promise])
     } finally {await archive?.close();channel.run=null;channel.callbacks.clear()}
   }
-  async function stop({native,runtimeKind,command}) {
+  async function stop(options) {
+    const fence = activeRuns.get(options.command.runID), stopping = deferred()
+    if (fence) fence.stopping = stopping
+    try {
+      await stopNative(options)
+      if (fence) fence.stopped = true
+    } finally { if (fence) fence.stopping = null; stopping.resolve() }
+  }
+  async function stopNative({native,runtimeKind,command}) {
     if(runtimeKind==='default_agent')return invoke(native,'session/cancel',{})
     if(['hermes','opencode'].includes(runtimeKind)){const job=nativeJobs.get(command.runID);if(!job)throw fail('The native run is no longer active.');job.controller.abort();return}
     const channel=await attach(native,runtimeKind)
@@ -333,5 +353,5 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     return isExecutionEnabled()?values:values.map(value=>({...value,available:false,canStart:false,unavailableReason:'Background execution is disabled for this workspace.'}))
   }
   return {create,adopt,run,stop,steer,respond,providers,settings,configure,
-    async capabilities({native,runtimeKind}){const value=(await providers()).find(item=>item.runtimeKind===runtimeKind);return value&&(['codex','claude_code'].includes(runtimeKind)?{...value,canSteer:native.steeringSupported===true,activeInputMode:native.steeringSupported?'steer':'notNegotiated'}:value)},async cancelActive(){for(const job of nativeJobs.values())job.controller.abort();await Promise.all([defaultAgent.cancelActive(),durableACP.stopAll()])},async close(){closed=true;for(const channel of channels.values()){channel.stopped=true;const error=fail('The native workspace service is shutting down.');for(const request of channel.pending.values())request.reject(error);channel.pending.clear();channel.run?.completion.reject(error)}for(const job of nativeJobs.values())job.controller.abort();await defaultAgent.cancelActive();await durableACP.stopAll();await Promise.allSettled([...channels.values()].map(channel=>channel.pump))}}
+    async capabilities({native,runtimeKind}){const value=(await providers()).find(item=>item.runtimeKind===runtimeKind);return value&&(['codex','claude_code'].includes(runtimeKind)?{...value,canSteer:native.steeringSupported===true,activeInputMode:native.steeringSupported?'steer':'notNegotiated'}:value)},async cancelActive(){for(const fence of activeRuns.values())fence.stopped=true;for(const job of nativeJobs.values())job.controller.abort();await Promise.all([defaultAgent.cancelActive(),durableACP.stopAll()])},async close(){closed=true;for(const channel of channels.values()){channel.stopped=true;const error=fail('The native workspace service is shutting down.');for(const request of channel.pending.values())request.reject(error);channel.pending.clear();channel.run?.completion.reject(error)}for(const job of nativeJobs.values())job.controller.abort();await defaultAgent.cancelActive();await durableACP.stopAll();await Promise.allSettled([...channels.values()].map(channel=>channel.pump))}}
 }

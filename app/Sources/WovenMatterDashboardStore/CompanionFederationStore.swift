@@ -102,7 +102,7 @@ extension WorkspaceDatabaseConnection {
       for entry in batch.entries {
         let workspace = try federationAuthorizedWorkspaceUnlocked(entry.workspaceID, deviceID: deviceID)
         guard federationID(entry.eventID), federationID(entry.conversationID), entry.originSequence > 0,
-              entry.runID.map(federationID) ?? true, try JSONEncoder().encode(entry).count <= 1_024 * 1_024 else {
+              entry.runID.map(federationID) ?? true, try JSONEncoder().encode(entry).count <= CompanionFederationProtocol.maximumEntryBytes else {
           throw federationError("invalid_event", "Execution history requires stable UUID identities and bounded records.")
         }
         let fingerprint = try companionFingerprint(entry)

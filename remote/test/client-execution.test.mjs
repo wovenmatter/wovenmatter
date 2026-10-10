@@ -11,7 +11,7 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve))
 function fixture(t) {
   const directory=mkdtempSync(join(tmpdir(),'wm-direct-'))
   const runs=[],calls=[]
-  const runtime={providers:async()=>[],create:async()=>({sessionID:randomUUID()}),
+  const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true}],create:async()=>({sessionID:randomUUID()}),
     run:async input=>{const done=deferred();runs.push({...input,done});calls.push(input.command.commandID);await done.promise},
     stop:async({command})=>runs.find(item=>item.command.runID===command.runID)?.done.resolve(),
     respond:async()=>{},steer:async()=>{},close:async()=>{for(const run of runs)run.done.resolve()}}
@@ -23,6 +23,40 @@ function fixture(t) {
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
   return {directory,runs,calls,runtime,enrollment,grant,principal,command,get service(){return service},async restart(){await service.close();service=create()},create}
 }
+
+test('client provider selection determines the exact native runtime and rejects invalid routes',async t=>{
+  const f=fixture(t),created=[]
+  f.runtime.providers=async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true},
+    {id:'codex',runtimeKind:'codex',available:true,canStart:true},{id:'disabled',runtimeKind:'pi',available:false,canStart:false}]
+  f.runtime.create=async request=>{created.push(request);return {sessionID:randomUUID()}}
+  // This is the providerID-only shape emitted by both the iOS and Mac clients.
+  const opened=await f.service.command(f.command('createSession',{providerID:'codex'}),f.principal)
+  assert.equal(opened.status,'completed')
+  assert.equal(created[0].runtimeKind,'codex')
+  assert.equal(f.service.conversations()[0].runtimeKind,'codex')
+  for(const route of [{providerID:'unknown'},{providerID:'disabled'},{providerID:'codex',runtimeKind:'default_agent'}]) {
+    const rejected=await f.service.command(f.command('createSession',route),f.principal)
+    assert.equal(rejected.status,'rejected')
+  }
+  assert.equal(created.length,1)
+});
+
+test('transcript pagination retains all tool activity even when there are few messages',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
+  for(let index=0;index<95;index++)f.runs[0].publish({sessionUpdate:'tool_call',toolCallId:String(index),title:'Tool '+index,status:'completed',content:[{text:'Result '+index}]})
+  f.runs[0].done.resolve();await turn()
+  let before,messages=[],activities=[]
+  do {
+    const page=f.service.transcript(opened.conversationID,before)
+    assert.ok(page.messages.length<=40 && page.activities.length<=40)
+    messages=[...page.messages,...messages];activities=[...page.activities,...activities];before=page.olderCursor
+  } while(before)
+  assert.equal(messages.length,2)
+  assert.deepEqual(activities.map(item=>item.detail),Array.from({length:95},(_,i)=>'Result '+i))
+  assert.equal(new Set(activities.map(item=>item.id)).size,95)
+  assert.throws(()=>f.service.transcript(opened.conversationID,'invalid'),{statusCode:400})
+});
 
 test('per-device bearer grants never expose administration or another device receipts',async t=>{
   const f=fixture(t)

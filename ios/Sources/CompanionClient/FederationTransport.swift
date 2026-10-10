@@ -84,7 +84,7 @@ extension MobileSyncEngine {
       var entries: [CompanionJournalEntry] = [], bytes = 0
       for entry in pending.prefix(CompanionFederationProtocol.maximumBatchEntries) {
         let size = try JSONEncoder().encode(entry).count
-        guard size < 7 * 1_024 * 1_024 else { throw MobileConnectionError.responseTooLarge }
+        guard size <= CompanionFederationProtocol.maximumEntryBytes else { throw MobileConnectionError.responseTooLarge }
         if bytes + size > 7 * 1_024 * 1_024 { break }
         entries.append(entry); bytes += size
       }

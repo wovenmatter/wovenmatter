@@ -45,14 +45,17 @@ extension ApplicationModel {
         } catch { ensureConversationState(id: id).setError(error.localizedDescription) }
     }
 
-    func actOnFederatedConversation(_ action: FederatedExecutionAction, conversationID: String) async {
+    @discardableResult
+    func actOnFederatedConversation(_ action: FederatedExecutionAction, conversationID: String) async -> FederatedExecutionSnapshot? {
         do {
             let snapshot: FederatedExecutionSnapshot?
             if isBackendFrontend { snapshot = try await sendBackendCommand(.federatedExecution(action)).federatedExecution }
             else { snapshot = try await performFederatedExecution(action) }
             if let snapshot { federatedExecutionSnapshots[conversationID] = snapshot }
             ensureConversationState(id: conversationID).setError(nil)
+            return snapshot
         } catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+        return nil
     }
 
     func performFederatedExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {

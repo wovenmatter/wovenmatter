@@ -47,6 +47,30 @@ test('completed request replays after process recreation without new provider in
   const changed = request(); changed.context.messages[0].content = 'Different input';
   await assert.rejects(restarted.stream(changed, { principalID: 'device' }), /different input/);
 });
+test('explicit model changes retain each selected descriptor across refresh, restart and receipt replay', async t => {
+  const { DefaultAgentEngine } = await import('../src/engine.mjs');
+  const fixture = await setup(t);
+  // Exercise the real saved-descriptor validation with two synthetic custom-host models.
+  const first = { ...model, provider: 'local-server-fixture', api: 'openai-responses' }, second = { ...first, id: 'second-model' };
+  let catalog = [first, second];
+  fixture.engine.config.providers = [first.provider];
+  fixture.engine.config.customServers = [{ id: first.provider, url: first.baseUrl }];
+  fixture.engine.validateModelDestination = DefaultAgentEngine.prototype.validateModelDestination;
+  fixture.engine.resolveModel = reference => catalog.find(item => `${item.provider}/${item.id}` === reference);
+  fixture.engine.ensureModel = DefaultAgentEngine.prototype.ensureModel;
+  const initial = request(); initial.model = first;
+  await fixture.adapter.stream(initial, { principalID: 'device' });
+  const changed = request(); changed.model = second; changed.scope.requestID = 'conversation:changed-model';
+  await fixture.adapter.stream(changed, { principalID: 'device' });
+  catalog = [];
+  const restarted = createInferenceAdapter(fixture.engine);
+  await restarted.stream(initial, { principalID: 'device' });
+  await restarted.stream(changed, { principalID: 'device' });
+  assert.deepEqual(fixture.calls.map(call => call.model), [first, second]);
+  const continued = structuredClone(initial); continued.scope.requestID = 'conversation:return-to-first';
+  await restarted.stream(continued, { principalID: 'device' });
+  assert.deepEqual(fixture.calls.map(call => call.model), [first, second, first]);
+});
 test('account removal and credential replacement fail closed without fallback', async t => {
   const fixture = await setup(t);
   await fixture.adapter.stream(request(), { principalID: 'device' });

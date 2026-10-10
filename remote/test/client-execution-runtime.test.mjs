@@ -83,7 +83,7 @@ test('Pi RPC extension callbacks receive one native response without an ACP erro
   });`)
   const harness={id:'pi',transport:'rpc',command:process.execPath,arguments:[executable]},catalog=new Map([['pi',harness]])
   const relay=createDurableACP({catalog,workspaceRoot,environment:()=>process.env})
-  const runtime=createClientExecutionRuntime({defaultAgent:{cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,environment:()=>process.env})
+  const runtime=createClientExecutionRuntime({defaultAgent:{status:async()=>({locked:true}),cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,harnessStatus:async()=>({...harness,state:'ready'}),environment:()=>process.env})
   const service=createClientExecution({directory:join(workspaceRoot,'store'),runtime})
   t.after(async()=>{await service.close();rmSync(workspaceRoot,{recursive:true,force:true})})
   const deviceID=randomUUID(),grant=service.provision({libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID,scopes:['execution']})
@@ -114,7 +114,7 @@ import {createInterface} from 'node:readline';const out=v=>process.stdout.write(
   chmodSync(executable,0o700)
   const harness={id:'cursor',transport:'acp',command:executable,arguments:[]},catalog=new Map([['cursor',harness]])
   const relay=createDurableACP({catalog,workspaceRoot,environment:()=>process.env})
-  const runtime=createClientExecutionRuntime({defaultAgent:{cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,environment:()=>process.env})
+  const runtime=createClientExecutionRuntime({defaultAgent:{status:async()=>({locked:true}),cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,harnessStatus:async()=>({...harness,state:'ready'}),environment:()=>process.env})
   const service=createClientExecution({directory:join(workspaceRoot,'store'),runtime})
   t.after(async()=>{await service.close();rmSync(workspaceRoot,{recursive:true,force:true})})
   const deviceID=randomUUID(),grant=service.provision({libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID,scopes:['execution']})
@@ -139,3 +139,40 @@ import {createInterface} from 'node:readline';const out=v=>process.stdout.write(
   finally {clearTimeout(timer)}
   await until(()=>service.receipt(unfinished.commandID,deviceID),value=>value.status==='outcomeUnknown')
 })
+
+for (const stopFails of [false, true]) test(`Stop during Pi Durable setup fences dispatch (stop fails: ${stopFails})`, async t => {
+  let release, enteredResolve, hold = false;
+  const gate = new Promise(resolve => { release = resolve }), entered = new Promise(resolve => { enteredResolve = resolve }), calls = [];
+  const defaultAgent = {
+    async status() { if (hold) { hold = false; enteredResolve(); await gate } return { locked: false, epoch: 'fixture' } },
+    async invoke(value) {
+      calls.push(value.method);
+      if (value.method === 'session/cancel' && stopFails) throw Error('Synthetic cancellation failure');
+      return value.method === 'session/new' ? { result: { sessionId: 'fixture-session', _meta: { attachmentToken: 'fixture-token' } } }
+        : value.method === 'session/prompt' ? { operationID: value.operationID } : { result: {} };
+    },
+    async poll() { return { updates: [], cursor: 0, done: true } }, async cancelActive() {},
+  };
+  const root = mkdtempSync(join(tmpdir(), 'woven-stop-setup-'));
+  const runtime = createClientExecutionRuntime({ defaultAgent, durableACP: { async stopAll() {} }, catalog: new Map(),
+    workspaceRoot: root, environment: () => process.env, harnessStatus: async () => ({}) });
+  const service = createClientExecution({ directory: root, runtime });
+  t.after(async () => { release(); await service.close(); rmSync(root, { recursive: true, force: true }) });
+  const deviceID = randomUUID(), grant = service.provision({ libraryID: randomUUID(), workspaceID: randomUUID(), ownerDeviceID: randomUUID(), deviceID, scopes: ['execution'] });
+  const principal = service.principal('Bearer ' + grant.token, 'execution');
+  const command = (kind, args = {}) => ({ commandID: randomUUID(), deviceID, kind, ...args });
+  const created = await service.command(command('createSession', { providerID: 'default_agent' }), principal);
+  hold = true;
+  const input = command('send', { conversationID: created.conversationID, text: 'Synthetic input' });
+  const accepted = await service.command(input, principal); await entered;
+  const stop = await service.command(command('stop', { conversationID: created.conversationID, runID: accepted.runID }), principal);
+  assert.equal(stop.status, stopFails ? 'rejected' : 'completed');
+  release();
+  await until(() => service.receipt(input.commandID, deviceID), value => value.status !== 'accepted');
+  assert.equal(calls.filter(value => value === 'session/prompt').length, stopFails ? 1 : 0);
+  assert.equal(service.transcript(created.conversationID).messages.at(-1).status, stopFails ? 'completed' : 'cancelled');
+  const next = command('send', { conversationID: created.conversationID, text: 'Fresh later input' });
+  await service.command(next, principal);
+  await until(() => service.receipt(next.commandID, deviceID), value => value.status !== 'accepted');
+  assert.equal(calls.filter(value => value === 'session/prompt').length, stopFails ? 2 : 1);
+});
