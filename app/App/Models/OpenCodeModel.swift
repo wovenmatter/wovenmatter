@@ -46,7 +46,7 @@ final class OpenCodeModel {
     private(set) var installationInventory: RuntimeInventory?
     var installationDiagnostic: String {
         RuntimeMaintenance.diagnostic(inventory: installationInventory, kind: .opencode,
-            attempts: installationFailures, failure: "The pinned OpenCode v2 install could not be verified. Raw installer output omitted.")
+            attempts: installationFailures, failure: "The OpenCode v2 install could not be verified. Raw installer output omitted.")
     }
     private(set) var isControllingServer = false
     private var serverStopped = false

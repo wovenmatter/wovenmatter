@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+const bundledVersions = new URL('../default-agent/src/package-versions.mjs', import.meta.url)
+const { latestSupportedPackage } = await import(existsSync(bundledVersions) ? bundledVersions.href : new URL('../../default-agent/src/package-versions.mjs', import.meta.url).href)
 import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir, rename, realpath } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
@@ -18,14 +21,15 @@ export function precedes(a, b) {
   return false
 }
 export function validatedPackageSpec(harness, supplied) {
-  const pinned = harness.install.package
-  const separator = typeof pinned === 'string' ? pinned.lastIndexOf('@') : -1
+  const selector = harness.install.package
+  const separator = typeof selector === 'string' ? selector.lastIndexOf('@') : -1
   if (separator <= 0) throw failure('reviewed_package_spec_required')
-  const name = pinned.slice(0, separator)
-  const spec = supplied === undefined || supplied === null ? pinned : supplied
+  const name = selector.slice(0, separator)
+  const spec = supplied
   if (typeof spec !== 'string' || !spec.startsWith(name + '@')) throw failure('invalid_package_spec')
   const version = spec.slice(name.length + 1)
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(version)) throw failure('invalid_package_spec')
+  if (harness.id === 'pi' && !/^1\.\d+\.\d+$/.test(version)) throw failure('pi_version_incompatible')
   if (harness.id === 'opencode' && !supportsOpenCodeVersion(version)) throw failure('opencode_version_incompatible')
   return spec
 }
@@ -143,11 +147,12 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     const version = result?.code === 0 ? normalizedVersion(result.output) : null
     return { id, displayName: name, path, installedVersion: version, latestVersion: null, required, installed: Boolean(path && version) }
   }
-  async function latest(packageName, tag = 'latest') {
+  async function latest(packageName) {
     try {
-      const response = await fetchImplementation(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/${encodeURIComponent(tag)}`, { signal: AbortSignal.timeout(10000) })
-      if (!response.ok) return null
-      return normalizedVersion((await response.json()).version)
+      return await latestSupportedPackage(packageName, {
+        major: packageName === '@opencode/cli' ? 2 : packageName === '@earendil-works/pi-coding-agent' ? 1 : undefined,
+        fetchImplementation,
+      })
     } catch { return null }
   }
   async function inventory(h, checkLatest = false) {
@@ -270,7 +275,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         unlock = await acquireLock(resolve(environment().HOME, '.wovenmatter/runtime-operation.lock'), environment(), workspaceRoot)
         if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
         let command
-        const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (h.id === 'opencode' ? (await npmPreview(h)).packageSpec : undefined)) : null
+        const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec) : null
         const adapter = h.adapterPackage ? ` && npm install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
         if (h.id === 'hermes' && action === 'update') {
           const executable = await component('runtime', h.command, h.command)
@@ -322,7 +327,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   }
   async function npmPreview(h) {
     let packageSpec = h.install.package
-    if (h.id === 'pi' || h.id === 'opencode') {
+    if (h.install?.kind === 'npm-global') {
       const name = packageSpec.slice(0, packageSpec.lastIndexOf('@'))
       const version = await latest(name)
       if (!version) throw failure('latest_package_version_unavailable')

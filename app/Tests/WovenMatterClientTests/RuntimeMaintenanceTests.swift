@@ -27,6 +27,14 @@ struct RuntimeMaintenanceTests {
         }
     }
 
+    @Test func newestSupportedMajorSurvivesLatestTagMoving() async throws {
+        let version = try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: { url in
+            if url.absoluteString.hasSuffix("/latest") { return Data(#"{"version":"3.0.0","bin":{"cli":"bin.js"}}"#.utf8) }
+            return Data(#"{"versions":{"2.0.9":{"bin":{}},"2.0.26":{"bin":{}},"2.0.27":{"bin":{},"deprecated":"Withdrawn release"},"2.1.0-beta.1":{"bin":{}},"3.0.0":{"bin":{}}}}"#.utf8)
+        })
+        #expect(version == "2.0.26")
+    }
+
     @Test func codexInventoryFindsTheEngineBesideTheLaunchedAdapter() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -176,7 +184,7 @@ struct RuntimeMaintenanceTests {
         """.utf8).write(to: npm)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: npm.path)
         let prefix = root.appending(path: "managed")
-        let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm)
+        let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { _ in Data(#"{"version":"1.2.3","bin":{"fixture":"bin.js"}}"#.utf8) })
         func definition(_ version: String) -> LocalACPRuntimeDefinition {
             LocalACPRuntimeDefinition(runtimeKind: .pi, displayName: "Fixture", commandName: "fixture",
                 arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil,
@@ -184,8 +192,9 @@ struct RuntimeMaintenanceTests {
         }
         let launcher = try await installer.install(definition("1.2.3"), component: .adapter)
         let firstTree = launcher.resolvingSymlinksInPath()
+        let updated = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { _ in Data(#"{"version":"1.2.4","bin":{"fixture":"bin.js"}}"#.utf8) })
         await #expect(throws: (any Error).self) {
-            try await installer.install(definition("1.2.4"), component: .adapter)
+            try await updated.install(definition("1.2.4"), component: .adapter)
         }
         #expect(launcher.resolvingSymlinksInPath() == firstTree)
         #expect(FileManager.default.isExecutableFile(atPath: firstTree.path))

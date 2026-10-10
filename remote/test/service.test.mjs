@@ -580,7 +580,7 @@ test('installation uses latest adapter and fails unless actual components verify
   const response = await fetch(`${service.url}/v1/harnesses/pi/install`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ confirmed: true }),
+    body: JSON.stringify({ confirmed: true, packageSpec: "@earendil-works/pi-coding-agent@1.1.0" }),
   })
   assert.equal(response.status, 202)
   const operation = await waitFor(

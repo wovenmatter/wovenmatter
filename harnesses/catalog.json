@@ -263,10 +263,10 @@
       "transportCheckCommand": "opencode --version",
       "install": {
         "kind": "npm-global",
-        "package": "@opencode/cli@latest",
+        "package": "@opencode/cli@2",
         "source": "https://registry.npmjs.org/@opencode/cli",
         "arguments": [],
-        "command": "npm install -g @opencode/cli@latest"
+        "command": "npm install -g @opencode/cli@2"
       },
       "authentication": {
         "statusCommands": [],
@@ -293,9 +293,9 @@
       "install": {
         "kind": "npm-global",
         "source": "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
-        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent@1.0.0",
+        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent@1",
         "arguments": [],
-        "package": "@earendil-works/pi-coding-agent@1.0.0"
+        "package": "@earendil-works/pi-coding-agent@1"
       },
       "authentication": {
         "statusCommands": [

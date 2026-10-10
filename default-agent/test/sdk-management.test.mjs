@@ -62,9 +62,9 @@ test('a per-SDK check never queries the other SDK and preserves active installat
 test('incompatible or cancelled updates cannot replace the active generation', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8');
-  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.0.3' })) }), /incompatible/);
-  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude', fetchImplementation: async () => new Response(JSON.stringify({ version: '0.4.0' })) }), /incompatible/);
-  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '2.0.0' })) }), /incompatible/);
+  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.0.3' })) }), /compatible/);
+  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude', fetchImplementation: async () => new Response(JSON.stringify({ version: '0.4.0' })) }), /compatible/);
+  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '2.0.0' })) }), /compatible/);
   await assert.rejects(updateSDK({ directory: f.directory, id: 'claude', signal: AbortSignal.abort() }), /cancelled/);
   assert.equal(await readFile(f.active, 'utf8'), before);
 });
@@ -73,10 +73,10 @@ test('an app-source fingerprint change rejects stale copied helper code', async 
   const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-coding-agent': '0.86.1', '@earendil-works/pi-ai': '0.86.1' }); await installed.activate();
   await writeFile(f.active, JSON.stringify({ base: 'old-app-build', generation: installed.id }));
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
-  const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.0.3' })) });
+  const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.1.0' })) });
   const pi = status.sdks.find(sdk => sdk.id === 'pi');
-  assert.equal(pi.installedVersion, '1.0.3');
-  assert.equal(pi.latestVersion, '1.0.3');
+  assert.equal(pi.installedVersion, '1.1.0');
+  assert.equal(pi.latestVersion, '1.1.0');
   assert.equal(pi.consistent, true);
   assert.equal(pi.updateAvailable, false);
 });

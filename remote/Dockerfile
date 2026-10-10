@@ -1,15 +1,15 @@
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 
 LABEL com.wovenmatter.workspace-uid="10001" \
       com.wovenmatter.workspace-gid="10001" \
-      org.opencontainers.image.base.digest="sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+      org.opencontainers.image.base.digest="sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       bash ca-certificates chromium curl git gh jq openssh-client \
       procps python3 python3-venv ripgrep tini util-linux \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global playwright@1.62.1 \
+    && npm install --global playwright@1.64.0 \
     && groupadd --gid 10001 woven \
     && useradd --no-create-home --home-dir /home --shell /bin/bash --uid 10001 --gid 10001 woven \
     && chown woven:woven /home \

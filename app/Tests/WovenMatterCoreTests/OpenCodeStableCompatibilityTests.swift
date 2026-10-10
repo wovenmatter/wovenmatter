@@ -24,7 +24,7 @@ struct OpenCodeStableCompatibilityTests {
         })
         #expect(first.packageSpec == "@opencode/cli@2.0.22")
         #expect(next.packageSpec == "@opencode/cli@2.1.7")
-        await #expect(throws: OpenCodeError.incompatible("1.18.29")) {
+        await #expect(throws: RuntimeMaintenanceError.unavailable) {
             try await installer.prepareCLIInstall(OpenCodeServiceLauncher.installDefinition, fetch: { _ in
                 Data(#"{"version":"1.18.29","bin":{"opencode":"bin/opencode"}}"#.utf8)
             })
