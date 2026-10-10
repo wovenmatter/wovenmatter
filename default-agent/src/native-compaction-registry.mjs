@@ -1,7 +1,7 @@
 import { createRegistry } from '@earendil-works/pi-durable';
 import { NativeContext } from './native-context.mjs';
 
-// The pinned SDK's decline hook completes compaction with an empty result.
+// The supported SDK's decline hook completes compaction with an empty result.
 // Overflow recovery requires the actual entry which made the context smaller.
 // Decorate the application-owned registry's public task view, keeping the
 // stock task identity, phases, status cleanup and scheduler intact.

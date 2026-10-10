@@ -1,3 +1,4 @@
+import { latestSupportedPackage } from './package-versions.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -101,19 +102,12 @@ export async function sdkStatus({ directory }) {
   }));
   return { sdks, generation: runtime.generation, checkedAt: cached?.base === runtime.base ? cached.checkedAt ?? null : null };
 }
-async function registryVersion(name, signal, fetchImplementation = fetch) {
-  const timeout = AbortSignal.timeout(15000);
-  const response = await fetchImplementation(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-  if (!response.ok) throw fail('The SDK update source is unavailable. Try again later.');
-  let bytes = 0, text = '';
-  for await (const chunk of response.body) {
-    bytes += chunk.length;
-    if (bytes > 262144) throw fail('The SDK update source returned too much data.');
-    text += Buffer.from(chunk).toString('utf8');
-  }
-  const version = JSON.parse(text).version;
-  if (!stableVersion(version)) throw fail('The SDK update source did not return a supported release version.');
-  return version;
+async function registryVersion(name, signal, fetchImplementation = fetch, current) {
+  try {
+    return await latestSupportedPackage(name, { major: Number(current.split('.')[0]),
+      minor: name === '@anthropic-ai/claude-agent-sdk' ? Number(current.split('.')[1]) : undefined,
+      signal, fetchImplementation });
+  } catch { throw fail('The SDK update source did not return a compatible release. Try again later.'); }
 }
 function compatible(version, installed) {
   // Pi 1.x updates stay on the reviewed major line and must pass the
@@ -128,7 +122,7 @@ export async function checkSDKUpdates({ directory, id, signal, fetchImplementati
   if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi Durable SDK or Claude SDK.');
   for (const definition of definitions.filter(value => id === undefined || value.id === id)) {
     const current = await packageVersion(runtime.root, definition.packages[0]);
-    const latest = await registryVersion(definition.packages[0], signal, fetchImplementation);
+    const latest = await registryVersion(definition.packages[0], signal, fetchImplementation, current);
     if (!compatible(latest, current) || (definition.id === 'claude' && latest.split('.')[1] !== current.split('.')[1])) {
       throw fail(`${definition.name} has a new incompatible release. Update Woven Matter before installing it.`);
     }

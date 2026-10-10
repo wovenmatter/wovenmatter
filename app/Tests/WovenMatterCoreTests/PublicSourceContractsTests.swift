@@ -423,14 +423,8 @@ struct PublicSourceContractsTests {
     #expect(document.harnesses.filter {
       $0.install.kind == "npm-global"
     }.allSatisfy {
-      if $0.id == .opencode { return $0.install.package == "@opencode/cli@latest" }
-      guard let package = $0.install.package,
-            let separator = package.lastIndex(of: "@"),
-            separator != package.startIndex else { return false }
-      let version = package[package.index(after: separator)...].split(separator: "-", maxSplits: 1)[0]
-      let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-      return parts.count == 3
-        && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+      if $0.id == .opencode { return $0.install.package == "@opencode/cli@2" }
+      return $0.id == .pi && $0.install.package == "@earendil-works/pi-coding-agent@1"
     })
   }
 

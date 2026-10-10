@@ -3225,11 +3225,9 @@ final class ApplicationModel {
                 }
                 if let package = definition.adapterPackage ?? (kind == .pi && preview == nil ? RuntimeMaintenance.npmPackage(kind) : nil) {
                     // Resolve a concrete version before npm is allowed to mutate anything.
-                    let version: String
-                    do { version = try await RuntimeMaintenance.registryVersion(package) }
-                    catch {
-                        guard !update, let pinned = definition.minimumAdapterVersion else { throw error }
-                        version = pinned
+                    let version = try await RuntimeMaintenance.registryVersion(package)
+                    if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {
+                        throw RuntimeMaintenanceError.unavailable
                     }
                     _ = try await installer.installPackage(package, version: version, executableName: definition.commandName)
                 } else if update {

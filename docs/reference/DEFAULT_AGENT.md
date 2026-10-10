@@ -2,18 +2,26 @@
 
 The native app adds `AgentRuntimeKind.defaultAgent`; the eight external harnesses
 remain in the installation catalog. Local discovery resolves only the app-bundled
-Node executable and `default-agent/src/main.mjs`. The helper imports the pinned
+Node executable and `default-agent/src/main.mjs`. The helper imports the bundled
 Pi Durable SDK directly and exposes ACP to reuse the native conversation, tool activity,
 notes, persistence, and model-control presentation. It never invokes the
 external `pi` command.
 
 `default-agent/package-lock.json` pins the SDK dependency graph. The macOS build
-prepares Node 24.18.0 with pinned archive SHA-256 checks and includes its license.
+prepares Node 24.21.0 with pinned archive SHA-256 checks and includes its license.
 The workspace image uses its pinned Node base and installs the same locked SDK.
 Node receives its own JIT entitlement when the app is signed. SDK dependencies
 and runtime binaries are build products, not checked into Git. Remote deployment
 archives include only the helper's source and package manifests; local binaries,
 dependencies, tests, and build caches are not uploaded.
+
+External harness installs and updates resolve the newest supported release at the
+time of the operation: OpenCode stays on stable 2.x, Pi on stable 1.x, and ACP
+adapters use their latest release above the compatibility floor. A concrete
+version is frozen for each reviewed installation. Bundled Node, Playwright, and
+SDK lockfiles are tested distribution snapshots, not limits on harness updates.
+SDK updates likewise resolve the newest supported Pi 1.x or Claude 0.3.x release
+and activate it in an immutable generation after contract verification.
 
 SDK management is scoped to the executing location. Installed-version reads use
 package metadata only; registry checks and updates are explicit user actions.
@@ -130,7 +138,7 @@ entitlement, included allowance, or billing attribution for a particular account
 
 ## Claude model backend
 
-The pinned Claude Agent SDK bundles Anthropic’s signed, unmodified Claude Code
+The bundled Claude Agent SDK bundles Anthropic’s signed, unmodified Claude Code
 runtime. Pi remains the owner of the agent loop, tool execution, approvals,
 history, and compaction. Claude acts as a model client with native tools, skills,
 settings, and session persistence disabled for model requests. This follows the
@@ -140,7 +148,7 @@ A per-request loopback relay admits one upstream generation and captures its
 stream. Native recovery attempts are rejected locally so they cannot replace the
 first response or trigger extra model calls. Native authorization headers pass
 through memory only; the relay never logs or persists them. Structured assistant
-replay relies on the pinned SDK transport and is covered by a real-runtime test
+replay relies on the supported SDK transport and is covered by a real-runtime test
 against a synthetic local endpoint. Model metadata uses a conservative 200K
 context budget; token counts do not establish monetary charges.
 

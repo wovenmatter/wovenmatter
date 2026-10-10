@@ -19,10 +19,10 @@ command output, account data, paths, or credentials.
 
 | Runtime | Actual local architecture | Release source and action |
 | --- | --- | --- |
-| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Official npm registry, exact adapter version; official Codex installer for outdated sign-in CLI. Adapter minimum is 1.11.0. No `CODEX_PATH` is set. |
+| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. Adapter minimum is 1.13.1; it is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
 | Claude Code | `claude-agent-acp`, bundled `@anthropic-ai/claude-agent-sdk` and its platform-native Claude engine (legacy `cli.js` also supported), standalone `claude` sign-in CLI; inherited executable override is reported | Official npm adapter release; `claude update` for an outdated standalone CLI. |
-| Pi | `pi --mode rpc`, not ACP | Official `@earendil-works/pi-coding-agent` npm releases; exact managed package install. |
-| OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Current `@opencode/cli` release from `latest`; each install/update resolves a fresh release and verifies the 2.x family. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
+| Pi | `pi --mode rpc`, not ACP | Official `@earendil-works/pi-coding-agent` npm releases on stable 1.x; the newest compatible release is resolved for each install/update. |
+| OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Newest stable `@opencode/cli` 2.x release; each install/update resolves a fresh compatible release even if upstream `latest` advances to a new major. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
 | OpenClaw | Local `openclaw` CLI and separately linked gateways | Official npm `openclaw` release, managed CLI update. Does not update/restart gateways or install their provider runtimes. |
 | Cursor | Native `cursor-agent acp` | Version embedded in official Cursor installer; `cursor-agent update`. Same-date release hashes cannot be ordered and are not asserted to be newer. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |

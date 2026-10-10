@@ -97,7 +97,10 @@ jobs:
         run: docker build --file remote/Dockerfile --tag wovenmatter-remote:ci .
 
       - name: Build the standalone Executor runtime
-        run: docker build --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
+        run: |
+          wm_executor_version="$(node --input-type=module -e 'import { latestSupportedPackage } from "./default-agent/src/package-versions.mjs"; console.log(await latestSupportedPackage("executor", { major: 2, prerelease: true, executable: "executor" }));')"
+          docker build --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
+            --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
       - name: Verify Executor native helper prerequisites
         run: |
           docker run --rm --entrypoint bash wovenmatter-executor:ci -ec '
