@@ -32,11 +32,6 @@ struct InferenceRequestBuilder {
     system.append(contentsOf: sectionOrder.compactMap { sections[$0] })
     let prompt = system.joined(separator: "\n\n"), inventory = toolOrder.compactMap { tools[$0] }
     let messages = transcript.filter { $0["role"] as? String != "system" && !["error", "aborted"].contains($0["stopReason"] as? String ?? "") }
-    // These formatters currently support text-only tool results. Never silently discard
-    // image data or send a partial transcript when a tool returned an image.
-    if ["openai-responses", "openai-completions"].contains(model.api), messages.contains(where: {
-      $0["role"] as? String == "toolResult" && inferenceContent($0).contains { $0["type"] as? String == "image" }
-    }) { throw InferenceError.unsupportedToolImages }
     var body: InferenceObject = ["model": model.id, "stream": true]
     let maxTokens = min(options["maxTokens"] as? Int ?? model.maxTokens, model.maxTokens)
     guard maxTokens > 0 else { throw InferenceError.invalidConfiguration }
@@ -100,7 +95,8 @@ struct InferenceRequestBuilder {
     return url
   }
   private func image(_ block: InferenceObject) throws -> (String, String) {
-    guard model.input.contains("image"), let mime = block["mimeType"] as? String, mime.hasPrefix("image/"),
+    guard model.input.contains("image") else { throw InferenceError.unsupportedImageInput }
+    guard let mime = block["mimeType"] as? String, mime.hasPrefix("image/"),
       let data = block["data"] as? String, Data(base64Encoded: data) != nil else { throw InferenceError.invalidConfiguration }
     return (mime, data)
   }
@@ -109,7 +105,17 @@ struct InferenceRequestBuilder {
     for message in messages {
       let role = message["role"] as? String ?? ""
       if role == "toolResult" {
-        result.append(["type": "function_call_output", "call_id": callID(message["toolCallId"] as? String ?? ""), "output": inferenceText(message)]); continue
+        let text = inferenceText(message), images = inferenceContent(message).filter { $0["type"] as? String == "image" }
+        var output: Any = text
+        if !images.isEmpty {
+          var blocks: [InferenceObject] = text.isEmpty ? [] : [["type": "input_text", "text": text]]
+          for block in images {
+            let (mime, data) = try image(block)
+            blocks.append(["type": "input_image", "detail": "auto", "image_url": "data:\(mime);base64,\(data)"])
+          }
+          output = blocks
+        }
+        result.append(["type": "function_call_output", "call_id": callID(message["toolCallId"] as? String ?? ""), "output": output]); continue
       }
       var content = [InferenceObject]()
       for block in inferenceContent(message) {
@@ -160,9 +166,40 @@ struct InferenceRequestBuilder {
   }
   private func chatMessages(_ messages: [InferenceObject], system: String) throws -> [InferenceObject] {
     var result: [InferenceObject] = system.isEmpty ? [] : [["role": "system", "content": system]]
+    let compat = inferenceObject(model.metadata["compat"]?.value)
+    let requiresAssistantAfterToolResult = compat["requiresAssistantAfterToolResult"] as? Bool == true
+    var lastRole: String?
+    var toolImages = [InferenceObject]()
+    func appendToolImages() {
+      guard !toolImages.isEmpty else { return }
+      // Chat requires every parallel tool call to receive its result before a user image message.
+      if requiresAssistantAfterToolResult {
+        result.append(["role": "assistant", "content": "I have processed the tool results."])
+      }
+      result.append(["role": "user", "content": [["type": "text", "text": "Attached image(s) from tool result:"]] + toolImages])
+      toolImages.removeAll(keepingCapacity: true)
+      lastRole = "user"
+    }
     for message in messages {
       let role = message["role"] as? String ?? ""
-      if role == "toolResult" { result.append(["role": "tool", "tool_call_id": callID(message["toolCallId"] as? String ?? ""), "content": inferenceText(message)]); continue }
+      if role == "toolResult" {
+        let text = inferenceText(message), images = inferenceContent(message).filter { $0["type"] as? String == "image" }
+        var value: InferenceObject = ["role": "tool", "tool_call_id": callID(message["toolCallId"] as? String ?? ""),
+          "content": text.isEmpty && !images.isEmpty ? "(see attached image)" : text]
+        if compat["requiresToolResultName"] as? Bool == true, let name = message["toolName"] as? String { value["name"] = name }
+        result.append(value)
+        for block in images {
+          let (mime, data) = try image(block)
+          toolImages.append(["type": "image_url", "image_url": ["url": "data:\(mime);base64,\(data)"]])
+        }
+        lastRole = role
+        continue
+      }
+      appendToolImages()
+      if requiresAssistantAfterToolResult, lastRole == "toolResult", role == "user" {
+        result.append(["role": "assistant", "content": "I have processed the tool results."])
+      }
+      lastRole = role
       var content = [InferenceObject](), calls = [InferenceObject]()
       var thinking = ""
       var reasoningDetails = [InferenceObject]()
@@ -180,12 +217,14 @@ struct InferenceRequestBuilder {
         }
       }
       var value: InferenceObject = ["role": role, "content": content.isEmpty ? NSNull() : content]
+      if role == "assistant", content.isEmpty, requiresAssistantAfterToolResult { value["content"] = "" }
       if !calls.isEmpty { value["tool_calls"] = calls }
       if !reasoningDetails.isEmpty { value["reasoning_details"] = reasoningDetails }
       if role == "assistant", inferenceObject(model.metadata["compat"]?.value)["requiresReasoningContentOnAssistantMessages"] as? Bool == true { value["reasoning_content"] = "" }
       if !thinking.isEmpty, message["wovenInferenceConnectionID"] as? String == connection.id { value["reasoning_content"] = thinking }
       result.append(value)
     }
+    appendToolImages()
     return result
   }
   private func callID(_ value: String) -> String { String(value.split(separator: "|", maxSplits: 1).first ?? "") }

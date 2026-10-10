@@ -165,7 +165,7 @@ public enum InferenceCatalog {
 
 public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
   case invalidConfiguration, invalidEndpoint, adapterRequired, missingCredential, modelUnavailable, accountUnavailable
-  case malformedResponse, interrupted, responseTooLarge, http(Int), connectionFailed, unsupportedToolImages
+  case malformedResponse, interrupted, responseTooLarge, http(Int), connectionFailed, unsupportedImageInput
   public var errorDescription: String? {
     switch self {
     case .invalidConfiguration: "Choose a connection, account, and model before starting this agent."
@@ -175,7 +175,7 @@ public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
     case .modelUnavailable: "The selected model is unavailable on this connection. Choose a model explicitly; no fallback was attempted."
     case .accountUnavailable: "The selected account is unavailable on this inference host. No account fallback was attempted."
     case .malformedResponse: "The inference endpoint returned an unsupported response."
-    case .unsupportedToolImages: "This direct connection does not support images returned by tools yet. Continue with a text-only tool result or choose a compatible connection explicitly. No request was sent."
+    case .unsupportedImageInput: "The selected model does not accept images. Choose an image-capable model explicitly; no fallback was attempted."
     case .interrupted: "Inference was interrupted before a complete response was received. Saved agent work remains on this device."
     case .responseTooLarge: "The inference response exceeded this device's request limit."
     case .http(let status) where status == 401 || status == 403: "The inference endpoint rejected this connection's credentials. Check its account and permissions in Settings."

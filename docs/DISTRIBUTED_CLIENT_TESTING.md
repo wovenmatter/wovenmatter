@@ -73,6 +73,9 @@ the agent loop, native tools, code execution, and checkpoints remain on iOS.
 
 - Import a small text file; ask the agent to read it and create a local output.
   Exercise native note tools and save an output to the shared library.
+- Select an image-capable model, import a disposable test image, and ask the
+  on-device agent to describe it. The image-reading tool result goes only to
+  that run’s selected cloud or Tailscale inference connection.
 - Check permission prompts, a subagent, and code mode using only disposable test
   content. Stop while a tool is waiting for approval; cancelled work must not
   perform a later mutation.

@@ -10,6 +10,13 @@ private final class CapturedEvents: @unchecked Sendable {
 private struct TestCredentials: InferenceCredentialReading {
   func read(connectionID: String) async throws -> String? { "fixture-secret" }
 }
+private actor SelectedCredentials: InferenceCredentialReading {
+  var requestedIDs = [String]()
+  func read(connectionID: String) async throws -> String? {
+    requestedIDs.append(connectionID)
+    return connectionID == "selected-connection" ? "selected-secret" : "unrelated-secret"
+  }
+}
 private actor FixtureTransport: InferenceHTTPTransport {
   let events: [InferenceHTTPEvent]
   var requests = [URLRequest]()
@@ -151,24 +158,141 @@ final class InferenceTests: XCTestCase {
     let requests = await transport.requests
     XCTAssertEqual(requests.count, 1)
   }
-  func testUnsupportedDirectToolImagesFailBeforeAnyProviderRequest() async throws {
-    for (provider, api) in [("openai", "openai-responses"), ("openrouter", "openai-completions")] {
-      let model = try XCTUnwrap(InferenceCatalog.models(provider: provider).first { $0.api == api })
-      let connection = InferenceConnection(name: "Fixture", provider: provider, route: .direct, modelID: model.id)
-      let transport = FixtureTransport([])
-      let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport)
-      let request = try inferenceJSONString(["model": ["id": model.id, "provider": provider], "context": ["messages": [
-        ["role": "toolResult", "toolCallId": "read-image", "content": [
-          ["type": "text", "text": "Image follows"], ["type": "image", "mimeType": "image/png", "data": "Zml4dHVyZQ=="]
-        ]]
-      ]]])
-      do {
-        try await service.stream(requestJSON: request, emit: { _ in XCTFail("Unsupported tool image produced a model event") })
-        XCTFail("Unsupported tool image was silently discarded")
-      } catch { XCTAssertEqual(error as? InferenceError, .unsupportedToolImages) }
-      let requests = await transport.requests
-      XCTAssertTrue(requests.isEmpty, "Unsupported content must be rejected before any HTTP request")
+  private let firstImage = "Zmlyc3QtaW1hZ2U="
+  private let secondImage = "c2Vjb25kLWltYWdl"
+  private func imageToolTranscript() -> [InferenceObject] {
+    [
+      ["role": "assistant", "content": [
+        ["type": "toolCall", "id": "read-a|native-a", "name": "read_image", "arguments": ["path": "a.png"]],
+        ["type": "toolCall", "id": "read-b|native-b", "name": "read_image", "arguments": ["path": "b.png"]]
+      ]],
+      ["role": "toolResult", "toolCallId": "read-a|native-a", "toolName": "read_image", "content": [
+        ["type": "text", "text": "First image"], ["type": "image", "mimeType": "image/png", "data": firstImage]
+      ]],
+      ["role": "toolResult", "toolCallId": "read-b|native-b", "toolName": "read_image", "content": [
+        ["type": "image", "mimeType": "image/jpeg", "data": secondImage]
+      ]]
+    ]
+  }
+  func testResponsesToolImagesUseSelectedConnectionAndPreserveToolIdentity() async throws {
+    let model = try XCTUnwrap(InferenceCatalog.models(provider: "openai").first { $0.api == "openai-responses" && $0.input.contains("image") })
+    let connection = InferenceConnection(id: "selected-connection", name: "Selected", provider: model.provider, accountID: "selected-account", route: .direct, modelID: model.id)
+    let credentials = SelectedCredentials()
+    let transport = FixtureTransport([.response(200), .line("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{}}}"), .line("")])
+    let service = CompanionInferenceService(connection: connection, credentials: credentials, transport: transport)
+    let input: InferenceObject = ["model": ["id": model.id, "provider": model.provider, "baseUrl": "https://unrelated.example/v1"],
+      "accountID": "unrelated-account", "options": ["apiKey": "unrelated-secret"], "context": ["messages": imageToolTranscript()]]
+    try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in })
+    let requests = await transport.requests, requestedIDs = await credentials.requestedIDs
+    XCTAssertEqual(requests.count, 1); XCTAssertEqual(requestedIDs, ["selected-connection"])
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.url?.absoluteString, model.baseUrl + "/responses")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer selected-secret")
+    let bodyData = try XCTUnwrap(request.httpBody), body = inferenceObject(try JSONSerialization.jsonObject(with: bodyData))
+    XCTAssertEqual(body["model"] as? String, model.id)
+    XCTAssertFalse(String(decoding: bodyData, as: UTF8.self).contains("unrelated"))
+    let outputs = inferenceObjects(body["input"]).filter { $0["type"] as? String == "function_call_output" }
+    XCTAssertEqual(outputs.map { $0["call_id"] as? String }, ["read-a", "read-b"])
+    let mixed = inferenceObjects(outputs[0]["output"]), imageOnly = inferenceObjects(outputs[1]["output"])
+    XCTAssertEqual(mixed.map { $0["type"] as? String }, ["input_text", "input_image"])
+    XCTAssertEqual(mixed[0]["text"] as? String, "First image")
+    XCTAssertEqual(mixed[1]["image_url"] as? String, "data:image/png;base64,\(firstImage)")
+    XCTAssertEqual(mixed[1]["detail"] as? String, "auto")
+    XCTAssertEqual(imageOnly.count, 1)
+    XCTAssertEqual(imageOnly[0]["image_url"] as? String, "data:image/jpeg;base64,\(secondImage)")
+  }
+  func testChatToolImagesFollowEveryParallelToolResultAndStayOnSelectedRoute() async throws {
+    let model = try XCTUnwrap(InferenceCatalog.models(provider: "openrouter").first { $0.api == "openai-completions" && $0.input.contains("image") })
+    let connection = InferenceConnection(id: "selected-connection", name: "Selected", provider: model.provider, accountID: "selected-account", route: .direct, modelID: model.id)
+    let credentials = SelectedCredentials()
+    let transport = FixtureTransport([.response(200), .line("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}"), .line(""), .line("data: [DONE]"), .line("")])
+    let service = CompanionInferenceService(connection: connection, credentials: credentials, transport: transport)
+    let input: InferenceObject = ["model": ["id": model.id, "provider": model.provider, "baseUrl": "https://unrelated.example/v1"],
+      "accountID": "unrelated-account", "options": ["apiKey": "unrelated-secret"], "context": ["messages": imageToolTranscript()]]
+    try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in })
+    let requests = await transport.requests, requestedIDs = await credentials.requestedIDs
+    XCTAssertEqual(requests.count, 1); XCTAssertEqual(requestedIDs, ["selected-connection"])
+    let request = try XCTUnwrap(requests.first), bodyData = try XCTUnwrap(request.httpBody)
+    XCTAssertEqual(request.url?.absoluteString, model.baseUrl + "/chat/completions")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer selected-secret")
+    let body = inferenceObject(try JSONSerialization.jsonObject(with: bodyData)), messages = inferenceObjects(body["messages"])
+    XCTAssertEqual(body["model"] as? String, model.id)
+    XCTAssertFalse(String(decoding: bodyData, as: UTF8.self).contains("unrelated"))
+    XCTAssertEqual(messages.map { $0["role"] as? String }, ["assistant", "tool", "tool", "user"])
+    XCTAssertEqual(messages[1]["tool_call_id"] as? String, "read-a")
+    XCTAssertEqual(messages[2]["tool_call_id"] as? String, "read-b")
+    XCTAssertEqual(messages[1]["content"] as? String, "First image")
+    XCTAssertEqual(messages[2]["content"] as? String, "(see attached image)")
+    let content = inferenceObjects(messages[3]["content"])
+    XCTAssertEqual(content.map { $0["type"] as? String }, ["text", "image_url", "image_url"])
+    XCTAssertEqual(inferenceObject(content[1]["image_url"])["url"] as? String, "data:image/png;base64,\(firstImage)")
+    XCTAssertEqual(inferenceObject(content[2]["image_url"])["url"] as? String, "data:image/jpeg;base64,\(secondImage)")
+  }
+  func testChatToolImageCompatibilitySeparatorPrecedesFollowingUserMessage() throws {
+    var model = try XCTUnwrap(InferenceCatalog.models(provider: "openrouter").first { $0.api == "openai-completions" && $0.input.contains("image") })
+    model.metadata["compat"] = .object(["requiresAssistantAfterToolResult": .bool(true), "requiresToolResultName": .bool(true)])
+    let connection = InferenceConnection(name: "Selected", provider: model.provider, route: .direct, modelID: model.id)
+    let transcript = imageToolTranscript() + [["role": "user", "content": "Compare these."]]
+    let request = try InferenceRequestBuilder(connection: connection, model: model).request(["context": ["messages": transcript]], secret: "fixture")
+    let body = inferenceObject(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody))), messages = inferenceObjects(body["messages"])
+    XCTAssertEqual(messages.map { $0["role"] as? String }, ["assistant", "tool", "tool", "assistant", "user", "user"])
+    XCTAssertEqual(messages[1]["name"] as? String, "read_image")
+    XCTAssertEqual(messages[2]["name"] as? String, "read_image")
+    XCTAssertEqual(inferenceObjects(messages[4]["content"]).filter { $0["type"] as? String == "image_url" }.count, 2)
+    XCTAssertEqual(inferenceObjects(messages[5]["content"]).first?["text"] as? String, "Compare these.")
+  }
+  func testChatTextToolResultCompatibilityBridgesFollowingUserAndUsesEmptyAssistantContent() throws {
+    var model = try XCTUnwrap(InferenceCatalog.models(provider: "openrouter").first { $0.api == "openai-completions" })
+    let connection = InferenceConnection(name: "Selected", provider: model.provider, route: .direct, modelID: model.id)
+    let transcript: [InferenceObject] = [
+      ["role": "assistant", "content": [["type": "toolCall", "id": "read-a", "name": "read", "arguments": [:]]]],
+      ["role": "toolResult", "toolCallId": "read-a", "content": [["type": "text", "text": "Saved text"]]],
+      ["role": "user", "content": "Continue."]
+    ]
+    for required in [false, true] {
+      model.metadata["compat"] = .object(["requiresAssistantAfterToolResult": .bool(required)])
+      let request = try InferenceRequestBuilder(connection: connection, model: model).request(["context": ["messages": transcript]], secret: "fixture")
+      let body = inferenceObject(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody))), messages = inferenceObjects(body["messages"])
+      XCTAssertEqual(messages.map { $0["role"] as? String }, required ? ["assistant", "tool", "assistant", "user"] : ["assistant", "tool", "user"])
+      XCTAssertEqual(messages[1]["content"] as? String, "Saved text")
+      XCTAssertEqual(inferenceObjects(messages.last?["content"]).first?["text"] as? String, "Continue.")
+      if required {
+        XCTAssertEqual(messages[0]["content"] as? String, "")
+        XCTAssertEqual(messages[2]["content"] as? String, "I have processed the tool results.")
+      } else { XCTAssertTrue(messages[0]["content"] is NSNull) }
     }
+  }
+  func testUnsupportedOrMalformedToolImagesFailBeforeAnyProviderRequest() async throws {
+    for (provider, api) in [("openai", "openai-responses"), ("openrouter", "openai-completions")] {
+      for malformed in [false, true] {
+        let model = try XCTUnwrap(InferenceCatalog.models(provider: provider).first { $0.api == api && $0.input.contains("image") == malformed })
+        let connection = InferenceConnection(name: "Fixture", provider: provider, route: .direct, modelID: model.id)
+        let transport = FixtureTransport([])
+        let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport)
+        let input: InferenceObject = ["model": ["id": model.id, "provider": provider], "context": ["messages": [
+          ["role": "toolResult", "toolCallId": "read-image", "content": [
+            ["type": "text", "text": "Image follows"], ["type": "image", "mimeType": "image/png", "data": malformed ? "invalid-base64!" : firstImage]
+          ]]
+        ]]]
+        do {
+          try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in XCTFail("Rejected image produced a model event") })
+          XCTFail("Unsupported or malformed tool image was accepted")
+        } catch { XCTAssertEqual(error as? InferenceError, malformed ? .invalidConfiguration : .unsupportedImageInput) }
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty, "Invalid image input must not cause a partial request or provider fallback")
+      }
+    }
+  }
+  func testCustomTailscaleModelCannotOverrideDeclaredTextOnlyCapability() async throws {
+    let connection = InferenceConnection(name: "Server", provider: "local-server-openai", route: .direct, baseURL: "https://models.example.ts.net", modelID: "fixture-model")
+    let transport = FixtureTransport([]), service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport)
+    let input: InferenceObject = ["model": ["id": connection.modelID, "provider": connection.provider, "input": ["text", "image"]], "context": ["messages": imageToolTranscript()]]
+    do {
+      try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in })
+      XCTFail("Request metadata overrode native model capabilities")
+    } catch { XCTAssertEqual(error as? InferenceError, .unsupportedImageInput) }
+    let requests = await transport.requests
+    XCTAssertTrue(requests.isEmpty)
   }
   func testAdapterRequiresTerminalEventEvenWhenTransportEndsNormally() async throws {
     let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m")
