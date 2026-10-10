@@ -100,6 +100,62 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNotEqual(try CompanionModel.noteLocalVersion(original), try CompanionModel.noteLocalVersion(edited))
   }
 
+  @MainActor func testCancellingDeviceApprovalRemovesPendingWait() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    let waiting = Task {
+      do {
+        try await model.requireDeviceApproval(id: "approval", conversationID: "device-chat", title: "Write", detail: "File")
+        return false
+      } catch is CancellationError { return true }
+      catch { return false }
+    }
+    for _ in 0..<100 where model.localApprovals["approval"] == nil { await Task.yield() }
+    XCTAssertNotNil(model.localApprovals["approval"])
+    XCTAssertEqual(model.localPending.map(\.id), ["approval"])
+    waiting.cancel()
+    let cancelled = await waiting.value
+    XCTAssertTrue(cancelled)
+    XCTAssertNil(model.localApprovals["approval"])
+    XCTAssertTrue(model.localPending.isEmpty)
+  }
+
+  @MainActor func testLateQuestionCancellationDoesNotRemoveReplacementWait() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    func questionTask() -> Task<Bool, Never> {
+      Task { @MainActor in
+        do {
+          _ = try await model.askDeviceQuestion(id: "question", conversationID: "device-chat", question: "Continue?")
+          return false
+        } catch is CancellationError { return true }
+        catch { return false }
+      }
+    }
+    let first = questionTask()
+    for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
+    let firstToken = try XCTUnwrap(model.localApprovals["question"]?.token)
+    first.cancel()
+    let firstCancelled = await first.value
+    XCTAssertTrue(firstCancelled)
+    let second = questionTask()
+    for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
+    let secondToken = try XCTUnwrap(model.localApprovals["question"]?.token)
+    XCTAssertNotEqual(firstToken, secondToken)
+    model.cancelDeviceApproval("question", token: firstToken)
+    XCTAssertEqual(model.localApprovals["question"]?.token, secondToken)
+    XCTAssertEqual(model.localPending.map(\.id), ["question"])
+    second.cancel()
+    let secondCancelled = await second.value
+    XCTAssertTrue(secondCancelled)
+    XCTAssertTrue(model.localPending.isEmpty)
+    XCTAssertTrue(model.localQuestionAnswers.isEmpty)
+  }
+
   @MainActor func testWorkspaceFileToolsRejectTraversalAndSymlinkEscape() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

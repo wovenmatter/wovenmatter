@@ -140,6 +140,9 @@ extension CompanionModel {
   }
   func requireDeviceApproval(id: String, conversationID: String, title: String, detail: String) async throws {
     let token = UUID().uuidString
+    let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
+      self?.cancelDeviceApproval(id, token: token)
+    }
     let allowed = await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
         guard !Task.isCancelled else { continuation.resume(returning: false); return }
@@ -147,12 +150,17 @@ extension CompanionModel {
         localPending.append(.init(id: id, conversationID: conversationID, runID: executionRecords[conversationID]?.runID,
           kind: .approval, title: title, detail: detail, options: [.init(id: "allow", label: "Allow once"), .init(id: "deny", label: "Don’t allow")]))
       }
-    } onCancel: { [weak self] in Task { @MainActor in self?.cancelDeviceApproval(id, token: token) } }
+    } onCancel: { [cancelWait] in
+      Task { @MainActor [cancelWait] in cancelWait() }
+    }
     try Task.checkCancellation()
     guard allowed else { throw DeviceExecutionError.unavailable("The user declined this tool action.") }
   }
   func askDeviceQuestion(id: String, conversationID: String, question: String) async throws -> String {
     let token = UUID().uuidString
+    let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
+      self?.cancelDeviceApproval(id, token: token)
+    }
     let allowed = await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
         guard !Task.isCancelled else { continuation.resume(returning: false); return }
@@ -160,7 +168,9 @@ extension CompanionModel {
         localPending.append(.init(id: id, conversationID: conversationID, runID: executionRecords[conversationID]?.runID,
           kind: .question, title: "Pi Durable needs your input", questions: [.init(id: id, prompt: question)]))
       }
-    } onCancel: { [weak self] in Task { @MainActor in self?.cancelDeviceApproval(id, token: token) } }
+    } onCancel: { [cancelWait] in
+      Task { @MainActor [cancelWait] in cancelWait() }
+    }
     try Task.checkCancellation()
     guard allowed, let answer = localQuestionAnswers.removeValue(forKey: id) else { throw DeviceExecutionError.unavailable("The question was cancelled.") }
     return answer
