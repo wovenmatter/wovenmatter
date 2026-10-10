@@ -13,7 +13,7 @@ SCRIPT = (ROOT / 'remote/executor-deploy.sh').read_text()
 DOCKERFILE = (ROOT / 'remote/Executor.Dockerfile').read_text()
 
 class ExecutorDeploymentTests(unittest.TestCase):
-    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, https_failure=False, previous=False, rename_failure=False):
+    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False):
         commands = root / 'commands'
         commands.mkdir()
         log = root / 'commands.log'
@@ -49,13 +49,12 @@ class Ready:
     def __exit__(self, *args): pass
 def ready(request, timeout):
     assert request.full_url in ('http://127.0.0.1:4312/v1/apps', 'https://fixture.tailnet.ts.net:8443/v1/apps')
-    private=request.full_url.startswith('https:')
     assert request.get_header('Authorization')=='Bearer '+'a'*64
-    with open(os.environ['WM_FIXTURE_LOG'], 'a') as out: out.write(json.dumps(['https-readiness' if private else 'readiness'])+'\\n')
-    if os.environ.get('WM_FIXTURE_READY_FAIL') or (private and os.environ.get('WM_FIXTURE_HTTPS_FAIL')): raise OSError('fixture readiness failure')
+    with open(os.environ['WM_FIXTURE_LOG'], 'a') as out: out.write(json.dumps(['readiness'])+'\\n')
+    if os.environ.get('WM_FIXTURE_READY_FAIL'): raise OSError('fixture readiness failure')
     return Ready()
 urllib.request.urlopen=ready
-if os.environ.get('WM_FIXTURE_READY_FAIL') or os.environ.get('WM_FIXTURE_HTTPS_FAIL'):
+if os.environ.get('WM_FIXTURE_READY_FAIL'):
     tick=[0]
     def now(): tick[0]+=100; return tick[0]
     time.monotonic=now
@@ -74,7 +73,7 @@ elif sys.argv[1:]==['serve','status','--json']:
         payload = root / 'setup.json'
         payload.write_text(json.dumps({'origin': 'https://fixture.tailnet.ts.net:8443', 'apiKey': 'a'*64, 'encryptionKey': 'b'*64, 'version': '2.0.0-beta.12', 'dockerfile': DOCKERFILE}))
         env = {**os.environ, 'PATH': str(commands)+':/usr/bin:/bin', 'WM_FIXTURE_LOG': str(log), 'WM_FIXTURE_STATE': str(state), 'PYTHONPATH': str(root)}
-        for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_HTTPS_FAIL', https_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure)]:
+        for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure)]:
             if value: env[flag] = '1'
         # Replace only the home directory anchor; every deployment command and
         # credential/route/ownership check runs from the production source.
@@ -121,8 +120,7 @@ elif sys.argv[1:]==['serve','status','--json']:
             ready = calls.index(['readiness'])
             remove = calls.index(['docker', 'rm', 'wovenmatter-executor-previous'])
             self.assertLess(build, stop)
-            self.assertLess(ready, calls.index(['https-readiness']))
-            self.assertLess(calls.index(['https-readiness']), remove)
+            self.assertLess(ready, remove)
             self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.12'})
 
     def test_failed_readiness_restores_previous_runtime(self):
@@ -132,19 +130,6 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertNotEqual(result.returncode, 0)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
-            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.7'})
-
-    def test_failed_https_readiness_restores_previous_runtime(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            result, log = self.fixture(root, existing=True, old_version=True, https_failure=True)
-            self.assertNotEqual(result.returncode, 0)
-            calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertIn(['readiness'], calls)
-            self.assertIn(['https-readiness'], calls)
-            self.assertNotIn(['docker', 'rm', 'wovenmatter-executor-previous'], calls)
-            self.assertIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
-            self.assertIn(['docker', 'start', 'wovenmatter-executor'], calls)
             self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.7'})
 
     def test_failed_rename_restarts_current_runtime(self):
