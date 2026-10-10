@@ -98,6 +98,9 @@ public actor PiRPCClient {
     private var initialArchiveRequestIDs: Set<String> = []
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
+    private var promptInteraction: LocalACPClient.InteractionHandler?
+    private var extensionDecisions: [String: LocalACPInteractionDecision] = [:]
+    private var extensionUIClosed = false
     private var resumePermissionHandler: LocalACPClient.PermissionHandler?
 
     public func setResumePermissionHandler(_ handler: @escaping LocalACPClient.PermissionHandler) {
@@ -131,8 +134,10 @@ public actor PiRPCClient {
         let id: String
         let method: String?
         let title: String
-        let options: [LocalACPPermissionOption]
+        let form: LocalACPFormRequest?
+        let deadline: ContinuousClock.Instant?
     }
+
     private var stderrTask: Task<String?, Never>?
     private var shutdownTask: Task<Void, Never>?
 
@@ -267,11 +272,12 @@ public actor PiRPCClient {
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler? = nil,
                        onPermission: LocalACPClient.PermissionHandler? = nil,
+                       onInteraction: LocalACPClient.InteractionHandler? = nil,
                        dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
         try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
         return try await prompt(payload.text, images: payload.images, cliContext: input.cliContext, onEvent: onEvent,
-            onPermission: onPermission, dispatchFence: dispatchFence)
+            onPermission: onPermission, onInteraction: onInteraction, dispatchFence: dispatchFence)
     }
 
     public func steer(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws {
@@ -306,6 +312,7 @@ public actor PiRPCClient {
         cliContext: AgentCLIContext? = nil,
         onEvent: LocalACPClient.EventHandler? = nil,
         onPermission: LocalACPClient.PermissionHandler? = nil,
+        onInteraction: LocalACPClient.InteractionHandler? = nil,
         dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
         let fence = dispatchFence ?? AgentDispatchFence()
@@ -329,6 +336,7 @@ public actor PiRPCClient {
         latestTerminalError = nil
         promptEvents = onEvent
         promptPermission = onPermission
+        promptInteraction = onInteraction
         defer {
             promptGeneration = nil
         }
@@ -361,10 +369,11 @@ public actor PiRPCClient {
                 try await abortTask?.value
                 try await waitForNativeArchives()
                 try await archiveNativeHistory()
+                if cancelled { return .cancelled }
                 if let latestTerminalError {
                     throw PiRPCClientError.commandFailed(latestTerminalError)
                 }
-                return cancelled ? .cancelled : (latestStopReason ?? .endTurn)
+                return latestStopReason ?? .endTurn
             } catch {
                 failSettledWaiters(error)
                 throw error
@@ -418,14 +427,16 @@ public actor PiRPCClient {
             try await self.abortTask?.value
             try await self.waitForNativeArchives()
             try await self.archiveNativeHistory()
+            if self.cancelled { return .cancelled }
             if let error = self.latestTerminalError { throw PiRPCClientError.commandFailed(error) }
-            return self.cancelled ? .cancelled : (self.latestStopReason ?? .endTurn)
+            return self.latestStopReason ?? .endTurn
         })
     }
 
     public func finishRun() {
         promptEvents = nil
         promptPermission = nil
+        promptInteraction = nil
         runID = nil
     }
 
@@ -438,6 +449,7 @@ public actor PiRPCClient {
     public func stop() async throws {
         pendingDispatches.values.forEach { $0.cancel() }
         cancelled = true
+        for decision in extensionDecisions.values { decision.cancel() }
         guard promptAcknowledged, steeringRequestID == nil else {
             // Abort only stops native agent work, not an extension command that
             // is still awaiting a UI decision, including steering preflight.
@@ -492,6 +504,7 @@ public actor PiRPCClient {
             return
         }
         guard !closed else { return }
+        for decision in extensionDecisions.values { decision.cancel() }
         closed = true
         failPending(PiRPCClientError.processExited())
         readerTask?.cancel()
@@ -608,6 +621,8 @@ public actor PiRPCClient {
             return
         }
         guard !closed else { return }
+        extensionUIClosed = true
+        for decision in extensionDecisions.values { decision.cancel() }
         if hasQueuedSettlement { await eventTask?.value }
         else { eventTask?.cancel() }
         let detail = await stderrTask?.value
@@ -669,10 +684,10 @@ public actor PiRPCClient {
         let extensionRequest = type == "extension_ui_request"
             ? Self.extensionUIRequest(from: object)
             : nil
-        queueProjection(type: type, events: events, extensionRequest: extensionRequest)
+        queueProjection(type: type, events: events, extensionRequest: extensionRequest, aborted: object["aborted"] as? Bool == true)
     }
 
-    private func queueProjection(type: String?, events: [LocalACPEvent], extensionRequest: ExtensionUIRequest? = nil) {
+    private func queueProjection(type: String?, events: [LocalACPEvent], extensionRequest: ExtensionUIRequest? = nil, aborted: Bool = false) {
         guard extensionRequest != nil
                 || type == "agent_settled"
                 || !events.isEmpty else { return }
@@ -693,7 +708,7 @@ public actor PiRPCClient {
                         try await self.promptEvents?(event)
                     }
                     if type == "agent_settled" {
-                        await self.finishSettledWaiters(generation: generation)
+                        await self.finishSettledWaiters(generation: generation, aborted: aborted)
                     }
                 }
             } catch {
@@ -876,7 +891,9 @@ public actor PiRPCClient {
         pendingNativeArchives[token] = task; nativeArchiveTask = task
         var object: [String: Any] = metadata.scalars
         object["message"] = metadata.messageScalars
-        if let error = metadata.scalars["isError"] { object["isError"] = error == "true" }
+        for key in ["isError", "aborted", "willRetry"] {
+            if let value = metadata.scalars[key] { object[key] = value == "true" }
+        }
         if type == "message_end", metadata.messageScalars["role"] == "assistant" {
             activeReasoningPhaseID = nil; assistantMessageOpen = false
             captureTerminalStatus(metadata.messageScalars)
@@ -884,7 +901,7 @@ public actor PiRPCClient {
             // snapshot is available through the archive, not copied into UI RAM.
             queueProjection(type: type, events: [.assistantBoundary])
         } else {
-            queueProjection(type: type, events: projectedEvents(from: object))
+            queueProjection(type: type, events: projectedEvents(from: object), aborted: object["aborted"] as? Bool == true)
         }
     }
 
@@ -901,7 +918,7 @@ public actor PiRPCClient {
     private nonisolated static func isNativeRunEvent(type: String, scalars: [String: String], message: [String: String]) -> Bool {
         guard type != "response", type != "extension_ui_request",
               !["auth", "config", "provider", "credential", "secret"].contains(where: { type.hasPrefix($0) }) else { return false }
-        return ["agent_", "message_", "tool_", "turn_", "auto_compaction_", "auto_retry_"].contains(where: type.hasPrefix)
+        return ["agent_", "message_", "tool_", "turn_", "compaction_", "auto_compaction_", "auto_retry_"].contains(where: type.hasPrefix)
             || scalars["toolCallId"] != nil || ["user", "assistant", "toolResult"].contains(message["role"] ?? "")
     }
 
@@ -1087,9 +1104,10 @@ public actor PiRPCClient {
         }
     }
 
-    private func finishSettledWaiters(generation: Int? = nil) {
+    private func finishSettledWaiters(generation: Int? = nil, aborted: Bool = false) {
         if let generation, generation != settlementGeneration { return }
         guard settlement == nil else { return }
+        if aborted { cancelled = true }
         settlement = .success(())
         let waiters = settledWaiters
         settledWaiters.removeAll()
@@ -1116,91 +1134,84 @@ public actor PiRPCClient {
         failSettledWaiters(error)
     }
 
-    private nonisolated static func extensionUIRequest(
-        from object: [String: Any]
-    ) -> ExtensionUIRequest? {
+    private nonisolated static func extensionUIRequest(from object: [String: Any]) -> ExtensionUIRequest? {
         guard let id = string(object["id"]) else { return nil }
         let method = string(object["method"])
-        if method == "notify"
-            || method == "setStatus"
-            || method == "setWidget"
-            || method == "setTitle"
-            || method == "set_editor_text" {
-            return nil
+        if ["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"].contains(method ?? "") { return nil }
+        let prompt = [string(object["title"]), string(object["message"])].compactMap { $0 }.joined(separator: "\n\n")
+        let title = prompt.isEmpty ? "Pi has a question." : prompt
+        let form: LocalACPFormRequest?
+        if method == "select", let raw = object["options"] as? [String], !raw.isEmpty, raw.count <= 256,
+           Set(raw).count == raw.count {
+            form = LocalACPFormRequest(message: title, fields: [LocalACPFormField(id: "value", title: "Choose an option",
+                kind: .singleChoice, options: raw.map { LocalACPQuestionOption(id: $0, label: $0) })])
+        } else if method == "input" || method == "editor" {
+            form = LocalACPFormRequest(message: title, fields: [LocalACPFormField(id: "value", title: "Answer",
+                initialValue: method == "editor" ? .string((object["prefill"] as? String) ?? "") : nil,
+                placeholder: object["placeholder"] as? String, multiline: method == "editor")])
+        } else { form = nil }
+        let timeout = (object["timeout"] as? NSNumber)?.doubleValue
+        let deadline = timeout.flatMap { value -> ContinuousClock.Instant? in
+            // Pi uses Node's setTimeout only for a truthy timeout: zero disables
+            // it, and delays outside Node's timer range are clamped to 1 ms.
+            guard value != 0, !value.isNaN else { return nil }
+            let milliseconds = value < 1 || value > Double(Int32.max) ? 1 : value.rounded(.towardZero)
+            return ContinuousClock.now.advanced(by: .milliseconds(milliseconds))
         }
-        let options: [LocalACPPermissionOption]
-        if method == "confirm" {
-            options = [
-                LocalACPPermissionOption(id: "allow", name: "Allow", kind: "allow_once"),
-                LocalACPPermissionOption(id: "reject", name: "Reject", kind: "reject_once"),
-            ]
-        } else if let raw = array(object["options"]) {
-            options = raw.compactMap { value in
-                let name = (value as? String)
-                    ?? string((value as? [String: Any])?["label"])
-                    ?? string((value as? [String: Any])?["name"])
-                guard let name else { return nil }
-                return LocalACPPermissionOption(id: name, name: name, kind: "allow_once")
-            }
-        } else {
-            options = [
-                LocalACPPermissionOption(id: "allow", name: "Allow", kind: "allow_once"),
-                LocalACPPermissionOption(id: "reject", name: "Reject", kind: "reject_once"),
-            ]
-        }
-        let title = string(object["title"])
-            ?? string(object["message"])
-            ?? "Pi is requesting a decision."
-        return ExtensionUIRequest(
-            id: id,
-            method: method,
-            title: title,
-            options: options
-        )
+        return ExtensionUIRequest(id: id, method: method, title: title, form: form, deadline: deadline)
     }
 
-    private func handleExtensionUI(
-        _ request: ExtensionUIRequest
-    ) async throws {
+    private func handleExtensionUI(_ request: ExtensionUIRequest) async throws {
         let generation = promptGeneration
+        let decision = LocalACPInteractionDecision()
+        extensionDecisions[request.id] = decision
+        defer { extensionDecisions.removeValue(forKey: request.id) }
+        let permission = promptPermission ?? (launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" ? resumePermissionHandler : nil)
+        let interaction = promptInteraction
+        if cancelled || extensionUIClosed || Task.isCancelled || request.deadline.map({ $0 <= ContinuousClock.now }) == true { decision.cancel() }
+        else if request.method == "confirm" {
+            decision.start {
+                let selected = await permission?(LocalACPPermissionRequest(title: request.title, options: [
+                    LocalACPPermissionOption(id: "allow", name: "Allow", kind: "allow_once"),
+                    LocalACPPermissionOption(id: "reject", name: "Reject", kind: "reject_once"),
+                ]))
+                if let selected, ["allow", "reject"].contains(selected) { return .answers(["value": .single(selected)]) }
+                return .cancelled
+            }
+        } else if let form = request.form {
+            decision.start { await interaction?(.form(form)) ?? .cancelled }
+        } else { decision.cancel() }
+        let timeoutTask = request.deadline.map { deadline in Task {
+            do { try await ContinuousClock().sleep(until: deadline); decision.cancel() } catch { }
+        } }
+        defer { timeoutTask?.cancel() }
+        let answer = await decision.value()
         let selected: String?
-        if cancelled || Task.isCancelled {
-            selected = nil
-        } else {
-            let handler = promptPermission ?? (launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" ? resumePermissionHandler : nil)
-            selected = await handler?(
-                LocalACPPermissionRequest(
-                    title: request.title,
-                    options: request.options
-                )
-            )
-        }
+        if case .answers(let values) = answer, case .single(let value) = values["value"] { selected = value }
+        else if case .formValues(let values) = answer, request.form?.accepts(values) == true,
+                case .string(let value) = values["value"] { selected = value }
+        else { selected = nil }
         func response(cancelled: Bool) throws -> Data {
-            var payload: [String: Any] = [
-                "type": "extension_ui_response",
-                "id": request.id,
-            ]
+            var payload: [String: Any] = ["type": "extension_ui_response", "id": request.id]
             if cancelled {
                 payload["cancelled"] = true
                 if request.method == "confirm" { payload["confirmed"] = false }
-            } else if request.method == "confirm" {
-                payload["confirmed"] = true
-            } else {
-                payload["value"] = selected
-            }
+            } else if request.method == "confirm" { payload["confirmed"] = selected == "allow" }
+            else { payload["value"] = selected }
             return try JSONSerialization.data(withJSONObject: payload)
         }
         await acquireOutgoing()
         defer { releaseOutgoing() }
         guard !closed, let input else { return }
-        let rejected = selected == nil || selected == "reject" || cancelled
-            || Task.isCancelled || promptGeneration != generation
+        func shouldCancelResponse() -> Bool {
+            selected == nil || cancelled || extensionUIClosed || Task.isCancelled || promptGeneration != generation
+                || request.deadline.map { $0 <= ContinuousClock.now } == true
+        }
+        let rejected = shouldCancelResponse()
         var data = try response(cancelled: rejected)
         try await launch.historyRecorder?("out", data)
         guard !closed else { return }
-        // Stop can arrive while the chosen response waits for its journal write.
-        // Release the native UI request with a cancellation, never a late approval.
-        if !rejected && (cancelled || Task.isCancelled || promptGeneration != generation) {
+        if !rejected && shouldCancelResponse() {
             data = try response(cancelled: true)
             try await launch.historyRecorder?("out", data)
             guard !closed else { return }
@@ -1237,9 +1248,18 @@ public actor PiRPCClient {
         case "agent_start":
             sawAgentStart = true
             return [.programStatus(ProgramStatus(state: .working, app: "pi"), runID: nil)]
-        case "auto_compaction_start":
+        case "compaction_start", "auto_compaction_start":
             return [.programStatus(ProgramStatus(state: .working, app: "pi", message: "Compacting context"), runID: nil)]
-        case "auto_compaction_end", "auto_retry_end":
+        case "compaction_end", "auto_compaction_end":
+            if let error = object["errorMessage"] as? String {
+                let safe = ProgramStatus.message(error)?.replacingOccurrences(of: #"https?://[^\s]+"#,
+                    with: "[URL redacted]", options: [.regularExpression, .caseInsensitive]) ?? "Context compaction failed."
+                return [.programStatus(ProgramStatus(state: .working, app: "pi", message: "Context compaction failed"), runID: nil),
+                    .activity(AgentRunActivity(id: "pi-compaction", kind: .activity, phase: "end", title: "Context compaction",
+                        status: "failed", content: safe, contentIsDelta: false), appendsContent: false)]
+            }
+            return [.programStatus(ProgramStatus(state: .working, app: "pi"), runID: nil)]
+        case "auto_retry_end":
             return [.programStatus(ProgramStatus(state: .working, app: "pi"), runID: nil)]
         case "auto_retry_start":
             return [.programStatus(ProgramStatus(state: .working, app: "pi", message: "Retrying request"), runID: nil)]
