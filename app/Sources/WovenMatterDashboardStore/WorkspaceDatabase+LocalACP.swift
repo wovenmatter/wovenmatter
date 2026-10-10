@@ -664,6 +664,9 @@ extension WorkspaceDatabaseConnection {
       throw OpenCodeError.message("OpenCode v1 transcripts are read-only. OpenCode v2 uses the shared server directly.")
     }
     return try transaction {
+      guard try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
+        throw CompanionAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
+      }
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
         WHERE conversation_id = ? AND desktop_owned = 1 AND status IN ('running', 'uncertain')

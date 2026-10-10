@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 final class ApplicationModel {
     var isPreparedForExecutionRestart = false
+    var isLibraryClient = false
     var noteEditingSuspended = false
     func suspendNoteEditing() { noteEditingSuspended = true }
     func resumeNoteEditing() { noteEditingSuspended = false }
@@ -21,6 +22,7 @@ final class ApplicationModel {
     func flushNoteDrafts() async -> Bool { flushCount += 1; return true }
     func restoreOpenCodeInstances() async {}
     func shutdownLocalACPSessions() { sessionShutdownCount += 1 }
+    func prepareLibraryClientForQuit() async throws {}
     func flushNotesBeforeBackendClientQuit() async -> Bool { flushCount += 1; return true }
     func prepareOpenCodeInstancesToQuit() async throws {
         cleanupCount += 1
@@ -238,6 +240,11 @@ private struct AppTerminationTests {
         precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false) == .standalone)
         precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: true) == .frontend)
         precondition(LocalExecutionRole.resolve(arguments: ["--backend"], backgroundEnabled: false) == .backend)
+        precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: true, libraryClientEnabled: true) == .libraryClient)
+        precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false, libraryClientEnabled: true) == .libraryClient)
+        precondition(!LocalExecutionRole.libraryClient.ownsExecution)
+        precondition(LocalExecutionRole.libraryClient.leaseFileName != LocalExecutionRole.standalone.leaseFileName)
+        precondition(LocalExecutionRole.resolve(arguments: ["--backend"], backgroundEnabled: false, libraryClientEnabled: true) == .backend)
         precondition(LocalExecutionRole.backend.leaseFileName == LocalExecutionRole.standalone.leaseFileName)
         precondition(LocalExecutionRole.frontend.leaseFileName != LocalExecutionRole.backend.leaseFileName)
         let endpoint = LocalExecutionRole.backendSocketURL(workspaceDirectory: URL(fileURLWithPath: "/private/tmp/" + String(repeating: "long", count: 100)))

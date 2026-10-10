@@ -22,6 +22,7 @@ struct BuiltInSubagentArchiveRequest: Codable, Sendable {
 
 enum BackendApplicationCommand: Codable, Sendable {
     case companion(CompanionHostAction)
+    case federatedExecution(FederatedExecutionAction)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
@@ -57,6 +58,7 @@ enum BackendApplicationCommand: Codable, Sendable {
 
 struct BackendApplicationResult: Codable, Sendable {
     var companion: CompanionHostSnapshot?
+    var federatedExecution: FederatedExecutionSnapshot?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
     var trashedNotes: [WorkspaceTrashedNote]?
@@ -186,6 +188,8 @@ final class BackendApplicationService {
 
     private func execute(_ command: BackendApplicationCommand) async throws -> BackendApplicationResult {
         switch command {
+        case .federatedExecution(let action):
+            return try await .init(federatedExecution: model.performFederatedExecution(action))
         case .companion(let action):
             let host = model.companionHost
             switch action {

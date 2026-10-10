@@ -18,6 +18,7 @@ public actor MobileSyncEngine {
     try await task.value
   }
   private func performSynchronization() async throws {
+    try await store.restoreExecutionProjection()
     try await store.verifyWorkspace(transport.workspaceIdentity())
     let local = await store.snapshot()
     if local.workspaceID == nil {
@@ -33,7 +34,7 @@ public actor MobileSyncEngine {
       }
       try await store.acknowledge(result)
       processed += 1
-      if result.status != .accepted && (mutation.kind == .createFolder || mutation.kind == .renameFolder) {
+      if result.status != .accepted && (mutation.kind == .createFolder || mutation.kind == .renameFolder || (mutation.kind == .deleteFolder && result.status != .notFound)) {
         throw MobileConnectionError.http(409, result.message ?? "The folder could not sync. Dependent notes remain saved on this iPhone.")
       }
     }
@@ -55,9 +56,11 @@ public actor MobileSyncEngine {
     let current = await store.snapshot()
     let recent = current.conversations.values.sorted { $0.updatedAt > $1.updatedAt }.prefix(20)
     let missing = recent.filter { current.transcripts[$0.id] == nil }
-    for conversation in missing.prefix(2) { try await refreshTranscript(conversation.id) }
+    for conversation in missing.prefix(2) where current.executionConversationIDs?.contains(conversation.id) != true { try await refreshTranscript(conversation.id) }
+    if let federation = transport as? any FederationTransport { try await synchronizeFederation(using: federation) }
   }
   public func submit(_ command: CompanionCommand) async throws -> CompanionCommandReceipt {
+    guard command.workspaceID == nil else { throw MobileStore.Failure.wrongWorkspace }
     try await store.verifyWorkspace(transport.workspaceIdentity())
     let stored = await store.snapshot().commands.first { $0.id == command.commandID }
     var command = stored?.command ?? command
@@ -76,7 +79,7 @@ public actor MobileSyncEngine {
   func sendCommand(_ command: CompanionCommand) async throws -> CompanionCommandReceipt { try await transport.command(command) }
   public func recoverCommandReceipts() async throws {
     try await verifyRemoteWorkspace()
-    for launch in await store.snapshot().launches where !launch.accepted {
+    for launch in await store.snapshot().launches where !launch.accepted && launch.create.workspaceID == nil {
       if let receipt = try await transport.receipt(launch.create.commandID) { try await store.rememberLaunchReceipt(receipt, launchID: launch.id) }
       let latest = await store.snapshot().launches.first { $0.id == launch.id }
       if latest?.sendPrepared == true, let receipt = try await transport.receipt(launch.initialSend.commandID) { try await store.rememberLaunchReceipt(receipt, launchID: launch.id) }

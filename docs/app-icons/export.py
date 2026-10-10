@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Export one shared cube and shadow with two tile colors (requires Pillow)."""
+"""Export the shared cube for macOS and iOS app icons (requires Pillow)."""
 import json
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageStat
 
 HERE = Path(__file__).resolve().parent
-ASSETS = HERE.parents[1] / 'app/App/Assets.xcassets'
+ROOT = HERE.parents[1]
+ASSETS = ROOT / 'app/App/Assets.xcassets'
+IOS_ASSETS = ROOT / 'ios/Sources/CompanionApp/Assets.xcassets'
 MASTER_SIZE = (1254, 1254)
 SCALE = 4
 
@@ -36,7 +38,7 @@ def render_masters():
     means = [ImageStat.Stat(im.crop(patch)).mean for im in (green, reference)]
     # Replace only the source's neutral exterior with the sampled sage color.
     # Keep the full canvas and all foreground coordinates unchanged: no crop,
-    # zoom, or repositioning. macOS supplies the final outer icon shape.
+    # zoom, or repositioning. The operating system supplies the outer icon shape.
     source_tile = mask_for(lambda draw: draw.rounded_rectangle(
         tuple(v * SCALE for v in (84, 84, 1170, 1170)),
         radius=194 * SCALE, fill=255,
@@ -52,15 +54,23 @@ def render_masters():
     return green, cognac, foreground
 
 
+def export_catalog(source, catalog):
+    entries = json.loads((catalog / 'Contents.json').read_text())['images']
+    for entry in entries:
+        # iPad's 83.5pt icon produces an integral 167px image at 2x.
+        pixels = float(entry['size'].split('x')[0]) * int(entry['scale'][:-1])
+        assert pixels.is_integer(), entry
+        pixels = int(pixels)
+        source.resize((pixels, pixels), Image.Resampling.LANCZOS).save(catalog / entry['filename'])
+    print(f'Exported {len({e["filename"] for e in entries})} files to {catalog.relative_to(ROOT)}')
+
+
 def main():
     green, cognac, _ = render_masters()
-    for source, name in [(green, 'AppIcon'), (cognac, 'AppIconDev')]:
-        catalog = ASSETS / f'{name}.appiconset'
-        entries = json.loads((catalog / 'Contents.json').read_text())['images']
-        for entry in entries:
-            pixels = int(entry['size'].split('x')[0]) * int(entry['scale'][:-1])
-            source.resize((pixels, pixels), Image.Resampling.LANCZOS).save(catalog / entry['filename'])
-        print(f'Exported {len({e["filename"] for e in entries})} files to {catalog.name}')
+    export_catalog(green, ASSETS / 'AppIcon.appiconset')
+    export_catalog(cognac, ASSETS / 'AppIconDev.appiconset')
+    # iPhone and iPad use the production artwork in every build configuration.
+    export_catalog(green, IOS_ASSETS / 'AppIcon.appiconset')
 
 
 if __name__ == '__main__':

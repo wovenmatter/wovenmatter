@@ -428,3 +428,17 @@ test('native tool output is persisted and copied in byte-bounded exact chunks', 
   assert.equal(result.stopReason, 'end_turn');
   assert.ok(restored.session.messages.some(m => Array.isArray(m.content) && m.content.some(b => b.text === 'Continued safely')));
 });
+
+test('client adoption inspects native idle state without resuming unfinished work',async t=>{
+  const {engine}=await fixture(t),record=await engine.create(),sessionId=record.session.sessionId
+  record.busy=true
+  await assert.rejects(engine.handle('woven/adopt',{sessionId}),/still executing/)
+  record.busy=false
+  const inspect=record.harness.inspect.bind(record.harness)
+  record.harness.inspect=async()=>({tasks:[{id:'unfinished'}],submissions:[]})
+  await assert.rejects(engine.handle('woven/adopt',{sessionId}),/unfinished native work/)
+  record.harness.inspect=inspect
+  const adopted=await engine.handle('woven/adopt',{sessionId})
+  assert.equal(adopted.sessionId,sessionId)
+  assert.equal(record.session.messages.length,0)
+})

@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
 import { join } from 'node:path';
 import { DefaultAgentError, operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { openNativeJournal } from './native-journal.mjs';
+import { createInferenceAdapter } from './inference-adapter.mjs';
 
 function requestFingerprint(message) {
   const ordered = value => Array.isArray(value) ? value.map(ordered)
@@ -17,14 +18,14 @@ function verifyRetry(stored, fingerprint) {
 // Readers poll current process-owned operations. Durable owns native execution
 // persistence; an accepted transport ID is never redispatched after restart.
 export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON, attachmentState }) {
-  let enginePromise;
+  let enginePromise, inferenceAdapter;
   const vault = new CredentialVault(directory), epoch = crypto.randomUUID();
   let configurationQueue = Promise.resolve(), generation = 0;
   const operations = new Map(), admissions = new Map(), admissionQueues = new Map();
   const attachmentTokens = new Map(attachmentState?.tokens);
   const cancellationRevisions = new Map(attachmentState?.cancellations);
   function admit(message, fingerprint) {
-    if (!['session/load', 'session/prompt', '_session/steering', 'session/set_config_option', 'woven/history'].includes(message.method)) return invokeOperation(message, fingerprint);
+    if (!['session/load', 'woven/adopt', 'session/prompt', '_session/steering', 'session/set_config_option', 'woven/history'].includes(message.method)) return invokeOperation(message, fingerprint);
     const sessionID = message.params?.sessionId, cancellationRevision = cancellationRevisions.get(sessionID) ?? 0;
     const pending = (admissionQueues.get(sessionID) ?? Promise.resolve()).then(() => invokeOperation(message, fingerprint, cancellationRevision));
     const tail = pending.catch(() => {});
@@ -55,6 +56,28 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     configurationQueue = pending.catch(() => {});
     return pending;
   }
+  function unlockForClient({ workspace, unlockKey }) {
+    const pending = configurationQueue.then(async () => {
+      const candidate = typeof unlockKey === 'string' ? Buffer.from(unlockKey, 'base64') : Buffer.alloc(0);
+      try {
+        if (vault.unlocked && vault.workspace === workspace && candidate.length === vault.key.length && timingSafeEqual(candidate, vault.key)) return { unlocked: true };
+        await vault.unlock(workspace, unlockKey);
+        return { unlocked: true };
+      } finally { candidate.fill(0); }
+    });
+    configurationQueue = pending.catch(() => {});
+    return pending;
+  }
+  async function inferenceCatalog() {
+    if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
+    inferenceAdapter ??= createInferenceAdapter(await engine());
+    return inferenceAdapter.catalog();
+  }
+  async function inferenceStream(request, options) {
+    if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
+    inferenceAdapter ??= createInferenceAdapter(await engine());
+    return inferenceAdapter.stream(request, options);
+  }
   async function status() {
     if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
     return { ...(await (await engine()).status()), locked: false, epoch };
@@ -70,15 +93,15 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   }
   async function invokeOperation(message, fingerprint = requestFingerprint(message), cancellationRevision) {
     const e = await engine(), sessionID = message.params?.sessionId;
-    if (['session/prompt', '_session/steering', 'session/load', 'session/cancel', 'session/set_config_option', 'woven/history', 'woven/idle'].includes(message.method)
+    if (['session/prompt', '_session/steering', 'session/load', 'woven/adopt', 'session/cancel', 'session/set_config_option', 'woven/history', 'woven/idle'].includes(message.method)
       && (attachmentTokens.has(sessionID) || message.attachmentToken)) {
-      const freshLoad = message.method === 'session/load' && message.attachmentProtocol === 1 && !message.attachmentToken;
+      const freshLoad = ['session/load','woven/adopt'].includes(message.method) && message.attachmentProtocol === 1 && !message.attachmentToken;
       if (!freshLoad && message.attachmentToken !== attachmentTokens.get(sessionID)) throw new DefaultAgentError('This session attachment was replaced. Reconnect before sending another message.');
     }
     if (message.method === 'session/cancel') cancellationRevisions.set(sessionID, (cancellationRevisions.get(sessionID) ?? 0) + 1);
     if (message.method !== 'session/prompt') {
       const result = await e.handle(message.method, message.params);
-      if (['session/new', 'session/load'].includes(message.method) && message.attachmentProtocol === 1) {
+      if (['session/new', 'session/load', 'woven/adopt'].includes(message.method) && message.attachmentProtocol === 1) {
         const token = crypto.randomUUID();
         attachmentTokens.set(result.sessionId, token);
         result._meta = { ...result._meta, attachmentToken: token };
@@ -127,6 +150,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     return (await engine()).handle('session/cancel', { sessionId: sessionID });
   }
   async function cancelActive() {
+    await inferenceAdapter?.cancelAll();
     const running = [...operations.values()].filter(operation => !operation.done), current = enginePromise ? await enginePromise : null;
     const sessions = new Set([...running.map(operation => operation.sessionID), ...admissionQueues.keys(), ...(current?.sessions?.keys() ?? [])]);
     await Promise.all([...sessions].map(cancelSession));
@@ -139,7 +163,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     try { return await fn(...args); } finally { inFlight--; }
   };
   async function prepareRetirement() {
-    if (inFlight || admissions.size || admissionQueues.size || [...operations.values()].some(operation => !operation.done)) return false;
+    if (inFlight || inferenceAdapter?.activeCount || admissions.size || admissionQueues.size || [...operations.values()].some(operation => !operation.done)) return false;
     retiring = true;
     try {
       if (enginePromise) {
@@ -159,5 +183,5 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       throw error;
     }
   }
-  return { engine, configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
+  return { engine, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
 }

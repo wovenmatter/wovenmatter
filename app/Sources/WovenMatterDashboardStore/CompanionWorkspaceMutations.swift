@@ -73,7 +73,7 @@ extension WorkspaceDatabaseConnection {
       guard let title = request.title, let content = request.content else { return result(.invalid, "The note needs a title and a document.") }
       do {
         let document = try NoteDocument.editableDocument(from: content)
-        guard document.kind == .note else { return result(.invalid, "Only ordinary notes support companion edits.") }
+        guard companionEditableArtifact(document) else { return result(.invalid, "Linked database content is read-only on clients.") }
       } catch { return result(.invalid, error.localizedDescription) }
       if let folderID = request.folderID, try companionFolderUnlocked(id: folderID) == nil {
         return result(.notFound, "The destination folder does not exist. Sync its creation first or choose another folder.")
@@ -95,9 +95,10 @@ extension WorkspaceDatabaseConnection {
       guard let title = request.title, let content = request.content else { return result(.invalid, "The note needs a title and a document.") }
       if content != note.content {
         do {
-          guard try NoteDocument.editableDocument(from: note.content).kind == .note,
-                try NoteDocument.editableDocument(from: content).kind == .note else {
-            return result(.invalid, "Only ordinary notes support companion edits.")
+          let previous = try NoteDocument.editableDocument(from: note.content)
+          let replacement = try NoteDocument.editableDocument(from: content)
+          guard previous.kind == replacement.kind, companionEditableArtifact(previous), companionEditableArtifact(replacement) else {
+            return result(.invalid, "Preserve the document kind; linked database content is read-only on clients.")
           }
         } catch { return result(.invalid, error.localizedDescription, note: note) }
       }
@@ -109,6 +110,13 @@ extension WorkspaceDatabaseConnection {
       try companionExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL", values: [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
       try checkpointNoteUnlocked(id: request.resourceID, source: "companion", force: true)
       return try result(.accepted, note: companionNoteUnlocked(id: request.resourceID))
+    }
+  }
+
+  private func companionEditableArtifact(_ document: NoteDocument) -> Bool {
+    document.databaseLink == nil && document.blocks.allSatisfy { block in
+      if case .table(let table) = block { return table.databaseLink == nil }
+      return true
     }
   }
 

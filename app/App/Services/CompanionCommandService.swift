@@ -30,6 +30,14 @@ final class CompanionCommandService: CompanionCommandServing {
 
     init(model: ApplicationModel) { self.model = model }
 
+    func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace {
+        try await model.companionHost.registerExecutionManagement(grant, device: device)
+    }
+
+    func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
+        try await model.companionHost.provisionExecutionWorkspace(id: id, device: device)
+    }
+
     func send(
         conversation: WorkspaceConversationRecord,
         input: AgentMessageInput,
@@ -100,6 +108,12 @@ final class CompanionCommandService: CompanionCommandServing {
     /// Reads already negotiated state; never starts a provider just to display controls.
     func sessionCapabilities(conversationID: String) async throws -> CompanionProvider {
         let conversation = try await conversation(conversationID)
+        if try await model.dashboardStore?.database.companionExecutionOwner(conversationID: conversationID) != nil {
+            let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
+            guard var capability = snapshot.capability else { throw CommandError.unavailable }
+            capability.available = snapshot.online
+            return capability
+        }
         guard let runtime = conversation.localRuntimeKind else { throw CommandError.unknownProvider }
         let routeID: String
         if model.isOpenClawGatewayConversation(conversationID),
@@ -140,6 +154,28 @@ final class CompanionCommandService: CompanionCommandServing {
         }
         result += model.pendingLocalACPInteractions.map { pending in
             switch pending.request {
+            case .form(let request):
+                CompanionPendingInteraction(
+                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
+                    runID: pending.runID, kind: .question, title: request.message,
+                    questions: request.fields.map { field in
+                        let options: [CompanionInteractionOption] = field.kind == .boolean
+                            ? [.init(id: "true", label: "Yes"), .init(id: "false", label: "No")]
+                            : field.options.map { .init(id: $0.id, label: $0.label, detail: $0.detail) }
+                        var hints = [field.title]
+                        if !field.required { hints.append("Optional") }
+                        if let detail = field.detail { hints.append(detail) }
+                        if field.kind == .number || field.kind == .integer {
+                            hints.append(field.kind == .integer ? "Enter a whole number." : "Enter a number.")
+                            if let value = field.minimum { hints.append("Minimum: \(value)") }
+                            if let value = field.maximum { hints.append("Maximum: \(value)") }
+                        }
+                        if let value = field.minimumLength { hints.append("Minimum length: \(value)") }
+                        if let value = field.maximumLength { hints.append("Maximum length: \(value)") }
+                        return .init(id: field.id, prompt: hints.joined(separator: "\n"), options: options,
+                            allowsMultiple: field.kind == .multipleChoice,
+                            allowsFreeText: [.text, .number, .integer].contains(field.kind), required: field.required)
+                    })
             case .questions(let request):
                 CompanionPendingInteraction(
                     id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
@@ -165,6 +201,9 @@ final class CompanionCommandService: CompanionCommandServing {
                     ]
                 )
             }
+        }
+        if let client = model.federatedExecutionClient {
+            result += client.pending.values.flatMap { $0 }
         }
         return result + (await pendingNativeInteractions())
     }
@@ -282,6 +321,14 @@ final class CompanionCommandService: CompanionCommandServing {
     }
 
     private func respond(_ command: CompanionCommand) async throws {
+        if let conversationID = command.conversationID,
+           try await model.dashboardStore?.database.companionExecutionOwner(conversationID: conversationID) != nil {
+            let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
+            guard let response = command.response,
+                  let interaction = snapshot.interactions.first(where: { $0.id == command.interactionID && $0.runID == command.runID }) else { throw CommandError.interactionResolved }
+            _ = try await model.performFederatedExecution(.respond(interaction, response))
+            return
+        }
         if try await respondToNativeInteraction(command) { return }
         guard let rawID = command.interactionID, let id = UUID(uuidString: rawID),
               let response = command.response else { throw CommandError.invalidCommand }
@@ -309,6 +356,29 @@ final class CompanionCommandService: CompanionCommandServing {
                 guard response.answers.isEmpty, let optionID = response.optionID,
                       ["accept", "decline"].contains(optionID) else { throw CommandError.invalidCommand }
                 resolution = .planAccepted(response.optionID == "accept")
+            case .form(let request):
+                guard response.optionID == nil, Set(response.answers.keys).isSubset(of: Set(request.fields.map(\.id))) else {
+                    throw CommandError.invalidCommand
+                }
+                var values: [String: LocalACPFormValue] = [:]
+                for field in request.fields {
+                    let submitted = response.answers[field.id] ?? []
+                    if submitted.isEmpty && !field.required { continue }
+                    if field.kind == .multipleChoice { values[field.id] = .strings(submitted); continue }
+                    guard submitted.count == 1, let text = submitted.first else { throw CommandError.invalidCommand }
+                    switch field.kind {
+                    case .text, .singleChoice: values[field.id] = .string(text)
+                    case .number, .integer:
+                        guard let number = Double(text), number.isFinite else { throw CommandError.invalidCommand }
+                        values[field.id] = .number(number)
+                    case .boolean:
+                        guard text == "true" || text == "false" else { throw CommandError.invalidCommand }
+                        values[field.id] = .boolean(text == "true")
+                    case .multipleChoice: break
+                    }
+                }
+                guard request.accepts(values) else { throw CommandError.invalidCommand }
+                resolution = .formValues(values)
             case .questions(let request):
                 guard response.optionID == nil, Set(response.answers.keys) == Set(request.questions.map(\.id)) else { throw CommandError.invalidCommand }
                 var answers: [String: LocalACPQuestionAnswer] = [:]

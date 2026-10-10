@@ -38,6 +38,12 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var localRevisionParents: [String: [String: Int64]] = [:]
   public var deletedNotes: Set<String> = []
   public var uncachedNoteIDs: Set<String> = []
+  /// Optional for backward decoding of existing format-1 libraries.
+  public var executionConversationIDs: Set<String>?
+  public var centralDeletedConversationIDs: Set<String>?
+  public var centralConversationIDs: Set<String>?
+  public var pendingNoteDeletions: [String: CompanionNote]?
+  public var pendingFolderDeletions: [String: CompanionFolder]?
   public init() {}
   public func isDirty(_ id: String) -> Bool { outbox.contains { $0.mutation.resourceID == id } || conflicts[id] != nil }
 }
@@ -65,6 +71,8 @@ public actor MobileStore {
       }
     }
   }
+  public nonisolated let journal: WorkspaceJournal
+  public nonisolated let artifacts: SavedArtifactStore
   private let file: URL
   private let budget: Budget
   private var state: MobileStoreState
@@ -73,6 +81,8 @@ public actor MobileStore {
   private var lastWriteBytes = 0
   public init(file: URL, budget: Budget = .init()) throws {
     self.file = file; self.budget = budget
+    journal = try WorkspaceJournal(file: file.appendingPathExtension("execution"))
+    artifacts = try SavedArtifactStore(directory: file.appendingPathExtension("artifacts"))
     if FileManager.default.fileExists(atPath: file.path) {
       state = try MobileStorePersistence.load(from: file)
       guard state.formatVersion == 1 else { throw Failure.incompatibleStore }
@@ -107,23 +117,106 @@ public actor MobileStore {
     }
     return result
   }
-  @discardableResult public func createFolder(name: String) throws -> CompanionFolder {
-    let folder = CompanionFolder(id: UUID().uuidString.lowercased(), name: name, revision: 0, updatedAt: Self.now)
+  @discardableResult public func createFolder(name: String, id: String = UUID().uuidString.lowercased()) throws -> CompanionFolder {
+    if let existing = state.folders[id] {
+      guard existing.name == name else { throw Failure.conflictingNote }; return existing
+    }
+    guard state.pendingFolderDeletions?[id] == nil else { throw Failure.conflictingNote }
+    let folder = CompanionFolder(id: id, name: name, revision: 0, updatedAt: Self.now)
     try transaction { next in
       next.folders[folder.id] = folder
       next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .createFolder, resourceID: folder.id, title: name)))
     }
     return folder
   }
-  @discardableResult public func createNote(folderID: String?, title: String, content: String) throws -> CompanionNote {
+  @discardableResult public func createNote(folderID: String?, title: String, content: String, id: String = UUID().uuidString.lowercased()) throws -> CompanionNote {
+    try Task.checkCancellation()
+    guard state.notes[id] == nil, !state.deletedNotes.contains(id) else { throw Failure.conflictingNote }
     guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
-    let note = CompanionNote(id: UUID().uuidString.lowercased(), folderID: folderID, title: title, content: content, revision: 0, updatedAt: Self.now)
+    let note = CompanionNote(id: id, folderID: folderID, title: title, content: content, revision: 0, updatedAt: Self.now)
     try transaction { next in
       next.notes[note.id] = note
       next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .createNote, deviceID: next.deviceID)))
       try enforceNoteBudget(&next, protecting: note.id)
     }
     return note
+  }
+  public func renameFolder(id: String, name: String) throws {
+    try transaction { next in
+      guard var folder = next.folders[id] else { throw Failure.missingNote }
+      guard folder.name != name else { return }
+      guard !next.outbox.contains(where: { $0.mutation.resourceID == id && $0.submitted }) else { throw Failure.conflictingNote }
+      folder.name = name; folder.updatedAt = Self.now; next.folders[id] = folder
+      if let index = next.outbox.firstIndex(where: { $0.mutation.resourceID == id }) { next.outbox[index].mutation.title = name }
+      else { next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .renameFolder, resourceID: id, expectedRevision: folder.revision, title: name))) }
+    }
+  }
+  /// Removing a nonempty folder requires an explicit move policy in the caller.
+  public func deleteFolder(id: String) throws {
+    if state.pendingFolderDeletions?[id] != nil { return }
+    try transaction { next in
+      guard let folder = next.folders[id] else { return }
+      guard !next.notes.values.contains(where: { $0.folderID == id }),
+        !next.outbox.contains(where: { $0.mutation.folderID == id || ($0.mutation.resourceID == id && $0.submitted) }) else { throw Failure.conflictingNote }
+      next.outbox.removeAll { $0.mutation.resourceID == id }
+      next.folders.removeValue(forKey: id)
+      if folder.revision > 0 {
+        if next.pendingFolderDeletions == nil { next.pendingFolderDeletions = [:] }
+        next.pendingFolderDeletions?[id] = folder
+        next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .deleteFolder, resourceID: id, expectedRevision: folder.revision)))
+      }
+    }
+  }
+  public func deleteWorkspaceNote(id: String, base: CompanionNote) throws {
+    if state.pendingNoteDeletions?[id] != nil || (state.deletedNotes.contains(id) && state.notes[id] == nil) { return }
+    try transaction { next in
+      guard let note = next.notes[id] else { return }
+      guard note.revision == base.revision, note.title == base.title, note.content == base.content,
+        note.folderID == base.folderID, next.conflicts[id] == nil,
+        !next.outbox.contains(where: { $0.mutation.resourceID == id && $0.submitted }) else { throw Failure.conflictingNote }
+      next.outbox.removeAll { $0.mutation.resourceID == id }
+      next.notes.removeValue(forKey: id); next.deletedNotes.insert(id)
+      if note.revision > 0 {
+        if next.pendingNoteDeletions == nil { next.pendingNoteDeletions = [:] }
+        next.pendingNoteDeletions?[id] = note
+        next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .deleteNote, resourceID: id, expectedRevision: note.revision)))
+      }
+    }
+  }
+  /// Import writes from an execution workspace through the same conflict/outbox
+  /// path as an editor. A deleted canonical ID is never silently recreated.
+  public func importWorkspaceNote(_ note: CompanionNote, base: CompanionNote? = nil) throws {
+    guard note.content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
+    if state.deletedNotes.contains(note.id) || (state.notes[note.id] == nil && base != nil) {
+      try transaction { next in
+        next.notes[note.id] = note
+        next.conflicts[note.id] = .init(base: base, local: note, remote: nil,
+          reason: "This note was deleted from the central library. The execution workspace's writing is preserved.")
+        next.outbox.removeAll { $0.mutation.resourceID == note.id }
+        try enforceNoteBudget(&next, protecting: note.id)
+      }
+    } else if let current = state.notes[note.id], let base,
+      (current.title != base.title || current.content != base.content || current.folderID != base.folderID),
+      (current.title != note.title || current.content != note.content || current.folderID != note.folderID) {
+      try transaction { next in
+        next.conflicts[note.id] = .init(base: base, local: note, remote: current,
+          reason: "The note was edited on this device while its workspace was running. Both versions have been preserved.")
+        next.notes[note.id] = note
+        next.outbox.removeAll { $0.mutation.resourceID == note.id }
+        try enforceNoteBudget(&next, protecting: note.id)
+      }
+    } else if state.notes[note.id] != nil {
+      try editNote(id: note.id, title: note.title, content: note.content, folderID: note.folderID, base: base)
+    } else {
+      _ = try createNote(folderID: note.folderID, title: note.title, content: note.content, id: note.id)
+    }
+  }
+  /// Agent tools compare the exact body they read, including unacknowledged
+  /// edits whose central revision has not changed. The check and write are atomic.
+  public func editNoteIfUnchanged(id: String, title: String, content: String, folderID: String?, expected: CompanionNote) throws {
+    guard state.notes[id] == expected, state.conflicts[id] == nil, !state.deletedNotes.contains(id) else { throw Failure.conflictingNote }
+    try Task.checkCancellation()
+    try editNote(id: id, title: title, content: content, folderID: folderID, base: expected)
   }
   public func editNote(id: String, title: String, content: String, folderID: String?, base: CompanionNote? = nil) throws {
     guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
@@ -191,8 +284,23 @@ public actor MobileStore {
             next.outbox.append(.init(mutation: Self.mutation(for: newer, kind: .updateNote, deviceID: next.deviceID)))
           }
         }
+        if mutation.kind == .deleteNote { next.notes.removeValue(forKey: mutation.resourceID); next.pendingNoteDeletions?.removeValue(forKey: mutation.resourceID) }
+        if mutation.kind == .deleteFolder { next.folders.removeValue(forKey: mutation.resourceID); next.pendingFolderDeletions?.removeValue(forKey: mutation.resourceID) }
         next.outbox.removeAll { $0.mutation.operationID == result.operationID }
       case .conflict, .notFound, .invalid:
+        if mutation.kind == .deleteNote, let saved = next.pendingNoteDeletions?.removeValue(forKey: mutation.resourceID) {
+          next.outbox.removeAll { $0.mutation.operationID == result.operationID }
+          if result.status == .notFound { return }
+          next.notes[saved.id] = saved
+          next.conflicts[saved.id] = .init(base: next.bases[saved.id], local: saved, remote: result.note,
+            reason: result.message ?? "The note changed before deletion. Its contents have been preserved.")
+          return
+        }
+        if mutation.kind == .deleteFolder, let saved = next.pendingFolderDeletions?.removeValue(forKey: mutation.resourceID) {
+          next.outbox.removeAll { $0.mutation.operationID == result.operationID }
+          if result.status != .notFound { next.folders[saved.id] = result.folder ?? saved }
+          return
+        }
         if let local = next.notes[mutation.resourceID] {
           next.conflicts[local.id] = .init(base: next.bases[local.id], local: local, remote: result.note, reason: result.message ?? "The Mac version changed.")
         }
@@ -208,8 +316,13 @@ public actor MobileStore {
       for id in Array(next.notes.keys) where remoteNotes[id] == nil && next.bases[id] != nil { Self.remoteDeletion(id, state: &next) }
       for note in snapshot.notes { Self.remoteNote(note, state: &next) }
       let pendingFolders = next.folders.filter { id, _ in next.outbox.contains { $0.mutation.resourceID == id } }
-      next.folders = Dictionary(uniqueKeysWithValues: snapshot.folders.map { ($0.id, $0) }).merging(pendingFolders) { _, local in local }
-      next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) })
+      next.folders = Dictionary(uniqueKeysWithValues: snapshot.folders.filter { next.pendingFolderDeletions?[$0.id] == nil }.map { ($0.id, $0) }).merging(pendingFolders) { _, local in local }
+      let incomingIDs = Set(snapshot.conversations.map(\.id))
+      let missingIDs = (next.centralConversationIDs ?? []).subtracting(incomingIDs)
+      next.centralDeletedConversationIDs = (next.centralDeletedConversationIDs ?? []).union(missingIDs).subtracting(incomingIDs)
+      next.centralConversationIDs = incomingIDs
+      let execution = next.conversations.filter { next.executionConversationIDs?.contains($0.key) == true && next.centralDeletedConversationIDs?.contains($0.key) != true }
+      next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) }).merging(execution) { _, local in local }
       next.cursor = snapshot.cursor
       try enforceNoteBudget(&next)
     }
@@ -225,17 +338,59 @@ public actor MobileStore {
           else if let note = change.note { Self.remoteNote(note, state: &next) }
         case .folder:
           if change.operation == .delete { next.folders.removeValue(forKey: change.resourceID) }
-          else if let folder = change.folder { next.folders[folder.id] = folder }
+          else if let folder = change.folder, next.pendingFolderDeletions?[folder.id] == nil { next.folders[folder.id] = folder }
         case .conversation:
           if change.operation == .delete {
             next.conversations.removeValue(forKey: change.resourceID); next.transcripts.removeValue(forKey: change.resourceID)
-          } else if let conversation = change.conversation { next.conversations[conversation.id] = conversation }
+            next.centralDeletedConversationIDs = (next.centralDeletedConversationIDs ?? []).union([change.resourceID])
+          } else if let conversation = change.conversation {
+            next.conversations[conversation.id] = conversation
+            next.centralConversationIDs = (next.centralConversationIDs ?? []).union([conversation.id])
+            next.centralDeletedConversationIDs?.remove(conversation.id)
+          }
         case .transcript, .providers: break
         }
       }
       next.cursor = max(next.cursor, page.cursor)
       try enforceNoteBudget(&next)
     }
+  }
+  /// Rebuild the disposable UI projection after any interrupted replay. The
+  /// journal cursor may commit before a cache write; restarting never loses data.
+  public func restoreExecutionProjection() async throws {
+    let history = await journal.snapshot()
+    try transaction { next in
+      for id in history.deletedConversationIDs {
+        next.conversations.removeValue(forKey: id); next.transcripts.removeValue(forKey: id)
+        next.executionConversationIDs?.remove(id)
+      }
+      for entry in history.pendingEntries where entry.kind == .restoredConversation { next.centralDeletedConversationIDs?.remove(entry.conversationID) }
+      for conversation in history.conversations.values where next.centralDeletedConversationIDs?.contains(conversation.id) != true {
+        next.conversations[conversation.id] = conversation
+        next.executionConversationIDs = (next.executionConversationIDs ?? []).union([conversation.id])
+      }
+    }
+    let recent = history.conversations.values.sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }.prefix(budget.transcriptCount)
+    for conversation in recent.reversed() where state.centralDeletedConversationIDs?.contains(conversation.id) != true {
+      if let transcript = history.transcripts[conversation.id] { try cache(transcript) }
+    }
+  }
+  /// Read-through projection for the central host's own execution API. The
+  /// authoritative snapshot/change feed continues to own these conversations.
+  public func cacheCentralConversations(_ conversations: [CompanionConversation]) throws {
+    try transaction { next in
+      for conversation in conversations { next.conversations[conversation.id] = conversation }
+    }
+  }
+  /// Projection only: execution history remains durable in the separate journal.
+  public func adoptExecution(conversation: CompanionConversation? = nil, transcript: CompanionTranscript? = nil) throws {
+    try transaction { next in
+      if let conversation, next.centralDeletedConversationIDs?.contains(conversation.id) != true {
+        next.conversations[conversation.id] = conversation
+        next.executionConversationIDs = (next.executionConversationIDs ?? []).union([conversation.id])
+      }
+    }
+    if let transcript { try cache(transcript) }
   }
   public func cache(_ transcript: CompanionTranscript) throws {
     guard state.transcripts[transcript.conversationID] != transcript else { return }
@@ -301,11 +456,11 @@ public actor MobileStore {
   @discardableResult public func preserveConflictAsCopy(id: String) throws -> CompanionNote {
     guard let conflict = state.conflicts[id] else { throw Failure.missingNote }
     let copy = CompanionNote(id: UUID().uuidString.lowercased(), folderID: state.folders[conflict.local.folderID ?? ""]?.id,
-      title: conflict.local.title + " — iPhone copy", content: conflict.local.content, revision: 0, updatedAt: Self.now)
+      title: conflict.local.title + " — recovery copy", content: conflict.local.content, revision: 0, updatedAt: Self.now)
     try transaction { next in
       next.notes[copy.id] = copy
       next.outbox.append(.init(mutation: Self.mutation(for: copy, kind: .createNote, deviceID: next.deviceID)))
-      if let remote = conflict.remote { next.notes[id] = remote; next.bases[id] = remote }
+      if let remote = conflict.remote { next.notes[id] = remote; next.bases[id] = remote; next.deletedNotes.remove(id) }
       else { next.notes.removeValue(forKey: id); next.bases.removeValue(forKey: id) }
       next.conflicts.removeValue(forKey: id)
     }
@@ -363,7 +518,8 @@ public actor MobileStore {
       let documents = state.notes.values.reduce(0) { $0 + $1.content.utf8.count }
         + state.bases.values.reduce(0) { $0 + $1.content.utf8.count }
       let conflicts = state.conflicts.values.reduce(0) { $0 + $1.local.content.utf8.count + ($1.base?.content.utf8.count ?? 0) + ($1.remote?.content.utf8.count ?? 0) }
-      return documents + conflicts + state.outbox.reduce(0) { $0 + ($1.mutation.content?.utf8.count ?? 0) }
+      let pendingDeletes = state.pendingNoteDeletions?.values.reduce(0) { $0 + $1.content.utf8.count } ?? 0
+      return documents + conflicts + pendingDeletes + state.outbox.reduce(0) { $0 + ($1.mutation.content?.utf8.count ?? 0) }
     }
     var total = bytes(next)
     guard total > budget.noteBytes else { return }

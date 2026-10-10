@@ -2,13 +2,20 @@ import SwiftUI
 
 @main struct WovenMatterCompanionApp: App {
   @State private var model = CompanionModel()
+  @Environment(\.scenePhase) private var scenePhase
   var body: some Scene {
     WindowGroup {
       ZStack {
         if model.initialized { CompanionShell(model: model) }
         else { ProgressView("Opening your library…") }
       }
-        .task { await model.run() }
+        .task {
+          #if DEBUG
+          if DeviceRuntimeSmoke.enabled { await DeviceRuntimeSmoke.run(); return }
+          #endif
+          await model.run()
+        }
+        .onChange(of: scenePhase) { _, phase in model.sceneChanged(phase) }
         .onOpenURL { url in Task { await model.pair(url: url) } }
     }
   }
@@ -80,6 +87,7 @@ struct CompanionShell: View {
     .scrollIndicators(.never)
     .foregroundStyle(DashboardPalette.foreground).tint(theme.palette.themeAccent)
     .background(theme.palette.workspace)
+    .sheet(isPresented: $model.executionSettingsPresented) { ExecutionSettingsPane(model: model) }
     .sheet(isPresented: $model.pairingPresented) { PairingPane(model: model) }
     .alert("Woven Matter", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
       Button("OK") { model.errorMessage = nil }
@@ -171,8 +179,8 @@ struct HomePane: View {
                 .font(.title3).foregroundStyle(theme.palette.themeAccent)
               VStack(alignment: .leading, spacing: 6) {
                 Text(model.connectionLabel).font(.subheadline.weight(.semibold))
-                Text(model.online ? "Your workspace is connected. Agents run on your Mac."
-                  : "Your notes stay available here. Connect to your Mac to sync and use agents.")
+                Text(model.online ? "Your central library is synchronized. Choose where agents run in Chats."
+                  : "Your notes stay available here. Connect to your central Mac to synchronize your library.")
                   .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
                 if !model.online {
                   if model.credential == nil {
@@ -203,7 +211,7 @@ struct HomePane: View {
             VStack(alignment: .leading, spacing: 8) {
               Text(launch.initialSend.text ?? "New conversation").lineLimit(3)
               Text(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "New chat request saved · awaiting acknowledgement").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-              if !launch.terminalFailure { Button("Continue this saved request") { Task { await model.continueLaunch(launch) } }.disabled(!model.online) }
+              if !launch.terminalFailure { Button("Continue this saved request") { Task { await model.continueLaunch(launch) } }.disabled(launch.create.workspaceID.map { model.workspaceReachable[$0] != true } ?? !model.online) }
             }.padding(14).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
           }
           if !model.unresolvedCommands.isEmpty {
@@ -348,11 +356,11 @@ struct CompanionSettingsPane: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
           if !model.fixture {
-            GroupLabel(text: "Mac connection")
+            GroupLabel(text: "Central library")
             VStack(alignment: .leading, spacing: 8) {
               Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
                 .font(.headline)
-              Text("Connect to your Mac to sync your workspace and use agents.")
+              Text("Synchronize your app library and saved artifacts with your central Mac. Execution workspaces connect independently.")
                 .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
               .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
@@ -360,6 +368,8 @@ struct CompanionSettingsPane: View {
             WorkspaceRow(icon: .rotate, title: model.connecting ? "Connecting…" : "Sync now") { Task { await model.refresh() } }
               .disabled(model.credential == nil || model.connecting)
           }
+          GroupLabel(text: "Agents")
+          WorkspaceRow(icon: .settings, title: "Agents and workspaces", detail: "Pi Durable · inference connections") { model.executionSettingsPresented = true }
           GroupLabel(text: "Appearance")
           DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
             DashboardTheme(rawValue: $0)?.title ?? $0

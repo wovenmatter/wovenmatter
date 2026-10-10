@@ -12,7 +12,7 @@ let package = Package(
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"])
   ],
-  dependencies: [.package(path: "../shared")],
+  dependencies: [.package(path: "../shared"), .package(path: "../ios")],
   targets: [
     .target(
       name: "WovenMatterCore",
@@ -69,7 +69,7 @@ let package = Package(
     // Both test suites exercise those same services without starting providers.
     .target(
       name: "WovenMatterAppFacade",
-      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
+      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", .product(name: "CompanionClient", package: "ios")],
       path: "App",
       exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Resources", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],
@@ -82,7 +82,7 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterAppFacadeTests",
-      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore"]
+      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", .product(name: "CompanionClient", package: "ios")]
     )
   ]
 )

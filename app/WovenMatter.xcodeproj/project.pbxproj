@@ -124,6 +124,21 @@
 		4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */; };
 		46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */; };
 		00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */; };
+		BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */; };
+		A2D41477A1E81E4EC0EE3D4F /* CentralLibraryClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */; };
+		C4263304AD979555E1FFD2A7 /* CentralLibraryClientSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */; };
+		52556EB4DECB821D2350C11D /* LibraryClientWorkspacePanes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F8C8D451C08816FCB0DE57 /* LibraryClientWorkspacePanes.swift */; };
+		6B9C39486293F27D58B07C38 /* LibraryClientCalendarPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C42B9DC026E313A10DFD666 /* LibraryClientCalendarPane.swift */; };
+		15A73AF75EB1926573CED4FF /* LibraryClientInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA136600A92E0CDFD01D70B1 /* LibraryClientInteraction.swift */; };
+		1865697E240F2F2763E855ED /* CompanionClient in Frameworks */ = {isa = PBXBuildFile; productRef = C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */; };
+		763F07E058D62A4D0C5FE5D1 /* SecondaryMacExecutionWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */; };
+		178C7E2397EDD9D8A1ECB4FC /* SecondaryMacExecutionHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */; };
+		97AD203F32768DAAE8E74B8A /* CompanionInferenceHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */; };
+		6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */; };
+		3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */; };
+		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
+		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
+		04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969050270F91397F88F6A49D /* FederatedConversationPane.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -245,6 +260,20 @@
 		4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/WorkspaceAssetSession.swift"; sourceTree = SOURCE_ROOT; };
 		1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardAssetPane.swift"; sourceTree = SOURCE_ROOT; };
 		D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardBrowserPane.swift"; sourceTree = SOURCE_ROOT; };
+		619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientModel.swift; sourceTree = "<group>"; };
+		BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientView.swift; sourceTree = "<group>"; };
+		4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientSettings.swift; sourceTree = "<group>"; };
+		11F8C8D451C08816FCB0DE57 /* LibraryClientWorkspacePanes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryClientWorkspacePanes.swift; sourceTree = "<group>"; };
+		6C42B9DC026E313A10DFD666 /* LibraryClientCalendarPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryClientCalendarPane.swift; sourceTree = "<group>"; };
+		FA136600A92E0CDFD01D70B1 /* LibraryClientInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryClientInteraction.swift; sourceTree = "<group>"; };
+		A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryMacExecutionWorkspace.swift; sourceTree = "<group>"; };
+		39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryMacExecutionHost.swift; sourceTree = "<group>"; };
+		DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionInferenceHost.swift; sourceTree = "<group>"; };
+		8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsModel.swift; sourceTree = "<group>"; };
+		CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSavedArtifactsView.swift; sourceTree = "<group>"; };
+		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
+		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
+		969050270F91397F88F6A49D /* FederatedConversationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedConversationPane.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -252,6 +281,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1865697E240F2F2763E855ED /* CompanionClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
 				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
 			);
@@ -308,6 +338,8 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */,
+				619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */,
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
 				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
@@ -348,6 +380,13 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				969050270F91397F88F6A49D /* FederatedConversationPane.swift */,
+				CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */,
+				FA136600A92E0CDFD01D70B1 /* LibraryClientInteraction.swift */,
+				6C42B9DC026E313A10DFD666 /* LibraryClientCalendarPane.swift */,
+				11F8C8D451C08816FCB0DE57 /* LibraryClientWorkspacePanes.swift */,
+				4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */,
+				BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */,
 				BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */,
 				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
 				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
@@ -424,6 +463,11 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
+				4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */,
+				DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */,
+				39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */,
+				A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */,
 				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
@@ -458,6 +502,7 @@
 			);
 			name = WovenMatter;
 			packageProductDependencies = (
+				C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
 				D46000000000000000000001 /* WovenMatterDashboardStore */,
 			);
@@ -489,6 +534,7 @@
 			mainGroup = 614FCD38F579029AF08B9221;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				C06BA836DE1CAE4D56F3020D /* XCLocalSwiftPackageReference "../ios" */,
 				03A429A1CC1E3FDB9062F0AE /* XCLocalSwiftPackageReference "." */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -561,6 +607,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */,
+				FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */,
+				D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */,
+				3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */,
+				6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */,
+				97AD203F32768DAAE8E74B8A /* CompanionInferenceHost.swift in Sources */,
+				178C7E2397EDD9D8A1ECB4FC /* SecondaryMacExecutionHost.swift in Sources */,
+				763F07E058D62A4D0C5FE5D1 /* SecondaryMacExecutionWorkspace.swift in Sources */,
+				15A73AF75EB1926573CED4FF /* LibraryClientInteraction.swift in Sources */,
+				6B9C39486293F27D58B07C38 /* LibraryClientCalendarPane.swift in Sources */,
+				52556EB4DECB821D2350C11D /* LibraryClientWorkspacePanes.swift in Sources */,
+				C4263304AD979555E1FFD2A7 /* CentralLibraryClientSettings.swift in Sources */,
+				A2D41477A1E81E4EC0EE3D4F /* CentralLibraryClientView.swift in Sources */,
+				BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
@@ -889,6 +949,7 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = .;
 		};
+		C06BA836DE1CAE4D56F3020D /* XCLocalSwiftPackageReference "../ios" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../ios; };
 /* End XCLocalSwiftPackageReference section */
 
 
@@ -901,6 +962,7 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterDashboardStore;
 		};
+		C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */ = {isa = XCSwiftPackageProductDependency; package = C06BA836DE1CAE4D56F3020D; productName = CompanionClient; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 01308825FA357DD758C18D1F /* Project object */;

@@ -48,9 +48,20 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         guard !terminating else { return .terminateLater }
         terminating = true
         model.suspendNoteEditing()
-        if LocalExecutionRole.current == .frontend {
+        if LocalExecutionRole.current == .frontend || model.isLibraryClient {
             Task {
-                let flushed = await model.flushNotesBeforeBackendClientQuit()
+                var flushed = await model.flushNotesBeforeBackendClientQuit()
+                if flushed {
+                    do { try await model.prepareLibraryClientForQuit() }
+                    catch {
+                        flushed = false
+                        let alert = NSAlert()
+                        alert.messageText = "Finish local work before quitting"
+                        alert.informativeText = error.localizedDescription
+                        alert.addButton(withTitle: "Keep Woven Matter open")
+                        alert.runModal()
+                    }
+                }
                 if !flushed { terminating = false; model.resumeNoteEditing() }
                 if flushed { await finishTermination(sender) }
                 else { sender.reply(toApplicationShouldTerminate: false) }
@@ -309,18 +320,27 @@ enum LocalExecutionTransition {
 /// Captured once at startup; changing the preference cannot change a running
 /// process's ownership role. Standalone and backend share the execution lease.
 enum LocalExecutionRole: String {
-    case standalone, frontend, backend
+    case standalone, frontend, backend, libraryClient
 
+    nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
     static let current = resolve(arguments: CommandLine.arguments,
-        backgroundEnabled: UserDefaults.standard.bool(forKey: LocalBackgroundExecution.preferenceKey))
+        backgroundEnabled: UserDefaults.standard.bool(forKey: LocalBackgroundExecution.preferenceKey),
+        libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey))
 
-    static func resolve(arguments: [String], backgroundEnabled: Bool) -> Self {
+    static func resolve(arguments: [String], backgroundEnabled: Bool, libraryClientEnabled: Bool = false) -> Self {
         if arguments.contains("--backend") { return .backend }
+        if libraryClientEnabled { return .libraryClient }
         return backgroundEnabled ? .frontend : .standalone
     }
 
-    var ownsExecution: Bool { self != .frontend }
-    var leaseFileName: String { self == .frontend ? "frontend-owner.lock" : "workspace-owner.lock" }
+    var ownsExecution: Bool { self == .standalone || self == .backend }
+    var leaseFileName: String {
+        switch self {
+        case .frontend: "frontend-owner.lock"
+        case .libraryClient: "library-client-owner.lock"
+        case .standalone, .backend: "workspace-owner.lock"
+        }
+    }
 
     static func backendSocketURL(workspaceDirectory: URL) -> URL {
         // sun_path is only 104 bytes on macOS. A workspace/variant path may be

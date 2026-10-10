@@ -3,6 +3,8 @@ import WovenMatterCore
 
 @MainActor
 public protocol CompanionCommandServing: AnyObject {
+    func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace
+    func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential
     func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
     func providers() -> [CompanionProvider]
     func pendingInteractions() async -> [CompanionPendingInteraction]
@@ -13,6 +15,12 @@ public protocol CompanionCommandServing: AnyObject {
 }
 
 public extension CompanionCommandServing {
+    func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace {
+        throw CompanionAPIError(code: "unsupported", message: "This host does not accept secondary execution management grants.")
+    }
+    func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
+        throw CompanionAPIError(code: "unsupported", message: "This host does not provision independent execution workspaces.")
+    }
     func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
         throw CompanionAPIError(code: "unsupported", message: "Update your Mac to use this feature.")
     }
@@ -74,12 +82,17 @@ public final class CompanionWorkspaceAPI {
             onRequest()
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
+            if path.hasPrefix("/v1/federation/") {
+                let response = try await CompanionFederationAPI.handle(request, path: path, query: values, device: device, database: database, commands: commands)
+                if request.method == "POST", response.status == 200 { onMutation() }
+                return response
+            }
             if request.method == "GET" {
                 switch path {
                 case "/v1/hello":
                     return try .json(CompanionHello(workspaceID: workspaceID,
                         hostName: Host.current().localizedName ?? "Woven Matter Mac",
-                        capabilities: ["notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "workspace.management.v1"]))
+                        capabilities: [CompanionFederationProtocol.capability, "notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "workspace.management.v1"]))
                 case "/v1/snapshot": return try .json(try await database.companionSnapshot())
                 case "/v1/changes":
                     guard let after = Int64(query("after") ?? query("cursor") ?? "0"), after >= 0 else {
@@ -137,6 +150,9 @@ public final class CompanionWorkspaceAPI {
                 }
                 if components.count == 4, components[0] == "v1", components[1] == "sessions" {
                     if components[3] == "transcript" {
+                        if let transcript = try await database.companionFederatedTranscript(conversationID: components[2], before: query("before")) {
+                            return try .json(transcript)
+                        }
                         return try .json(try await commands.transcript(conversationID: components[2], before: query("before")))
                     }
                     if components[3] == "capabilities" {
@@ -172,7 +188,7 @@ public final class CompanionWorkspaceAPI {
             }
             return .error("not_found", "Unknown companion endpoint.", status: 404)
         } catch let error as CompanionAPIError {
-            let status = error.code == "unauthorized" ? 401 : error.code == "version_mismatch" ? 426 : error.code == "rate_limited" ? 429 : 400
+            let status = error.code == "unauthorized" ? 401 : error.code == "wrong_owner" ? 403 : error.code == "not_found" ? 404 : error.code == "version_mismatch" ? 426 : error.code == "rate_limited" ? 429 : ["revision_conflict", "event_conflict", "origin_gap", "receipt_conflict", "record_conflict", "chunk_conflict"].contains(error.code) ? 409 : 400
             return .error(error.code, error.message, status: status)
         } catch is DecodingError { return .error("invalid_request", "The request did not match the companion protocol.", status: 400) }
         catch { return .error("workspace_error", "The Mac could not complete this request. Your pending writing is preserved; check the Mac and retry.", status: 500) }

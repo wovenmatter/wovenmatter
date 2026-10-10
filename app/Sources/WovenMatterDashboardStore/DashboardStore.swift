@@ -1252,6 +1252,10 @@ public actor DashboardStore {
     try await ownedLocalSessions?.stop(conversationID: conversationID)
   }
 
+  public func detachLocalACPForExecutionAdoption(conversationID: String) async throws {
+    try await localSessions.detachForExecutionAdoption(conversationID: conversationID)
+  }
+
   public func shutdownLocalACPSessions() async {
     await ownedOpenClawGateway?.shutdown()
     await ownedLocalSessions?.shutdown()

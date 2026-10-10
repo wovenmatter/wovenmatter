@@ -1,8 +1,6 @@
 # Native iOS companion
 
-The iPhone and iPad use the running Mac's canonical workspace. Provider execution,
-credentials, SSH routes and concurrency remain on the Mac. PR #37 is integrated
-with monorepo main `729800a7cda6321d0431ea19f621d5fc1d5c163b`.
+The iPhone and iPad share one central Mac's library while execution belongs to a selected Mac, Linux, or device workspace. This document retains the companion protocol and UI details; [the distributed architecture contract](DISTRIBUTED_CLIENT_ARCHITECTURE.md) defines the current multi-client model. PR #37 includes the on-device Pi Durable runtime, direct workspace routes, secondary Mac client mode, and the canonical green cube icons.
 
 ## Implemented behavior
 
@@ -21,7 +19,7 @@ with monorepo main `729800a7cda6321d0431ea19f621d5fc1d5c163b`.
   and remote runtime selections, linked workspaces and configured OpenClaw Gateways
   use the current desktop routing and readiness checks. OpenCode uses its native
   server and Hermes uses its native Gateway; neither is simulated as an ACP agent. A note-bound send
-  flushes and pins its exact canonical content/revision. The phone owns no providers.
+  flushes and pins its exact canonical content/revision. Device-owned Pi Durable uses its own durable runtime and native tools with external inference.
 - Creation and first send are separate durable commands. Lost acknowledgements
   recover by receipt; reconnect never automatically submits an unsent command.
   Stop/steer/answers carry stable conversation, run and interaction IDs. The first
@@ -53,7 +51,7 @@ HTTP transport and process supervision to the existing workspace SQLite store.
 native SwiftUI/UIKit views, the portable mobile client/store and generated Xcode
 project. Both app targets compile `app/App/Views/DashboardStyle.swift` and bundle
 `app/App/SharedAssets.xcassets` directly, so icons, tokens and common controls have
-one source. The portable Foundation packages remain independent of SwiftUI.
+one source. The portable client Foundation package remains independent of SwiftUI. `PiDurableRuntime` bundles the reviewed SDK and uses JavaScriptCore/native persistence; its code-mode worker is isolated in WebKit. `CompanionInference` supplies cloud/Tailscale model streams. Linux execution uses scoped device credentials and a durable origin journal; secondary Macs reuse the client library with an optional isolated execution workspace.
 `integration/` crosses those real client/server/store boundaries using fake
 provider execution and controlled network failures.
 
@@ -127,5 +125,4 @@ is `com.wovenmatter.companion.dev`; installing an updated build preserves its da
 and Keychain pairing. See `ios/README.md` for the device test workflow.
 
 These are private development test builds. PR review, merging, production release,
-App Store distribution and human acceptance remain separate. APNs, hosted accounts,
-multi-Mac authority, voice and mobile provider execution are outside this MVP.
+App Store distribution and human acceptance remain separate. APNs, hosted accounts, voice and on-device inference are outside this work. Additional Macs are clients of one authority; device Pi Durable execution is included.

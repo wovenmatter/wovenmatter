@@ -11,6 +11,7 @@ import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
 import { SessionCLIContext } from './cli-context.mjs';
 import { reportProgramStatus } from './program-status.mjs';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export class DefaultAgentEngine {
@@ -429,6 +430,13 @@ export class DefaultAgentEngine {
       return { sessionId: record.session.sessionId, ...this.configuration(record) };
     }
     const record = this.sessions.get(params.sessionId) ?? await this.create(params.sessionId);
+    if (method === 'woven/adopt') {
+      if (record.busy) throw new DefaultAgentError('This session is still executing. Wait for it to become idle before moving client ownership.');
+      await record.configurationQueue;
+      const state = await record.harness.inspect(BACKGROUND_CONTEXT);
+      if (state.tasks.length || state.submissions.length) throw new DefaultAgentError('This session has unfinished native work. Resolve it before moving client ownership.');
+      return { sessionId: record.session.sessionId, ...this.configuration(record) };
+    }
     if (method === 'session/set_config_option') return this.select(record, params.value, params.configId ?? params.id ?? 'model');
     if (method === 'woven/history') return record.history(params.after ?? 0, params.limit ?? 200);
     if (method === 'woven/idle') return record.waitIdle();

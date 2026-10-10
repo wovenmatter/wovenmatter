@@ -124,7 +124,16 @@ struct DashboardCloudConversation: View {
     @State private var librarySourceMessageID: String?
     @State private var attachmentOpenError: String?
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let conversation, model.federatedExecutionOwners[conversation.id] != nil {
+            FederatedConversationPane(model: model, conversation: conversation, savedMessages: messages,
+                draft: $draft, sendInProgress: sendInProgress, onSend: onSend)
+        } else {
+            nativeBody
+        }
+    }
+
+    @ViewBuilder private var nativeBody: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
         let attachmentsByMessageID = Dictionary(grouping: messageAttachments, by: \.messageID)

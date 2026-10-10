@@ -2,6 +2,8 @@ import SwiftUI
 import Observation
 import CompanionClient
 import WovenMatterCompanion
+import PiDurableRuntime
+import CompanionInference
 
 @MainActor @Observable final class CompanionModel {
   enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", library = "Library", calendar = "Calendar", trash = "Trash"
@@ -30,9 +32,9 @@ import WovenMatterCompanion
   var selectedNoteID: String?
   var selectedConversationID: String?
   var providerID = ""
-  private var draftBuffer: [String: MobileChatDraft] = [:]
-  private var chatDraftTask: Task<Void, Never>?
-  private var draftKey: String { selectedConversationID ?? "new-chat" }
+  var draftBuffer: [String: MobileChatDraft] = [:]
+  var chatDraftTask: Task<Void, Never>?
+  var draftKey: String { selectedConversationID ?? "new-chat" }
   var referencedNoteID: String? {
     get { (draftBuffer[draftKey] ?? state.chatDrafts[draftKey])?.noteID }
     set { var draft = currentDraft; draft.noteID = newValue; updateChatDraft(key: draftKey, draft: draft) }
@@ -41,7 +43,7 @@ import WovenMatterCompanion
     get { (draftBuffer[draftKey] ?? state.chatDrafts[draftKey])?.text ?? "" }
     set { var draft = currentDraft; draft.text = newValue; updateChatDraft(key: draftKey, draft: draft) }
   }
-  private var currentDraft: MobileChatDraft { draftBuffer[draftKey] ?? state.chatDrafts[draftKey] ?? .init(text: "") }
+  var currentDraft: MobileChatDraft { draftBuffer[draftKey] ?? state.chatDrafts[draftKey] ?? .init(text: "") }
   var online = false
   var connecting = false
   var sending = false
@@ -54,21 +56,57 @@ import WovenMatterCompanion
   var draftContents: [String: String] = [:]
   var credential: MobileCredential?
   var store: MobileStore?
-  private var engine: MobileSyncEngine?
-  private var transport: HTTPSCompanionTransport?
-  private var saveTask: Task<Void, Never>?
+  var engine: MobileSyncEngine?
+  var transport: HTTPSCompanionTransport?
+  var saveTask: Task<Void, Never>?
   private var saveGenerations: [String: Int] = [:]
   private var refreshInProgress = false
   private var workspaceActionInProgress = false
   private var booted = false
   var initialized = false
+  var executionWorkspaceID = "local"
+  var executionSettingsPresented = false
+  var inferenceConnections: [InferenceConnection] = []
+  var inferenceConnectionID = ""
+  var conversationWorkspaceIDs: [String: String] = [:]
+  var executionRecords: [String: DeviceConversationRecord] = [:]
+  var localRuntimes: [String: PiDurableRuntime] = [:]
+  var localStopping: Set<String> = []
+  var localRunTokens: [String: String] = [:]
+  var deviceSnapshotInProgress: Set<String> = []
+  var localRunTasks: [String: Task<Void, Never>] = [:]
+  var localApprovals: [String: LocalToolApproval] = [:]
+  var localQuestionAnswers: [String: String] = [:]
+  var localPending: [CompanionPendingInteraction] = []
+  var executionWorkspaces: [CompanionExecutionWorkspace] = []
+  var workspacePollTasks: [String: Task<Void, Never>] = [:]
+  var workspaceClients: [String: WorkspaceClient] = [:]
+  var workspaceProviders: [String: [CompanionProvider]] = [:]
+  var workspaceReachable: [String: Bool] = [:]
+  var executionWorkspaceRefreshInProgress = false
+  var remotePending: [String: [CompanionPendingInteraction]] = [:]
+  var workspaceAuthorizationRetryAt: [String: Date] = [:]
+  var workspaceProblems: [String: String] = [:]
+  var inferenceProblem: String?
+  var executionDirectory: URL?
+  var executionRefreshTasks: [String: Task<Void, Never>] = [:]
+  var executionCredentialStore = InferenceCredentialStore()
+  var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+
   private var frame = 0
   let fixture: Bool
   let isolatedTestHost: Bool
 
+  private static var smokeIsolationRequested: Bool {
+    #if DEBUG
+    return DeviceRuntimeSmoke.enabled
+    #else
+    return false
+    #endif
+  }
   init() {
     let environment = ProcessInfo.processInfo.environment
-    isolatedTestHost = environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil || NSClassFromString("XCTestCase") != nil || NSClassFromString("XCTest.XCTestCase") != nil
+    isolatedTestHost = Self.smokeIsolationRequested || environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil || NSClassFromString("XCTestCase") != nil || NSClassFromString("XCTest.XCTestCase") != nil
     #if DEBUG
     fixture = ProcessInfo.processInfo.environment["WOVENMATTER_UI_FIXTURE"] == "1"
     #else
@@ -86,11 +124,14 @@ import WovenMatterCompanion
       let namespace = ProcessInfo.processInfo.environment["WOVENMATTER_UI_FIXTURE_NAMESPACE"] ?? "default"
       let safeNamespace = namespace.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
       let filename = fixture ? "fixture-library-\(safeNamespace).json" : "mobile-library.json"
-      store = try MobileStore(file: root.appendingPathComponent("WovenMatterCompanion").appendingPathComponent(filename))
+      let libraryRoot = root.appendingPathComponent("WovenMatterCompanion")
+      store = try MobileStore(file: libraryRoot.appendingPathComponent(filename))
+      executionDirectory = libraryRoot.appendingPathComponent(fixture ? "fixture-execution-\(safeNamespace)" : "execution", isDirectory: true)
     } catch { errorMessage = "The local library could not open: " + error.localizedDescription }
   }
   init(store: MobileStore, transport: any CompanionTransport) {
     fixture = false; isolatedTestHost = false; self.store = store
+    executionWorkspaceID = "central"
     engine = MobileSyncEngine(store: store, transport: transport)
     online = true
   }
@@ -101,9 +142,12 @@ import WovenMatterCompanion
   var selectedNote: CompanionNote? { selectedNoteID.flatMap { state.notes[$0] } }
   var selectedConversation: CompanionConversation? { selectedConversationID.flatMap { state.conversations[$0] } }
   var transcript: CompanionTranscript? { selectedConversationID.flatMap { historyPages[$0] ?? state.transcripts[$0] } }
-  var activeRunID: String? { selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID }
-  var activeProvider: CompanionProvider? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
-  var currentPending: [CompanionPendingInteraction] { pending.filter { $0.conversationID == selectedConversationID } }
+  var activeRunID: String? {
+    if let id = selectedConversationID, let record = executionRecords[id] { return (record.status == "running" || record.status == "stopping") ? record.runID : nil }
+    return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
+  }
+  var centralProvider: CompanionProvider? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
+  var currentPending: [CompanionPendingInteraction] { (pending + localPending + remotePending.values.flatMap { $0 }).filter { $0.conversationID == selectedConversationID } }
   var unresolvedCommands: [MobileCommandRecord] { state.commands.filter { $0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown } }
 
   func run() async {
@@ -116,11 +160,26 @@ import WovenMatterCompanion
       else {
         do { credential = try MobileCredentialVault.load(); try configureTransport() }
         catch { errorMessage = error.localizedDescription }
+        do { try await loadExecutionConfiguration() }
+        catch { errorMessage = error.localizedDescription }
       }
     }
-    while !Task.isCancelled {
-      if !fixture { await refresh() }
-      do { try await Task.sleep(for: .seconds(online ? 1 : 5)) } catch { return }
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { [weak self] in
+        while !Task.isCancelled {
+          guard let self else { return }
+          if !self.fixture { await self.refresh() }
+          do { try await Task.sleep(for: .seconds(5)) } catch { return }
+        }
+      }
+      group.addTask { [weak self] in
+        while !Task.isCancelled {
+          guard let self else { return }
+          if !self.fixture { await self.refreshExecutionWorkspaces() }
+          do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        }
+      }
+      await group.waitForAll()
     }
   }
   func reload() async { if let store { let next = await store.snapshot(); if next != state { state = next } } }
@@ -144,6 +203,7 @@ import WovenMatterCompanion
       try MobileCredentialVault.save(paired)
       credential = paired
       try configureTransport()
+      try await ensureDeviceWorkspace()
       pairingPresented = false; pairingText = ""
       await refresh()
     } catch { errorMessage = error.localizedDescription }
@@ -152,7 +212,7 @@ import WovenMatterCompanion
     guard let engine, !refreshInProgress else { return }
     refreshInProgress = true; connecting = !online
     defer { refreshInProgress = false; connecting = false }
-    let targetConversationID = selectedConversationID
+    let targetConversationID = selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil
     do {
       try await engine.synchronize()
       if frame % 5 == 0 || providers.isEmpty { providers = try await engine.providers() }
@@ -164,7 +224,7 @@ import WovenMatterCompanion
       if frame % 5 == 0 { try await engine.recoverCommandReceipts() }
       frame += 1
       await reload()
-      online = true; connectionLabel = "Connected to Mac"
+      online = true; connectionLabel = "Library synchronized"
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
     } catch {
       online = false
@@ -199,9 +259,24 @@ import WovenMatterCompanion
   }
   func selectConversation(_ id: String) async {
     selectedConversationID = id; tab = .chat
-    await refresh()
+    if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
+    else if selectedExecutionWorkspaceID == "central" { await refresh() }
+    else { await refreshExecutionWorkspaces() }
+  }
+  func refreshConversation() async {
+    let owner = selectedExecutionWorkspaceID
+    if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
+    else if owner == "central" { await refresh() }
+    else { await refreshDirectWorkspace(owner) }
   }
   func loadEarlierMessages() async {
+    if selectedExecutionWorkspaceID != "central", let client = workspaceClients[selectedExecutionWorkspaceID], let target = selectedConversationID,
+       let before = transcript?.olderCursor, !loadingHistory {
+      loadingHistory = true; defer { loadingHistory = false }
+      do { historyPages[target] = try await client.earlierTranscript(target, before: before) }
+      catch { errorMessage = error.localizedDescription }
+      return
+    }
     guard online, let engine, let target = selectedConversationID, let before = transcript?.olderCursor, !loadingHistory else { return }
     loadingHistory = true
     defer { loadingHistory = false }
@@ -245,7 +320,7 @@ import WovenMatterCompanion
     do { selectedNoteID = try await store.preserveConflictAsCopy(id: id).id; await reload() }
     catch { errorMessage = error.localizedDescription }
   }
-  private func updateChatDraft(key: String, draft: MobileChatDraft) {
+  func updateChatDraft(key: String, draft: MobileChatDraft) {
     draftBuffer[key] = draft
     guard let store else { return }
     let previous = chatDraftTask
@@ -256,6 +331,8 @@ import WovenMatterCompanion
     }
   }
   func send() async {
+    if selectedExecutionWorkspaceID == "local" { await sendOnDevice(); return }
+    if selectedExecutionWorkspaceID != "central" { await sendToExecutionWorkspace(); return }
     guard online, let engine, !sending, !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     // Capture target, route, text and reference before yielding. Switching tabs or
     // sessions during save/network work can never redirect this command.
@@ -269,7 +346,7 @@ import WovenMatterCompanion
     let provider = activeProvider
     let draftContext = currentDraft
     let deviceID = state.deviceID
-    let pendingLaunch = target == nil ? state.launches.first(where: { !$0.accepted && !$0.terminalFailure }) : nil
+    let pendingLaunch = target == nil ? state.launches.first(where: { $0.create.workspaceID == nil && !$0.accepted && !$0.terminalFailure }) : nil
     sending = true
     defer { sending = false }
     await saveTask?.value
@@ -320,6 +397,7 @@ import WovenMatterCompanion
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
   func continueLaunch(_ launch: MobileLaunchRecord) async {
+    if let workspaceID = launch.create.workspaceID { await continueWorkspaceLaunch(launch, workspaceID: workspaceID); return }
     guard online, let engine, !sending else { return }
     let selection = selectedConversationID
     let sourceTab = tab
@@ -346,19 +424,58 @@ import WovenMatterCompanion
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
   func stop() async {
+    if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
+    if selectedExecutionWorkspaceID != "central" { await stopExecutionWorkspace(); return }
     guard let conversationID = selectedConversationID, let runID = activeRunID, online, activeProvider?.canStop == true else { return }
     await submit(.init(deviceID: state.deviceID, kind: .stop, conversationID: conversationID, runID: runID))
   }
   func respond(_ interaction: CompanionPendingInteraction, response: CompanionInteractionResponse) async {
+    if let approval = localApprovals.removeValue(forKey: interaction.id) {
+      localPending.removeAll { $0.id == interaction.id }
+      if !response.answers.isEmpty {
+        localQuestionAnswers[interaction.id] = response.answers.values.flatMap { $0 }.joined(separator: "\n")
+      }
+      approval.continuation.resume(returning: !response.cancelled && (response.optionID == "allow" || !response.answers.isEmpty))
+      return
+    }
+    if executionOwner(of: interaction.conversationID) != "central" { await respondInExecutionWorkspace(interaction, response: response); return }
     await submit(.init(deviceID: state.deviceID, kind: .respond, conversationID: interaction.conversationID,
       runID: interaction.runID, interactionID: interaction.id, response: response))
   }
   func workspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+    let conversationID: String?
+    switch request { case .session(let id), .exportConversation(let id, _): conversationID = id; default: conversationID = nil }
+    if let id = conversationID {
+      let owner = executionOwner(of: id)
+      if owner == "local" { return try await readDeviceWorkspace(request) }
+      if owner != "central" {
+        guard let client = workspaceClients[owner] else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
+        return try await client.readWorkspace(request)
+      }
+    }
     guard online, let engine else { throw MobileConnectionError.offline }
     return try await engine.readWorkspace(request)
   }
   @discardableResult
   func perform(_ action: CompanionWorkspaceAction) async -> Bool {
+    let conversationID: String?
+    switch action {
+    case .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
+    default: conversationID = nil
+    }
+    if let id = conversationID {
+      let owner = executionOwner(of: id)
+      if owner == "local" { return await performDeviceAction(action) }
+      if owner != "central" {
+        guard let client = workspaceClients[owner] else { errorMessage = "This execution workspace is unavailable."; return false }
+        do {
+          let command = CompanionCommand(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: action)
+          let result = try await client.submit(command)
+          guard result.status == .completed else { errorMessage = result.message ?? "The workspace has not confirmed this change."; return false }
+          await refreshExecutionWorkspaces(); return true
+        } catch { errorMessage = error.localizedDescription; return false }
+      }
+    }
     guard online, let engine else { errorMessage = MobileConnectionError.offline.localizedDescription; return false }
     guard !workspaceActionInProgress else { return false }
     workspaceActionInProgress = true; defer { workspaceActionInProgress = false }

@@ -17,11 +17,18 @@ public struct CompanionHTTPRequest: Sendable {
 }
 
 public struct CompanionHTTPResponse: Sendable {
+  /// Awaiting emit applies socket backpressure to the producer. A producer must
+  /// propagate cancellation to its underlying inference request or process.
+  public typealias Stream = @Sendable (@escaping @Sendable (Data) async throws -> Void) async throws -> Void
   public let status: Int
   public let contentType: String
   public let body: Data
+  public let stream: Stream?
   public init(status: Int = 200, contentType: String = "application/json", body: Data) {
-    self.status = status; self.contentType = contentType; self.body = body
+    self.status = status; self.contentType = contentType; self.body = body; self.stream = nil
+  }
+  public init(status: Int = 200, contentType: String, stream: @escaping Stream) {
+    self.status = status; self.contentType = contentType; self.body = Data(); self.stream = stream
   }
   public static func json<T: Encodable>(_ value: T, status: Int = 200) throws -> Self {
     Self(status: status, body: try JSONEncoder().encode(value))
@@ -86,16 +93,21 @@ public struct CompanionHTTPParser: Sendable {
   private var malformed: CompanionAPIError { CompanionAPIError(code: "invalid_request", message: "Invalid companion request.") }
 }
 
-/// Each connection has its own bounded reader. Request tasks do not own Mac runs,
-/// and closing a connection intentionally does not cancel an accepted command.
+/// Each connection has its own bounded reader. Ordinary request tasks do not own
+/// Mac runs, so disconnecting never cancels an accepted execution command. An
+/// inference-only streaming response does own its producer and cancels it on close.
 public final class CompanionHTTPServer: @unchecked Sendable {
   public typealias Handler = @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse
   private let queue = DispatchQueue(label: "com.wovenmatter.companion.http")
   private let handler: Handler
+  private let streamIdleTimeout: TimeInterval
   private var listener: NWListener?
   private var clients: [UUID: CompanionHTTPConnection] = [:]
   private var startContinuation: CheckedContinuation<UInt16, any Error>?
-  public init(handler: @escaping Handler) { self.handler = handler }
+  public init(streamIdleTimeout: TimeInterval = 180, handler: @escaping Handler) {
+    precondition(streamIdleTimeout.isFinite && streamIdleTimeout > 0)
+    self.handler = handler; self.streamIdleTimeout = streamIdleTimeout
+  }
 
   public func start(port: UInt16 = 0) async throws -> UInt16 {
     try await withCheckedThrowingContinuation { continuation in
@@ -143,7 +155,7 @@ public final class CompanionHTTPServer: @unchecked Sendable {
   private func accept(_ connection: NWConnection) {
     guard clients.count < 32 else { connection.cancel(); return }
     let id = UUID()
-    let client = CompanionHTTPConnection(connection: connection, queue: queue, handler: handler) { [weak self] in
+    let client = CompanionHTTPConnection(connection: connection, queue: queue, handler: handler, streamIdleTimeout: streamIdleTimeout) { [weak self] in
       self?.clients.removeValue(forKey: id)
     }
     clients[id] = client
@@ -155,12 +167,20 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
   private let connection: NWConnection
   private let queue: DispatchQueue
   private let handler: CompanionHTTPServer.Handler
+  private let streamIdleTimeout: TimeInterval
   private let onClose: @Sendable () -> Void
   private var parser = CompanionHTTPParser()
+  // All mutable connection state is confined to queue, including NW callbacks.
   private var closed = false
   private var processing = false
-  init(connection: NWConnection, queue: DispatchQueue, handler: @escaping CompanionHTTPServer.Handler, onClose: @escaping @Sendable () -> Void) {
-    self.connection = connection; self.queue = queue; self.handler = handler; self.onClose = onClose
+  private var peerClosed = false
+  private var streaming = false
+  private var streamTask: Task<Void, Never>?
+  private var streamIdleTimer: (any DispatchSourceTimer)?
+  init(connection: NWConnection, queue: DispatchQueue, handler: @escaping CompanionHTTPServer.Handler,
+       streamIdleTimeout: TimeInterval, onClose: @escaping @Sendable () -> Void) {
+    self.connection = connection; self.queue = queue; self.handler = handler
+    self.streamIdleTimeout = streamIdleTimeout; self.onClose = onClose
   }
   func start() {
     connection.stateUpdateHandler = { [weak self] state in
@@ -171,10 +191,14 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
     queue.asyncAfter(deadline: .now() + 15) { [weak self] in
       guard let self, !self.processing else { return }; self.cancel()
     }
-    queue.asyncAfter(deadline: .now() + 60) { [weak self] in self?.cancel() }
+    queue.asyncAfter(deadline: .now() + 60) { [weak self] in
+      guard let self, !self.streaming else { return }; self.cancel()
+    }
   }
   func cancel() {
     guard !closed else { return }; closed = true
+    streamTask?.cancel(); streamTask = nil
+    streamIdleTimer?.cancel(); streamIdleTimer = nil
     connection.cancel(); onClose()
   }
   private func receive() {
@@ -183,6 +207,8 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
       do {
         if let request = try self.parser.append(data ?? Data()) {
           self.processing = true
+          self.peerClosed = complete || error != nil
+          if !self.peerClosed { self.monitorDisconnect() }
           Task { [self] in
             let response = await handler(request)
             queue.async { [self] in send(response) }
@@ -194,11 +220,81 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
       }
     }
   }
+  private func monitorDisconnect() {
+    // There is exactly one request per connection. This read detects a closed
+    // inference client even while its producer is waiting for model output.
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] data, _, complete, error in
+      guard let self, !self.closed else { return }
+      if data?.isEmpty == false { self.cancel(); return } // no pipelining
+      if complete || error != nil {
+        self.peerClosed = true
+        if self.streaming { self.cancel() }
+      } else { self.monitorDisconnect() }
+    }
+  }
   private func send(_ response: CompanionHTTPResponse) {
     guard !closed else { return }
+    guard (100...599).contains(response.status), !response.contentType.isEmpty,
+      response.contentType.utf8.allSatisfy({ $0 >= 32 && $0 != 127 }) else {
+      send(.error("invalid_response", "The server could not encode its response.", status: 500)); return
+    }
     let reason = response.status == 200 ? "OK" : "Request Error"
-    var wire = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n".utf8)
-    wire.append(response.body)
-    connection.send(content: wire, completion: .contentProcessed { [weak self] _ in self?.cancel() })
+    let framing = response.stream == nil ? "Content-Length: \(response.body.count)" : "Transfer-Encoding: chunked"
+    var wire = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Type: \(response.contentType)\r\n\(framing)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n".utf8)
+    guard let producer = response.stream else {
+      wire.append(response.body)
+      connection.send(content: wire, completion: .contentProcessed { [weak self] _ in self?.cancel() })
+      return
+    }
+    guard !peerClosed else { cancel(); return }
+    streaming = true
+    armStreamTimeout()
+    let header = wire
+    streamTask = Task { [self] in
+      do {
+        try await write(header)
+        try Task.checkCancellation()
+        try await producer { [self] bytes in
+          try Task.checkCancellation()
+          guard !bytes.isEmpty else { return }
+          // A single large emission is sliced without queuing the whole response.
+          for offset in stride(from: 0, to: bytes.count, by: 64 * 1_024) {
+            let count = min(64 * 1_024, bytes.count - offset)
+            let start = bytes.index(bytes.startIndex, offsetBy: offset)
+            let end = bytes.index(start, offsetBy: count)
+            var chunk = Data((String(count, radix: 16) + "\r\n").utf8)
+            chunk.append(bytes[start..<end]); chunk.append(contentsOf: [13, 10])
+            try await write(chunk)
+          }
+        }
+        try Task.checkCancellation()
+        try await write(Data("0\r\n\r\n".utf8))
+      } catch { /* An incomplete chunked response signals failure to the client. */ }
+      queue.async { [self] in cancel() }
+    }
+  }
+  private func write(_ bytes: Data) async throws {
+    try Task.checkCancellation()
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+      queue.async { [self] in
+        guard !closed else { continuation.resume(throwing: CancellationError()); return }
+        connection.send(content: bytes, completion: .contentProcessed { [self] error in
+          if let error { continuation.resume(throwing: error) }
+          else if closed { continuation.resume(throwing: CancellationError()) }
+          else { armStreamTimeout(); continuation.resume() }
+        })
+      }
+    }
+  }
+  private func armStreamTimeout() {
+    if streamIdleTimer == nil {
+      let timer = DispatchSource.makeTimerSource(queue: queue)
+      timer.setEventHandler { [weak self] in self?.cancel() }
+      streamIdleTimer = timer
+      timer.schedule(deadline: .now() + streamIdleTimeout)
+      timer.resume()
+    } else {
+      streamIdleTimer?.schedule(deadline: .now() + streamIdleTimeout)
+    }
   }
 }

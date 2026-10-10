@@ -44,12 +44,12 @@ public enum MobileConnectionError: Error, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .http(_, let message): message
-    case .revoked: "This iPhone’s access was revoked or expired. Pair again on your Mac. Local notes remain available."
-    case .versionMismatch: "The Mac and iPhone need compatible versions of Woven Matter. Local notes remain available."
-    case .invalidResponse: "The Mac returned an unreadable response."
-    case .responseTooLarge: "This response exceeds the iPhone’s download limit."
+    case .revoked: "This device’s access was revoked or expired. Pair again with the central Mac. Local notes remain available."
+    case .versionMismatch: "These devices need compatible versions of Woven Matter. Local notes remain available."
+    case .invalidResponse: "The connected workspace returned an unreadable response."
+    case .responseTooLarge: "This response exceeds the client download limit."
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
-    case .offline: "Connect to your running Mac to use agents. Your notes work offline."
+    case .offline: "This workspace is unavailable. Locally saved work remains available."
     }
   }
 }
@@ -64,7 +64,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
 }
 
 public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Sendable {
-  private let credential: MobileCredential
+  let credential: MobileCredential
   private let session: URLSession
   public init(credential: MobileCredential) throws {
     guard Self.validEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
@@ -106,7 +106,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> CompanionNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
-  private func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil) async throws -> Result {
+  func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil) async throws -> Result {
     let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024)
     return try JSONDecoder().decode(Result.self, from: data)
   }

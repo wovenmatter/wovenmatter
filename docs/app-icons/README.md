@@ -1,7 +1,8 @@
 # App icons
 
 - **Production / Release:** sage green (`AppIcon`).
-- **Dev / Debug:** pale cognac (`AppIconDev`).
+- **macOS Dev / Debug:** pale cognac (`AppIconDev`).
+- **iPhone / iPad (all configurations):** the production sage green (`AppIcon`).
 
 Both variants use **one shared foreground**, traced from the original green
 **A11 Larger** design: identical cube pixels, shadow pixels, geometry, placement,
@@ -16,10 +17,12 @@ difference to the green master outside the shared cube-and-shadow mask. This
 preserves the master's subtle background texture. The original neutral exterior
 is filled with the sampled background color,
 producing fully opaque square artwork. The source tile mask is used only to
-replace that exterior; it is not exported as transparency. macOS applies the
-final outer icon shape. The full canvas and foreground coordinates are retained
-without cropping, scaling up, or repositioning. All existing asset
-catalog sizes from 16 to 1024 pixels are exported with Lanczos resampling.
+replace that exterior; it is not exported as transparency. The operating system
+applies the final outer icon shape. The full canvas and foreground coordinates are retained
+without cropping, scaling up, or repositioning. All existing macOS and iOS asset
+catalog sizes from 16 to 1024 pixels are exported with Lanczos
+resampling. The iOS 1024-pixel artwork is identical to the production macOS
+1024-pixel artwork; iOS assets are never derived from the cognac dev variant.
 Antialiased boundary pixels naturally blend with their respective backgrounds;
 the foreground artwork itself is shared, not regenerated.
 

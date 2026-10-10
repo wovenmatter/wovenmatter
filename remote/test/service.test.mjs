@@ -1057,3 +1057,28 @@ process.stdin.on('end', () => {
 })
 `
 }
+
+test('direct client grants expose only execution routes and enforce revocation', async context => {
+  const fixture=await temporaryFixture(context,'wovenmatter-direct-client-')
+  const catalog=resolve(fixture,'catalog.json')
+  await writeFile(catalog,JSON.stringify({schemaVersion:4,harnesses:[]}))
+  const service=await startService({workspace:fixture,home:fixture,catalog,token:'fixture-admin-token'})
+  context.after(()=>service.child.kill('SIGTERM'))
+  const id=()=>globalThis.crypto.randomUUID()
+  const body={libraryID:id(),workspaceID:id(),ownerDeviceID:id(),deviceID:id(),scopes:['execution']}
+  const enrolled=await fetch(service.url+'/v1/execution/devices',{method:'POST',headers:{authorization:'Bearer fixture-admin-token','content-type':'application/json'},body:JSON.stringify(body)})
+  assert.equal(enrolled.status,201)
+  const grant=await enrolled.json(),headers={authorization:'Bearer '+grant.token,'content-type':'application/json'}
+  const descriptor=await fetch(service.url+'/v1/execution',{headers})
+  assert.equal(descriptor.status,200)
+  assert.equal((await descriptor.json()).id,body.workspaceID)
+  assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
+  assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
+  assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
+  assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
+  const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
+  assert.equal(foreign.status,400)
+  const revoked=await fetch(service.url+'/v1/execution/devices/'+body.deviceID,{method:'DELETE',headers:{authorization:'Bearer fixture-admin-token'}})
+  assert.equal(revoked.status,200)
+  assert.equal((await fetch(service.url+'/v1/execution',{headers})).status,401)
+})

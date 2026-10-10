@@ -10,10 +10,11 @@ struct SettingsCompanionView: View {
     var onBack: () -> Void
 
     var body: some View {
-        SettingsPage(title: "iPhone & iPad",
+        SettingsPage(title: "Devices",
             detail: "Capture ideas anywhere. Work with the same folders, notes, and agents on your Mac.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            SettingsCard(title: "Share this workspace", detail: "Connect this Mac and your iPhone or iPad to the same Tailscale network.") {
+            CentralLibraryPairingCard(client: model.libraryClient, application: model)
+            SettingsCard(title: "Share this central library", detail: "Connect this Mac and your iPhone or iPad to the same Tailscale network.") {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(host.status, systemImage: host.endpoint == nil ? "iphone.slash" : "iphone.radiowaves.left.and.right")
@@ -83,13 +84,13 @@ struct SettingsCompanionView: View {
                 }
             }
             if host.endpoint != nil {
-                SettingsCard(title: "Pair your iPhone or iPad", detail: "Open Woven Matter on your iPhone or iPad and scan this code. It expires in five minutes and can be used once.") {
+                SettingsCard(title: "Pair another device", detail: "Open Woven Matter on your iPhone, iPad, or another Mac. Scan this code or paste its pairing link. It expires in five minutes and can be used once.") {
                     if let payload = host.pairingPayload {
                         HStack(alignment: .center, spacing: 24) {
                             if let qr = qrImage(payload.encodedURL.absoluteString) {
                                 Image(nsImage: qr).interpolation(.none).resizable().frame(width: 200, height: 200)
                                     .padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 8))
-                                    .accessibilityLabel("One-time iPhone pairing QR code")
+                                    .accessibilityLabel("One-time device pairing QR code")
                             }
                             VStack(alignment: .leading, spacing: 12) {
                                 if let expiry = host.pairingExpiresAt {

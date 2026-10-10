@@ -6,6 +6,7 @@ import WovenMatterDashboardStore
 
 @MainActor @Observable
 final class LibraryModel {
+    let savedArtifacts = SavedArtifactsModel()
     private(set) var items: [WorkspaceLibraryItem] = []
     private(set) var facets: [LibraryFacet] = []
     private(set) var hasMore = false
@@ -27,6 +28,7 @@ final class LibraryModel {
 
     init(service: LibraryService? = nil) {
         self.service = service
+        savedArtifacts.configure(service: service)
     }
 
     isolated deinit { syncTask?.cancel() }
@@ -48,6 +50,7 @@ final class LibraryModel {
     ) {
         self.service = service
         self.backendExecutor = backendExecutor
+        savedArtifacts.configure(service: service, backendExecutor: backendExecutor)
         self.locations = locations
         self.remoteWorkspace = remoteWorkspace
         guard syncTask == nil else { return }

@@ -25,6 +25,7 @@ extension MobileSyncEngine {
   /// any request. Recovery only reads receipts; executing an unsent continuation
   /// requires the user to press Continue while online.
   public func startConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
+    guard requested.create.workspaceID == nil, requested.initialSend.workspaceID == nil else { throw MobileStore.Failure.wrongWorkspace }
     if let task = launchTasks[requested.id] { return try await task.value }
     let task = Task { try await self.performLaunch(requested) }
     launchTasks[requested.id] = task

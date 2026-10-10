@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import WovenMatterCompanion
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -54,6 +55,11 @@ enum MobileStorePersistence {
   private static func transform(_ state: inout MobileStoreState, _ body: (String) throws -> String) throws {
     for id in Array(state.notes.keys) { state.notes[id]!.content = try body(state.notes[id]!.content) }
     for id in Array(state.bases.keys) { state.bases[id]!.content = try body(state.bases[id]!.content) }
+    for id in Array(state.pendingNoteDeletions?.keys ?? Dictionary<String, CompanionNote>().keys) {
+      var note = state.pendingNoteDeletions![id]!
+      note.content = try body(note.content)
+      state.pendingNoteDeletions?[id] = note
+    }
     for id in Array(state.conflicts.keys) {
       state.conflicts[id]!.local.content = try body(state.conflicts[id]!.local.content)
       if let value = state.conflicts[id]!.base?.content { state.conflicts[id]!.base!.content = try body(value) }
@@ -68,7 +74,7 @@ enum MobileStorePersistence {
     for index in state.launches.indices { if let value = state.launches[index].initialSend.text { state.launches[index].initialSend.text = try body(value) } }
     for id in Array(state.chatDrafts.keys) { state.chatDrafts[id]!.text = try body(state.chatDrafts[id]!.text) }
   }
-  private static func writeDurably(_ data: Data, at file: URL) throws {
+  static func writeDurably(_ data: Data, at file: URL) throws {
     let directory = file.deletingLastPathComponent()
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let temporary = directory.appendingPathComponent(".write-" + UUID().uuidString)

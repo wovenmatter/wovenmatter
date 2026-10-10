@@ -107,6 +107,42 @@ struct ACPConfigurationLifecycleTests {
     #expect(reopenedState.starts == 1 && reopenedState.configurationReads == 1 && reopenedState.shutdowns == 1)
     await reopened.shutdown()
   }
+
+  @Test func executionAdoptionDetachesOnlyItsIdleClientAndRejectsLegacyReopen() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let firstID = try await database.createLocalACPSession(runtimeKind: .codex, title: "Transfer", ownerDeviceID: UUID())
+    let secondID = try await database.createLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
+    let first = SelectorDriverState(expectedExistingSessionID: nil)
+    let second = SelectorDriverState(expectedExistingSessionID: nil)
+    let drivers = SelectorDriverSequence([first, second])
+    let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in drivers.next() })
+    let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
+      executableURL: URL(filePath: "/nonexistent-adoption-fixture"), arguments: [])
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    _ = try await coordinator.configuration(conversationID: firstID, launch: launch, workspace: workspace)
+    _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
+    let original = try await database.localACPSession(conversationID: firstID)
+    try await coordinator.detachForExecutionAdoption(conversationID: firstID)
+    #expect(first.shutdowns == 1 && second.shutdowns == 0)
+    await #expect(throws: (any Error).self) {
+      try await coordinator.configuration(conversationID: firstID, launch: launch, workspace: workspace)
+    }
+    _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
+    #expect(drivers.requests == 2)
+    await first.emit(.init(model: "selected-model", modelOptions: ["default-model", "selected-model"]))
+    #expect(try await database.localACPSession(conversationID: firstID).model == original.model)
+    let running = try await database.beginLocalACPRun(conversationID: secondID, content: "Other process is busy")
+    await #expect(throws: (any Error).self) { try await coordinator.detachForExecutionAdoption(conversationID: secondID) }
+    #expect(second.shutdowns == 0)
+    try await database.completeLocalACPRun(runID: running.runID)
+    _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
+    await coordinator.shutdown()
+    #expect(first.shutdowns == 1 && second.shutdowns == 1)
+  }
+
 }
 
 private final class SelectorDriverState: @unchecked Sendable {

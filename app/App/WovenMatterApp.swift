@@ -383,6 +383,12 @@ struct WovenMatterApp: App {
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil
             || environment.keys.contains("XCTestConfigurationFilePath")
+        // A leftover login job must not reopen an old central library after
+        // this Mac has explicitly switched to a different library's client.
+        if !isRunningUnitTests, LocalExecutionRole.current == .backend,
+           UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
+            Darwin.exit(EXIT_SUCCESS)
+        }
         if !isRunningUnitTests { KeychainAccess.enforceCentralAuthorization() }
         workspaceProcessLease = isRunningUnitTests
             ? nil
@@ -482,8 +488,10 @@ struct WovenMatterApp: App {
         }
 
         Settings {
-            SettingsView(model: applicationModel)
-                .scrollIndicators(.never)
+            Group {
+                if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
+                else { SettingsView(model: applicationModel) }
+            }.scrollIndicators(.never)
         }
     }
 }

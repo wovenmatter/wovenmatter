@@ -8,22 +8,26 @@ struct ChatPane: View {
   @State private var referencesPresented = false
   @State private var detailsPresented = false
   @State private var settingsPresented = false
+  @State private var filesPresented = false
   var body: some View {
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
           Text(model.selectedConversation?.title ?? "New chat").font(.headline).lineLimit(1)
-          Text(model.online ? (model.activeProvider?.displayName ?? "Choose an agent") : "Offline · saved transcript").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Text(model.executionStatus).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }
         Spacer()
         Menu {
           if model.selectedConversationID != nil {
+            if model.selectedExecutionWorkspaceID == "local" {
+              Button("Workspace files") { filesPresented = true }
+            }
             Button("Details and export") { detailsPresented = true }
-            Button("Session settings and tools") { settingsPresented = true }.disabled(!model.online)
+            Button("Session settings and tools") { settingsPresented = true }.disabled(!model.executionOnline)
           }
           Button("New chat", glyph: .squarePen) { model.newChat() }
-          if model.activeRunID != nil { Button("Stop this run", systemImage: "stop.fill", role: .destructive) { Task { await model.stop() } }.disabled(!model.online || model.activeProvider?.canStop != true) }
-          Button("Refresh", glyph: .rotate) { Task { await model.refresh() } }.disabled(!model.online)
+          if model.activeRunID != nil { Button("Stop this run", systemImage: "stop.fill", role: .destructive) { Task { await model.stop() } }.disabled(!model.executionOnline || model.activeProvider?.canStop != true) }
+          Button("Refresh", glyph: .rotate) { Task { await model.refreshConversation() } }
         } label: { Image(systemName: "ellipsis").font(.title2).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Conversation actions")
       }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
       ScrollViewReader { proxy in
@@ -33,15 +37,15 @@ struct ChatPane: View {
               Button("Return to latest messages", systemImage: "arrow.down") { model.showLatestMessages() }.font(.caption)
             }
             if model.transcript?.olderCursor != nil {
-              Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.online || model.loadingHistory)
+              Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.executionOnline || model.loadingHistory)
             }
             if model.selectedConversationID == nil {
               VStack(alignment: .leading, spacing: 12) {
                 Text("Continue the work from here.").font(.title2.weight(.semibold))
-                Text("Your Mac runs the agent. Reference a synced note, start a conversation, and come back to the same session on either device.").foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Choose a workspace and inference connection. Pi Durable can run on this device, or you can control agents in another workspace over Tailscale.").foregroundStyle(DashboardPalette.mutedForeground)
               }.padding(.vertical, 30)
             } else if model.transcript == nil {
-              ContentUnavailableView { Label("Transcript isn’t saved here", glyph: .messageSquare) } description: { Text("Connect to your Mac to load this conversation.") }
+              ContentUnavailableView { Label("Transcript isn’t saved here", glyph: .messageSquare) } description: { Text("Connect to the conversation’s execution workspace or your central library to load its history.") }
             }
             ForEach(model.transcript?.messages ?? []) { message in MessageView(message: message) }
             ForEach(model.transcript?.activities ?? []) { activity in
@@ -55,7 +59,7 @@ struct ChatPane: View {
               PendingInteractionView(model: model, interaction: interaction)
             }
             if model.activeRunID != nil {
-              HStack { ProgressView(); Text(model.online ? "Running on your Mac" : "Mac connection interrupted · run continues there").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              HStack { ProgressView(); Text(model.executionOnline ? "Running on \(model.executionName.lowercased())" : "Workspace connection interrupted · execution stays there").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
             }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
@@ -65,7 +69,16 @@ struct ChatPane: View {
           else { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("latest", anchor: .bottom) } }
         }
       }
+      if model.canResumeLocalRun {
+        HStack {
+          Button("Resume saved run") { Task { await model.resumeDeviceRun() } }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(model.sending)
+          Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(DashboardQuietButtonStyle())
+        }.padding(.horizontal, 18)
+      }
       composer
+    }
+    .sheet(isPresented: $filesPresented) {
+      if let id = model.selectedConversationID { DeviceWorkspaceFiles(model: model, conversationID: id) }
     }
     .sheet(isPresented: $detailsPresented) {
       if let item = model.selectedConversation { ItemManagementSheet(model: model, id: item.id, isNote: false, title: item.title, folderID: item.folderID ?? "") }
@@ -91,14 +104,26 @@ struct ChatPane: View {
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
         HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
-      TextField(model.activeRunID == nil ? "Message your Mac…" : "Steer this run…", text: $model.composer, axis: .vertical)
+      TextField(model.activeRunID == nil ? "Message…" : "Steer this run…", text: $model.composer, axis: .vertical)
         .lineLimit(2...6).accessibilityIdentifier("chat-composer")
-        .disabled(!model.online)
+      HStack {
+        ExecutionWorkspaceMenu(model: model)
+        Spacer()
+        if model.selectedExecutionWorkspaceID == "local" {
+          Menu {
+            ForEach(model.inferenceConnections) { connection in
+              Button(connection.name + " · " + connection.modelID) { model.selectInferenceConnection(connection.id) }
+            }
+            Button("Manage inference connections") { model.executionSettingsPresented = true }
+          } label: { Text(model.selectedInferenceConnection?.modelID ?? "Choose model").font(.caption).lineLimit(1).frame(minHeight: 44) }
+            .disabled(model.selectedConversationID != nil)
+        }
+      }
       HStack(spacing: 14) {
         Button { referencesPresented = true } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Reference a note")
         if model.selectedConversationID == nil {
           Menu {
-            ForEach(model.providers) { provider in
+            ForEach(model.availableExecutionProviders) { provider in
               Button { model.providerID = provider.id } label: {
                 Label {
                   Text(provider.displayName + " · " + provider.routeName + (provider.available ? "" : " · unavailable"))
@@ -114,7 +139,7 @@ struct ChatPane: View {
               Text(model.activeProvider?.displayName ?? "Agent").lineLimit(1)
               DashboardLucideIcon(glyph: .chevronDown, size: 14)
             }.font(.subheadline.weight(.medium)).frame(minHeight: 44)
-          }.disabled(!model.online || model.providers.isEmpty)
+          }.disabled(!model.executionOnline || model.availableExecutionProviders.isEmpty)
         } else {
           HStack(spacing: 6) {
             MobileAgentIcon(runtimeKind: model.activeProvider?.runtimeKind ?? model.selectedConversation?.runtimeKind, size: 20)
@@ -123,19 +148,18 @@ struct ChatPane: View {
         }
         Spacer()
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
-          Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.online)
+          Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)
         }
         Button { Task { await model.send() } } label: {
           Group { if model.sending { ProgressView().tint(.white) } else { DashboardLucideIcon(glyph: .arrowUp, size: 20) } }
             .frame(width: 44, height: 44).foregroundStyle(.white).background(canSend ? DashboardPalette.primary : Color.gray.opacity(0.35), in: Circle())
         }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
       }
-      if !model.online { Text("Connect to your running Mac to send. Agent messages are never queued offline.").font(.caption2).foregroundStyle(DashboardPalette.mutedForeground) }
-      else if model.activeRunID != nil && model.activeProvider?.canSteer != true { Text("This agent can’t accept input during this run. You can stop it or wait.").font(.caption2).foregroundStyle(DashboardPalette.mutedForeground) }
+      if let help = model.composerHelp { Text(help).font(.caption2).foregroundStyle(DashboardPalette.mutedForeground) }
     }.padding(15).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)).padding(.horizontal, 18).padding(.vertical, 12)
   }
   private var canSend: Bool {
-    model.online && !model.sending && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+    model.executionOnline && model.activeProvider?.available == true && !model.canResumeLocalRun && !model.sending && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
       (model.activeRunID == nil || model.activeProvider?.canSteer == true)
   }
 }
@@ -194,11 +218,11 @@ struct PendingInteractionView: View {
           var result = answers.mapValues { Array($0).sorted() }
           for (id, text) in freeText where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[id, default: []].append(text) }
           respond(.init(answers: result))
-        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(!interaction.questions.allSatisfy { !(answers[$0.id] ?? []).isEmpty || !(freeText[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(!interaction.questions.allSatisfy { !$0.isRequired || !(answers[$0.id] ?? []).isEmpty || !(freeText[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
       }
       Button("Cancel request", role: .cancel) { respond(.init(cancelled: true)) }.font(.caption).frame(minHeight: 44)
-      Text("The first valid answer on either device wins.").font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
-    }.disabled(!model.online || responding).padding(16).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+      Text(model.selectedExecutionWorkspaceID == "local" ? "This action runs on this device." : "The first valid answer on any authorized device wins.").font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
+    }.disabled(!model.executionOnline || responding).padding(16).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
   }
   private func respond(_ response: CompanionInteractionResponse) {
     responding = true

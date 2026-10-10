@@ -6,6 +6,7 @@ struct DashboardLibrarySurface: View {
     @Bindable var library: LibraryModel
     let configuredWorkspaces: [(id: String, name: String)]
     let onOpenMessage: (WorkspaceLibraryItem) -> Void
+    @State private var collection = "Messages"
     @State private var selection = LibraryQuery()
     @State private var dateRange: LibraryDateRange = .all
     private var query: LibraryQuery {
@@ -36,40 +37,44 @@ struct DashboardLibrarySurface: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let error = library.error ?? library.loadError {
-                HStack {
-                    Text(error).font(.system(size: 12)).textSelection(.enabled)
-                    Spacer()
-                    Button("Dismiss") { library.dismissError() }.buttonStyle(DashboardQuietButtonStyle())
-                }.padding(.horizontal, 32).padding(.vertical, 8)
-            }
-            if library.loading && library.items.isEmpty {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if library.items.isEmpty {
-                DashboardConversationEmptyState(
-                    icon: .libraryBigControl,
-                    title: library.facets.isEmpty ? "No Library items yet" : "No matching items",
-                    detail: library.facets.isEmpty
-                        ? "Files, links, and photos you exchange in new messages will appear here."
-                        : "Adjust your filters or search to find an item."
-                )
-                .frame(maxHeight: .infinity)
+            if collection == "Saved Artifacts" {
+                DashboardSavedArtifactsView(model: library.savedArtifacts)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(library.items) { item in
-                            DashboardLibraryRow(
-                                item: item, onOpen: { library.open(item) },
-                                onSource: { onOpenMessage(item) }, onRetry: { library.retry(item) })
+                if let error = library.error ?? library.loadError {
+                    HStack {
+                        Text(error).font(.system(size: 12)).textSelection(.enabled)
+                        Spacer()
+                        Button("Dismiss") { library.dismissError() }.buttonStyle(DashboardQuietButtonStyle())
+                    }.padding(.horizontal, 32).padding(.vertical, 8)
+                }
+                if library.loading && library.items.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if library.items.isEmpty {
+                    DashboardConversationEmptyState(
+                        icon: .libraryBigControl,
+                        title: library.facets.isEmpty ? "No Library items yet" : "No matching items",
+                        detail: library.facets.isEmpty
+                            ? "Files, links, and photos you exchange in new messages will appear here."
+                            : "Adjust your filters or search to find an item."
+                    )
+                    .frame(maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(library.items) { item in
+                                DashboardLibraryRow(
+                                    item: item, onOpen: { library.open(item) },
+                                    onSource: { onOpenMessage(item) }, onRetry: { library.retry(item) })
+                            }
+                            if library.hasMore {
+                                Button("Load more") { Task { await library.load(query: query, more: true) } }
+                                    .buttonStyle(DashboardQuietButtonStyle()).disabled(library.loading).padding(
+                                        .vertical, 12)
+                            }
                         }
-                        if library.hasMore {
-                            Button("Load more") { Task { await library.load(query: query, more: true) } }
-                                .buttonStyle(DashboardQuietButtonStyle()).disabled(library.loading).padding(
-                                    .vertical, 12)
-                        }
-                    }
-                    .padding(.horizontal, 32).padding(.top, 16).padding(.bottom, 32)
-                }.scrollIndicators(.never)
+                        .padding(.horizontal, 32).padding(.top, 16).padding(.bottom, 32)
+                    }.scrollIndicators(.never)
+                }
             }
         }
         .background(theme.palette.workspace)
@@ -97,54 +102,60 @@ struct DashboardLibrarySurface: View {
                     .background(DashboardPalette.muted).clipShape(DashboardShapes.card)
                 Text("Library").font(.system(size: 22, weight: .semibold)).tracking(-0.3)
                 Spacer()
-                Menu {
-                    Button("Newest first") { selection.oldestFirst = false }
-                    Button("Oldest first") { selection.oldestFirst = true }
-                } label: {
-                    Label(selection.oldestFirst ? "Oldest first" : "Newest first", systemImage: "arrow.up.arrow.down")
+                if collection == "Messages" {
+                    Menu {
+                        Button("Newest first") { selection.oldestFirst = false }
+                        Button("Oldest first") { selection.oldestFirst = true }
+                    } label: {
+                        Label(selection.oldestFirst ? "Oldest first" : "Newest first", systemImage: "arrow.up.arrow.down")
+                    }
+                    .menuStyle(.borderlessButton).fixedSize()
                 }
-                .menuStyle(.borderlessButton).fixedSize()
             }
-            DashboardSearchField(text: $selection.search, prompt: "Search Library")
-            ScrollView(.horizontal) {
-                HStack(spacing: 16) {
-                    multipleFilter("Workspaces", options: workspaces, selected: $selection.workspaces)
-                    multipleFilter("Agent types", options: harnesses, selected: $selection.harnesses)
-                    multipleFilter("Agents", options: agents, selected: $selection.agents)
-                    Menu {
-                        Button("All senders") { selection.sender = nil }
-                        ForEach(LibrarySender.allCases, id: \.self) { value in
-                            Button(value.title) { selection.sender = value }
+            DashboardSegmentedSelector(options: ["Messages", "Saved Artifacts"], selection: $collection) { $0 }
+                .frame(maxWidth: 320)
+            if collection == "Messages" {
+                DashboardSearchField(text: $selection.search, prompt: "Search Library")
+                ScrollView(.horizontal) {
+                    HStack(spacing: 16) {
+                        multipleFilter("Workspaces", options: workspaces, selected: $selection.workspaces)
+                        multipleFilter("Agent types", options: harnesses, selected: $selection.harnesses)
+                        multipleFilter("Agents", options: agents, selected: $selection.agents)
+                        Menu {
+                            Button("All senders") { selection.sender = nil }
+                            ForEach(LibrarySender.allCases, id: \.self) { value in
+                                Button(value.title) { selection.sender = value }
+                            }
+                        } label: {
+                            filterLabel(selection.sender?.title ?? "All senders")
                         }
-                    } label: {
-                        filterLabel(selection.sender?.title ?? "All senders")
-                    }
-                    Menu {
-                        Button("All types") { selection.kind = nil }
-                        ForEach(LibraryItemKind.allCases, id: \.self) { value in
-                            Button(value.title) { selection.kind = value }
+                        Menu {
+                            Button("All types") { selection.kind = nil }
+                            ForEach(LibraryItemKind.allCases, id: \.self) { value in
+                                Button(value.title) { selection.kind = value }
+                            }
+                        } label: {
+                            filterLabel(selection.kind?.title ?? "All types")
                         }
-                    } label: {
-                        filterLabel(selection.kind?.title ?? "All types")
+                        Menu {
+                            ForEach(LibraryDateRange.allCases) { value in Button(value.title) { dateRange = value } }
+                        } label: {
+                            filterLabel(dateRange.title)
+                        }
                     }
-                    Menu {
-                        ForEach(LibraryDateRange.allCases) { value in Button(value.title) { dateRange = value } }
-                    } label: {
-                        filterLabel(dateRange.title)
-                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .menuStyle(.borderlessButton)
                 }
-                .fixedSize(horizontal: true, vertical: false)
-                .menuStyle(.borderlessButton)
-            }
-            .scrollIndicators(.never)
-            HStack {
-                Text(itemCount).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                Spacer()
-                if selection != LibraryQuery() || dateRange != .all {
-                    Button("Clear filters") {
-                        selection = .init()
-                        dateRange = .all
-                    }.buttonStyle(DashboardQuietButtonStyle())
+                .scrollIndicators(.never)
+                HStack {
+                    Text(itemCount).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Spacer()
+                    if selection != LibraryQuery() || dateRange != .all {
+                        Button("Clear filters") {
+                            selection = .init()
+                            dateRange = .all
+                        }.buttonStyle(DashboardQuietButtonStyle())
+                    }
                 }
             }
         }

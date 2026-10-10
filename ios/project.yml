@@ -22,6 +22,10 @@ targets:
     dependencies:
       - package: Mobile
         product: CompanionClient
+      - package: Mobile
+        product: PiDurableRuntime
+      - package: Mobile
+        product: CompanionInference
       - package: Shared
         product: WovenMatterCompanion
     settings:

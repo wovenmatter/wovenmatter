@@ -166,6 +166,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func companionConversationUnlocked(id: String) throws -> CompanionConversation? {
+    if let federated = try federationConversationUnlocked(id) { return federated }
     let statement = try prepareUnlocked("""
       SELECT c.id, c.title, c.folder_id,
         CASE WHEN g.agent_id IS NOT NULL THEN 'gateway:' || g.agent_id

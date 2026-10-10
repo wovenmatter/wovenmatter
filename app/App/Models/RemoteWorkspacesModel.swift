@@ -1321,6 +1321,64 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    /// Enroll a paired library client using the existing administrative SSH channel.
+    /// The returned bearer is device-scoped; the container administration token stays in Keychain.
+    func provisionExecutionDevice(
+        configuration: RemoteWorkspaceConfiguration, libraryID: String,
+        ownerDeviceID: String, deviceID: String, deviceName: String
+    ) async throws -> CompanionExecutionCredential {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        // Deterministic dedicated port per configured container; the remote script
+        // refuses collisions and never replaces another service's Serve route.
+        let portKey = "wovenmatter.execution.https-port." + configuration.id.uuidString.lowercased()
+        let suffix = configuration.id.uuidString.replacingOccurrences(of: "-", with: "").suffix(4)
+        let port = defaults.object(forKey: portKey) as? Int ?? (20_000 + (Int(suffix, radix: 16) ?? 0) % 20_000)
+        let ssh = sshClient
+        let endpoint = try await Task.detached(priority: .userInitiated) {
+            try await ssh.exposeExecution(configuration: configuration, httpsPort: port)
+        }.value
+        try requireCurrent(identity)
+        defaults.set(port, forKey: portKey)
+        let credential = try await client.provisionExecutionDevice(
+            libraryID: libraryID, workspaceID: configuration.id.uuidString.lowercased(),
+            ownerDeviceID: ownerDeviceID, deviceID: deviceID, name: deviceName,
+            workspaceName: configuration.name, endpoint: endpoint)
+        do {
+            try requireCurrent(identity)
+            guard credential.deviceID == deviceID, credential.workspace.id == configuration.id.uuidString.lowercased(),
+                  credential.workspace.libraryID == libraryID, credential.workspace.ownerDeviceID == ownerDeviceID,
+                  credential.workspace.kind == .linux, credential.workspace.endpoint == endpoint else {
+                throw RemoteWorkspaceClientError.invalidResponse("The workspace returned an execution grant for a different identity.")
+            }
+        } catch {
+            try? await client.revokeExecutionDevice(deviceID: deviceID)
+            throw error
+        }
+        return credential
+    }
+
+    func adoptExecutionConversation(configuration: RemoteWorkspaceConfiguration, adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
+        let identity = try requestIdentity(configuration)
+        guard adoption.workspaceID == configuration.id.uuidString.lowercased() else {
+            throw RemoteWorkspaceClientError.invalidResponse("The adoption belongs to another execution workspace.")
+        }
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let conversation = try await client.adoptExecutionConversation(adoption)
+        try requireCurrent(identity)
+        return conversation
+    }
+
+    func revokeExecutionDevice(configuration: RemoteWorkspaceConfiguration, deviceID: String) async throws {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        try await client.revokeExecutionDevice(deviceID: deviceID)
+        try requireCurrent(identity)
+    }
+
     private func refreshService(
         _ configuration: RemoteWorkspaceConfiguration
     ) async {

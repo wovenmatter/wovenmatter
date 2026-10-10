@@ -6,6 +6,7 @@ import WovenMatterCompanion
 struct LibraryPane: View {
   @Bindable var model: CompanionModel
   @State private var items: [CompanionLibraryItem] = []
+  @State private var savedArtifacts: [CompanionArtifactManifest] = []
   @State private var search = ""
   @State private var kind = ""
   @State private var hasMore = false
@@ -24,7 +25,23 @@ struct LibraryPane: View {
         ["": "All", "file": "Files", "link": "Links", "photo": "Photos"][$0] ?? $0
       }.accessibilityLabel("Library item kind").padding()
       List {
-        if !model.online { Text("Connect to your Mac to browse the Library.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if !savedArtifacts.isEmpty {
+          Section("Saved artifacts") {
+            ForEach(savedArtifacts.filter { item in
+              !item.deleted && (search.isEmpty || item.title.localizedCaseInsensitiveContains(search)) &&
+              (kind.isEmpty || kind == "photo" && item.mediaType.hasPrefix("image/") || kind == "file" && !item.mediaType.hasPrefix("image/"))
+            }) { item in
+              Button { Task { await openSavedArtifact(item) } } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                  Label(item.title, systemImage: item.mediaType.hasPrefix("image/") ? "photo" : "doc")
+                  Text(item.revision > 0 ? "Synchronized with central library" : "Saved on this device · waiting to sync")
+                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                }
+              }
+            }
+          }
+        }
+        if !model.online { Text("Saved artifacts remain available here. Connect to your central library to load other files and links.").foregroundStyle(DashboardPalette.mutedForeground) }
         if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
         ForEach(items) { item in
           VStack(alignment: .leading, spacing: 6) {
@@ -49,6 +66,7 @@ struct LibraryPane: View {
       .quickLookPreview($preview)
   }
   private func load(more: Bool = false) async {
+    savedArtifacts = await model.store?.artifacts.manifests().sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } ?? []
     guard model.online, !more || !loading else { return }
     loadGeneration += 1; let generation = loadGeneration
     loading = true; failure = nil
@@ -58,6 +76,16 @@ struct LibraryPane: View {
       guard generation == loadGeneration, !Task.isCancelled else { return }
       items = more ? items + values : values; hasMore = next
     } catch { if generation == loadGeneration, !Task.isCancelled { failure = error.localizedDescription } }
+  }
+  private func openSavedArtifact(_ item: CompanionArtifactManifest) async {
+    do {
+      guard let source = await model.store?.artifacts.localURL(id: item.id) else { throw DeviceExecutionError.unavailable("This artifact is still downloading. Reconnect to the central library to finish synchronization.") }
+      let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SavedArtifact-" + UUID().uuidString)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let name = URL(fileURLWithPath: item.title).lastPathComponent
+      let destination = directory.appendingPathComponent(name.isEmpty || name == "." || name == ".." ? "Artifact" : name)
+      try FileManager.default.copyItem(at: source, to: destination); preview = destination
+    } catch { model.errorMessage = error.localizedDescription }
   }
   private func open(_ item: CompanionLibraryItem) async {
     do { preview = try await model.exportFile(.libraryFile(id: item.id)) }
@@ -73,7 +101,14 @@ struct TrashPane: View {
     VStack {
       PaneHeader(title: "Trash") { EmptyView() }
       List {
-        if !model.online { Text("Connect to your Mac to restore notes and conversations.") }
+        ForEach(model.executionRecords.values.filter { $0.isTrashed == true }.sorted { $0.updatedAt > $1.updatedAt }, id: \.id) { record in
+          HStack {
+            Label(record.title, glyph: .messageSquare)
+            Spacer()
+            Button("Restore") { Task { await model.restoreDeviceConversation(record.id) } }
+          }
+        }
+        if !model.online { Text("Device conversations can be restored here. Connect to your central library to restore other items.") }
         if let failure { Text(failure) }
         ForEach(items) { item in
           HStack {
@@ -82,7 +117,7 @@ struct TrashPane: View {
             Button("Restore") { Task { await restore(item) } }.disabled(!model.online)
           }
         }
-        if model.online && items.isEmpty && failure == nil { Text("Trash is empty.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if model.online && items.isEmpty && !model.executionRecords.values.contains(where: { $0.isTrashed == true }) && failure == nil { Text("Trash is empty.").foregroundStyle(DashboardPalette.mutedForeground) }
       }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.task(id: model.online) { await load() }
   }
@@ -132,8 +167,8 @@ struct ItemManagementSheet: View {
           Button(isNote ? "Export original document" : "Export full run") { Task { await export(original: true) } }
         }
         Section { Button("Move to Trash", role: .destructive) { confirmTrash = true } }
-        if !model.online { Text("Connect to your Mac to manage this item.").foregroundStyle(DashboardPalette.mutedForeground) }
-      }.disabled(busy || !model.online)
+        if !(isNote ? model.online : model.executionAvailable(for: id)) { Text("Connect to this item’s owner to manage it.").foregroundStyle(DashboardPalette.mutedForeground) }
+      }.disabled(busy || !(isNote ? model.online : model.executionAvailable(for: id)))
         .navigationTitle(isNote ? "Note details" : "Conversation details")
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         .confirmationDialog("Move this item to Trash?", isPresented: $confirmTrash, titleVisibility: .visible) {
@@ -190,7 +225,7 @@ struct SessionSettingsSheet: View {
             selection("Permission", value: $permission, options: settings.permissions)
             Button("Apply settings") { Task { await apply() } }.disabled(!settings.canConfigure)
             if !settings.canConfigure { Text("Wait for the active run to finish before changing settings.").font(.caption) }
-            if settings.models.isEmpty { Text("Options appear after this agent has connected on the Mac.").font(.caption) }
+            if settings.models.isEmpty { Text("Options appear after this agent has connected in its workspace.").font(.caption) }
           }
           Section("Workspace tools") {
             ForEach(settings.availableTools) { tool in
@@ -202,7 +237,7 @@ struct SessionSettingsSheet: View {
             }
           }
         } else if let failure { Text(failure) } else { ProgressView("Loading settings…") }
-      }.disabled(busy || !model.online)
+      }.disabled(busy || !model.executionAvailable(for: id))
         .navigationTitle("Session settings")
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         .task { await load() }

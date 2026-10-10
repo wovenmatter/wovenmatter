@@ -38,6 +38,9 @@ extension CompanionCommandService {
                     status: recorded?.statusLabel, sessionID: recorded?.sessionID)
             })
         case .session(let id):
+            if try await store.database.companionExecutionOwner(conversationID: id) != nil {
+                return try await model.centralExecutionClient().readWorkspace(conversationID: id, request: request)
+            }
             return .session(try await sessionSettings(id))
         case .trash:
             var values = try await store.trashedConversations().prefix(500).map {
@@ -95,6 +98,10 @@ extension CompanionCommandService {
             }
             try await store.mutateNote(id: id, mutation: mutation, expectedRevision: revision)
         case let .configureSession(id, selectedModel, thinking, permission):
+            if try await store.database.companionExecutionOwner(conversationID: id) != nil {
+                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                return
+            }
             let settings = try await sessionSettings(id)
             guard settings.canConfigure,
                   selectedModel.map({ value in settings.models.contains { $0.id == value } }) ?? true,
@@ -109,6 +116,10 @@ extension CompanionCommandService {
             model.sessionSelectionPreferences.stageCalendarSelections(id: id, harness: context.harness, workspace: context.workspace, selections: next)
             try await model.applyPendingSessionSelections(conversationID: id)
         case let .sessionTools(id, enabled, confirmed):
+            if try await store.database.companionExecutionOwner(conversationID: id) != nil {
+                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                return
+            }
             _ = try await conversation(id)
             let requested = try WorkspaceSessionTools(identifiers: enabled)
             guard let tools = model.agentTools else { throw CommandError.unavailable }

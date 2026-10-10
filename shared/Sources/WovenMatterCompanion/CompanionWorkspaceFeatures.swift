@@ -1,7 +1,7 @@
 import Foundation
 
-/// Value-only mobile contracts. Paths, provider credentials, and execution
-/// objects stay on the Mac; file reads resolve a canonical Library identity.
+/// Value-only client contracts. File reads resolve a workspace-owned Library
+/// identity; credentials never enter ordinary app-data synchronization.
 public enum CompanionWorkspaceRead: Codable, Equatable, Sendable {
   case library(search: String, kind: String?, offset: Int)
   case libraryFile(id: String)
