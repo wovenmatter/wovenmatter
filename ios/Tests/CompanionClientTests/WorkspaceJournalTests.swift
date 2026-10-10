@@ -5,7 +5,8 @@ import WovenMatterCompanion
 private actor OfflineWorkspace: ExecutionWorkspaceTransport {
   var receipts: [String: CompanionCommandReceipt] = [:]
   var executed: [CompanionCommand] = []
-  var loseReply = true
+  var loseReply: Bool
+  init(loseReply: Bool = true) { self.loseReply = loseReply }
   func identity() -> CompanionExecutionWorkspace { .init(id: "linux", libraryID: "library", ownerDeviceID: "mac", kind: .linux, name: "Server", revision: 1) }
   func providers() -> [CompanionProvider] { [] }
   func pending() -> [CompanionPendingInteraction] { [] }
@@ -102,6 +103,45 @@ final class WorkspaceJournalTests: XCTestCase {
     XCTAssertEqual(executed.count, 1); XCTAssertEqual(executed.first?.text, "First prompt")
     let stored = await restarted.journal.commandRecords(workspaceID: "linux")
     XCTAssertEqual(stored.first?.command.text, "First prompt")
+  }
+  func testDirectControlCommandsPersistOwnerBeforeDispatchAndRejectMismatches() async throws {
+    let store = try MobileStore(file: path()), transport = OfflineWorkspace(loseReply: false)
+    let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)
+    let command = CompanionCommand(deviceID: "phone", kind: .respond, conversationID: "chat", runID: "run",
+      interactionID: "approval", response: .init(optionID: "allow"))
+    _ = try await client.submit(command)
+    let executed = await transport.executed
+    XCTAssertEqual(executed.count, 1)
+    XCTAssertEqual(executed.first?.workspaceID, "linux")
+    XCTAssertEqual(executed.first?.conversationID, "chat")
+    let stored = await store.journal.commandRecords(workspaceID: "linux")
+    XCTAssertEqual(stored.first?.command, executed.first)
+    var wrongOwner = command
+    wrongOwner.commandID = UUID().uuidString.lowercased()
+    wrongOwner.workspaceID = "another-workspace"
+    do { _ = try await client.submit(wrongOwner); XCTFail("Explicit ownership must not be overwritten") }
+    catch MobileStore.Failure.wrongWorkspace {}
+    let callsAfterMismatch = await transport.executed
+    let recordsAfterMismatch = await store.journal.commandRecords(workspaceID: "linux")
+    XCTAssertEqual(callsAfterMismatch.count, 1)
+    XCTAssertEqual(recordsAfterMismatch.count, 1)
+  }
+  func testLegacyUnscopedCommandRetryPreservesItsPersistedPayload() async throws {
+    let file = path(), transport = OfflineWorkspace(loseReply: false)
+    let store = try MobileStore(file: file)
+    let saved = CompanionCommand(commandID: "legacy", deviceID: "phone", kind: .respond, conversationID: "chat",
+      runID: "run", interactionID: "approval", response: .init(optionID: "allow"))
+    _ = try await store.journal.rememberCommand(saved, workspaceID: "linux")
+    let restarted = try MobileStore(file: file)
+    let client = WorkspaceClient(store: restarted, workspaceID: "linux", transport: transport)
+    var retry = saved
+    retry.workspaceID = "linux"
+    retry.response = .init(optionID: "deny")
+    _ = try await client.submit(retry)
+    let executed = await transport.executed
+    XCTAssertEqual(executed, [saved])
+    let records = await restarted.journal.commandRecords(workspaceID: "linux")
+    XCTAssertEqual(records.first?.command, saved)
   }
   func testDirectLaunchPersistsInitialPromptBeforeCreateAndResumesWithoutCentral() async throws {
     let file = path(); let store = try MobileStore(file: file); let transport = OfflineWorkspace()

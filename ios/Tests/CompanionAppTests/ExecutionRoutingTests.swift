@@ -86,10 +86,15 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionWorkspaceID = "local"
     await model.respond(.init(id: "approval", conversationID: "remote-conversation", runID: "remote-run", kind: .approval, title: "Permission"), response: .init(optionID: "allow"))
     let calls = await endpoint.commands
-    XCTAssertEqual(calls.count, 1)
-    XCTAssertEqual(calls.first?.conversationID, "remote-conversation")
-    XCTAssertEqual(calls.first?.workspaceID, workspaceID)
-    XCTAssertEqual(calls.first?.kind, .respond)
+    XCTAssertNil(model.errorMessage)
+    XCTAssertEqual(calls.count, 1, model.errorMessage ?? "Expected the conversation owner's workspace to receive the response")
+    let submitted = try XCTUnwrap(calls.first)
+    XCTAssertEqual(submitted.conversationID, "remote-conversation")
+    XCTAssertEqual(submitted.workspaceID, workspaceID)
+    XCTAssertEqual(submitted.kind, .respond)
+    XCTAssertEqual(submitted.runID, "remote-run")
+    XCTAssertEqual(submitted.interactionID, "approval")
+    XCTAssertEqual(submitted.response?.optionID, "allow")
   }
 
   @MainActor func testNoteReadVersionChangesForOfflineEditsAtSameServerRevision() throws {

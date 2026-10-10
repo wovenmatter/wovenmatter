@@ -309,9 +309,14 @@ public actor WorkspaceClient {
     }?.command
   }
   public func submit(_ requested: CompanionCommand) async throws -> CompanionCommandReceipt {
+    guard requested.workspaceID == nil || requested.workspaceID == workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     try await verify()
+    var scoped = requested
+    scoped.workspaceID = workspaceID
     let saved = await store.journal.commandRecords(workspaceID: workspaceID).first { $0.id == requested.commandID }?.command
-    let command = try await store.journal.rememberCommand(saved ?? requested, workspaceID: workspaceID)
+    // New commands carry their owner before persistence. Legacy saved commands
+    // keep their exact payload; the journal key and transport still bind them.
+    let command = try await store.journal.rememberCommand(saved ?? scoped, workspaceID: workspaceID)
     // An explicit retry always uses the persisted payload, even if the composer
     // has since changed. Recording a different payload under that ID is rejected.
     // Recover an acknowledgement before resubmitting the exact same command.
