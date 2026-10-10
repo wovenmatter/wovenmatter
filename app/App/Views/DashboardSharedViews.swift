@@ -700,28 +700,6 @@ extension View {
     }
 }
 
-struct DashboardIconButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
-    @Environment(\.dashboardSidebarForeground) private var sidebarForeground
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
-            .background(
-                isEnabled && (configuration.isPressed || hovered)
-                    ? (configuration.isPressed ? theme.palette.themeSoft : theme.palette.themeWhisper)
-                    : .clear
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
-            .opacity(isEnabled ? 1 : 0.4)
-            .onHover { hovered = $0 }
-    }
-}
-
 struct DashboardPillButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled

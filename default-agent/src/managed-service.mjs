@@ -27,6 +27,19 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     const pending = new Map();
     let exited = false;
     const value = { child, generation: runtime.generation, pending,
+      stream(request, { signal, onEvent, principalID }) {
+        if (exited || !child.connected) return Promise.reject(new SDKMaintenanceError('The Pi Durable runtime stopped. Reconnect this workspace.'));
+        signal?.throwIfAborted();
+        const id = ++sequence;
+        return new Promise((resolve, reject) => {
+          const abort = () => { if (child.connected) child.send({ method: 'inferenceCancel', requestID: id }, () => {}); };
+          pending.set(id, { resolve, reject, onEvent, cleanup: () => signal?.removeEventListener('abort', abort) });
+          signal?.addEventListener('abort', abort, { once: true });
+          child.send({ id, method: 'inferenceStream', args: [request, { principalID }] }, error => {
+            if (error) { pending.delete(id); signal?.removeEventListener('abort', abort); reject(new SDKMaintenanceError('The inference request could not reach the host runtime.')); }
+          });
+        });
+      },
       call(method, ...args) {
         if (exited || !child.connected) return Promise.reject(new SDKMaintenanceError('The Pi Durable runtime stopped. Reconnect this workspace.'));
         const id = ++sequence;
@@ -39,13 +52,14 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
       } };
     child.on('message', message => {
       const request = pending.get(message.id); if (!request) return;
-      pending.delete(message.id);
+      if (message.event) { request.onEvent?.(message.event); return; }
+      pending.delete(message.id); request.cleanup?.();
       if (message.error) request.reject(Object.assign(new Error(message.error.message), { statusCode: message.error.statusCode }));
       else request.resolve(message.result);
     });
     const lost = () => {
       exited = true;
-      for (const request of pending.values()) request.reject(new SDKMaintenanceError('The Pi Durable runtime stopped. Reconnect this workspace.'));
+      for (const request of pending.values()) { request.cleanup?.(); request.reject(new SDKMaintenanceError('The Pi Durable runtime stopped. Reconnect this workspace.')); }
       pending.clear(); if (worker === value) worker = undefined;
     };
     child.once('error', lost); child.once('exit', lost);
@@ -113,6 +127,13 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
       // process memory and is never written by SDK management or diagnostics.
       const result = await dispatch('configure', payload);
       lastConfiguration = structuredClone(payload); return result;
+    },
+    unlockForClient: options => dispatch('unlockForClient', options),
+    inferenceCatalog: options => dispatch('inferenceCatalog', options),
+    async inferenceStream(request, options) {
+      let response;
+      await selected(value => { response = value.stream(request, options); leases++; });
+      try { return await response; } finally { leases--; }
     },
     invoke: message => dispatch('invoke', message),
     poll: (id, after) => dispatch('poll', id, after),

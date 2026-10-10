@@ -22,6 +22,7 @@ private enum SettingsSection: Equatable {
     case connections(String)
     case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
+    case companion
     case openClaw
     case openCode
     case hermes
@@ -40,6 +41,7 @@ private enum SettingsSection: Equatable {
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
+    var executionOnly = false
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openClaw
@@ -56,6 +58,10 @@ struct SettingsView: View {
             switch section {
             case .landing:
                 landing
+            case .companion:
+                SettingsCompanionView(model: model, host: model.companionHost,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing })
             case .defaultAgent(let scope, let origin):
                 SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
@@ -204,12 +210,22 @@ struct SettingsView: View {
             reservesRailControlSpace: reservesRailControlSpace
         ) {
             VStack(spacing: 2) {
+                if !executionOnly {
                 SettingsDestinationRow(
                     title: "General",
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
                 )
+                }
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Devices",
+                    detail: "Connect Macs, iPhones, and iPads to one central library over Tailscale.",
+                    icon: { Image(systemName: "iphone").font(.system(size: 15)) },
+                    action: { section = .companion }
+                )
+                }
                 SettingsDestinationRow(
                     title: "Connections",
                     detail: "Shared accounts, API keys, and local model servers.",
@@ -231,12 +247,14 @@ struct SettingsView: View {
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
+                if !executionOnly {
                 SettingsDestinationRow(
                     title: "Remote agent workspaces",
                     detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
                 )
+                }
                 SettingsDestinationRow(
                     title: "Codex",
                     detail: "Local runtime status and workspace settings.",
@@ -285,18 +303,22 @@ struct SettingsView: View {
                     icon: { DashboardHarnessLogoIcon(logo: .pi, size: 15) },
                     action: { section = .harness(.pi, nil, .landing) }
                 )
+                if !executionOnly {
                 SettingsDestinationRow(
                     title: "Buzz agent workspaces",
                     detail: "Connect agents from local Buzz workspaces.",
                     icon: { DashboardLucideIcon(glyph: .radioTower, size: 15) },
                     action: { section = .buzzWorkspaces }
                 )
+                }
+                if !executionOnly {
                 SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",
                     icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
                     action: { section = .usage }
                 )
+                }
             }
         }
     }

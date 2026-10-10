@@ -5,4 +5,4 @@ import { pathToFileURL } from 'node:url';
 import { resolveSDKRuntime } from './sdk-management.mjs';
 const directory = process.env.WOVEN_DEFAULT_AGENT_DIRECTORY ?? join(homedir(), '.wovenmatter', 'default-agent');
 const runtime = await resolveSDKRuntime({ directory });
-await import(pathToFileURL(join(runtime.root, 'src/main-runtime.mjs')).href);
+await import(pathToFileURL(join(runtime.root, process.argv.includes('--inference') ? 'src/inference-main.mjs' : 'src/main-runtime.mjs')).href);

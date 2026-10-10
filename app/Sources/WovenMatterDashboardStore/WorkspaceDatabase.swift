@@ -55,4 +55,14 @@ public final class WorkspaceDatabase: Sendable {
       }
     }
   }
+  #if DEBUG
+  /// Instrument every connection on its owning queue for SQL regression checks.
+  /// Raw handles never leave the worker, including when readers run concurrently.
+  func inspectConnections(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> Void) async throws {
+    for box in (writer.map { [$0] } ?? []) + readers {
+      try await box.worker.perform { _ in try box.use(operation) }
+    }
+  }
+  #endif
+
 }

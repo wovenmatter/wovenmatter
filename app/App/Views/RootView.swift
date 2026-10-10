@@ -15,7 +15,8 @@ struct RootView: View {
             case .starting:
                 startupView
             case .ready:
-                WorkspaceView(model: model)
+                if model.isLibraryClient { CentralLibraryClientView(model: model.libraryClient, application: model) }
+                else { WorkspaceView(model: model) }
             case .failed(let message):
                 failureView(message: message)
             }

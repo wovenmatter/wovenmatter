@@ -114,6 +114,7 @@ public actor DashboardStore {
   public nonisolated let library: LibraryService
   public nonisolated let conversationChanges: AsyncStream<DashboardConversationChange>
 
+  private let runControls: DashboardRunControlAdapters?
   private let deviceIdentity: DashboardDeviceIdentity
   private let ownedLocalSessions: LocalACPSessionCoordinator?
   private let ownedOpenClawGateway: OpenClawGatewayCoordinator?
@@ -134,6 +135,11 @@ public actor DashboardStore {
   private var localWorkspacePrepared = false
 
   public init(supportDirectory: URL, readOnlyProjection: Bool = false) async throws {
+    try await self.init(supportDirectory: supportDirectory, readOnlyProjection: readOnlyProjection, runControls: nil)
+  }
+
+  init(supportDirectory: URL, readOnlyProjection: Bool = false, runControls: DashboardRunControlAdapters? = nil) async throws {
+    self.runControls = runControls
     if readOnlyProjection {
       let database = try await WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
       self.database = database
@@ -402,6 +408,10 @@ public actor DashboardStore {
   }
 
   public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL, recover: Bool = false) async throws {
+    if let create = runControls?.createGatewaySession {
+      try await create(agentID, sessionKey, cwd, recover)
+      return
+    }
     try await openClawGateway.createWorkspaceSession(agentID: agentID, sessionKey: sessionKey, cwd: cwd, recover: recover)
   }
 
@@ -452,7 +462,8 @@ public actor DashboardStore {
     onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
-    try await openClawGateway.accept(
+    if let runControls { return try await runControls.accept(.gateway, conversationID, input, deliveryContent, noteContext) }
+    return try await openClawGateway.accept(
       conversationID: conversationID,
       input: input,
       deliveryContent: deliveryContent,
@@ -463,8 +474,9 @@ public actor DashboardStore {
     )
   }
 
-  public func cancelOpenClawGatewayPrompt(conversationID: String) async throws {
-    try await openClawGateway.cancel(conversationID: conversationID)
+  public func cancelOpenClawGatewayPrompt(conversationID: String, expectedRunID: String? = nil) async throws {
+    if let runControls { try await runControls.cancel(.gateway, conversationID, expectedRunID); return }
+    try await openClawGateway.cancel(conversationID: conversationID, expectedRunID: expectedRunID)
   }
 
   public func openClawGatewaySessionPreferences(
@@ -477,7 +489,10 @@ public actor DashboardStore {
     conversationID: String,
     preferences: OpenClawSessionPreferences
   ) async throws -> OpenClawSessionPreferences {
-    try await openClawGateway.patchSession(
+    if let patch = runControls?.patchGatewaySession {
+      return try await patch(conversationID, preferences)
+    }
+    return try await openClawGateway.patchSession(
       conversationID: conversationID,
       preferences: preferences
     )
@@ -496,7 +511,10 @@ public actor DashboardStore {
   public func openClawGatewaySessionMetadata(
     conversationID: String
   ) async throws -> LocalACPSessionMetadata {
-    try await openClawGateway.sessionMetadata(conversationID: conversationID)
+    if let metadata = runControls?.gatewaySessionMetadata {
+      return try await metadata(conversationID)
+    }
+    return try await openClawGateway.sessionMetadata(conversationID: conversationID)
   }
 
   public func calendarOpenClawMetadata(agentID: UUID, model: String?) async throws -> LocalACPSessionMetadata {
@@ -681,8 +699,11 @@ public actor DashboardStore {
 
   public func createBuzzWorkspaceLocalACPSession(
     enrollmentID: UUID,
-    title: String
+    title: String,
+    requestedConversationID: UUID? = nil,
+    folderID: String? = nil
   ) async throws -> String {
+    await runControls?.beforeSessionCreation()
     try await prepareLocalWorkspace()
     guard let enrollment = try await database.buzzWorkspaceAgentEnrollments()
       .first(where: { $0.id == enrollmentID }) else {
@@ -699,7 +720,9 @@ public actor DashboardStore {
       enrollmentID: enrollmentID,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
-      model: resolved.model
+      model: resolved.model,
+      requestedConversationID: requestedConversationID,
+      folderID: folderID
     )
   }
 
@@ -859,8 +882,8 @@ public actor DashboardStore {
     )
   }
 
-  public func updateNote(id: String, title: String, content: String) async throws {
-    try await database.updateNote(id: id, title: title, content: content)
+  public func updateNote(id: String, title: String, content: String, expectedRevision: String? = nil) async throws {
+    try await database.updateNote(id: id, title: title, content: content, expectedRevision: expectedRevision)
   }
 
   public func handleNoteEditingRequest(
@@ -906,13 +929,18 @@ public actor DashboardStore {
   public func createLocalACPSession(
     runtimeKind: AgentRuntimeKind,
     title: String,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    gatewayAgentID: UUID? = nil,
+    folderID: String? = nil
   ) async throws -> String {
-    try await database.createLocalACPSession(
+    await runControls?.beforeSessionCreation()
+    return try await database.createLocalACPSession(
       runtimeKind: runtimeKind,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
-      requestedConversationID: requestedConversationID
+      requestedConversationID: requestedConversationID,
+      gatewayAgentID: gatewayAgentID,
+      folderID: folderID
     )
   }
 
@@ -922,15 +950,18 @@ public actor DashboardStore {
     remoteWorkspaceID: UUID,
     remoteWorkspaceName: String,
     title: String,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    folderID: String? = nil
   ) async throws -> String {
-    try await database.createRemoteACPSession(
+    await runControls?.beforeSessionCreation()
+    return try await database.createRemoteACPSession(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
-      requestedConversationID: requestedConversationID
+      requestedConversationID: requestedConversationID,
+      folderID: folderID
     )
   }
 
@@ -1013,6 +1044,7 @@ public actor DashboardStore {
     onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
+    if let runControls { return try await runControls.accept(.localACP, conversationID, input, deliveryContent, noteContext) }
     try dispatchFence?.check()
     let context = try await localACPLaunchContext(
       conversationID: conversationID,
@@ -1054,12 +1086,15 @@ public actor DashboardStore {
     conversationID: String,
     input: AgentMessageInput,
     deliveryContent: String? = nil,
+    expectedRunID: String? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
+    if let runControls { return try await runControls.steer(.localACP, conversationID, input, deliveryContent, expectedRunID) }
     return try await localSessions.sendActiveInput(
       conversationID: conversationID,
       input: input,
       deliveryContent: deliveryContent,
+      expectedRunID: expectedRunID,
       dispatchFence: dispatchFence
     )
   }
@@ -1084,12 +1119,15 @@ public actor DashboardStore {
     conversationID: String,
     input: AgentMessageInput,
     deliveryContent: String? = nil,
+    expectedRunID: String? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
-    try await openClawGateway.sendActiveInput(
+    if let runControls { return try await runControls.steer(.gateway, conversationID, input, deliveryContent, expectedRunID) }
+    return try await openClawGateway.sendActiveInput(
       conversationID: conversationID,
       input: input,
       deliveryContent: deliveryContent,
+      expectedRunID: expectedRunID,
       dispatchFence: dispatchFence
     )
   }
@@ -1110,6 +1148,9 @@ public actor DashboardStore {
       directLaunch: launch,
       directWorkspace: workspace
     )
+    if let configuration = runControls?.sessionConfiguration {
+      return try await configuration(conversationID)
+    }
     return try await localSessions.configuration(
       conversationID: conversationID,
       launch: context.launch,
@@ -1131,6 +1172,10 @@ public actor DashboardStore {
       directLaunch: launch,
       directWorkspace: workspace
     )
+    if let configure = runControls?.configureSession {
+      return try await configure(conversationID,
+        SessionSelections(model: model, thinking: thinking, permission: permission), context.workspace)
+    }
     return try await localSessions.updateConfiguration(
       conversationID: conversationID,
       model: model,
@@ -1190,12 +1235,25 @@ public actor DashboardStore {
     )
   }
 
+  public func localACPActiveInputCapability(conversationID: String) async -> LocalACPActiveInputRoute? {
+    try? await localSessions.activeInputCapability(conversationID: conversationID)
+  }
+
+  public func cancelLocalACPPrompt(conversationID: String, expectedRunID: String) async throws {
+    if let runControls { try await runControls.cancel(.localACP, conversationID, expectedRunID); return }
+    try await localSessions.cancel(conversationID: conversationID, expectedRunID: expectedRunID)
+  }
+
   public func cancelLocalACPPrompt(conversationID: String) async {
     await ownedLocalSessions?.cancel(conversationID: conversationID)
   }
 
   public func stopLocalACPPrompt(conversationID: String) async throws {
     try await ownedLocalSessions?.stop(conversationID: conversationID)
+  }
+
+  public func detachLocalACPForExecutionAdoption(conversationID: String) async throws {
+    try await localSessions.detachForExecutionAdoption(conversationID: conversationID)
   }
 
   public func shutdownLocalACPSessions() async {

@@ -116,3 +116,32 @@ test('SDK retirement transfers only the current attachment authority and trusted
   const reattached = (await load('native')).result._meta.attachmentToken;
   assert.equal((await selection('native', reattached)).result.sessionId, 'native');
 });
+
+test('inference streaming crosses worker IPC and cancellation reaches only that request', async t => {
+  const f = await fixture(t, `
+    export function createDefaultAgentService() {
+      return {
+        inferenceCatalog: async () => ({ models: [], accounts: [{ id: 'second', provider: 'fixture', label: 'Second' }] }),
+        inferenceStream: async (request, { signal, onEvent, principalID }) => {
+          onEvent({ type: 'start', principalID });
+          if (request.wait) {
+            await new Promise(resolve => { if (signal.aborted) resolve(); else signal.addEventListener('abort', resolve, { once: true }); });
+            throw Error('Cancelled fixture inference');
+          }
+          onEvent({ type: 'done', message: { text: request.input } });
+        },
+        unlockForClient: async value => ({ unlocked: value.workspace === 'fixture' }),
+        cancelActive: async () => {}, prepareRetirement: async () => ({ attachmentState: {} }),
+      };
+    }
+  `);
+  assert.equal((await f.service.inferenceCatalog()).accounts[0].id, 'second');
+  assert.equal((await f.service.unlockForClient({ workspace: 'fixture', unlockKey: 'fixture' })).unlocked, true);
+  const controller = new AbortController(), received = [];
+  await assert.rejects(f.service.inferenceStream({ wait: true }, { principalID: 'phone', signal: controller.signal, onEvent: event => {
+    received.push(event); controller.abort();
+  } }), /Cancelled fixture inference/);
+  assert.equal(received[0].principalID, 'phone');
+  await f.service.inferenceStream({ input: 'next' }, { principalID: 'phone', onEvent: event => received.push(event) });
+  assert.equal(received.at(-1).message.text, 'next');
+});

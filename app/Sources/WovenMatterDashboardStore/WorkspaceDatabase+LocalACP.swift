@@ -125,9 +125,11 @@ extension WorkspaceDatabaseConnection {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    gatewayAgentID: UUID? = nil,
+    folderID: String? = nil
   ) throws -> String {
-    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID) }
+    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID, gatewayAgentID: gatewayAgentID, folderID: folderID) }
   }
 
   @discardableResult
@@ -139,7 +141,9 @@ extension WorkspaceDatabaseConnection {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    gatewayAgentID: UUID? = nil,
+    folderID: String? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
@@ -147,6 +151,8 @@ extension WorkspaceDatabaseConnection {
           ) else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
+    let operatorID = try localMutationOperatorIDUnlocked()
+    try validateFolderUnlocked(id: folderID, operatorID: operatorID)
     if openCodeAssociation != nil && runtimeKind != .opencode { throw LocalACPSessionDatabaseError.runtimeUnavailable }
     if let snapshot = importedOpenCodeSnapshot {
       guard let link = openCodeAssociation, snapshot.info["id"].text == link.sessionID,
@@ -172,14 +178,20 @@ extension WorkspaceDatabaseConnection {
         try bind(link.connectionID, at: 1, to: existing); try bind(link.sessionID, at: 2, to: existing)
         if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let agentID = try ensureLocalCLIAgentUnlocked(
-        runtimeKind: runtimeKind,
-        ownerDeviceID: ownerDeviceID,
-        operatorID: operatorID,
-        status: .ready,
-        updatedAt: createdAt
-      )
+      let agentID: String
+      if let gatewayAgentID {
+        guard runtimeKind == .openclaw else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+        let linked = try prepareUnlocked("SELECT 1 FROM desktop_openclaw_gateway_links WHERE agent_id = ?")
+        defer { sqlite3_finalize(linked) }
+        try bind(gatewayAgentID.uuidString.lowercased(), at: 1, to: linked)
+        guard sqlite3_step(linked) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+        agentID = gatewayAgentID.uuidString.lowercased()
+      } else {
+        agentID = try ensureLocalCLIAgentUnlocked(
+          runtimeKind: runtimeKind, ownerDeviceID: ownerDeviceID,
+          operatorID: operatorID, status: .ready, updatedAt: createdAt
+        )
+      }
       let conversationID = (requestedConversationID ?? UUID()).uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
@@ -192,9 +204,9 @@ extension WorkspaceDatabaseConnection {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
+          created_at, updated_at, desktop_owned, folder_id
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -207,6 +219,7 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
+      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -227,6 +240,19 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 8, to: session)
       try stepDone(session)
       try adoptReservedSessionOriginUnlocked(conversationID)
+      if gatewayAgentID != nil {
+        let gateway = try prepareUnlocked("""
+          INSERT INTO desktop_openclaw_gateway_sessions
+            (conversation_id, agent_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+          """)
+        defer { sqlite3_finalize(gateway) }
+        try bind(conversationID, at: 1, to: gateway)
+        try bind(agentID, at: 2, to: gateway)
+        try bind("agent:main:wovenmatter:\(conversationID)", at: 3, to: gateway)
+        try bind(timestamp, at: 4, to: gateway)
+        try bind(timestamp, at: 5, to: gateway)
+        try stepDone(gateway)
+      }
       if let link = openCodeAssociation {
         let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
@@ -367,9 +393,10 @@ extension WorkspaceDatabaseConnection {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    folderID: String? = nil
   ) throws -> String {
-    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID) }
+    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, folderID: folderID) }
   }
 
   @discardableResult
@@ -382,11 +409,15 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
+    folderID: String? = nil,
     allowMissingCalendarFolder: Bool = false
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
+
+    let operatorID = try localMutationOperatorIDUnlocked()
+    try validateFolderUnlocked(id: folderID, operatorID: operatorID)
 
       if let link = openCodeAssociation {
         guard runtimeKind == .opencode,
@@ -399,7 +430,6 @@ extension WorkspaceDatabaseConnection {
         try bind(link.sessionID, at: 2, to: existing)
         if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
       let agentID = try ensureRemoteHarnessAgentUnlocked(
         runtimeKind: runtimeKind,
         remoteWorkspaceID: remoteWorkspaceID,
@@ -422,9 +452,9 @@ extension WorkspaceDatabaseConnection {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
+          created_at, updated_at, desktop_owned, folder_id
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -437,6 +467,7 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
+      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -633,6 +664,9 @@ extension WorkspaceDatabaseConnection {
       throw OpenCodeError.message("OpenCode v1 transcripts are read-only. OpenCode v2 uses the shared server directly.")
     }
     return try transaction {
+      guard try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
+        throw CompanionAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
+      }
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
         WHERE conversation_id = ? AND desktop_owned = 1 AND status IN ('running', 'uncertain')
@@ -1931,9 +1965,10 @@ extension WorkspaceDatabase {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    gatewayAgentID: UUID? = nil, folderID: String? = nil
   ) async throws -> String {
-    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID) }
+    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID, gatewayAgentID: gatewayAgentID, folderID: folderID) }
   }
 
   @discardableResult
@@ -1945,9 +1980,9 @@ extension WorkspaceDatabase {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil, folderID: String? = nil
   ) async throws -> String {
-    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID) }
+    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, folderID: folderID) }
   }
 
   @discardableResult

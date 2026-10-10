@@ -16,6 +16,7 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case moveConversation(id: String, folderID: String?)
     case createNote(folderID: String?, kind: NoteArtifactKind)
     case persistNoteDraft(DashboardNoteJournalEntry)
+    case preserveRecoveryCopy(DashboardNoteJournalEntry)
     case checkpointNote(id: String)
     case restoreNote(id: String, versionID: String, expectedRevision: String)
 }
@@ -49,13 +50,17 @@ extension BackendApplicationService {
             result.accepted = try await store.moveConversation(id: id, toFolderID: folder)
         case let .createNote(folder, kind):
             result.entityID = try await store.createNote(folderID: folder, kind: kind)
+        case let .preserveRecoveryCopy(entry):
+            result.entityID = try await store.database.preserveRecoveryCopy(sourceID: entry.noteID, title: entry.title, content: entry.content, folderID: entry.folderID)
         case let .checkpointNote(id):
             try await store.database.checkpointNote(id: id)
         case let .restoreNote(id, version, revision):
             result.noteResponse = try await store.database.restoreNoteAssetVersion(noteID: id, versionID: version, expectedRevision: revision)
         case let .persistNoteDraft(entry):
             try await store.database.persistNoteDraft(id: entry.noteID, title: entry.title, content: entry.content,
-                                                folderID: entry.folderID, createdAt: entry.createdAt)
+                                                folderID: entry.folderID, createdAt: entry.createdAt,
+                                                expectedRevision: entry.expectedRevision, baseContent: entry.baseContent,
+                                                baseTitle: entry.baseTitle, operationID: entry.mutationID)
         }
         await model.refreshWorkspace()
         return result

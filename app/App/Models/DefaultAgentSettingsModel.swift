@@ -101,6 +101,8 @@ final class DefaultAgentSettingsModel {
     private var metadataTask: Task<Void, Never>?
     private var metadataGeneration = UUID()
     private var catalogRemote: RemoteWorkspaceConfiguration?
+    var browsingProvider = ""
+    private var forceCatalogRefresh = false
     private var requestedAllModels = false
     private var publishedCatalogKey: String?
     init() {
@@ -704,13 +706,16 @@ final class DefaultAgentSettingsModel {
     }
     private var catalogConfiguration: DefaultAgentSettings {
         var value = DefaultAgentSettings()
-        value.providers = configuration.providers
+        value.providers = requestedAllModels ? [browsingProvider].filter { configuration.providers.contains($0) } : configuration.providers
         value.customServers = LocalModelServerStore.servers
         return value
     }
     /// Entry and ordinary preference changes use metadata only. Starting the
-    /// helper is reserved for an explicit request to browse every model.
-    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil, includeAllModels: Bool = false) {
+    /// helper is reserved for an explicit request to browse one provider.
+    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil, includeAllModels: Bool = false, provider: String? = nil, force: Bool = false) {
+        forceCatalogRefresh = force
+        if let provider { browsingProvider = provider }
+        if !configuration.providers.contains(browsingProvider) { browsingProvider = configuration.providers.first ?? "" }
         let hasOtherOperation = busy && !catalogOnly
         let cacheKey = catalogKey(remote: remote)
         if publishedCatalogKey != cacheKey {
@@ -728,7 +733,7 @@ final class DefaultAgentSettingsModel {
             busy = true
             error = nil
         }
-        if forward(.init(action: "catalog", flag: includeAllModels, remote: remote)) { return }
+        if forward(.init(action: "catalog", provider: browsingProvider, value: force ? "refresh" : nil, flag: includeAllModels, remote: remote)) { return }
         let config = catalogConfiguration
         if !includeAllModels {
             hydrateEnabledMetadata(remote: remote)
@@ -738,12 +743,7 @@ final class DefaultAgentSettingsModel {
         // Coalesce only a real, matching in-flight discovery request.
         if catalogOnly, error == nil, catalogRequestKey == cacheKey,
            catalogRequestConfiguration == config, activeRemote == remote { return }
-        if let value = catalogCache[cacheKey], value.configuration == config {
-            publishCatalog()
-            if !hasOtherOperation { busy = false }
-            loadAccounts()
-            return
-        }
+        publishCatalog()
         // Browsing must not replace an in-progress connection/sign-in operation.
         // Its status result can supply the full catalog; otherwise Browse retries
         // once that operation has finished.
@@ -751,6 +751,7 @@ final class DefaultAgentSettingsModel {
         refresh(remote: remote, action: "catalog")
         loadAccounts()
     }
+    func refreshCatalog() { loadCatalog(remote: catalogRemote, includeAllModels: true, force: true) }
     func waitForEnabledMetadata() async {
         await metadataTask?.value
         await accountsTask?.value
@@ -833,12 +834,8 @@ final class DefaultAgentSettingsModel {
         // Frontend snapshots already hold the exact projection. Preference edits
         // must not collapse an open full browser while waiting for the backend.
         let full = cachedFull ?? (isFrontend && catalogIncludesAllModels && publishedCatalogKey == key ? catalog : nil)
-        if let full {
-            let available = availableModelProviderIDs
-            resolvedDefaultModelID = configuration.defaultModel.flatMap { id in
-                full.contains { $0.id == id && isProviderEnabled(for: id) } ? id : nil
-            } ?? full.first { isProviderEnabled(for: $0.id) && available.contains($0.provider) }?.id
-                ?? full.first { isProviderEnabled(for: $0.id) }?.id
+        if full != nil {
+            resolvedDefaultModelID = configuration.defaultModel ?? stored?.defaultModel
         } else if stored?.configuration == catalogConfiguration,
                   stored?.selectedDefault == configuration.defaultModel,
                   stored?.connectedProviders == availableModelProviderIDs {
@@ -912,14 +909,6 @@ final class DefaultAgentSettingsModel {
             await self.accountsTask?.value
             guard !Task.isCancelled, self.metadataGeneration == requestID,
                   self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
-            // Never use local SDK metadata to claim a remote runtime's version.
-            guard remote == nil, !self.enabledModelIDs.isEmpty else { return }
-            let ids = self.enabledModelIDs
-            let names = await DefaultAgentEnabledModelMetadata.names(for: ids, resources: nil, local: true)
-            guard !Task.isCancelled, self.metadataGeneration == requestID,
-                  self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
-            self.applyEnabledNames(names)
-            self.publishCatalog()
         }
     }
     private func applyEnabledNames(_ names: [String: String]) {
@@ -986,6 +975,7 @@ final class DefaultAgentSettingsModel {
                     catalogRequestConfiguration = launched
                 }
                 var body = try JSONSerialization.jsonObject(with: prepared.data()) as! [String: Any]
+                if catalogOnly { body["force"] = forceCatalogRefresh }
                 body["action"] = action ?? (login == nil ? "status" : "login")
                 if let login {
                     body["provider"] = login

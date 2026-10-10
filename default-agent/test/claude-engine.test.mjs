@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { ProviderCatalog } from '../src/provider-catalog.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { ClaudeRuntime } from '../src/claude-runtime.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
@@ -14,7 +15,7 @@ async function fixture(t, { credentials = {}, credentialAccounts = {}, config = 
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-engine-'));
   const claude = {
     checks: 0,
-    models: [{ value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] }],
+    models: [{ value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] }, { value: 'fixture-other', displayName: 'Other fixture', supportedEffortLevels: [] }],
     loadModels: async () => {},
     async status() { this.checks++; return { connected: true }; },
     environment: async () => ({}),
@@ -22,7 +23,9 @@ async function fixture(t, { credentials = {}, credentialAccounts = {}, config = 
     // Models streams below own every fixture generation.
     sdkQuery: async () => ({ accountInfo: async () => ({ email: 'fixture@example.invalid', organization: 'fixture-org', apiProvider: 'firstParty' }), close() {} }),
   };
-  const options = { cwd: root, directory: root, claude, credentials, credentialAccounts,
+  const catalog = new ProviderCatalog(root, { fetchCatalog: async () => { throw Error('Fixture catalog network forbidden'); } });
+  await catalog.write('openai', { checkedAt: Date.now(), models: [{ id: 'gpt-4o', name: 'Offline fixture', provider: 'openai', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', contextWindow: 16384, maxTokens: 4096, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] });
+  const options = { cwd: root, directory: root, claude, catalog, credentials, credentialAccounts,
     config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', ...config } };
   const engine = await new DefaultAgentEngine(options).initialize();
   t.after(async () => {
@@ -298,22 +301,17 @@ test('composer offers only the default and explicitly enabled models', async t =
 });
 
 
-test('removed models normalize idle and restored selections to the visible default', async t => {
+test('a missing saved model never silently normalizes to another selection', async t => {
   const { engine } = await fixture(t);
   const record = await engine.create();
-  const expected = record.selected;
   record.selected = 'openrouter/disabled';
-  record.saveOptions({ selected: record.selected });
+  record.selectedModel = undefined;
+  record.saveOptions({ selected: record.selected, selectedModel: null });
   await engine.apply({ config: engine.config });
-  assert.equal(record.selected, expected);
-  record.selected = 'openrouter/disabled';
-  record.saveOptions({ selected: record.selected });
+  assert.equal(record.selected, 'openrouter/disabled');
   engine.sessions.delete(record.session.sessionId);
   await record.session.dispose();
-  const restored = await engine.create(record.session.sessionId);
-  assert.equal(restored.selected, expected);
-  engine.config.defaultModel = 'disabled/model';
-  assert.equal(engine.modelOptions()[0].id, expected);
+  await assert.rejects(engine.create(record.session.sessionId), /Choose an enabled provider/);
 });
 
 test('Built-in steering reaches the next model call inside the same native run', async t => {

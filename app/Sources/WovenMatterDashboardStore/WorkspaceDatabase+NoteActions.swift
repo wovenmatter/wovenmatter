@@ -6,7 +6,7 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       let operatorID = try localMutationOperatorIDUnlocked()
       guard let row = try historyRowsUnlocked("""
-        SELECT updated_at FROM notes WHERE id = ? AND user_id = ?
+        SELECT CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT) AS updated_at FROM notes WHERE id = ? AND user_id = ?
           AND deleted_at IS \(trashed ? "NOT NULL" : "NULL")
         """, values: [id, operatorID]).first?.objectValue,
         let revision = row["updated_at"]?.stringValue else { throw WorkspaceNoteMutationError.noteNotFound }
@@ -20,7 +20,7 @@ extension WorkspaceDatabaseConnection {
       let current = try noteActionRevision(id: id, trashed: restoring)
       guard current == expectedRevision else { throw WorkspaceNoteMutationError.revisionConflict }
       let operatorID = try localMutationOperatorIDUnlocked()
-      let revision = if case .setPinned = mutation { current } else { try nextNoteRevisionUnlocked(id: id) }
+      let revision = try nextNoteUpdatedAtUnlocked(id: id)
       switch mutation {
       case .setPinned(let pinned):
         // Pin state is not document activity. The dashboard UPDATE trigger still

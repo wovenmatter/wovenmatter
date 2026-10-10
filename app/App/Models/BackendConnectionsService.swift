@@ -102,7 +102,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             case "cancel": model.cancel()
             case "respond": model.respond(c.value ?? "")
             case "catalog":
-                model.loadCatalog(remote: c.remote, includeAllModels: c.flag ?? false)
+                model.loadCatalog(remote: c.remote, includeAllModels: c.flag ?? false, provider: c.provider, force: c.value == "refresh")
                 if c.flag != true { await model.waitForEnabledMetadata() }
             case "refresh": model.refresh(remote: c.remote, login: c.provider, action: c.value, profile: c.profile,
                 removingAccount: c.removingAccount, reconnectingAccount: c.reconnectingAccount)

@@ -50,6 +50,7 @@ test('attached completion includes child reports and children spawned during par
     for (const record of [...engine.sessions.values()]) await record.session.dispose();
     await rm(root, { recursive: true, force: true });
   });
+  engine.publishProviderModels('openai', [{ id: 'gpt-4.1', name: 'Offline fixture', provider: 'openai', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', contextWindow: 16384, maxTokens: 4096, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
   const record = await engine.create();
   let parentCalls = 0, childCalls = 0;
   engine.runtime.streamSimple = (model, _input, options) => {
@@ -428,3 +429,17 @@ test('native tool output is persisted and copied in byte-bounded exact chunks', 
   assert.equal(result.stopReason, 'end_turn');
   assert.ok(restored.session.messages.some(m => Array.isArray(m.content) && m.content.some(b => b.text === 'Continued safely')));
 });
+
+test('client adoption inspects native idle state without resuming unfinished work',async t=>{
+  const {engine}=await fixture(t),record=await engine.create(),sessionId=record.session.sessionId
+  record.busy=true
+  await assert.rejects(engine.handle('woven/adopt',{sessionId}),/still executing/)
+  record.busy=false
+  const inspect=record.harness.inspect.bind(record.harness)
+  record.harness.inspect=async()=>({tasks:[{id:'unfinished'}],submissions:[]})
+  await assert.rejects(engine.handle('woven/adopt',{sessionId}),/unfinished native work/)
+  record.harness.inspect=inspect
+  const adopted=await engine.handle('woven/adopt',{sessionId})
+  assert.equal(adopted.sessionId,sessionId)
+  assert.equal(record.session.messages.length,0)
+})

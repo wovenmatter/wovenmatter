@@ -25,6 +25,7 @@ run_static_checks() {
   scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh
   scripts/test-note-editor.sh
+  scripts/test-note-drafts.sh
   scripts/test-note-socket.sh
   python3 scripts/test-support/test_executor_deployment.py
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
@@ -43,6 +44,7 @@ run_package_tests() {
   local process_suites=(
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
+    WorkspaceAgentToolsServiceTests
     NativeHarnessArchiveTests
     NativeFramePrivacyTests
     NativeJSONSearchProjectionTests
@@ -55,7 +57,7 @@ run_package_tests() {
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
     swift test --package-path app --scratch-path "$swift_scratch")
-  # Process fixtures measure startup, deadlines, and reaping; the SDK suite also
+  # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
   # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
@@ -73,6 +75,7 @@ run_package_tests() {
 run_default_agent_tests() {
   npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
   npm test --prefix default-agent
+  node scripts/build-ios-pi-runtime.mjs --check
 }
 
 run_remote_tests() {
@@ -98,12 +101,25 @@ run_app_build() {
   "$browser_build/WovenBrowserLifecycleTests"
 }
 
+run_companion() {
+  local ios_mode="${1:---simulator}"
+  env \
+    CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
+    SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
+    swift test --package-path shared --scratch-path "${cache_root}/SharedSwiftPM"
+  env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
+    scripts/test-ios.sh "$ios_mode"
+  env WOVENMATTER_INTEGRATION_TEST_CACHE_DIR="${cache_root}/Integration" \
+    scripts/test-companion-integration.sh
+}
+
 run_all() {
   run_static_checks
   run_default_agent_tests
   run_remote_tests
   run_package_tests
   run_app_build
+  run_companion --all-devices
 }
 
 run_macos() {
@@ -111,6 +127,7 @@ run_macos() {
   run_default_agent_tests
   run_package_tests
   run_app_build
+  run_companion --simulator
 }
 
 run_remote() {
@@ -123,10 +140,11 @@ mode="${1:-changed}"
 case "$mode" in
   --all) run_all; exit ;;
   --macos) run_macos; exit ;;
+  --companion) run_companion --simulator; exit ;;
   --remote) run_remote; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--macos|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--macos|--companion|--remote]' >&2
     exit 64
     ;;
 esac
@@ -141,7 +159,7 @@ changed="$(
 changed="$(printf '%s\n' "$changed" | sort -u)"
 if [ -z "$changed" ]; then
   printf 'No changes relative to %s.\n' "$base"
-elif printf '%s\n' "$changed" | grep -Eq '^(default-agent/|remote/|harnesses/|scripts/|\.github/|\.dockerignore$|app/Package|app/WovenMatter\.xcodeproj)'; then
+elif printf '%s\n' "$changed" | grep -Eq '^(default-agent/|shared/|ios/|integration/|remote/|harnesses/|scripts/|\.github/|\.dockerignore$|app/Package|app/WovenMatter\.xcodeproj)'; then
   run_all
 elif printf '%s\n' "$changed" | grep -Eq '^app/App/' \
   && printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then

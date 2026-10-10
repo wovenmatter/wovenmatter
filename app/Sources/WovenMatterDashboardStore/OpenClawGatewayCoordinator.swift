@@ -601,7 +601,12 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  public func cancel(conversationID: String) async throws {
+  public func cancel(conversationID: String, expectedRunID: String? = nil) async throws {
+    if let expectedRunID, !activeRuns.values.contains(where: {
+      $0.conversationID == conversationID && $0.runID == expectedRunID
+    }) {
+      throw LocalACPSessionDatabaseError.runNotFound
+    }
     if let fences = steeringDispatchFences[conversationID] { for fence in fences.values { fence.cancel() } }
     if admittingConversations.contains(conversationID) {
       cancelledAdmissions.insert(conversationID)
@@ -666,6 +671,7 @@ public actor OpenClawGatewayCoordinator {
     conversationID: String,
     input: AgentMessageInput,
     deliveryContent: String? = nil,
+    expectedRunID: String? = nil,
     dispatchFence suppliedFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     let dispatchFence = suppliedFence ?? AgentDispatchFence()
@@ -677,6 +683,11 @@ public actor OpenClawGatewayCoordinator {
     let stopEpoch = requestedRunID.flatMap { steeringStopEpochs[$0] }
     await acquireSteeringLock(conversationID: conversationID)
     defer { releaseSteeringLock(conversationID: conversationID) }
+    if let expectedRunID, !activeRuns.values.contains(where: {
+      $0.conversationID == conversationID && $0.runID == expectedRunID
+    }) {
+      throw LocalACPSessionDatabaseError.runNotFound
+    }
     try dispatchFence.check()
     guard runExecutor == nil else {
       throw LocalACPSessionDatabaseError.steeringUnsupported

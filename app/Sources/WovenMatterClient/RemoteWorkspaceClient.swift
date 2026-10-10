@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import WovenMatterCore
+import WovenMatterCompanion
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
 public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
@@ -586,6 +587,19 @@ public actor RemoteWorkspaceSSHClient {
         )
     }
 
+    /// Enables a private HTTPS proxy to an existing loopback-only workspace.
+    /// It does not start a container, enroll a device, or change another route.
+    public func exposeExecution(configuration: RemoteWorkspaceConfiguration, httpsPort: Int = 8443) throws -> URL {
+        struct Result: Decodable { let endpoint: URL }
+        let result = try decode(Result.self, from: runScript(
+            hostName: configuration.hostName, userName: configuration.userName,
+            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
+        guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace did not return a private Tailscale endpoint.")
+        }
+        return result.endpoint
+    }
+
     public func prepareHost(
         hostName: String,
         userName: String?
@@ -1067,6 +1081,27 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+    }
+
+    public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
+                                         deviceID: String, name: String, workspaceName: String, endpoint: URL,
+                                         scopes: [String] = ["execution", "inference"]) async throws -> CompanionExecutionCredential {
+        struct Payload: Encodable {
+            let libraryID: String; let workspaceID: String; let ownerDeviceID: String
+            let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL; let scopes: [String]
+        }
+        let payload = Payload(libraryID: libraryID, workspaceID: workspaceID, ownerDeviceID: ownerDeviceID,
+                              deviceID: deviceID, name: name, workspaceName: workspaceName, endpoint: endpoint, scopes: scopes)
+        return try await request(path: "v1/execution/devices", method: "POST", body: JSONEncoder().encode(payload))
+    }
+
+    public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
+        try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
+    }
+
+    public func revokeExecutionDevice(deviceID: String) async throws {
+        guard UUID(uuidString: deviceID) != nil else { throw RemoteWorkspaceClientError.invalidResponse("Invalid client device identity.") }
+        let _: [String: Bool] = try await request(path: "v1/execution/devices/" + deviceID.lowercased(), method: "DELETE", body: nil)
     }
 
     public func publishTaskGatewaySchedules(_ publication: RemoteTaskGatewayPublication) async throws -> RemoteTaskGatewayStatus {

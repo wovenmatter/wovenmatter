@@ -344,9 +344,11 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     const operation = path.slice('/v1/durable-acp/'.length)
     const result = await serialize(async () => {
       if (!await isEnabled()) throw new Error('Background execution is disabled')
-      if (!['attach', 'message', 'poll', 'recover', 'cli'].includes(operation)) throw new Error('Unknown relay operation')
+      if (!['attach', 'adopt', 'message', 'poll', 'recover', 'cli'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
-      if (['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
+      if (operation === 'adopt' && (channel.state !== 'running' || channel.snapshot.busy || channel.snapshot.pendingRequests.length)) throw new Error('This session is not idle; client ownership was not changed')
+      if (operation === 'adopt' && (typeof body.expectedNativeSessionID !== 'string' || (channel.snapshot.piState?.sessionId ?? channel.snapshot.session?.sessionId) !== body.expectedNativeSessionID)) throw new Error('The durable channel belongs to a different native session; client ownership was not changed')
+      if (['attach', 'adopt', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
         // This shares the native admission queue: earlier requests are already
         // accounted for, while delayed requests from the old relay cannot admit.
         channel.attachmentToken = randomUUID()
@@ -415,9 +417,9 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         busy: channel.snapshot.busy, pendingRequests: channel.snapshot.pendingRequests,
         recoveryComplete: !!channel.attachmentToken && body.attachmentToken === channel.attachmentToken
           && !channel.snapshot.busy && !channel.failure && channel.state === 'running',
-        ...((['attach', 'recover'].includes(operation) || body.includeRecovery) ? { recoveredRuns: channel.snapshot.recoveredRuns } : {}) }
+        ...((['attach', 'adopt', 'recover'].includes(operation) || body.includeRecovery) ? { recoveredRuns: channel.snapshot.recoveredRuns } : {}) }
       return { channelID: channel.id, state: channel.state, failure: channel.failure,
-        ...(['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1 ? { attachmentToken: channel.attachmentToken } : {}),
+        ...(['attach', 'adopt', 'recover'].includes(operation) && body.attachmentProtocol === 1 ? { attachmentToken: channel.attachmentToken } : {}),
         snapshot: publicSnapshot, events: channel.events.slice(after, after + 256) }
     })
     if (operation === 'poll' && body.waitMs != null) {

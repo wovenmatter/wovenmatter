@@ -18,7 +18,7 @@ workspace_storage_legacy=true
 workspace_storage_used=''
 
 usage() {
-  printf '%s\n' 'usage: remote-workspace.sh inspect | prepare AUTHORIZED | create ID PORT [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] | status ID | start ID | stop ID | restart ID | update ID IMAGE [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [PORT] | delete ID [--data]' >&2
+  printf '%s\n' 'usage: remote-workspace.sh inspect | expose ID PORT [HTTPS_PORT] | prepare AUTHORIZED | create ID PORT [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] | status ID | start ID | stop ID | restart ID | update ID IMAGE [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [PORT] | delete ID [--data]' >&2
   exit 64
 }
 
@@ -841,11 +841,57 @@ delete_workspace() {
     "$container_existed" "$persistent_data_removed"
 }
 
+# Explicit client-sharing setup. Docker stays bound to loopback; Tailscale
+# terminates private HTTPS. Never enable Funnel or replace another proxy.
+expose_workspace() {
+  [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage
+  local id="$1" port="$2" https_port="${3:-8443}" route dns status serving existing name published
+  validate_id "$id"
+  validate_port "$port"
+  validate_port "$https_port"
+  command -v tailscale >/dev/null 2>&1 || fail "tailscale_missing" "Install and connect Tailscale on this workspace host first." 69
+  command -v python3 >/dev/null 2>&1 || fail "python_missing" "Python 3 is required to verify private workspace sharing." 69
+  require_docker
+  acquire_lock tailscale-serve
+  name="$(container_name "$id")"
+  published="$(inspect_value "$name" '{{range (index .HostConfig.PortBindings "7337/tcp")}}{{.HostIp}}:{{.HostPort}}{{end}}')" || fail "workspace_missing" "The workspace container is unavailable." 69
+  [ "$published" = "127.0.0.1:${port}" ] || fail "workspace_binding_changed" "The workspace must be bound to the expected loopback port before sharing." 78
+  status="$(tailscale status --json)" || fail "tailscale_unavailable" "Connect Tailscale on this workspace host first." 69
+  dns="$(python3 -c 'import json,sys,re; s=json.load(sys.stdin); h=s.get("Self",{}).get("DNSName","").rstrip(".").lower(); assert s.get("BackendState")=="Running" and re.fullmatch(r"[a-z0-9.-]+\.ts\.net",h); print(h)' <<< "$status")" || fail "tailscale_disconnected" "Connect Tailscale with an HTTPS name before sharing." 69
+  route="/wovenmatter-execution/${id}"
+  serving="$(tailscale serve status --json)" || fail "tailscale_serve_unavailable" "Private Tailscale Serve status is unavailable." 69
+  existing="$(python3 -c '
+import json,sys
+s=json.load(sys.stdin); host,port,path,target=sys.argv[1:]; endpoint=host+":"+port
+assert not s.get("AllowFunnel",{}).get(endpoint), "Public Funnel is enabled on this port"
+tcp=s.get("TCP",{}).get(port,{})
+assert not tcp or tcp.get("HTTPS") is True, "Another TCP route owns this port"
+handlers=s.get("Web",{}).get(endpoint,{}).get("Handlers",{})
+for p,v in handlers.items():
+ if p.rstrip("/")==path:
+  assert v.get("Proxy")==target, "Another service owns this route"
+  print("present"); break
+else: print("missing")
+' "$dns" "$https_port" "$route" "http://127.0.0.1:${port}" <<< "$serving")" || fail "tailscale_route_conflict" "An existing public or unrelated route owns this endpoint. Existing routes were preserved." 78
+  if [ "$existing" != present ]; then
+    tailscale serve --bg --https="$https_port" --set-path="$route" "http://127.0.0.1:${port}" >/dev/null \
+      || fail "tailscale_serve_failed" "Tailscale could not expose the private workspace route. Enable tailnet HTTPS first." 69
+  fi
+  serving="$(tailscale serve status --json)" || fail "tailscale_serve_unavailable" "Private sharing could not be verified." 69
+  python3 -c 'import json,sys; s=json.load(sys.stdin); host,port,path,target=sys.argv[1:]; endpoint=host+":"+port; assert not s.get("AllowFunnel",{}).get(endpoint); assert s.get("Web",{}).get(endpoint,{}).get("Handlers",{}).get(path,{}).get("Proxy")==target' \
+    "$dns" "$https_port" "$route" "http://127.0.0.1:${port}" <<< "$serving" \
+    || fail "tailscale_serve_unverified" "Tailscale did not confirm the private workspace route. Check its Serve configuration." 69
+  printf '{"endpoint":'
+  json_string "https://${dns}:${https_port}${route}"
+  printf '}\n'
+}
+
 command="${1:-}"
 [ -n "$command" ] || usage
 shift
 case "$command" in
   inspect) inspect_host "$@" ;;
+  expose) expose_workspace "$@" ;;
   prepare) prepare_host "$@" ;;
   create) create_workspace "$@" ;;
   status) status_workspace "$@" ;;
