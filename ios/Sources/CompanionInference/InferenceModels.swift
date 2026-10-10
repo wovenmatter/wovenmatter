@@ -33,10 +33,11 @@ public struct InferenceConnection: Codable, Sendable, Identifiable, Equatable {
   public var baseURL: String?
   public var modelID: String
   public var hostScope: InferenceHostScope?
+  public var selectedModel: InferenceModel?
   public init(id: String = UUID().uuidString, name: String, provider: String, accountID: String = "default",
-              route: InferenceRoute, baseURL: String? = nil, modelID: String, hostScope: InferenceHostScope? = nil) {
+              route: InferenceRoute, baseURL: String? = nil, modelID: String, hostScope: InferenceHostScope? = nil, selectedModel: InferenceModel? = nil) {
     self.id = id; self.name = name; self.provider = provider; self.accountID = accountID
-    self.route = route; self.baseURL = baseURL; self.modelID = modelID; self.hostScope = hostScope
+    self.route = route; self.baseURL = baseURL; self.modelID = modelID; self.hostScope = hostScope; self.selectedModel = selectedModel
   }
   public func validate() throws {
     guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -109,6 +110,7 @@ public struct InferenceModel: Codable, Sendable, Identifiable, Equatable {
     self.id = id; self.name = name; self.provider = provider; self.api = api; self.baseUrl = baseUrl
     self.contextWindow = contextWindow; self.maxTokens = maxTokens; self.reasoning = reasoning; self.input = input
     self.cost = cost; self.thinkingLevelMap = thinkingLevelMap
+    self.metadata["cost"] = .object(cost.mapValues { .number($0) })
   }
   private struct Field: CodingKey {
     let stringValue: String
@@ -157,10 +159,7 @@ public enum InferenceCatalog {
     .init(id: "anthropic", name: "Claude · API key", defaultRoute: .direct, supportsDirect: true),
     .init(id: "local-server-openai", name: "Tailscale model server", defaultRoute: .direct, supportsDirect: true),
   ]
-  public static func models(provider: String) throws -> [InferenceModel] {
-    guard let url = Bundle.module.url(forResource: "models", withExtension: "json") else { throw InferenceError.modelUnavailable }
-    return try JSONDecoder().decode([InferenceModel].self, from: Data(contentsOf: url)).filter { $0.provider == provider }
-  }
+
 }
 
 public enum InferenceError: Error, LocalizedError, Sendable, Equatable {

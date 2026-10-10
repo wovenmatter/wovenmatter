@@ -117,3 +117,24 @@ Successful compilation, portable tests, and the runtime smoke are distinct from
 app-hosted XCTest, real provider acceptance, and physical-device acceptance.
 Record any toolchain test-runner failure explicitly. Do not infer unlimited iOS
 background execution or working real network access from a simulator build.
+
+## Provider catalog checks
+
+`ios/Tests/CompanionInferenceTests/ProviderModelCatalogTests.swift` and
+`default-agent/test/provider-catalog.test.mjs` use tiny synthetic descriptors and
+controlled HTTP responses. They cover cold/warm/restarted/stale/304 caches,
+first-load retry, offline retention, cancellation/provider isolation, complete
+metadata round trips, xAI identity mapping, unsupported model filtering, bounded
+responses, and rejection of foreign endpoints before credential access. Shared
+engine checks also cover credential-free Browse, no startup catalog network,
+pinned selections across refresh and restart, and empty/valid/offline Claude
+SDK discovery. Existing inference, native-context, attached-child and durable
+recovery tests remain provider-free.
+
+Manual acceptance still needs a device/provider session: rapidly switch providers
+and dismiss the picker while loading; reopen a configured conversation with the
+catalog and central Mac unavailable; verify cached names and explicit retry; then
+refresh metadata during an active run and confirm its original route is retained.
+Live subscription discovery can fail independently of its last saved inventory.
+No fixture test establishes live account access, provider inference, physical
+suspension behavior, or Tailscale availability.

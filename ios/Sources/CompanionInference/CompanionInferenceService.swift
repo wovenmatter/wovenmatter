@@ -14,14 +14,21 @@ public struct InferenceHostCatalog: Codable, Sendable {
 
 public actor CompanionInferenceService {
   public let connection: InferenceConnection
+  private var pinnedModel: InferenceModel?
+  private let catalogLoader: ProviderModelCatalog
   private let credentials: any InferenceCredentialReading
   private let transport: any InferenceHTTPTransport
   public init(connection: InferenceConnection, credentials: any InferenceCredentialReading = InferenceCredentialStore(),
-              transport: any InferenceHTTPTransport = InferenceURLSessionTransport()) {
+              transport: any InferenceHTTPTransport = InferenceURLSessionTransport(), catalogLoader: ProviderModelCatalog = .shared, model: InferenceModel? = nil) {
     self.connection = connection; self.credentials = credentials; self.transport = transport
+    self.catalogLoader = catalogLoader; self.pinnedModel = model ?? connection.selectedModel
   }
   public func model() async throws -> InferenceModel {
     try connection.validate()
+    if connection.route == .direct && connection.provider.hasPrefix("local-server-") {
+      return .init(id: connection.modelID, name: connection.modelID, provider: connection.provider, api: "openai-responses", baseUrl: connection.baseURL ?? "")
+    }
+    if let pinnedModel { try validate(pinnedModel); return pinnedModel }
     let models: [InferenceModel]
     if connection.route == .adapter {
       let host = try await hostCatalog()
@@ -29,17 +36,24 @@ public actor CompanionInferenceService {
       models = host.models
     } else if connection.provider.hasPrefix("local-server-") {
       return .init(id: connection.modelID, name: connection.modelID, provider: connection.provider, api: "openai-responses", baseUrl: connection.baseURL ?? "")
-    } else { models = try InferenceCatalog.models(provider: connection.provider) }
+    } else {
+      let cached = await catalogLoader.cached(provider: connection.provider)
+      if let selected = cached.first(where: { $0.id == connection.modelID }) { models = [selected] }
+      else { models = try await catalogLoader.load(provider: connection.provider) }
+    }
     guard let model = models.first(where: { $0.id == connection.modelID && $0.provider == connection.provider }) else { throw InferenceError.modelUnavailable }
+    try validate(model); pinnedModel = model
     return model
   }
   public func catalog() async throws -> [InferenceModel] {
     if connection.route == .adapter { return try await hostCatalog().models.filter { $0.provider == connection.provider } }
-    return try InferenceCatalog.models(provider: connection.provider)
+    return try await catalogLoader.load(provider: connection.provider)
   }
   public func hostCatalog() async throws -> InferenceHostCatalog {
     try connection.validate()
-    var request = URLRequest(url: try adapterURL("catalog"))
+    var components = URLComponents(url: try adapterURL("catalog"), resolvingAgainstBaseURL: false)!
+    components.queryItems = [URLQueryItem(name: "provider", value: connection.provider)]
+    var request = URLRequest(url: components.url!)
     request.setValue("Bearer \(try await secret())", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     applyHostScope(to: &request)
@@ -59,6 +73,8 @@ public actor CompanionInferenceService {
       var input = try JSONSerialization.jsonObject(with: data) as? InferenceObject else { throw InferenceError.invalidConfiguration }
     let requested = inferenceObject(input["model"])
     guard requested["id"] as? String == connection.modelID, requested["provider"] as? String == connection.provider else { throw InferenceError.modelUnavailable }
+    // Validate the pinned routing metadata before even reading the credential.
+    let selected = connection.route == .direct ? try await model() : nil
     let secret = try await secret()
     if connection.route == .adapter {
       input["accountID"] = connection.accountID
@@ -87,7 +103,7 @@ public actor CompanionInferenceService {
       }
       guard terminal else { throw InferenceError.interrupted }
     } else {
-      let selected = try await model()
+      guard let selected else { throw InferenceError.modelUnavailable }
       // A credential replacement must not replay account-bound thinking signatures to another principal.
       var route = connection
       route.id = SHA256.hash(data: Data([connection.id, connection.provider, connection.modelID, secret].joined(separator: "\u{0}").utf8)).map { String(format: "%02x", $0) }.joined()
@@ -106,6 +122,12 @@ public actor CompanionInferenceService {
       }
       if !payload.isEmpty { try decoder.consume(payload.joined(separator: "\n")) }
       try decoder.finish()
+    }
+  }
+  private func validate(_ model: InferenceModel) throws {
+    guard model.id == connection.modelID, model.provider == connection.provider else { throw InferenceError.modelUnavailable }
+    if connection.route == .direct && !connection.provider.hasPrefix("local-server-") {
+      try InferenceModelPolicy.validate(model, provider: connection.provider)
     }
   }
   private func applyHostScope(to request: inout URLRequest) {

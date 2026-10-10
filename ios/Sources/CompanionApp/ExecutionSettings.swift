@@ -71,6 +71,8 @@ private struct InferenceConnectionEditor: View {
   @State private var hostID = ""
   @State private var accounts: [InferenceHostAccount] = []
   @State private var loadingHost = false
+  @State private var catalogTask: Task<Void, Never>?
+  @State private var catalogGeneration = UUID()
   private var definition: InferenceProvider? { InferenceCatalog.providers.first { $0.id == provider } }
   var body: some View {
     NavigationStack {
@@ -87,8 +89,14 @@ private struct InferenceConnectionEditor: View {
               Text("Choose a model").tag("")
               ForEach(models) { item in Text(item.name).tag(item.id) }
             }
-          } else {
+          } else if provider.hasPrefix("local-server-") {
             TextField("Model ID", text: $modelID).textInputAutocapitalization(.never).autocorrectionDisabled()
+          } else {
+            Text("Choose a model after loading this provider’s catalog.")
+          }
+          if definition?.defaultRoute == .direct && !provider.hasPrefix("local-server-") {
+            if loadingHost { ProgressView("Loading models…") }
+            Button("Refresh models") { updateModels(force: true) }.disabled(loadingHost)
           }
         }
         if definition?.defaultRoute == .adapter {
@@ -100,6 +108,9 @@ private struct InferenceConnectionEditor: View {
             if loadingHost { ProgressView("Loading accounts and models…") }
             Picker("Account", selection: $accountID) {
               Text("Choose an account").tag("")
+              if !accountID.isEmpty && !accounts.contains(where: { $0.id == accountID && $0.provider == provider && $0.connected }) {
+                Text(accountID).tag(accountID)
+              }
               ForEach(accounts.filter { $0.provider == provider && $0.connected }) { account in Text(account.label).tag(account.id) }
             }
             Button("Refresh host connections") { loadHost() }.disabled(hostID.isEmpty || loadingHost)
@@ -123,7 +134,7 @@ private struct InferenceConnectionEditor: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
-          ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || loadingHost || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.isEmpty) }
+          ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.isEmpty) }
         }.task {
           if let connection {
             name = connection.name; provider = connection.provider; modelID = connection.modelID
@@ -131,32 +142,60 @@ private struct InferenceConnectionEditor: View {
           }
           if let endpoint = connection?.baseURL { hostID = model.executionWorkspaces.first { $0.endpoint?.absoluteString == endpoint }?.id ?? "" }
           updateModels()
-        }.onChange(of: provider) { _, _ in modelID = ""; accountID = ""; updateModels(); if definition?.defaultRoute == .adapter { loadHost() } }
+        }.onDisappear { catalogTask?.cancel() }.onChange(of: provider) { _, _ in modelID = ""; accountID = ""; updateModels(); if definition?.defaultRoute == .adapter { loadHost() } }
         .onChange(of: hostID) { previous, _ in
           if !previous.isEmpty { models = []; accounts = []; modelID = ""; accountID = ""; endpoint = "" }
-          if !hostID.isEmpty { loadHost() }
+          loadHost()
         }
     }
   }
-  private func updateModels() {
-    models = definition?.defaultRoute == .adapter ? [] : (try? InferenceCatalog.models(provider: provider)) ?? []
-    if definition?.defaultRoute != .adapter { accountID = "default" }
+  private func updateModels(force: Bool = false) {
+    catalogTask?.cancel(); catalogGeneration = UUID(); loadingHost = false; problem = nil
+    models = connection?.provider == provider ? [connection?.selectedModel].compactMap { $0 } : []
+    guard definition?.defaultRoute == .direct else { return }
+    accountID = "default"
+    guard !provider.hasPrefix("local-server-") else { return }
+    let selectedProvider = provider, generation = catalogGeneration
+    loadingHost = true
+    catalogTask = Task {
+      @MainActor func publish(_ fetched: [InferenceModel]) {
+        models = fetched
+        if let selected = connection?.selectedModel, selected.provider == selectedProvider,
+           selected.id == modelID, !models.contains(where: { $0.id == selected.id }) { models.insert(selected, at: 0) }
+      }
+      let cached = await ProviderModelCatalog.shared.cached(provider: selectedProvider)
+      guard !Task.isCancelled, catalogGeneration == generation else { return }
+      if !cached.isEmpty { publish(cached) }
+      do {
+        let fetched = try await ProviderModelCatalog.shared.load(provider: selectedProvider, force: force)
+        guard !Task.isCancelled, catalogGeneration == generation else { return }
+        publish(fetched)
+      } catch {
+        guard !Task.isCancelled, catalogGeneration == generation else { return }
+        problem = "Models could not be refreshed. Saved selections remain available. Retry with Refresh models."
+      }
+      loadingHost = false
+    }
   }
   private func loadHost() {
-    guard !hostID.isEmpty, !loadingHost else { return }
-    let selectedHost = hostID, selectedProvider = provider
+    catalogTask?.cancel(); catalogGeneration = UUID(); loadingHost = false
+    guard !hostID.isEmpty else { return }
+    let selectedHost = hostID, selectedProvider = provider, generation = catalogGeneration
     loadingHost = true; problem = nil
-    Task {
+    catalogTask = Task {
       do {
         let credential = try await model.authorizedWorkspaceCredential(selectedHost)
         let catalogID = "catalog-" + selectedHost
         try await model.executionCredentialStore.save(credential.token, connectionID: catalogID)
         let connection = InferenceConnection(id: catalogID, name: "Host catalog", provider: selectedProvider, accountID: "catalog", route: .adapter, baseURL: credential.endpoint.absoluteString, modelID: "catalog", hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version))
         let catalog = try await CompanionInferenceService(connection: connection, credentials: model.executionCredentialStore).hostCatalog()
-        guard hostID == selectedHost && provider == selectedProvider else { loadingHost = false; loadHost(); return }
+        guard !Task.isCancelled, catalogGeneration == generation else { return }
         endpoint = credential.endpoint.absoluteString
         models = catalog.models.filter { $0.provider == selectedProvider }; accounts = catalog.accounts
-      } catch { problem = error.localizedDescription }
+      } catch {
+        guard !Task.isCancelled, catalogGeneration == generation else { return }
+        problem = error.localizedDescription
+      }
       loadingHost = false
     }
   }
@@ -164,7 +203,8 @@ private struct InferenceConnectionEditor: View {
     saving = true; problem = nil
     let value = InferenceConnection(id: connection?.id ?? UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines),
       provider: provider, accountID: accountID, route: definition?.defaultRoute ?? .direct,
-      baseURL: endpoint.isEmpty ? nil : endpoint, modelID: modelID)
+      baseURL: endpoint.isEmpty ? nil : endpoint, modelID: modelID,
+      selectedModel: models.first { $0.id == modelID && $0.provider == provider })
     Task {
       do {
         var configured = value

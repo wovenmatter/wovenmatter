@@ -69,8 +69,8 @@ private actor SmokeNativeTools {
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       let transport = SmokeInferenceTransport()
       let native = SmokeNativeTools(file: root.appendingPathComponent("native-note.txt"))
-      guard let model = try InferenceCatalog.models(provider: "openai").first(where: { $0.api == "openai-responses" }) else { throw InferenceError.modelUnavailable }
-      let service = CompanionInferenceService(connection: .init(name: "Controlled smoke", provider: "openai", route: .direct, modelID: model.id), credentials: SmokeCredentials(), transport: transport)
+      let model = InferenceModel(id: "offline-smoke", name: "Offline smoke", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
+      let service = CompanionInferenceService(connection: .init(name: "Controlled smoke", provider: "openai", route: .direct, modelID: model.id), credentials: SmokeCredentials(), transport: transport, model: model)
       let tools = #"[{"name":"write_file","description":"Write a test-only local file","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}},{"name":"read_file","description":"Read the test-only local file","parameters":{"type":"object","properties":{}},"replay":"safe"}]"#
       let config = PiDurableConfiguration(conversationID: "smoke-conversation", modelJSON: try model.descriptorJSON(), toolsJSON: tools)
       var eventCount = 0
@@ -98,7 +98,7 @@ private actor SmokeNativeTools {
         "nativeFile": try String(contentsOf: root.appendingPathComponent("native-note.txt"), encoding: .utf8)]) { _, new in new }
       let codeTransport = SmokeInferenceTransport(codeMode: true)
       let codeNative = SmokeNativeTools(file: root.appendingPathComponent("code-note.txt"))
-      let codeService = CompanionInferenceService(connection: .init(name: "Controlled code mode", provider: "openai", route: .direct, modelID: model.id), credentials: SmokeCredentials(), transport: codeTransport)
+      let codeService = CompanionInferenceService(connection: .init(name: "Controlled code mode", provider: "openai", route: .direct, modelID: model.id), credentials: SmokeCredentials(), transport: codeTransport, model: model)
       let codeConfig = PiDurableConfiguration(conversationID: "smoke-code-conversation", modelJSON: try model.descriptorJSON(), toolsJSON: tools)
       func makeCodeRuntime() throws -> PiDurableRuntime {
         try PiDurableRuntime(storageDirectory: root.appendingPathComponent("code-runtime"), configuration: codeConfig,

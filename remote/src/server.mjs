@@ -144,7 +144,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/v1/execution/workspace-read' && request.method === 'POST') return json(response,200,await clientExecution.readWorkspace(await readJSON(request)))
     if (url.pathname === '/v1/execution/providers' && request.method === 'GET') return json(response,200,await clientExecution.providers())
     if (url.pathname === '/v1/execution/interactions' && request.method === 'GET') return json(response,200,clientExecution.interactions())
-    if (url.pathname === '/v1/inference/catalog' && request.method === 'GET') return json(response,200,await defaultAgent.inferenceCatalog({principalID:device?.id ?? 'administrator'}))
+    if (url.pathname === '/v1/inference/catalog' && request.method === 'GET') return json(response,200,await defaultAgent.inferenceCatalog({principalID:device?.id ?? 'administrator',provider:url.searchParams.get('provider')}))
     if (url.pathname === '/v1/inference/stream' && request.method === 'POST') {
       const body = await readJSON(request,8*1024*1024), controller = new AbortController()
       response.once('close',()=>controller.abort())

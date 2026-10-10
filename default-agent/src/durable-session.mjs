@@ -56,7 +56,7 @@ export async function openDurableSession(engine, id, requested) {
     const batch = records => ({ schemaVersion: 1, sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
     record.nativeRoot = root;
     record.nativeContext = context;
-    const scopes = new Map(), childMetadata = new Map(), modelScopes = new Map(), toolScopes = new AsyncLocalStorage();
+    const scopes = new Map(), childMetadata = new Map(), childModels = new Map(), modelScopes = new Map(), toolScopes = new AsyncLocalStorage();
     const scopedArchive = (scope, records) => records.map(item => {
       if (scope === record) return item;
       const group = JSON.stringify({ nativeConversationID: scope.conversation.id, parentNativeConversationID: record.conversation.id, childID: String(scope.conversation.id) });
@@ -69,7 +69,7 @@ export async function openDurableSession(engine, id, requested) {
         if (!metadata || metadata.parentConversationID !== record.conversation.id) throw new DefaultAgentError('This child does not belong to the current Pi Durable conversation.');
         const child = await record.harness.conversation(conversationID, context);
         if (!child) throw new DefaultAgentError('This native child conversation is unavailable.');
-        const scope = createSubagentContext(record, engine, { conversation: child, sessionID: metadata.sessionID, model: engine.resolveModel(`${metadata.provider}/${metadata.modelId}`), accountID: metadata.accountID, thinkingLevel: metadata.thinking, runID: metadata.runID, cli: childBindings.get(conversationID) ?? new SessionCLIContext().fork(), appendArchive: items => record.appendArchive(scopedArchive({ conversation: child, runID: metadata.runID }, items)), reportUsage: usage => record.reportUsage?.(usage) }, context);
+        const scope = createSubagentContext(record, engine, { conversation: child, sessionID: metadata.sessionID, model: await engine.ensureModel(`${metadata.provider}/${metadata.modelId}`, metadata.selectedModel), accountID: metadata.accountID, thinkingLevel: metadata.thinking, runID: metadata.runID, cli: childBindings.get(conversationID) ?? new SessionCLIContext().fork(), appendArchive: items => record.appendArchive(scopedArchive({ conversation: child, runID: metadata.runID }, items)), reportUsage: usage => record.reportUsage?.(usage) }, context);
         scope.connectionPin = metadata;
         return scope;
       })());
@@ -128,12 +128,16 @@ export async function openDurableSession(engine, id, requested) {
     const currentRoute = async (api, ctx) => {
       const scope = await prepareScope(api, ctx);
       const reference = (await api.snapshot(AgentDoc, api.conversationId, ctx)).model;
-      const model = engine.resolveModel(`${reference.provider}/${reference.modelId}`), account = await currentAccount(model, scope);
+      const model = scope.session.model ?? await engine.ensureModel(`${reference.provider}/${reference.modelId}`);
+      if (model?.provider !== reference.provider || model?.id !== reference.modelId) throw new DefaultAgentError('The saved model does not match this native run. No model fallback was attempted.');
+      const account = await currentAccount(model, scope);
       return { scope, model, account, route: { provider: model.provider, modelID: model.id, accountID: account.id } };
     };
     const models = new Proxy(engine.runtime, { get(target, key) {
+      if (key === 'getModel') return (provider, id) => record.selectedModel?.provider === provider && record.selectedModel?.id === id ? record.selectedModel : childModels.get(`${provider}/${id}`) ?? target.getModel(provider, id);
       if (key === 'completeSimple') return async (model, input, options) => {
         const scope = modelScope(options);
+        model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         try {
           const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }), scope));
@@ -144,6 +148,7 @@ export async function openDurableSession(engine, id, requested) {
       };
       if (key === 'streamSimple') return (model, input, options) => {
         const scope = modelScope(options);
+        model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         const result = createAssistantMessageEventStream(), prepared = scope.nativePrepared;
         const tag = message => ({ ...safeAssistantDiagnostic(message), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}) });
@@ -175,7 +180,10 @@ export async function openDurableSession(engine, id, requested) {
       const records = [];
       const changedGroup = publication.changes.find(change => change.type === 'document' && change.record.kind === Subagents.definition.kind && change.conversationId === record.conversation?.id);
       const reportEntries = new Set(publication.changes.filter(change => change.type === 'submission' && change.value.requestId?.startsWith('woven-subagent-report:')).map(change => change.value.entry));
-      for (const change of publication.changes) if (change.type === 'document' && change.record.kind === ChildContext.definition.kind && change.value) childMetadata.set(change.conversationId, change.value);
+      for (const change of publication.changes) if (change.type === 'document' && change.record.kind === ChildContext.definition.kind && change.value) {
+        childMetadata.set(change.conversationId, change.value);
+        if (change.value.selectedModel) childModels.set(`${change.value.provider}/${change.value.modelId}`, change.value.selectedModel);
+      }
       publication.changes.forEach((change, index) => {
         const nativeConversationID = change.conversationId ?? (change.type === 'conversation' ? change.value.id : change.value?.conversationId);
         const child = childMetadata.get(nativeConversationID) ?? record.subagents?.metadata(nativeConversationID);
@@ -200,7 +208,15 @@ export async function openDurableSession(engine, id, requested) {
     record.conversation = conversation;
     record.nativeBridge = nativeContextBridge(record, engine, context);
     const options = await harness.snapshot(Options, conversation.id, context) ?? {};
-    record.selected = options.selected; record.options = options; record.subagentConcurrency = options.subagentConcurrency ?? engine.config.subagentConcurrency;
+    record.selected = options.selected; record.options = options;
+    record.selectedModel = await engine.ensureModel(options.selected ?? engine.config.defaultModel, options.selectedModel);
+    // Restore alternate child selections before the native scheduler resolves their models.
+    const group = await harness.snapshot(Subagents, conversation.id, context);
+    for (const child of Object.values(group?.children ?? {})) {
+      const saved = await harness.snapshot(ChildContext, child.conversationId, context);
+      if (saved?.selectedModel) childModels.set(`${saved.provider}/${saved.modelId}`, await engine.ensureModel(`${saved.provider}/${saved.modelId}`, saved.selectedModel));
+    }
+    record.subagentConcurrency = options.subagentConcurrency ?? engine.config.subagentConcurrency;
     const listeners = new Set();
     const send = update => {
       let offset = 0;
@@ -334,8 +350,8 @@ export async function openDurableSession(engine, id, requested) {
     record.subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener); };
     record.reportUsage = usage => { for (const listener of listeners) listener({ usage }); };
     const session = { sessionId: sessionID, thinkingLevel: options.thinking ?? 'medium', messages: [],
-      get model() { return engine.resolveModel(record.selected); }, getAvailableThinkingLevels: () => session.model ? getSupportedThinkingLevels(session.model) : [],
-      setModel: async model => { record.selected = `${model.provider}/${model.id}`; const levels = getSupportedThinkingLevels(model); if (!levels.includes(session.thinkingLevel)) session.thinkingLevel = levels[0]; await conversation.configure({ model: { provider: model.provider, modelId: model.id }, thinkingLevel: session.thinkingLevel, cwd }, context); },
+      get model() { return record.selectedModel ?? engine.resolveModel(record.selected); }, getAvailableThinkingLevels: () => session.model ? getSupportedThinkingLevels(session.model) : [],
+      setModel: async model => { record.selectedModel = structuredClone(model); record.selected = `${model.provider}/${model.id}`; const levels = getSupportedThinkingLevels(model); if (!levels.includes(session.thinkingLevel)) session.thinkingLevel = levels[0]; await conversation.configure({ model: { provider: model.provider, modelId: model.id }, thinkingLevel: session.thinkingLevel, cwd }, context); },
       setThinkingLevel: level => { session.thinkingLevel = level; record.configurationQueue = (record.configurationQueue ?? Promise.resolve()).then(() => conversation.configure({ thinkingLevel: level }, context)); },
       setActiveToolsByName: names => { record.configurationQueue = (record.configurationQueue ?? Promise.resolve()).then(() => conversation.configure({ tools: names.map(n => [...adapted, codeTool, record.subagents.tool].find(t => t.name === n)).filter(Boolean) }, context)); },
       abort: async () => { await record.subagents.stopGroup(); await conversation.abort(context, { background: true }); }, refreshContext: async () => { session.messages = [...(await conversation.context(context)).messages]; },

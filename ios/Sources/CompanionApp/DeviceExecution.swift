@@ -141,6 +141,7 @@ extension CompanionModel {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to configure inference connections.") }
     try connection.validate()
     var saved = connection
+    saved.selectedModel = try await CompanionInferenceService(connection: connection, credentials: executionCredentialStore).model()
     if let existing = inferenceConnections.first(where: { $0.id == connection.id }),
        existing.provider != connection.provider || existing.route != connection.route || existing.baseURL != connection.baseURL ||
        existing.accountID != connection.accountID || existing.hostScope != connection.hostScope || existing.modelID != connection.modelID {
@@ -227,7 +228,8 @@ extension CompanionModel {
     if let existing = localRuntimes[id] { try await finishDeviceCancellation(id, runtime: existing); return existing }
     guard let record = executionRecords[id], let root = executionDirectory,
           let connection = record.connection ?? inferenceConnections.first(where: { $0.id == record.connectionID }) else { throw InferenceError.missingCredential }
-    let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
+    let pinned = try JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8))
+    let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned)
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
       configuration: .init(conversationID: id, modelJSON: record.modelJSON, toolsJSON: try toolsJSON(for: record),
         instructions: "You are Pi Durable running on an iOS Woven Matter workspace. Use provided native tools for notes and workspace files. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Never claim shell, process, or unrestricted filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."),

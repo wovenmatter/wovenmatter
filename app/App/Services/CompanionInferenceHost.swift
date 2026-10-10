@@ -40,6 +40,9 @@ final class CompanionInferenceHost {
             }
             guard request.body.count <= 8 * 1024 * 1024 else { return .error("too_large", "Inference input exceeds the request limit.", status: 413) }
             var object: [String: Any] = [:]
+            if catalog, let provider = URLComponents(string: "http://localhost" + request.target)?.queryItems?.first(where: { $0.name == "provider" })?.value {
+                object["provider"] = provider
+            }
             if stream {
                 guard let value = try JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
                     return .error("invalid_request", "Invalid inference request.", status: 400)

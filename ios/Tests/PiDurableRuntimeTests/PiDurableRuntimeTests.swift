@@ -189,7 +189,7 @@ final class PiDurableRuntimeTests: XCTestCase {
     let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
     let fixture = ResponsesFixture()
     let connection = InferenceConnection(id: "fixture-account", name: "Controlled inference", provider: "openai", route: .direct, modelID: "gpt-4.1")
-    let service = CompanionInferenceService(connection: connection, credentials: IntegrationCredentials(), transport: fixture)
+    let service = CompanionInferenceService(connection: connection, credentials: IntegrationCredentials(), transport: fixture, model: InferenceModel(id: connection.modelID, name: "Offline fixture", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1"))
     let descriptor = try await service.model().descriptorJSON()
     let host = ControlledHost()
     let engine = try PiDurableRuntime(storageDirectory: path,

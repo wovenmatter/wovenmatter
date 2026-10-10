@@ -82,7 +82,10 @@ async function invoke(message) {
     }
     const e = await engine();
     controlController.signal.throwIfAborted();
-    if (message.action === 'catalog') return { models: e.catalog() };
+    if (message.action === 'catalog') {
+      const provider = message.provider ?? e.config.providers[0];
+      return { models: await e.browse(provider, { signal: controlController.signal, force: message.force === true }) };
+    }
     if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId, { signal: controlController.signal });
     if (message.action === 'reset') {
       await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));

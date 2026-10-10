@@ -45,3 +45,41 @@ The existing companion protocol remains compatible while new federation capabili
 - iPhone and iPad support the existing shared styles and canonical green cube app icon; simulator checks precede physical-device acceptance.
 
 Implementation status and exact test evidence belong in the PR handoff; this document states the required contract and does not claim unperformed live acceptance.
+
+## Provider model metadata
+
+The app has no first-party bundled model inventory or catalog generator. Opening
+one provider fetches only its credential-free `https://pi.dev/api/models/providers/{provider}?types=chat`
+shard, using `User-Agent: pi/<SDK compatibility version>`. `types` selects the
+representation; both loaders explicitly retain only supported chat APIs. Native
+API-key xAI connections retain the `xai-api` identity while fetching the `xai` shard.
+
+The native cache and the shared desktop/remote cache store bounded provider files
+with ETag, Last-Modified and a four-hour freshness window. They perform no launch
+fetch or polling. Refresh happens only while browsing a provider or resolving an
+uncached selected descriptor; cached selections remain usable during catalog
+outages. Refresh/retry is explicit after a first-load failure. Public metadata
+requests contain no credentials, cookies, account/device IDs or inference input,
+and do not follow redirects. Fixed provider/API/base-URL policy is checked before
+credential access. Complete compatibility, reasoning, input and tiered-cost
+metadata survives storage; it cannot supply credential destinations or headers.
+
+Device connections save their selected descriptors. Existing device conversations
+retain their original `modelJSON`. Desktop/remote conversations and native child
+contexts pin selected descriptors in their existing durable records; inference
+hosts also retain their own descriptor for each authorized client conversation.
+Catalog refresh cannot replace a run's model, provider, account or execution owner.
+Authorized subscription-host discovery and explicitly configured Tailscale server
+IDs remain separate from public metadata discovery.
+
+Claude model names and effort options come from the SDK's demand-driven
+`supportedModels()` with empty streaming input, or its last valid saved result.
+An empty cache has an unavailable/retry state, with no app-authored aliases. The
+SDK does not expose context/output limits in that result; the existing native
+adapter's conservative host budgets remain limits, not discovered entitlements.
+
+The upstream Pi desktop/remote dependencies still contain and eagerly import their
+own provider baseline (about 951 KB in Pi 1.1.0). Woven's provider catalogs and
+selected-label UI no longer depend on it. Removing those upstream bytes requires
+an SDK packaging change and is outside this cleanup. The actual iOS Pi Durable
+runtime bundle and `harnesses/catalog.json` installation manifest are retained.

@@ -14,6 +14,9 @@ struct InferenceRequestBuilder {
   let connection: InferenceConnection
   let model: InferenceModel
   func request(_ input: InferenceObject, secret: String) throws -> URLRequest {
+    try connection.validate()
+    guard model.id == connection.modelID, model.provider == connection.provider else { throw InferenceError.modelUnavailable }
+    if !connection.provider.hasPrefix("local-server-") { try InferenceModelPolicy.validate(model, provider: connection.provider) }
     let context = inferenceObject(input["context"]), options = inferenceObject(input["options"])
     let compat = inferenceObject(model.metadata["compat"]?.value)
     let transcript = inferenceObjects(context["messages"])
@@ -88,10 +91,8 @@ struct InferenceRequestBuilder {
     return request
   }
   private func cloudURL(_ value: String) throws -> URL {
-    let hosts: [String: Set<String>] = ["openai": ["api.openai.com"], "anthropic": ["api.anthropic.com"],
-      "openrouter": ["openrouter.ai"], "opencode-go": ["opencode.ai"], "xai-api": ["api.x.ai"]]
-    guard let url = URL(string: value), url.scheme == "https", let host = url.host?.lowercased(),
-      hosts[model.provider]?.contains(host) == true, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw InferenceError.invalidEndpoint }
+    try InferenceModelPolicy.validate(model, provider: connection.provider)
+    guard let url = URL(string: value) else { throw InferenceError.invalidEndpoint }
     return url
   }
   private func image(_ block: InferenceObject) throws -> (String, String) {

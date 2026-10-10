@@ -1,5 +1,6 @@
 import { mkdir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { ProviderCatalog, installPublicCatalog, providerEndpoints, validatePublicModel } from './provider-catalog.mjs';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { openDurableSession } from './durable-session.mjs';
 import { credentialRouteIdentity } from './native-context.mjs';
@@ -15,8 +16,9 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export class DefaultAgentEngine {
-  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude }) {
+  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, catalog }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
+    this.providerCatalog = catalog ?? new ProviderCatalog(directory);
     this.claude = claude ?? new ClaudeRuntime(directory);
     this.programStatusContext = new AsyncLocalStorage();
   }
@@ -24,17 +26,21 @@ export class DefaultAgentEngine {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.claude.loadModels();
     this.credentials = await new Credentials(this.supplied, this.vault, this.credentialAccounts).initialize();
-    this.runtime = await ModelRuntime.create({ credentials: this.credentials.forModelRuntime(), modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
+    this.runtime = await ModelRuntime.create({ credentials: this.credentials.forModelRuntime(), modelsPath: null, modelsStore: this.providerCatalog, refreshOnCreate: false });
+    this.publishProviderModels = installPublicCatalog(this.runtime);
+    // Restore only configured selections, without network or a scan of every provider.
+    for (const provider of new Set([...this.config.models, this.config.defaultModel].filter(Boolean).map(id => id.split('/')[0]))) {
+      if (providerEndpoints[provider]) {
+        const saved = await this.providerCatalog.read(provider);
+        if (saved) this.publishProviderModels(provider, saved.models);
+      }
+    }
     registerLocalServers(this.runtime, this.config.customServers);
-    const xaiModels = this.runtime.getModels().filter(model => model.provider === 'xai');
-    if (xaiModels.length) this.runtime.registerProvider('xai-api', {
-      name: 'xAI API key', baseUrl: 'https://api.x.ai/v1', api: 'openai-responses', authHeader: true,
-      models: xaiModels.map(({ provider, api, baseUrl, ...model }) => model),
-    });
     registerClaudeProviders(this.runtime, this.claude, this.credentials);
     const resolveAuth = this.runtime.getAuth.bind(this.runtime);
     this.runtime.getAuth = async (model, options = {}) => {
       const provider = typeof model === 'string' ? model : model.provider;
+      if (typeof model === 'object' && providerEndpoints[provider]) validatePublicModel(model);
       if (isClaude(provider + '/')) return resolveAuth(model, options);
       let credential = await this.credentials.read(provider);
       if (credential?.borrowed) {
@@ -90,22 +96,53 @@ export class DefaultAgentEngine {
   catalog() {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
   }
+  async browse(provider, { signal, force = false } = {}) {
+    if (!this.config.providers.includes(provider)) throw new DefaultAgentError('Choose an enabled provider to browse its models.');
+    if (isClaude(provider + '/')) {
+      // API discovery needs the resolved key; subscription uses only its selected native profile.
+      const key = provider === 'anthropic' ? (await this.credentials.read(provider))?.key : undefined;
+      const operation = () => this.claude.discover(key, { signal });
+      if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, operation);
+      else await operation();
+      registerClaudeProviders(this.runtime, this.claude, this.credentials);
+    } else if (providerEndpoints[provider]) {
+      const saved = await this.providerCatalog.read(provider, { signal });
+      if (saved) this.publishProviderModels(provider, saved.models);
+      try {
+        const entry = await this.providerCatalog.load(provider, { signal, force });
+        this.publishProviderModels(provider, entry.models);
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!saved || force) throw error;
+      }
+    }
+    return this.catalog().filter(model => model.provider === provider);
+  }
+  async ensureModel(reference, selectedModel) {
+    if (selectedModel) {
+      if (modelRef(selectedModel) !== reference) throw new DefaultAgentError('The saved model does not match this conversation.');
+      if (providerEndpoints[selectedModel.provider]) validatePublicModel(selectedModel);
+      return structuredClone(selectedModel);
+    }
+    let model = this.resolveModel(reference);
+    if (!model && reference) {
+      const provider = reference.split('/')[0];
+      if (providerEndpoints[provider]) {
+        const saved = await this.providerCatalog.read(provider);
+        if (saved) { this.publishProviderModels(provider, saved.models); model = this.resolveModel(reference); }
+      }
+    }
+    if (!model && reference) {
+      await this.browse(reference.split('/')[0]);
+      model = this.resolveModel(reference);
+    }
+    if (!model && reference) throw new DefaultAgentError('The selected model is unavailable. Refresh its provider or choose a model explicitly.');
+    return model;
+  }
   providerName(id) { return providerNames[id] ?? this.config.customServers.find(s => s.id === id)?.url ?? id; }
   async status({ signal } = {}) {
     signal?.throwIfAborted();
     const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId, { signal });
-    signal?.throwIfAborted();
-    if (subscription.connected || await this.credentials.read('anthropic')) {
-      try {
-        const discover = async () => this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key, { signal });
-        if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, discover);
-        else await discover();
-        registerClaudeProviders(this.runtime, this.claude, this.credentials);
-      } catch {
-        signal?.throwIfAborted(); // Cancellation is not an offline inventory fallback.
-        // Keep the bundled aliases available when discovery is offline.
-      }
-    }
     signal?.throwIfAborted();
     return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
   }
@@ -113,7 +150,7 @@ export class DefaultAgentEngine {
   modelOptions() {
     const all = this.catalog();
     const ids = [...this.config.models];
-    const defaultModel = [this.config.defaultModel, this.implicitDefaultModel, all[0]?.id].find(id => all.some(m => m.id === id));
+    const defaultModel = [this.config.defaultModel, all[0]?.id].find(id => all.some(m => m.id === id));
     if (defaultModel && !ids.includes(defaultModel)) ids.unshift(defaultModel);
     return ids.flatMap(id => all.filter(m => m.id === id));
   }
@@ -123,7 +160,7 @@ export class DefaultAgentEngine {
       record.session.setActiveToolsByName([...record.ordinaryTools, ...(this.config.codeMode === 'off' ? [] : ['codemode'])]);
     }
     const visible = this.modelOptions();
-    if (!visible.some(m => m.id === record.selected)) {
+    if (!record.selected && visible.length) {
       record.selected = visible[0]?.id;
       this.persistOptions(record);
     }
@@ -134,14 +171,19 @@ export class DefaultAgentEngine {
   configuration(record, reason) {
     const levels = this.thinkingLevels(record);
     const thinking = record.session.thinkingLevel;
+    const options = this.modelOptions();
+    if (record.session.model && !options.some(model => model.id === record.selected)) {
+      const model = record.session.model;
+      options.push({ id: modelRef(model), name: model.name, provider: model.provider, providerName: this.providerName(model.provider) });
+    }
     return { availableCommands: [{ name: 'compact', description: 'Compact the conversation using the selected native provider, with Pi fallback for unsupported routes.', input: { hint: 'Optional compaction instructions' } }], configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
-      options: this.modelOptions().map(modelOption) },
+      options: options.map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
       { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full Access', description: 'Native Durable workspace tools run without approval prompts.' }] }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
   }
   persistOptions(record) {
-    record.saveOptions({ selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
+    record.saveOptions({ selected: record.selected, selectedModel: record.session.model ? JSON.parse(JSON.stringify(record.session.model)) : null, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
       ...(record.accountID ? { accountID: record.accountID, accountOwned: record.accountOwned === true, credentialIdentity: record.credentialIdentity ?? null } : {}) });
   }
   async sessionDirectory(value) {
@@ -186,16 +228,9 @@ export class DefaultAgentEngine {
         record.resumeNative();
         return record;
       }
-      const connected = new Set((await this.credentials.list()).map(c => c.providerId));
-      const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
-      if (!options.selected && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
-        if ((await this.claude.status()).connected) connected.add('claude-subscription');
-      }
-      if (!hasDefault) this.implicitDefaultModel = this.catalog().find(m => connected.has(m.provider))?.id ?? this.catalog()[0]?.id;
-      const visible = this.modelOptions();
-      const selected = [options.selected, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
-      const model = this.resolveModel(selected);
-      record.selected = model ? modelRef(model) : selected;
+      const selected = options.selected ?? this.config.defaultModel ?? undefined;
+      const model = await this.ensureModel(selected, options.selectedModel);
+      record.selected = selected;
       if (model) await record.session.setModel(model);
       this.normalizeSelection(record);
       this.persistOptions(record);
@@ -225,7 +260,7 @@ export class DefaultAgentEngine {
       record.permission = 'full'; this.persistOptions(record); return this.configuration(record);
     }
     if (option !== 'model') throw new DefaultAgentError('Unknown session option.');
-    const model = this.resolveModel(reference);
+    const model = await this.ensureModel(reference);
     if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Pi Durable.');
     const accounts = await this.credentials.candidates(model.provider);
     const account = accounts.find(a => a.credential && (a.credential.type !== 'oauth' || a.credential.expires > Date.now()));
@@ -283,7 +318,7 @@ export class DefaultAgentEngine {
       this.normalizeSelection(record);
       beforeLeaf = await record.contextLeaf();
       controller.signal.throwIfAborted();
-      const enabled = new Set(this.modelOptions().map(model => model.id));
+      const enabled = new Set([...this.modelOptions().map(model => model.id), record.selected].filter(Boolean));
       const references = [...new Set([record.selected, ...this.config.fallbackModels].filter(id => enabled.has(id)))];
       const attempts = [];
       for (const reference of references) {
@@ -304,7 +339,7 @@ export class DefaultAgentEngine {
             provider === 'claude-subscription' && this.claude.withProfile
               ? this.claude.withProfile(account.credential?.accountId, action) : action());
           const run = async () => {
-          const model = this.resolveModel(reference);
+          const model = reference === record.selected && record.session.model ? record.session.model : await this.ensureModel(reference);
           if (!model) throw new Error('Model is no longer available. Select a model in Settings → Pi Durable.');
           if (isClaude(reference)) {
             if (model.provider === 'anthropic' && !await this.credentials.read('anthropic')) throw new Error('Authentication required.');

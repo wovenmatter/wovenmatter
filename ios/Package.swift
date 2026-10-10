@@ -15,7 +15,7 @@ let package = Package(
     .testTarget(name: "CompanionClientTests", dependencies: ["CompanionClient"]),
     .target(name: "PiDurableRuntime", resources: [.process("Resources")], linkerSettings: [.linkedFramework("JavaScriptCore")]),
     .testTarget(name: "PiDurableRuntimeTests", dependencies: ["PiDurableRuntime", "CompanionInference"]),
-    .target(name: "CompanionInference", resources: [.process("Resources")]),
+    .target(name: "CompanionInference"),
     .testTarget(name: "CompanionInferenceTests", dependencies: ["CompanionInference"]),
   ]
 )

@@ -27,8 +27,9 @@ function cleanEvent(event) {
 export function createInferenceAdapter(engine) {
   const active = new Map();
   const root = join(engine.directory, 'client-inference');
-  async function catalog() {
-    const models = engine.runtime.getModels().filter(model => engine.config.providers.includes(model.provider));
+  async function catalog({ provider, signal } = {}) {
+    if (provider && engine.browse) await engine.browse(provider, { signal });
+    const models = engine.runtime.getModels().filter(model => engine.config.providers.includes(model.provider) && (!provider || model.provider === provider));
     const accounts = [];
     for (const provider of new Set(models.map(model => model.provider))) {
       for (const account of await engine.credentials.candidates(provider)) {
@@ -45,13 +46,16 @@ export function createInferenceAdapter(engine) {
     if (!validID(principalID) || !validID(request?.scope?.conversationID) || !validID(request?.scope?.requestID)
       || !validID(request?.accountID) || !Array.isArray(request?.context?.messages)
       || Buffer.byteLength(JSON.stringify(request)) > 8 * 1024 * 1024) throw new DefaultAgentError('Invalid client inference request.');
-    const model = engine.runtime.getModels().find(model => model.id === request.model?.id && model.provider === request.model?.provider
-      && engine.config.providers.includes(model.provider));
-    if (!model) throw new DefaultAgentError('The selected model is unavailable. No model fallback was attempted.');
+    const conversationKey = hash({ principalID, conversation: request.scope.conversationID });
+    const modelPath = join(root, conversationKey, 'selected-model.json');
+    const savedModel = await readJSON(modelPath, null);
+    const reference = `${request.model?.provider}/${request.model?.id}`;
+    const model = engine.ensureModel ? await engine.ensureModel(reference, savedModel) : engine.runtime.getModels().find(model => model.id === request.model?.id && model.provider === request.model?.provider);
+    if (!model || !engine.config.providers.includes(model.provider)) throw new DefaultAgentError('The selected model is unavailable. No model fallback was attempted.');
+    if (!savedModel) await writePrivateJSON(modelPath, model);
     const account = (await engine.credentials.candidates(model.provider)).find(account => account.id === request.accountID);
     if (!account?.credential) throw new DefaultAgentError('The selected account is unavailable. No account fallback was attempted.');
     if (account.credential.type === 'oauth' && account.credential.borrowed && account.credential.expires <= Date.now()) throw new DefaultAgentError('The selected subscription access has expired. Reconnect its credential owner or sign in on this inference host. No account fallback was attempted.');
-    const conversationKey = hash({ principalID, conversation: request.scope.conversationID });
     const requestKey = hash({ principalID, requestID: request.scope.requestID });
     const credentialIdentity = credentialRouteIdentity({ manifest: { storeID: conversationKey } }, account);
     const fingerprint = hash({ provider: model.provider, model: model.id, account: account.id, credentialIdentity,

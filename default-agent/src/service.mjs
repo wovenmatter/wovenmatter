@@ -68,10 +68,10 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     configurationQueue = pending.catch(() => {});
     return pending;
   }
-  async function inferenceCatalog() {
+  async function inferenceCatalog(options) {
     if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
     inferenceAdapter ??= createInferenceAdapter(await engine());
-    return inferenceAdapter.catalog();
+    return inferenceAdapter.catalog(options);
   }
   async function inferenceStream(request, options) {
     if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');

@@ -351,7 +351,7 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
           const parentNative = record.nativePrepared?.route;
           const principal = chosen.provider === 'claude-subscription' && parentNative?.provider === chosen.provider && parentNative.accountID === chosen.accountID ? parentNative.nativePrincipalIdentity : undefined;
           const saved = { sessionID: randomUUID(), parentSessionID: record.session.sessionId, parentConversationID: rootID, conversationId: conversation.id, name: args.name, task: message,
-            provider: chosen.provider, modelId: chosen.modelId, accountID: chosen.accountID, accountOwned: chosen.account.owned === true,
+            provider: chosen.provider, modelId: chosen.modelId, selectedModel: JSON.parse(JSON.stringify(record.session.model?.provider === chosen.provider && record.session.model?.id === chosen.modelId ? record.session.model : engine.resolveModel(`${chosen.provider}/${chosen.modelId}`))), accountID: chosen.accountID, accountOwned: chosen.account.owned === true,
             ...(identity ? { credentialIdentity: identity } : {}), ...(principal ? { parentNativePrincipalIdentity: principal } : {}), thinking: chosen.thinking,
             ...(record.runID ? { runID: record.runID, originRunID: record.runID } : {}), connection: publicRoute.connection, label: `${publicRoute.connection.name} · ${publicRoute.connection.accountLabel}`, billing: publicRoute.connection.billing };
           Object.assign(await tx.doc(ChildContext, conversation.id), saved);

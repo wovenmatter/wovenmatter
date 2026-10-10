@@ -34,7 +34,7 @@ lines.on('line', line => {
       const engine = await new DefaultAgentEngine({ cwd: process.cwd(), directory, config: payload.config,
         credentials: payload.credentials, credentialAccounts: payload.credentialAccounts, claude: new ClaudeRuntime(authDirectory) }).initialize();
       const adapter = createInferenceAdapter(engine);
-      if (value.action === 'catalog') await send(await adapter.catalog());
+      if (value.action === 'catalog') await send(await adapter.catalog({ provider: value.request?.provider, signal: controller.signal }));
       else if (value.action === 'stream') await adapter.stream(value.request, { principalID: value.principalID, signal: controller.signal, onEvent: send });
       else throw Error('Unknown inference operation.');
       process.exitCode = 0;

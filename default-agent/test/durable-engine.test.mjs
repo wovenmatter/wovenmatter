@@ -50,6 +50,7 @@ test('attached completion includes child reports and children spawned during par
     for (const record of [...engine.sessions.values()]) await record.session.dispose();
     await rm(root, { recursive: true, force: true });
   });
+  engine.publishProviderModels('openai', [{ id: 'gpt-4.1', name: 'Offline fixture', provider: 'openai', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', contextWindow: 16384, maxTokens: 4096, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
   const record = await engine.create();
   let parentCalls = 0, childCalls = 0;
   engine.runtime.streamSimple = (model, _input, options) => {
