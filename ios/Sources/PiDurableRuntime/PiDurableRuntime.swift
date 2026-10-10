@@ -182,6 +182,7 @@ public final class PiDurableRuntime {
 
   private func synchronous(_ operation: String, value: Any) throws -> Any {
     switch operation {
+    case "monotonicTime": return ProcessInfo.processInfo.systemUptime * 1_000
     case "sha256": return SHA256.hash(data: Data((value as? String ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
     case "url":
       guard let value = value as? [String: Any], let input = value["input"] as? String else {

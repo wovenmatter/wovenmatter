@@ -1330,6 +1330,11 @@ final class RemoteWorkspacesModel {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
+        // Re-send the current encrypted vault configuration even after a service
+        // restart. A cached acknowledgement cannot prove its unlock material is
+        // still in memory when the device-scoped restart grant is created.
+        try await synchronizeDefaultAgent(configuration)
+        try requireCurrent(identity)
         // Deterministic dedicated port per configured container; the remote script
         // refuses collisions and never replaces another service's Serve route.
         let portKey = "wovenmatter.execution.https-port." + configuration.id.uuidString.lowercased()

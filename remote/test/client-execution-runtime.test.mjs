@@ -131,4 +131,11 @@ import {createInterface} from 'node:readline';const out=v=>process.stdout.write(
   assert.equal(stopped.status,'completed')
   await until(()=>service.receipt(input.commandID,deviceID),value=>value.status==='completed')
   assert.equal(service.transcript(opened.conversationID).activeRunID,undefined)
+  const unfinished=command('send',{conversationID:opened.conversationID,text:'third'})
+  await service.command(unfinished,principal)
+  await until(()=>service.transcript(opened.conversationID),value=>value.messages.some(item=>item.content==='input 3'))
+  let timer
+  try {await Promise.race([runtime.close(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('shutdown stalled on a native request')),2000)})])}
+  finally {clearTimeout(timer)}
+  await until(()=>service.receipt(unfinished.commandID,deviceID),value=>value.status==='outcomeUnknown')
 })

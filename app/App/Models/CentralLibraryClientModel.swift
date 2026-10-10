@@ -126,6 +126,7 @@ final class CentralLibraryClientModel {
     var composer: String {
         get { (chatDrafts[draftKey] ?? state.chatDrafts[draftKey])?.text ?? "" }
         set {
+            guard !preparingTransition else { return }
             let key = draftKey
             var value = chatDrafts[key] ?? state.chatDrafts[key] ?? .init(text: "")
             value.text = newValue; value.providerID = selectedProviderID
@@ -137,6 +138,7 @@ final class CentralLibraryClientModel {
     var contextNoteID: String {
         get { (chatDrafts[draftKey] ?? state.chatDrafts[draftKey])?.noteID ?? "" }
         set {
+            guard !preparingTransition else { return }
             let key = draftKey
             var draft = chatDrafts[key] ?? state.chatDrafts[key] ?? .init(text: "")
             draft.noteID = newValue.isEmpty ? nil : newValue
@@ -232,10 +234,10 @@ final class CentralLibraryClientModel {
         } catch { errorMessage = error.localizedDescription }
     }
     func startLocalSharing() async {
-        guard !preparingTransition, !localSharingBusy, let localExecution, localHost == nil, let store else { return }
+        guard !preparingTransition, !localSharingBusy, let localExecution, !sharingLocalExecution, let store else { return }
         localSharingBusy = true; defer { localSharingBusy = false }
         do {
-            let host = SecondaryMacExecutionHost(workspace: localExecution, directory: executionDirectory)
+            let host = localHost ?? SecondaryMacExecutionHost(workspace: localExecution, directory: executionDirectory)
             localHost = host
             let previousPort = journal.workspaces[localExecution.descriptor.id]?.endpoint?.port
             try await host.start(preferredHTTPSPort: previousPort)
@@ -247,14 +249,16 @@ final class CentralLibraryClientModel {
             UserDefaults.standard.set(true, forKey: Self.localSharingKey)
             await refresh()
         } catch {
-            localHost?.stop(); try? await localHost?.waitUntilStopped(); localHost = nil
+            localHost?.stop(); try? await localHost?.waitUntilStopped()
             errorMessage = error.localizedDescription
         }
     }
     func stopLocalSharing() async {
+        guard !localSharingBusy else { return }
+        localSharingBusy = true; defer { localSharingBusy = false }
         localHost?.stop()
         do { try await localHost?.waitUntilStopped() } catch { errorMessage = error.localizedDescription; return }
-        localHost = nil; sharingLocalExecution = false; publishedManagement = nil
+        sharingLocalExecution = false; publishedManagement = nil
         UserDefaults.standard.set(false, forKey: Self.localSharingKey)
         if let localExecution, let store {
             do {
@@ -383,6 +387,7 @@ final class CentralLibraryClientModel {
         }
     }
     func editNote(_ note: CompanionNote, title: String? = nil, content: String? = nil, folderID: String? = nil) {
+        guard !preparingTransition else { return }
         var draft = draftNotes[note.id] ?? note
         if let title { draft.title = title }; if let content { draft.content = content }
         if let folderID { draft.folderID = folderID.isEmpty ? nil : folderID }
@@ -396,7 +401,7 @@ final class CentralLibraryClientModel {
         }
     }
     func createNote(kind: NoteArtifactKind = .note) async {
-        guard let store else { return }
+        guard !preparingTransition, let store else { return }
         do {
             let content = try NoteDocument(kind: kind).encoded()
             let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled " + kind.displayName, content: content)
@@ -404,7 +409,7 @@ final class CentralLibraryClientModel {
         } catch { errorMessage = error.localizedDescription }
     }
     func createFolder(_ name: String) async {
-        guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !preparingTransition, let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         do { selectedFolderID = try await store.createFolder(name: name).id; await reload(); section = .folders }
         catch { errorMessage = error.localizedDescription }
     }

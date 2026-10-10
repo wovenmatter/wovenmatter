@@ -72,6 +72,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         acceptsCommands = false
         model.backendStopping = true
         do {
+            try await model.refreshClientExecutionState()
             let persisted = try await database.companionSnapshot()
             guard commandsInFlight == 0, !hasActiveRuns, !persisted.conversations.contains(where: { $0.activeRunID != nil }),
                   model.pendingLocalACPPermissions.isEmpty, model.pendingLocalACPInteractions.isEmpty else {
@@ -151,6 +152,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await task.value
     }
     private func performCapture() async throws {
+        try await model.refreshClientExecutionState()
         guard await model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
         try await reconcileLibrary()
         let snapshot = try await database.companionSnapshot()
@@ -181,6 +183,9 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try persistProjection()
         let ids = Set(snapshot.conversations.map(\.id))
         for id in prior.conversations.keys where !ids.contains(id) && !prior.deletedConversationIDs.contains(id) {
+            // Archiving may race the last polling refresh. Retain terminal native
+            // records before publishing the conversation tombstone.
+            try await captureNativeHistory(conversationID: id)
             let latest = await origin.snapshot()
             try await origin.record(.init(workspaceID: descriptor.id, originSequence: (latest.originSequences[descriptor.id] ?? 0) + 1,
                 conversationID: id, kind: .deletedConversation))

@@ -61,7 +61,7 @@ extension ApplicationModel {
         var earlier: CompanionTranscript?
         switch action {
         case .refresh(let conversationID): id = conversationID
-        case .stop(let conversationID, let runID): id = conversationID; _ = try await client.stop(conversationID: id, runID: runID)
+        case .stop(let conversationID, let runID): id = conversationID; try await cancelCanonicalRun(conversationID: id, runID: runID)
         case .respond(let interaction, let response): id = interaction.conversationID; _ = try await client.respond(interaction, response: response)
         case .configure(let conversationID, let command): id = conversationID; _ = try await client.perform(conversationID: id, action: command)
         case .earlier(let conversationID, let before): id = conversationID; earlier = try await client.earlierTranscript(conversationID: id, before: before)
@@ -115,15 +115,18 @@ extension ApplicationModel {
     /// Called before any native runtime selection or preparation. Imported
     /// execution ownership is looked up live as well as cached for presentation.
     func dispatchFederatedMessage(conversationID: String, input: AgentMessageInput, note: WorkspaceNoteRecord?,
-                                  expectedRunID: String?, requiresIdle: Bool) async throws -> Bool {
+                                  expectedRunID: String?, requiresIdle: Bool, dispatchFence: AgentDispatchFence) async throws -> Bool {
         guard let database = dashboardStore?.database else { return false }
         if let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == conversationID }) {
             try await adoptRegisteredRemoteConversationIfNeeded(conversation)
         }
         guard try await database.companionExecutionOwner(conversationID: conversationID) != nil else { return false }
         guard input.files.isEmpty else { throw CompanionAPIError(code: "attachment_unavailable", message: "Save this file to the workspace before referencing it in this remote conversation.") }
+        try await waitForAgentStop(conversationID: conversationID)
+        try dispatchFence.check()
         let client = try centralExecutionClient()
         try await client.refresh(conversationID: conversationID)
+        try dispatchFence.check()
         let active = try await database.companionFederatedTranscript(conversationID: conversationID)?.activeRunID
         if requiresIdle && active != nil { throw LocalACPSessionDatabaseError.runAlreadyActive }
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }
@@ -134,7 +137,8 @@ extension ApplicationModel {
         if let note, !input.references.contains(where: { $0.resourceID == note.id }) {
             prompt += "\n\nReferenced note: \(note.title)\n\(note.content)"
         }
-        _ = try await client.send(conversationID: conversationID, text: prompt, expectedRunID: expectedRunID ?? active)
+        _ = try await client.send(conversationID: conversationID, text: prompt, expectedRunID: expectedRunID ?? active,
+            beforeDispatch: { try dispatchFence.claimDispatch() })
         return true
     }
 }

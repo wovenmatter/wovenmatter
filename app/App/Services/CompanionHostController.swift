@@ -164,6 +164,9 @@ final class CompanionHostController {
                     do { try await self.refreshExecutionRegistry() }
                     catch { self.errorMessage = error.localizedDescription }
                     await self.retryPendingRevocations()
+                    if let model = self.model, let client = try? model.centralExecutionClient() {
+                        await client.refreshRegisteredWorkspaces()
+                    }
                     if let expiry = self.pairingExpiresAt, expiry <= Date() {
                         self.pairingPayload = nil; self.pairingExpiresAt = nil
                     }

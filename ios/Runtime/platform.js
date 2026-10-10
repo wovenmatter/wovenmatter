@@ -93,7 +93,7 @@ if (!globalThis.setTimeout) {
   globalThis.clearTimeout = id => { timers.delete(id); globalThis.__wmCancelTimer(id); };
 }
 globalThis.__wmTimerFired = id => { const callback = timers.get(id); timers.delete(id); callback?.(); };
-if (!globalThis.performance) globalThis.performance = {now:() => Date.now()};
+if (!globalThis.performance) globalThis.performance = {now:() => nativeSync('monotonicTime',null)};
 
 // TypeBox resolves local JSON Schema references through URL. Foundation supplies parsing;
 // there is no browser navigation, fetch, or access to arbitrary native objects here.

@@ -2534,7 +2534,7 @@ final class ApplicationModel {
         }
 
         if try await dispatchFederatedMessage(conversationID: conversation.id, input: input, note: note,
-            expectedRunID: expectedRunID, requiresIdle: requiresIdle) { return (true, nil) }
+            expectedRunID: expectedRunID, requiresIdle: requiresIdle, dispatchFence: dispatchFence) { return (true, nil) }
 
         let activityID = activeWorkSleepPrevention.beginDispatch()
         defer { activeWorkSleepPrevention.endDispatch(activityID) }
@@ -4182,6 +4182,13 @@ final class ApplicationModel {
         }
     }
 
+    /// The isolated secondary-Mac execution model has no dashboard polling UI.
+    /// Reconcile only run state after a command without starting app services.
+    func refreshClientExecutionState() async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        localRunningConversationIDs = try await dashboardStore.activeAgentConversationIDs()
+    }
+
     func canonicalActiveRunID(conversationID: String) async -> String? {
         try? await dashboardStore?.database.activeRunID(conversationID: conversationID)
     }
@@ -4189,7 +4196,14 @@ final class ApplicationModel {
     func cancelCanonicalRun(conversationID: String, runID: String) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         if try await dashboardStore.database.companionExecutionOwner(conversationID: conversationID) != nil {
-            _ = try await centralExecutionClient().stop(conversationID: conversationID, runID: runID); return
+            backendApplicationService?.recordCompanionStop(conversationID: conversationID)
+            cancelPendingAgentDispatch(conversationID: conversationID)
+            let client = try centralExecutionClient()
+            let barrier = agentStops.begin(conversationID: conversationID) {
+                _ = try await client.stop(conversationID: conversationID, runID: runID)
+            }
+            try await barrier.value
+            return
         }
         guard try await dashboardStore.database.activeRunID(conversationID: conversationID) == runID else {
             throw LocalACPSessionDatabaseError.runNotFound

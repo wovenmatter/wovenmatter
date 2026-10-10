@@ -7,6 +7,57 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct SecondaryMacExecutionWorkspaceTests {
+    @Test func managementRequestCannotCrossAHostRestartAtTheSameEndpoint() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let libraryID = UUID().uuidString.lowercased()
+        try await replica.verifyWorkspace(libraryID)
+        let owner = await replica.snapshot().deviceID
+        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
+            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        let serving = SecondaryServingFixture()
+        let gate = SecondaryManagementGate()
+        let host = SecondaryMacExecutionHost(workspace: workspace, directory: fixture.directory,
+            makeExposure: { serving.exposure() }, afterManagementAuthentication: { await gate.pauseIfRequested() })
+        defer { host.stop() }
+        try await host.start()
+        let originalEndpoint = host.endpoint
+        let originalGrant = try #require(host.managementGrant)
+        let oldHandler = host.requestHandler()
+        let deviceID = UUID().uuidString.lowercased()
+        func request(_ grant: CompanionExecutionManagementGrant, path: String) throws -> CompanionHTTPRequest {
+            .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token,
+                "x-woven-protocol": String(CompanionProtocol.version), "x-woven-library": libraryID,
+                "x-woven-workspace": owner], body: try JSONEncoder().encode(["deviceID": deviceID]))
+        }
+        gate.hold = true
+        let originalRequest = try request(originalGrant, path: "/v1/execution/manage/devices")
+        let pending = Task { await oldHandler(originalRequest) }
+        for _ in 0..<300 where !gate.arrived { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(gate.arrived)
+        host.stop()
+        try await host.start()
+        #expect(host.endpoint == originalEndpoint)
+        let replacementGrant = try #require(host.managementGrant)
+        let handler = host.requestHandler()
+        let response = await handler(try request(replacementGrant, path: "/v1/execution/manage/devices"))
+        #expect(response.status == 200)
+        let credential = try JSONDecoder().decode(CompanionExecutionCredential.self, from: response.body)
+        gate.release()
+        #expect(await pending.value.status == 503)
+        let auth = try CompanionExecutionAuthentication(fileURL: fixture.directory.appending(path: "execution-access.json"))
+        #expect(try await auth.authenticate(bearer: credential.token).deviceID == deviceID)
+        #expect(await handler(originalRequest).status == 403)
+        let revoked = await handler(try request(replacementGrant, path: "/v1/execution/manage/revoke"))
+        #expect(revoked.status == 200)
+        host.stop(); try await host.waitUntilStopped(); try await host.start()
+        let restarted = host.requestHandler()
+        let executionRead = CompanionHTTPRequest(method: "GET", target: "/v1/execution", headers: [
+            "authorization": "Bearer " + credential.token, "x-woven-protocol": String(CompanionProtocol.version),
+            "x-woven-library": libraryID, "x-woven-workspace": owner, "x-woven-device": deviceID])
+        #expect(await restarted(executionRead).status == 401)
+    }
+
     @Test func toolChangesProjectThroughReplicaWithoutOverwritingOfflineEdits() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
@@ -136,4 +187,45 @@ struct SecondaryMacExecutionWorkspaceTests {
         #expect(journal.conversations[conversation]?.workspaceID == owner)
         #expect(journal.entries.values.contains { $0.receipt?.commandID == input.commandID })
     }
+}
+
+@MainActor private final class SecondaryManagementGate {
+    var hold = false
+    var arrived = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func pauseIfRequested() async {
+        guard hold else { return }
+        hold = false; arrived = true
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release() { waiter?.resume(); waiter = nil }
+}
+
+@MainActor private final class SecondaryServingFixture {
+    var child: SecondaryServingChild?
+    func exposure() -> CompanionTailscaleServe {
+        CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
+            probe: { [self] _, arguments in try await probe(arguments) },
+            launch: { [self] _, arguments in
+                let value = SecondaryServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
+                child = value; return value
+            })
+    }
+    func probe(_ arguments: [String]) throws -> Data {
+        if arguments == ["status", "--json"] {
+            return Data(#"{"BackendState":"Running","Self":{"DNSName":"secondary.test.ts.net."}}"#.utf8)
+        }
+        guard let child, child.isRunning else { return Data("{}".utf8) }
+        return try JSONSerialization.data(withJSONObject: ["Foreground": ["fixture": [
+            "TCP": [String(child.port): ["HTTPS": true]],
+            "Web": ["secondary.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]]])
+    }
+}
+
+@MainActor private final class SecondaryServingChild: CompanionServingProcess {
+    let port: Int
+    let target: String
+    var isRunning = true
+    init(port: Int, target: String) { self.port = port; self.target = target }
+    func terminate() { isRunning = false }
 }

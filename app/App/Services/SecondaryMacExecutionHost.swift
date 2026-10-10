@@ -18,32 +18,42 @@ final class SecondaryMacExecutionHost {
     private var starting = false
     private var api: CompanionMacExecutionAPI?
     private var management: CompanionExecutionAuthentication?
+    private var authentication: CompanionExecutionAuthentication?
+    private var managementDeviceIDs: Set<String> = []
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    private let makeExposure: @MainActor () -> CompanionTailscaleServe
+    private let afterManagementAuthentication: @MainActor () async -> Void
     private var generation = UUID()
     private var awakeActivity: NSObjectProtocol?
-    init(workspace: SecondaryMacExecutionWorkspace, directory: URL) { self.workspace = workspace; self.directory = directory }
+    init(workspace: SecondaryMacExecutionWorkspace, directory: URL,
+         makeExposure: @escaping @MainActor () -> CompanionTailscaleServe = { CompanionTailscaleServe() },
+         afterManagementAuthentication: @escaping @MainActor () async -> Void = {}) {
+        self.workspace = workspace; self.directory = directory
+        self.makeExposure = makeExposure; self.afterManagementAuthentication = afterManagementAuthentication
+    }
 
     func start(preferredHTTPSPort: Int? = nil) async throws {
-        guard endpoint == nil, !starting else { return }
+        guard endpoint == nil else { return }
+        guard !starting else { throw CompanionAPIError(code: "starting", message: "Execution sharing is still starting or stopping. Retry shortly.") }
         starting = true
         generation = UUID(); let attempt = generation
-        defer { if generation == attempt { starting = false } }
+        defer { starting = false; resumeIdleWaiters() }
         for previous in stoppingExposures { try await previous.waitUntilStopped() }
         stoppingExposures.removeAll()
         guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-        let authentication = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "execution-access.json"))
-        let management = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "management-access.json"))
-        self.management = management
-        let server = CompanionHTTPServer { [weak self] request in
-            guard let self else { return .error("unavailable", "Execution sharing stopped.", status: 503) }
-            return await self.handle(request, attempt: attempt)
-        }
+        if authentication == nil { authentication = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "execution-access.json")) }
+        if management == nil { management = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "management-access.json")) }
+        guard let authentication, let management else { throw CancellationError() }
+        let server = CompanionHTTPServer(handler: requestHandler())
         self.server = server
-        let exposure = CompanionTailscaleServe(); self.exposure = exposure
+        let exposure = makeExposure(); self.exposure = exposure
         do {
             let port = try await server.start()
+            guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
             let endpoint = try await exposure.start(loopbackPort: port, preferredHTTPSPort: preferredHTTPSPort)
             guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
             try await workspace.setEndpoint(endpoint)
+            guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
             let descriptor = workspace.descriptor
             let api = CompanionMacExecutionAPI(database: workspace.database,
                 commands: SecondaryMacExecutionCommands(workspace: workspace), authentication: authentication,
@@ -53,6 +63,10 @@ final class SecondaryMacExecutionHost {
             inference = CompanionInferenceHost(authentication: authentication, descriptor: descriptor, directory: directory,
                 isActive: { [weak self] in self?.generation == attempt && self?.endpoint != nil })
             let token = try await management.provision(deviceID: descriptor.libraryID, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
+            guard generation == attempt, !Task.isCancelled else {
+                try await management.revoke(deviceID: descriptor.libraryID)
+                throw CancellationError()
+            }
             managementGrant = .init(workspaceID: descriptor.id, endpoint: endpoint, token: token)
             awakeActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled, .userInitiatedAllowingIdleSystemSleep], reason: "Share this Mac’s Woven Matter execution workspace")
         } catch {
@@ -63,7 +77,7 @@ final class SecondaryMacExecutionHost {
         }
     }
     func stop() {
-        generation = UUID(); starting = false; endpoint = nil; managementGrant = nil; api = nil; inference = nil
+        generation = UUID(); endpoint = nil; managementGrant = nil; api = nil; inference = nil
         server?.stop(); server = nil
         if let exposure {
             exposure.stop()
@@ -73,11 +87,29 @@ final class SecondaryMacExecutionHost {
         if let awakeActivity { ProcessInfo.processInfo.endActivity(awakeActivity); self.awakeActivity = nil }
     }
     func waitUntilStopped() async throws {
-        for exposure in stoppingExposures { try await exposure.waitUntilStopped() }
-        stoppingExposures.removeAll()
+        if starting || !managementDeviceIDs.isEmpty {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+        // A cancelled startup can add its owned exposure while unwinding. Wait
+        // for startup first, then drain the complete cleanup set before release.
+        let pending = stoppingExposures
+        for exposure in pending { try await exposure.waitUntilStopped() }
+        stoppingExposures.removeAll { value in pending.contains { $0 === value } }
+    }
+    private func resumeIdleWaiters() {
+        guard !starting, managementDeviceIDs.isEmpty else { return }
+        let waiters = idleWaiters; idleWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+    func requestHandler() -> @MainActor @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse {
+        let attempt = generation
+        return { [weak self] request in
+            guard let self else { return .error("unavailable", "Execution sharing stopped.", status: 503) }
+            return await self.handle(request, attempt: attempt)
+        }
     }
     private func handle(_ request: CompanionHTTPRequest, attempt: UUID) async -> CompanionHTTPResponse {
-        guard generation == attempt, let api, let endpoint else { return .error("unavailable", "Execution sharing is starting or stopped.", status: 503) }
+        guard generation == attempt, let api, endpoint != nil else { return .error("unavailable", "Execution sharing is starting or stopped.", status: 503) }
         let target = URLComponents(string: "http://localhost" + request.target)?.path ?? ""
         let path = target.hasPrefix("/wovenmatter/") ? String(target.dropFirst("/wovenmatter".count)) : target
         if path.hasPrefix("/v1/inference/"), let inference { return await inference.handle(request) }
@@ -94,11 +126,28 @@ final class SecondaryMacExecutionHost {
             struct Device: Decodable { let deviceID: String }
             let device = try JSONDecoder().decode(Device.self, from: request.body)
             guard UUID(uuidString: device.deviceID) != nil else { return .error("invalid_device", "A device UUID is required.", status: 400) }
-            // Recheck serving generation after crossing the authentication actor.
-            guard self.endpoint == endpoint else { return .error("unavailable", "Execution sharing stopped.", status: 503) }
-            if path == "/v1/execution/manage/devices" { return try .json(try await api.provision(deviceID: device.deviceID)) }
+            await afterManagementAuthentication()
+            // The URL may be identical after a restart; only the exact serving
+            // generation authorizes work admitted before crossing an actor.
+            guard generation == attempt, endpoint != nil else { return .error("unavailable", "Execution sharing stopped.", status: 503) }
+            guard !managementDeviceIDs.contains(device.deviceID) else {
+                return .error("operation_in_progress", "This device has another enrollment or revocation in progress. Retry shortly.", status: 409)
+            }
+            managementDeviceIDs.insert(device.deviceID)
+            defer { managementDeviceIDs.remove(device.deviceID); resumeIdleWaiters() }
+            if path == "/v1/execution/manage/devices" {
+                let credential = try await api.provision(deviceID: device.deviceID)
+                guard generation == attempt, endpoint != nil else {
+                    // Keep the device gate until cleanup completes so this cannot
+                    // revoke a replacement enrollment from the next generation.
+                    try await api.revoke(deviceID: device.deviceID)
+                    return .error("unavailable", "Execution sharing stopped during enrollment.", status: 503)
+                }
+                return try .json(credential)
+            }
             if path == "/v1/execution/manage/revoke" {
                 try await api.revoke(deviceID: device.deviceID)
+                guard generation == attempt, endpoint != nil else { return .error("unavailable", "Execution sharing stopped during revocation.", status: 503) }
                 return try .json(["revoked": true])
             }
             return .error("not_found", "Unknown management operation.", status: 404)

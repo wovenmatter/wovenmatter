@@ -231,7 +231,8 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       else await Promise.race([(async()=>{
         let failure
         try {await rpc(channel,'session/prompt',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID}},command.commandID)} catch(error){failure=error}
-        while(channel.busy||channel.pendingInputs)await delay(25)
+        while(!closed&&!channel.stopped&&(channel.busy||channel.pendingInputs))await delay(25)
+        if(closed||channel.stopped)throw fail('The native workspace session stopped.')
         if(failure||channel.run?.nativeError)throw failure??channel.run.nativeError
       })(),completion.promise])
     } finally {await archive?.close();channel.run=null;channel.callbacks.clear()}
@@ -332,5 +333,5 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     return isExecutionEnabled()?values:values.map(value=>({...value,available:false,canStart:false,unavailableReason:'Background execution is disabled for this workspace.'}))
   }
   return {create,adopt,run,stop,steer,respond,providers,settings,configure,
-    async capabilities({native,runtimeKind}){const value=(await providers()).find(item=>item.runtimeKind===runtimeKind);return value&&(['codex','claude_code'].includes(runtimeKind)?{...value,canSteer:native.steeringSupported===true,activeInputMode:native.steeringSupported?'steer':'notNegotiated'}:value)},async cancelActive(){for(const job of nativeJobs.values())job.controller.abort();await Promise.all([defaultAgent.cancelActive(),durableACP.stopAll()])},async close(){closed=true;for(const job of nativeJobs.values())job.controller.abort();await defaultAgent.cancelActive();await durableACP.stopAll();await Promise.allSettled([...channels.values()].map(channel=>channel.pump))}}
+    async capabilities({native,runtimeKind}){const value=(await providers()).find(item=>item.runtimeKind===runtimeKind);return value&&(['codex','claude_code'].includes(runtimeKind)?{...value,canSteer:native.steeringSupported===true,activeInputMode:native.steeringSupported?'steer':'notNegotiated'}:value)},async cancelActive(){for(const job of nativeJobs.values())job.controller.abort();await Promise.all([defaultAgent.cancelActive(),durableACP.stopAll()])},async close(){closed=true;for(const channel of channels.values()){channel.stopped=true;const error=fail('The native workspace service is shutting down.');for(const request of channel.pending.values())request.reject(error);channel.pending.clear();channel.run?.completion.reject(error)}for(const job of nativeJobs.values())job.controller.abort();await defaultAgent.cancelActive();await durableACP.stopAll();await Promise.allSettled([...channels.values()].map(channel=>channel.pump))}}
 }

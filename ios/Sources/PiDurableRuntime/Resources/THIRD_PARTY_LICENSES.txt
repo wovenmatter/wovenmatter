@@ -1,5 +1,5 @@
-Pi Durable, Pi AI and Chord 1.0.3
-https://github.com/earendil-works/pi/tree/v1.0.3
+Pi Durable, Pi AI and Chord 1.1.0
+https://github.com/earendil-works/pi/tree/v1.1.0
 MIT License
 Copyright (c) 2025 Mario Zechner
 

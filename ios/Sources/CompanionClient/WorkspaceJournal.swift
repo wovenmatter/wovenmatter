@@ -310,7 +310,10 @@ public actor WorkspaceClient {
   }
   public func submit(_ requested: CompanionCommand) async throws -> CompanionCommandReceipt {
     try await verify()
-    let command = try await store.journal.rememberCommand(requested, workspaceID: workspaceID)
+    let saved = await store.journal.commandRecords(workspaceID: workspaceID).first { $0.id == requested.commandID }?.command
+    let command = try await store.journal.rememberCommand(saved ?? requested, workspaceID: workspaceID)
+    // An explicit retry always uses the persisted payload, even if the composer
+    // has since changed. Recording a different payload under that ID is rejected.
     // Recover an acknowledgement before resubmitting the exact same command.
     let receipt: CompanionCommandReceipt
     if let existing = try await transport.receipt(command.commandID) { receipt = existing }

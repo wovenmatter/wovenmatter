@@ -91,6 +91,11 @@ struct FederatedConversationPane: View {
                 }
             }.padding(20)
         }
+        .onChange(of: snapshot?.online) { _, _ in
+            // Switching between the owner's live history and the central archive
+            // also switches the opaque pagination cursor's authority.
+            olderMessages = []; olderCursor = nil; hasLoadedEarlier = false
+        }
         .task(id: conversation.id) {
             olderMessages = []; olderCursor = nil; hasLoadedEarlier = false
             while !Task.isCancelled {

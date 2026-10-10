@@ -20,6 +20,8 @@ final class CentralExecutionClient {
     private let saveCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
     private let onChange: @MainActor () async -> Void
     private var transports: [String: any ExecutionWorkspaceTransport] = [:]
+    private var nextBackgroundRefresh: [String: Date] = [:]
+    private var backgroundRefreshInProgress = false
     private var transportEndpoints: [String: URL] = [:]
     private var refreshTasks: [String: Task<Void, any Error>] = [:]
     private(set) var workspaceByConversation: [String: CompanionExecutionWorkspace] = [:]
@@ -46,6 +48,36 @@ final class CentralExecutionClient {
         return descriptor
     }
 
+    /// Background library ingestion does not depend on a selected conversation.
+    /// Only enrolled endpoints participate; this never launches a workspace.
+    func refreshRegisteredWorkspaces() async {
+        guard !backgroundRefreshInProgress else { return }
+        backgroundRefreshInProgress = true
+        defer { backgroundRefreshInProgress = false }
+        guard let workspaces = try? await database.companionExecutionWorkspaces() else { return }
+        for workspace in workspaces where !workspace.deleted && workspace.endpoint != nil &&
+            !workspace.capabilities.contains("history.central.v1") {
+            guard !Task.isCancelled else { return }
+            guard nextBackgroundRefresh[workspace.id].map({ $0 <= Date() }) ?? true else { continue }
+            do {
+                if let pending = refreshTasks[workspace.id] { try await pending.value }
+                else {
+                    let task = Task { try await self.replay(workspace: workspace) }
+                    refreshTasks[workspace.id] = task
+                    do { try await task.value; refreshTasks.removeValue(forKey: workspace.id) }
+                    catch { refreshTasks.removeValue(forKey: workspace.id); throw error }
+                }
+                pending[workspace.id] = try await transport(for: workspace).pending()
+                onlineWorkspaces.insert(workspace.id); errors.removeValue(forKey: workspace.id)
+                nextBackgroundRefresh[workspace.id] = Date().addingTimeInterval(10)
+            } catch {
+                if case MobileConnectionError.revoked = error { transports.removeValue(forKey: workspace.id) }
+                onlineWorkspaces.remove(workspace.id); errors[workspace.id] = error.localizedDescription
+                nextBackgroundRefresh[workspace.id] = Date().addingTimeInterval(45)
+            }
+        }
+    }
+
     func refresh(conversationID: String) async throws {
         guard let descriptor = try await workspace(conversationID: conversationID) else { return }
         do {
@@ -61,7 +93,7 @@ final class CentralExecutionClient {
             // through replay, where origin identity and sequence are validated.
             let transcript = try await transport.transcript(conversationID)
             guard transcript.conversationID == conversationID else { throw MobileConnectionError.invalidResponse }
-            transcripts[conversationID] = transcript
+            transcripts[conversationID] = Self.markCursor(transcript, origin: "owner")
             capabilities[conversationID] = try await transport.capabilities(conversationID)
             pending[descriptor.id] = try await transport.pending()
             onlineWorkspaces.insert(descriptor.id); errors.removeValue(forKey: descriptor.id)
@@ -69,7 +101,9 @@ final class CentralExecutionClient {
             if case MobileConnectionError.revoked = error { transports.removeValue(forKey: descriptor.id) }
             onlineWorkspaces.remove(descriptor.id); errors[descriptor.id] = error.localizedDescription
             // Keep the last projection visible when its execution owner is offline.
-            if transcripts[conversationID] == nil { transcripts[conversationID] = try? await database.companionFederatedTranscript(conversationID: conversationID) }
+            if let saved = try? await database.companionFederatedTranscript(conversationID: conversationID) {
+                transcripts[conversationID] = Self.markCursor(saved, origin: "library")
+            }
             throw error
         }
     }
@@ -104,9 +138,11 @@ final class CentralExecutionClient {
         let credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: identity.libraryID,
             workspaceID: workspace.id, deviceID: identity.hostDeviceID, token: issued.token)
         let transport = try makeTransport(credential)
+        // Provisioning has acknowledged this scoped grant. Preserve it before
+        // probing reachability so a lost probe does not rotate it on reconnect.
+        try saveCredential(credential)
         let remote = try await transport.identity()
         guard remote.id == workspace.id, remote.libraryID == identity.libraryID else { throw MobileStore.Failure.wrongWorkspace }
-        try saveCredential(credential)
         transports[workspace.id] = transport; transportEndpoints[workspace.id] = remote.endpoint
         return transport
     }
@@ -114,6 +150,7 @@ final class CentralExecutionClient {
     private func replay(workspace: CompanionExecutionWorkspace) async throws {
         let identity = try await database.companionLibraryIdentity()
         let transport = try await transport(for: workspace)
+        var imported = false
         for _ in 0..<100 {
             let cursor = try await database.companionExecutionOriginCursor(workspaceID: workspace.id)
             let page = try await transport.events(after: cursor)
@@ -133,15 +170,16 @@ final class CentralExecutionClient {
                     batch.append(entry); bytes += size
                 }
                 _ = try await database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: batch), deviceID: identity.hostDeviceID)
-                offset += batch.count
+                offset += batch.count; imported = true
             }
             if !page.hasMore { break }
         }
-        await onChange()
+        if imported { await onChange() }
     }
 
     @discardableResult
-    func send(conversationID: String, text: String, expectedRunID: String? = nil) async throws -> CompanionCommandReceipt {
+    func send(conversationID: String, text: String, expectedRunID: String? = nil,
+              beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let workspace = try await requiredWorkspace(conversationID)
         let identity = try await database.companionLibraryIdentity()
         let kind: CompanionCommand.Kind = expectedRunID == nil ? .send : .steer
@@ -151,7 +189,7 @@ final class CentralExecutionClient {
         }
         let command = existing?.command ?? CompanionCommand(deviceID: identity.hostDeviceID, kind: kind,
             conversationID: conversationID, runID: expectedRunID, text: text, libraryID: identity.libraryID, workspaceID: workspace.id)
-        return try await submit(command, workspace: workspace)
+        return try await submit(command, workspace: workspace, beforeDispatch: beforeDispatch)
     }
 
     @discardableResult
@@ -176,8 +214,20 @@ final class CentralExecutionClient {
         return try await transport(for: workspace).readWorkspace(request)
     }
     func earlierTranscript(conversationID: String, before: String) async throws -> CompanionTranscript {
+        if before.hasPrefix("library:") {
+            guard let saved = try await database.companionFederatedTranscript(conversationID: conversationID,
+                before: String(before.dropFirst("library:".count))) else { throw MobileConnectionError.invalidResponse }
+            return Self.markCursor(saved, origin: "library")
+        }
+        guard before.hasPrefix("owner:") else { throw MobileConnectionError.invalidResponse }
         let workspace = try await requiredWorkspace(conversationID)
-        return try await transport(for: workspace).transcript(conversationID, before: before)
+        let page = try await transport(for: workspace).transcript(conversationID, before: String(before.dropFirst("owner:".count)))
+        return Self.markCursor(page, origin: "owner")
+    }
+    private static func markCursor(_ transcript: CompanionTranscript, origin: String) -> CompanionTranscript {
+        var value = transcript
+        value.olderCursor = transcript.olderCursor.map { origin + ":" + $0 }
+        return value
     }
     @discardableResult
     func perform(conversationID: String, action: CompanionWorkspaceAction) async throws -> CompanionCommandReceipt {
@@ -192,7 +242,8 @@ final class CentralExecutionClient {
         }
         return workspace
     }
-    private func submit(_ requested: CompanionCommand, workspace: CompanionExecutionWorkspace) async throws -> CompanionCommandReceipt {
+    private func submit(_ requested: CompanionCommand, workspace: CompanionExecutionWorkspace,
+                        beforeDispatch: @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) &&
             $0.command.kind == requested.kind && $0.command.conversationID == requested.conversationID &&
@@ -204,7 +255,7 @@ final class CentralExecutionClient {
         let transport = try await transport(for: workspace)
         let receipt: CompanionCommandReceipt
         if let existing = try await transport.receipt(command.commandID) { receipt = existing }
-        else { receipt = try await transport.command(command) }
+        else { try beforeDispatch(); receipt = try await transport.command(command) }
         guard receipt.commandID == command.commandID, receipt.deviceID == command.deviceID,
               receipt.workspaceID == nil || receipt.workspaceID == workspace.id else { throw MobileConnectionError.invalidResponse }
         try await commandJournal.rememberReceipt(receipt, workspaceID: workspace.id)

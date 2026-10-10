@@ -44,7 +44,7 @@ fi
 xcodebuild -quiet -project "${repo_root}/app/WovenMatter.xcodeproj" \
   -scheme WovenMatter -configuration Debug -destination "platform=macOS,arch=$(uname -m)" \
   -derivedDataPath "${cache_root}/DerivedData" \
-  WOVENMATTER_DEV_PRODUCT_NAME="Woven Matter Companion Test" WOVENMATTER_DEV_BUNDLE_ID=com.wovenmatter.macos.companion-test \
+  WOVENMATTER_DEV_PRODUCT_NAME="Woven Matter Companion Test" WOVENMATTER_DEV_BUNDLE_ID=wovenmatter.desktop.dev.companion-test \
   CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual \
   "CODE_SIGN_IDENTITY=$sign_identity" OTHER_CODE_SIGN_FLAGS=--timestamp=none build
 app="${cache_root}/DerivedData/Build/Products/Debug/Woven Matter Companion Test.app"

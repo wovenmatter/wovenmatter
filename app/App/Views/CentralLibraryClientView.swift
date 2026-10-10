@@ -54,6 +54,7 @@ struct CentralLibraryClientView: View {
             detail.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.palette.workspace)
         }
         .navigationSplitViewStyle(.balanced)
+        .disabled(model.preparingTransition)
         .task { await model.run() }
         .alert("Woven Matter", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }

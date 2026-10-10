@@ -101,8 +101,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for (const row of db.prepare('SELECT body FROM conversations').all()) {
       const record = JSON.parse(row.body)
       if (record.conversation.activeRunID) {
-        for(const activity of record.transcript.activities)if(activity.runID===command.runID&&activity.status==='running')activity.status=stopped?'cancelled':error?'failed':'completed'
-    delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
+        for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
+        delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
         for (const message of record.transcript.messages) if (message.status === 'running') message.status = 'interrupted'
         publish(record)
       }
@@ -354,14 +354,14 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       record.conversation.preview = content.slice(-256)
     } else if (update.sessionUpdate === 'agent_thought_chunk') {
-      const id=String(update._meta?.wovenThoughtID??runID+':thinking')
+      const id=runID+':'+String(update._meta?.wovenThoughtID??'thinking')
       let activity=record.transcript.activities.find(item=>item.id===id)
       if(!activity){activity={id,runID,title:'Thinking',status:'running',detail:''};record.transcript.activities.push(activity)}
       const value=update.content?.text??''
       activity.detail=textParts(update._meta?.wovenThoughtSnapshot?value:(activity.detail??'')+value)[0]
       changedActivities.push(id)
     } else if (['tool_call','tool_call_update'].includes(update.sessionUpdate)) {
-      const id = String(update.toolCallId ?? randomUUID())
+      const id = runID+':'+String(update.toolCallId ?? randomUUID())
       let activity = record.transcript.activities.find(item => item.id === id)
       if (!activity) { activity = {id,runID,title:textParts(update.title ?? 'Tool')[0],status:'running'}; record.transcript.activities.push(activity) }
       activity.status = update.status === 'completed' ? 'completed' : update.status === 'failed' ? 'failed' : 'running'

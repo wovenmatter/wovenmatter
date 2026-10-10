@@ -31,11 +31,20 @@ struct CentralExecutionClientTests {
         let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == conversation.id })
         await #expect(throws: (any Error).self) { _ = try await fixture.model.dispatchAgentMessage(conversation: record, input: .init(text: "Exactly once")) }
         fixture.model.federatedExecutionClient = try make()
+        await fixture.model.federatedExecutionClient?.refreshRegisteredWorkspaces()
+        #expect(try await fixture.database.companionFederatedTranscript(conversationID: conversation.id)?.messages.map(\.content) == ["Exactly once"])
         let backend = BackendApplicationService(model: fixture.model)
         let request = BackendRPCRequest(method: "application.command", payload: try JSONEncoder().encode(
-            BackendApplicationCommand.sendMessage(conversationID: conversation.id, input: .init(text: "Exactly once"), noteID: nil)))
+            BackendApplicationCommand.sendMessageFenced(conversationID: conversation.id, input: .init(text: "Exactly once"), noteID: nil,
+                admission: .init(instanceID: backend.instanceID, clientID: UUID(), stopSequence: 0, observedStopRevision: 0))))
         let response = await backend.handle(request)
         #expect(response.error == nil, "\(response.error ?? "")")
+        #expect(await remote.executions == 1)
+        let stoppedPreparation = AgentDispatchFence(); stoppedPreparation.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await fixture.model.federatedExecutionClient?.send(conversationID: conversation.id, text: "Stopped before transport",
+                beforeDispatch: { try stoppedPreparation.claimDispatch() })
+        }
         #expect(await remote.executions == 1)
         #expect(await fixture.recorder.deliveries.isEmpty)
         let state = try await fixture.model.performFederatedExecution(.refresh(conversationID: conversation.id))
@@ -56,14 +65,29 @@ struct CentralExecutionClientTests {
         let origin = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
         _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [origin]), deviceID: identity.hostDeviceID)
-        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin])
+        let history = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
+            kind: .transcript, transcript: .init(conversationID: conversation.id, messages: (0..<100).map { index in
+                .init(id: UUID().uuidString.lowercased(), conversationID: conversation.id, role: "user", content: "Saved \(index)")
+            }))
+        _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [history]), deviceID: identity.hostDeviceID)
+        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin, history])
         await remote.breakReplay()
         let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: fixture.directory.appending(path: "commands.json"),
             provision: { _ in .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
             makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
         await #expect(throws: (any Error).self) { try await client.refresh(conversationID: conversation.id) }
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 1)
+        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 2)
         #expect(client.onlineWorkspaces.isEmpty)
+        let saved = try #require(client.transcripts[conversation.id])
+        let cursor = try #require(saved.olderCursor)
+        #expect(cursor.hasPrefix("library:"))
+        let earlier = try await client.earlierTranscript(conversationID: conversation.id, before: cursor)
+        #expect(saved.messages.count + earlier.messages.count == 100)
+        await client.refreshRegisteredWorkspaces()
+        let attempts = await remote.eventRequests
+        await client.refreshRegisteredWorkspaces()
+        #expect(await remote.eventRequests == attempts)
+        #expect(client.errors[workspace.id] != nil)
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
 }
@@ -74,6 +98,7 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     var entries: [CompanionJournalEntry]
     var receipts: [String: CompanionCommandReceipt] = [:]
     var executions = 0
+    var eventRequests = 0
     var lostACK = false
     var broken = false
     init(workspace: CompanionExecutionWorkspace, conversation: CompanionConversation, entries: [CompanionJournalEntry]) {
@@ -89,6 +114,7 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
         entries.last(where: { $0.transcript != nil })?.transcript ?? .init(conversationID: id)
     }
     func events(after: Int64) -> CompanionJournalPage {
+        eventRequests += 1
         let available = entries.filter { $0.originSequence > after }
         return .init(libraryID: workspace.libraryID, cursor: after + Int64(available.count) + (broken ? 1 : 0), entries: available)
     }

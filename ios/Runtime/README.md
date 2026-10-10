@@ -1,13 +1,13 @@
 # On-device Pi Durable
 
 The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, and `chord`
-1.0.3 packages already locked in `default-agent/package-lock.json`. It does not
+1.1.0 packages already locked in `default-agent/package-lock.json`. It does not
 ship Node, run a remote agent loop, or download executable SDK code. Rebuild
 with `node scripts/build-ios-pi-runtime.mjs`; use `--check` to verify committed
 resources match the reviewed sources and installed locked dependencies.
 
 `PiDurableRuntime` serializes the SDK on JavaScriptCore. Swift provides secure
-random bytes, UTF-8, schema URL resolution, timers, a private filesystem, and
+random bytes, UTF-8, schema URL resolution, monotonic timing, timers, a private filesystem, and
 asynchronous inference/tool capabilities. The filesystem exposes only that
 conversation's directory, excludes symlink escapes, takes an exclusive writer
 lock, and fsyncs journal files and directory entries before exposing commits.
@@ -36,7 +36,9 @@ scheduler. `submit(text:requestID:)` durably admits input and returns its receip
 A caller must persist its request ID **before** submitting and recover a lost
 acknowledgement through `submission(requestID:)`; retrying an existing request
 ID never submits twice. `wait` returns a settled receipt for both successful
-and unanswered runs. `unanswered` must not be presented as completed.
+and unanswered runs. Both `submit` (including a deduplicated request) and `wait`
+enable SDK scheduling; use `submission` for read-only receipt recovery.
+`unanswered` must not be presented as completed.
 
 `abort()` is a durable user Stop and cascades through owned children.
 `close()` suspends pending work without cancelling the durable run; reopen a
@@ -69,6 +71,16 @@ Code mode supplies `tools`, `ALL_TOOLS`, `text()`, `store()` and `load()`.
 Stored JSON is committed to the conversation after a successful invocation.
 The code tool is not replay-safe; a process death during execution cannot
 re-run unknown side effects. Output and tool argument sizes are bounded.
+
+## Reviewed SDK generation
+
+The 1.1.0 update retains the upstream JSONL storage implementation, including
+its new ascending/descending cursor contract. Native history keeps the default
+newest-first entry order and passes each opaque cursor back unchanged. No host
+adapter uses the changed `TaskRuntime.context` cutoff signature. Tool execution
+timing uses native system uptime rather than the adjustable wall clock. The
+same model/tool bridge runs the updated SDK context retention and system-message
+ordering; credentials and execution ownership retain their native boundaries.
 
 ## Verification
 

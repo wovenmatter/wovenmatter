@@ -112,10 +112,12 @@ test('restart fences accepted unfinished commands without executing them again',
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
   const input=f.command('send',{conversationID:opened.conversationID,text:'once'})
   await f.service.command(input,f.principal);await turn()
+  f.runs[0].publish({sessionUpdate:'tool_call',toolCallId:'running-tool',title:'Read',status:'running'})
   await f.restart()
   assert.equal(f.service.receipt(input.commandID,f.enrollment.deviceID).status,'outcomeUnknown')
   assert.equal((await f.service.command(input,f.principal)).status,'outcomeUnknown')
   assert.equal(f.calls.length,1)
+  assert.equal(f.service.transcript(opened.conversationID).activities[0].status,'interrupted')
   assert.equal(f.service.transcript(opened.conversationID).activeRunID,undefined)
 })
 
@@ -173,4 +175,19 @@ test('identical native chunks keep distinct journal record identities within and
   assert.equal(records.length,4)
   assert.equal(new Set(records.map(record=>record.recordID)).size,4)
   assert.equal(new Set(records.map(record=>record.sha256)).size,1)
+})
+
+test('tool and thinking activities remain scoped to each run and settle with it',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  for(let index=0;index<2;index++) {
+    await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
+    f.runs[index].publish({sessionUpdate:'agent_thought_chunk',content:{text:'Thinking '+index},_meta:{wovenThoughtID:'reused-native-id'}})
+    f.runs[index].publish({sessionUpdate:'tool_call',toolCallId:'reused-tool',title:'Read',status:'running'})
+    f.runs[index].done.resolve();await turn()
+  }
+  const activities=f.service.transcript(opened.conversationID).activities
+  assert.equal(activities.length,4)
+  assert.equal(new Set(activities.map(item=>item.id)).size,4)
+  assert.ok(activities.every(item=>item.status==='completed'))
+  assert.deepEqual(activities.filter(item=>item.title==='Thinking').map(item=>item.detail),['Thinking 0','Thinking 1'])
 })

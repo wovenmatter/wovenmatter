@@ -315,3 +315,30 @@ test('oversized native tool previews never split a Unicode surrogate pair',()=>{
     assert.equal(source.slice(limit-1,limit+1),'🙂')
   }
 })
+
+test('direct OpenCode projects native text snapshots and tool/thinking activity without duplicate final text',async()=>{
+  const fixture=openCodeFixture({pages:[{data:[{id:'msg_answer',type:'assistant',content:[
+    {id:'thought',type:'reasoning',text:'Considering the file'},
+    {id:'tool',type:'tool',name:'read',state:{status:'completed',output:'file contents'}},
+    {id:'text',type:'text',text:'Result'}]}]}]})
+  const updates=[];fixture.context.publish=update=>updates.push(update);fixture.context.interactive={publish:()=>{},bind:()=>{}}
+  await fixture.execute(fixture.context)
+  assert.equal(text(updates),'Result')
+  assert.equal(updates.find(update=>update.sessionUpdate==='agent_message_chunk')._meta.wovenAssistantSnapshot,true)
+  assert.equal(updates.find(update=>update.sessionUpdate==='agent_thought_chunk').content.text,'Considering the file')
+  assert.equal(updates.find(update=>update.sessionUpdate==='tool_call_update').status,'completed')
+  assert.ok(nativeRecords(updates).some(record=>record.id==='message:msg_answer'))
+})
+
+test('direct Hermes exposes native tool activity while preserving the native archive',async()=>{
+  const fixture=hermesFixture({events:[{type:'tool.start',payload:{tool_id:'tool1',name:'read',context:'Reading'}},
+    {type:'tool.complete',payload:{tool_id:'tool1',name:'read',result:{text:'done'},result_text:'done'}},
+    {type:'message.complete',payload:{text:'Finished',status:'success'}}]})
+  const updates=[];fixture.context.publish=update=>updates.push(update);fixture.context.interactive={publish:()=>{},bind:()=>{}}
+  await fixture.execute(fixture.context)
+  const tools=updates.filter(update=>update.sessionUpdate==='tool_call_update')
+  assert.deepEqual(tools.map(update=>update.status),['running','completed'])
+  assert.ok(tools.every(update=>update.toolCallId==='tool1'))
+  assert.equal(text(updates),'Finished')
+  assert.ok(nativeRecords(updates).some(record=>record.kind==='tool.complete'))
+})
