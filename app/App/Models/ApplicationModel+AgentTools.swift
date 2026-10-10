@@ -84,7 +84,7 @@ extension ApplicationModel {
             for request in pendingLocalACPInteractions {
                 let kind: ProgramStatus.Kind = switch request.request {
                 case .plan: .permission
-                case .questions: .question
+                case .questions, .form: .question
                 case .secret: .auth
                 }
                 if let delivery = try await database.recordCoordinationNeedsInput(sessionID: request.conversationID,

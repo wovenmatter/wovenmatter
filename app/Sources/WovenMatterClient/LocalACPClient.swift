@@ -39,10 +39,12 @@ public struct LocalACPPermissionRequest: Codable, Equatable, Sendable {
 public struct LocalACPQuestionOption: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let label: String
+    public let detail: String?
 
-    public init(id: String, label: String) {
+    public init(id: String, label: String, detail: String? = nil) {
         self.id = id
         self.label = label
+        self.detail = detail
     }
 }
 
@@ -93,12 +95,14 @@ public struct LocalACPPlanRequest: Codable, Equatable, Sendable {
 }
 
 public enum LocalACPInteractionRequest: Codable, Equatable, Sendable {
+    case form(LocalACPFormRequest)
     case questions(LocalACPQuestionRequest)
     case plan(LocalACPPlanRequest)
     case secret(prompt: String)
 }
 
 public enum LocalACPInteractionResponse: Codable, Equatable, Sendable {
+    case formValues([String: LocalACPFormValue])
     case answers([String: LocalACPQuestionAnswer])
     case planAccepted(Bool)
     case secret(String)
@@ -657,6 +661,7 @@ public actor LocalACPClient {
         let method: String
     }
     private var pendingCursorRequests: [PendingCursorRequest] = []
+    private var elicitationDecisions: [(id: ACPJSONValue, decision: LocalACPInteractionDecision)] = []
     private struct PendingRequest {
         let codexExpectedGeneration: Int64?
         let continuation: AsyncThrowingStream<ACPRequestResponse, any Error>.Continuation
@@ -912,6 +917,9 @@ public actor LocalACPClient {
 
     private func initializeConnection() async throws -> ACPJSONValue? {
         var clientCapabilities: [String: ACPJSONValue] = [:]
+        if runtimeKind == .claudeCode {
+            clientCapabilities["elicitation"] = .object(["form": .object([:])])
+        }
         if runtimeKind == .cursor {
             clientCapabilities["_meta"] = .object([
                 "parameterizedModelPicker": .bool(true),
@@ -1628,6 +1636,7 @@ public actor LocalACPClient {
     public func cancel() async throws {
         guard let sessionID else { return }
         sessionCancellationRequested = true
+        for pending in elicitationDecisions { pending.decision.cancel() }
         for response in interactiveResponses.values { response.fence.cancel() }
         let pending = pendingPermissionRequestIDs.filter { id in
             !interactiveResponses.values.contains { $0.id == id && $0.fence.hasDispatched }
@@ -1669,6 +1678,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
+        for pending in elicitationDecisions { pending.decision.cancel() }
         await finishRun()
         for response in interactiveResponses.values { response.fence.cancel() }
         readerTask?.cancel()
@@ -1827,6 +1837,33 @@ public actor LocalACPClient {
             if let id = envelope.id { try await respondWithCancelledPermission(id: id) }
             return
         }
+        if envelope.method == "$/cancel_request" {
+            if let id = envelope.params?["requestId"],
+               let pending = pendingCursorRequests.first(where: { $0.id == id && $0.method == "elicitation/create" }) {
+                elicitationDecisions.first(where: { $0.id == id })?.decision.cancel()
+                let responses = interactiveResponses.values.filter { $0.id == id }
+                for response in responses { response.fence.cancel() }
+                _ = removePendingCursorRequest(id: id)
+                if !responses.contains(where: { $0.fence.hasDispatched }) {
+                    try await respondToCancelledCursorRequest(pending)
+                }
+            }
+            return
+        }
+        if envelope.method == "elicitation/create", let id = envelope.id {
+            guard runtimeKind == .claudeCode else {
+                try await write(ACPEnvelope(id: id, error: .init(code: -32601, message: "Method not found")))
+                return
+            }
+            guard let requestedSession = envelope.params?["sessionId"]?.stringValue,
+                  requestedSession == sessionID, !sessionCancellationRequested else {
+                try await respondToCancelledCursorRequest(PendingCursorRequest(id: id, method: "elicitation/create"))
+                return
+            }
+            guard !pendingCursorRequests.contains(where: { $0.id == id }) else { return }
+            // Register before queueing: cancellation can precede UI delivery.
+            pendingCursorRequests.append(PendingCursorRequest(id: id, method: "elicitation/create"))
+        }
         enqueueNotification(envelope)
         if runtimeKind == .codex, envelope.method == "session/update", belongsToActiveSession(envelope),
            let status = envelope.params?["update"]?["_meta"]?["codex"]?["threadStatus"] {
@@ -1924,6 +1961,8 @@ public actor LocalACPClient {
                 envelope,
                 handler: activePermissionHandler ?? (durableRemoteACP ? resumePermissionHandler : nil)
             )
+        } else if envelope.method == "elicitation/create" {
+            try await respondToElicitation(envelope)
         } else if envelope.method == "cursor/ask_question" {
             try await respondToCursorQuestion(
                 envelope,
@@ -2013,6 +2052,7 @@ public actor LocalACPClient {
     }
 
     private func readerFailed(_ error: any Error) {
+        for pending in elicitationDecisions { pending.decision.cancel() }
         notificationTask?.cancel()
         for response in interactiveResponses.values { response.fence.cancel() }
         failPendingRequests(with: error)
@@ -2372,6 +2412,36 @@ public actor LocalACPClient {
         }
     }
 
+    private func respondToElicitation(_ envelope: ACPEnvelope) async throws {
+        guard let id = envelope.id, pendingCursorRequests.contains(where: { $0.id == id }) else { return }
+        guard envelope.params?["mode"]?.stringValue == "form",
+              let message = envelope.params?["message"]?.stringValue,
+              let schema = envelope.params?["requestedSchema"] else {
+            _ = removePendingCursorRequest(id: id)
+            try await write(ACPEnvelope(id: id, error: .init(code: -32602, message: "Only form elicitation is supported")))
+            return
+        }
+        let request: LocalACPFormRequest
+        do { request = try LocalACPFormRequest.parse(message: message, schema: schema) }
+        catch {
+            _ = removePendingCursorRequest(id: id)
+            try await write(ACPEnvelope(id: id, error: .init(code: -32602, message: "Unsupported elicitation form schema")))
+            return
+        }
+        let decision = LocalACPInteractionDecision()
+        elicitationDecisions.append((id, decision))
+        defer { elicitationDecisions.removeAll { $0.id == id } }
+        let handler = activeInteractionHandler
+        decision.start { await handler?(.form(request)) ?? .cancelled }
+        let response = await decision.value()
+        guard pendingCursorRequests.contains(where: { $0.id == id }) else { return }
+        let result: ACPJSONValue
+        if case .formValues(let values) = response, request.accepts(values) {
+            result = .object(["action": .string("accept"), "content": .object(values.mapValues(\.json))])
+        } else { result = .object(["action": .string("cancel")]) }
+        try await writeInteractiveResponse(ACPEnvelope(id: id, result: result))
+    }
+
     private func respondToCursorQuestion(
         _ envelope: ACPEnvelope,
         handler: InteractionHandler?
@@ -2506,7 +2576,9 @@ public actor LocalACPClient {
     private func respondToCancelledCursorRequest(
         _ request: PendingCursorRequest
     ) async throws {
-        let result: ACPJSONValue = if request.method == "cursor/create_plan" {
+        let result: ACPJSONValue = if request.method == "elicitation/create" {
+            .object(["action": .string("cancel")])
+        } else if request.method == "cursor/create_plan" {
             .object(["accepted": .bool(false)])
         } else {
             .object(["answers": .object([:])])

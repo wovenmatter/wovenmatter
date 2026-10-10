@@ -156,11 +156,12 @@ struct LocalACPSessionDriver: Sendable {
                         systemPrompt: systemPrompt
                     )
                 },
-                prompt: { input, onEvent, onPermission, _ in
+                prompt: { input, onEvent, onPermission, onInteraction in
                     try await client.prompt(
                         input,
                         onEvent: onEvent,
-                        onPermission: onPermission
+                        onPermission: onPermission,
+                        onInteraction: onInteraction
                     )
                 },
                 configuration: {
@@ -185,8 +186,8 @@ struct LocalACPSessionDriver: Sendable {
                 finishRun: { await client.finishRun() },
                 setRunID: { await client.setRunID($0) },
                 setResumePermissionHandler: { await client.setResumePermissionHandler($0) },
-                fencedPrompt: { input, event, permission, _, fence in
-                    try await client.prompt(input, onEvent: event, onPermission: permission,
+                fencedPrompt: { input, event, permission, interaction, fence in
+                    try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction,
                         dispatchFence: fence)
                 },
                 fencedActiveInput: { input, fence in
@@ -665,7 +666,7 @@ public actor LocalACPSessionCoordinator {
                     try? await streamWriter.finishSegmentForDecision()
                     let source = "interaction:" + UUID().uuidString
                     let kind: ProgramStatus.Kind = switch request {
-                    case .questions: .question
+                    case .questions, .form: .question
                     case .plan: .permission
                     case .secret: .auth
                     }
