@@ -26,6 +26,7 @@ struct CompanionShell: View {
   @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
   private var theme: DashboardTheme { DashboardTheme(rawValue: storedTheme) ?? .green }
   @State private var keyboardVisible = false
+  @State private var navigationReset = UUID()
   @Environment(\.horizontalSizeClass) private var sizeClass
   var body: some View {
     HStack(spacing: 0) {
@@ -40,24 +41,29 @@ struct CompanionShell: View {
               ForEach(Array(CompanionModel.Tab.allCases.dropFirst(5)), id: \.self) { tab in sidebarRow(tab) }
             }.padding(.horizontal, 12)
           }
-          if !model.fixture {
-            Button { model.pairingPresented = true } label: {
-              Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
-                .font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(20)
-            }.buttonStyle(.plain).accessibilityLabel("Mac connection: " + model.connectionLabel)
-          }
         }.frame(width: DashboardMetrics.railWidth).background(theme.palette.themeWhisper)
         Divider()
       }
       VStack(spacing: 0) {
-        if sizeClass != .regular && !CompanionModel.Tab.allCases.prefix(5).contains(model.tab) {
-          HStack {
-            Button { model.tab = .home } label: { Label("Home", glyph: .arrowLeft).frame(minHeight: 44) }
-              .accessibilityIdentifier("back-home")
-            Spacer()
-          }.padding(.horizontal, 20)
-        }
-        pane.frame(maxWidth: 960, maxHeight: .infinity).frame(maxWidth: .infinity)
+        NavigationStack {
+          VStack(spacing: 0) {
+            pane
+            if CompanionModel.Tab.allCases.prefix(5).contains(model.tab) { CompanionInlineError(model: model).padding(.horizontal, 20) }
+          }
+            .toolbar(CompanionModel.Tab.allCases.prefix(5).contains(model.tab) ? .hidden : .visible, for: .navigationBar)
+            .toolbar {
+              if !CompanionModel.Tab.allCases.prefix(5).contains(model.tab) {
+                ToolbarItem(placement: .topBarLeading) {
+                  Button { model.tab = .home } label: { Label("Home", glyph: .arrowLeft) }.accessibilityIdentifier("back-home")
+                }
+              }
+            }
+            .navigationDestination(isPresented: $model.executionSettingsPresented) { ExecutionSettingsPane(model: model) }
+            .navigationDestination(isPresented: $model.pairingPresented) { PairingPane(model: model) }
+        }.id(model.tab.rawValue + navigationReset.uuidString)
+          .frame(maxWidth: 960, maxHeight: .infinity)
+          .background(theme.palette.workspace).clipped()
+          .frame(maxWidth: .infinity)
         if keyboardVisible {
           HStack {
             Spacer()
@@ -69,7 +75,7 @@ struct CompanionShell: View {
         if sizeClass != .regular && !keyboardVisible {
           HStack(spacing: 0) {
             ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in
-              Button { model.tab = tab } label: {
+              Button { selectTab(tab) } label: {
                 VStack(spacing: 5) {
                   DashboardLucideIcon(glyph: tab.icon, size: 22)
                     .frame(width: 54, height: 30)
@@ -87,21 +93,22 @@ struct CompanionShell: View {
     .scrollIndicators(.never)
     .foregroundStyle(DashboardPalette.foreground).tint(theme.palette.themeAccent)
     .background(theme.palette.workspace)
-    .sheet(isPresented: $model.executionSettingsPresented) { ExecutionSettingsPane(model: model) }
-    .sheet(isPresented: $model.pairingPresented) { PairingPane(model: model) }
-    .alert("Woven Matter", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
-      Button("OK") { model.errorMessage = nil }
-    } message: { Text(model.errorMessage ?? "") }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
     .environment(\.dashboardTheme, theme)
     .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
   }
+  private func selectTab(_ tab: CompanionModel.Tab) {
+    model.executionSettingsPresented = false; model.pairingPresented = false
+    // Reselecting a tab returns to its root, as with a native tab bar.
+    if model.tab == tab { navigationReset = UUID() }
+    model.tab = tab
+  }
   private func isSelected(_ tab: CompanionModel.Tab) -> Bool {
     model.tab == tab || (tab == .home && !CompanionModel.Tab.allCases.prefix(5).contains(model.tab))
   }
   private func sidebarRow(_ tab: CompanionModel.Tab) -> some View {
-    WorkspaceRow(icon: tab.icon, title: tab.rawValue, selected: model.tab == tab) { model.tab = tab }
+    WorkspaceRow(icon: tab.icon, title: tab.rawValue, selected: model.tab == tab) { selectTab(tab) }
       .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
   }
   @ViewBuilder private var pane: some View {
@@ -115,10 +122,27 @@ struct CompanionShell: View {
       else { EmptyNotePane(model: model) }
     case .library: LibraryPane(model: model)
     case .calendar: CalendarPane(model: model)
+    case .scheduledTasks: ScheduledTasksPane(model: model)
+    case .databases: DatabasesPane(model: model)
+    case .usage: UsagePane(model: model)
     case .trash: TrashPane(model: model)
     }
   }
 
+}
+
+struct CompanionInlineError: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    if let message = model.errorMessage {
+      HStack(alignment: .top, spacing: 8) {
+        Text(message).font(.caption).foregroundStyle(DashboardPalette.danger).textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("workspace-action-error")
+        Button { model.errorMessage = nil } label: { DashboardLucideIcon(glyph: .close, size: 14).frame(width: 44, height: 44) }
+          .buttonStyle(.plain).accessibilityLabel("Dismiss error")
+      }.padding(.vertical, 8)
+    }
+  }
 }
 
 struct PaneHeader<Trailing: View>: View {
@@ -164,101 +188,37 @@ struct GroupLabel: View {
 }
 
 struct HomePane: View {
-  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   var body: some View {
     VStack(spacing: 0) {
-      PaneHeader(title: "Woven Matter") {
-        Button { model.pairingPresented = true } label: { Image(systemName: "qrcode").font(.title2).frame(width: 44, height: 44) }.accessibilityLabel("Pair with Mac")
-      }
+      PaneHeader(title: "Woven Matter") { EmptyView() }
       ScrollView {
-        VStack(alignment: .leading, spacing: 8) {
-          if !model.fixture {
-            HStack(alignment: .top, spacing: 12) {
-              Image(systemName: model.credential == nil ? "iphone.gen3" : model.online ? "checkmark.circle.fill" : "laptopcomputer")
-                .font(.title3).foregroundStyle(theme.palette.themeAccent)
-              VStack(alignment: .leading, spacing: 6) {
-                Text(model.credential == nil ? model.deviceWorkspaceName : model.connectionLabel).font(.subheadline.weight(.semibold))
-                Text(model.credential == nil
-                  ? "Your notes and agents work here. Add a provider connection on this device to start chatting. Pair a Mac whenever you want to synchronize your library."
-                  : model.online ? "Your central library is synchronized. Choose where agents run in Chats."
-                  : "Your notes and device agents stay available here. Reconnect to synchronize your library.")
-                  .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
-                if !model.online {
-                  if model.credential == nil {
-                    Button(model.inferenceConnections.isEmpty ? "Set up agents" : "Manage connections") { model.executionSettingsPresented = true }
-                      .buttonStyle(DashboardPrimaryButtonStyle())
-                    Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(DashboardQuietButtonStyle())
-                  } else {
-                    Button(model.connecting ? "Connecting…" : "Reconnect") { Task { await model.refresh() } }.disabled(model.connecting)
-                  }
-                }
-              }
-            }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
-              .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+        VStack(alignment: .leading, spacing: 2) {
+          GroupLabel(text: "Agents")
+          ForEach(model.launcherAgents) { agent in
+            WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name, detail: agent.workspaceName) {
+              model.launchAgent(agent)
+            }.accessibilityIdentifier("launch-agent-" + agent.id)
           }
-          ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) { quickActions }
-            VStack(spacing: 12) { quickActions }
-          }.padding(.vertical, 12)
-          if !model.pending.isEmpty {
-            GroupLabel(text: "Needs your attention")
-            ForEach(model.pending) { request in WorkspaceRow(systemIcon: "hand.raised", title: request.title, detail: "Respond") { Task { await model.selectConversation(request.conversationID) } } }
-          }
-          if !model.state.conflicts.isEmpty {
-            GroupLabel(text: "Saved conflicts")
-            ForEach(Array(model.state.conflicts.keys).sorted(), id: \.self) { id in
-              WorkspaceRow(systemIcon: "doc.on.doc", title: model.state.notes[id]?.title ?? "Note", detail: "Keep both versions") { Task { await model.openNote(id) } }
-            }
-          }
-          ForEach(model.state.launches.filter { !$0.accepted }) { launch in
-            VStack(alignment: .leading, spacing: 8) {
-              Text(launch.initialSend.text ?? "New conversation").lineLimit(3)
-              Text(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "New chat request saved · awaiting acknowledgement").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-              if !launch.terminalFailure { Button("Continue this saved request") { Task { await model.continueLaunch(launch) } }.disabled(launch.create.workspaceID.map { model.workspaceReachable[$0] != true } ?? !model.online) }
-            }.padding(14).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-          }
-          if !model.unresolvedCommands.isEmpty {
-            GroupLabel(text: "Command acknowledgements")
-            ForEach(model.unresolvedCommands) { record in
-              VStack(alignment: .leading, spacing: 8) {
-                Text(record.command.text ?? record.command.kind.rawValue).lineLimit(3)
-                Text(record.receipt?.message ?? "Waiting to learn whether the Mac accepted this command.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-                if record.receipt == nil {
-                  Button("Retry this same command") { Task { await model.retry(record) } }.disabled(!model.online)
-                }
-              }.padding(14).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-            }
-          }
-          GroupLabel(text: "Recent notes")
-          ForEach(model.notes.prefix(5)) { note in WorkspaceRow(icon: .fileText, title: note.title, detail: model.state.isDirty(note.id) ? "On device" : nil) { Task { await model.openNote(note.id) } } }
-          if model.notes.isEmpty { Text("Your ideas start here. Create a note, even before pairing.").foregroundStyle(DashboardPalette.mutedForeground).padding(14) }
           GroupLabel(text: "Workspace")
-          ForEach([CompanionModel.Tab.library, .calendar, .trash], id: \.self) { tab in
-            WorkspaceRow(icon: tab.icon, title: tab.rawValue) { model.tab = tab }
-              .accessibilityIdentifier("open-\(tab.rawValue.lowercased())")
+          ForEach([CompanionModel.Tab.library, .calendar, .scheduledTasks, .databases, .usage], id: \.self) { tab in
+            SettingsNavigationRow(title: tab.rawValue, icon: tab.icon) { destination(tab) }
+              .accessibilityIdentifier("open-" + tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))
           }
-          if !model.state.outbox.isEmpty { Text("\(model.state.outbox.count) saved changes waiting to sync").font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(14) }
-        }.padding(.horizontal, 18).padding(.bottom, 20)
+        }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
     }
   }
-  @ViewBuilder private var quickActions: some View {
-    quickAction("New chat", icon: .squarePen, detail: "Continue your work") { model.newChat() }
-    quickAction("New note", icon: .fileText, detail: "Capture an idea") { Task { await model.newNote() } }
-      .accessibilityIdentifier("action-new-note")
+  @ViewBuilder private func destination(_ tab: CompanionModel.Tab) -> some View {
+    switch tab {
+    case .library: LibraryPane(model: model)
+    case .calendar: CalendarPane(model: model)
+    case .scheduledTasks: ScheduledTasksPane(model: model)
+    case .databases: DatabasesPane(model: model)
+    case .usage: UsagePane(model: model)
+    default: EmptyView()
+    }
   }
-  private func quickAction(_ title: String, icon: DashboardLucideGlyph, detail: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      VStack(alignment: .leading, spacing: 8) {
-        DashboardLucideIcon(glyph: icon, size: 24).foregroundStyle(theme.palette.themeAccent)
-        Text(title).font(.headline)
-        Text(detail).font(.caption).foregroundStyle(DashboardPalette.foreground)
-      }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
-    }.buttonStyle(.plain)
-  }
-
 }
 
 struct FoldersPane: View {
@@ -274,9 +234,6 @@ struct FoldersPane: View {
           PaneHeader(title: "Folders") { EmptyView() }
           ScrollView {
             VStack(spacing: 0) {
-              WorkspaceRow(icon: .squarePen, title: "New chat") { model.newChat() }
-              WorkspaceRow(icon: .fileText, title: "New note") { Task { await model.newNote() } }.accessibilityIdentifier("action-new-note")
-              GroupLabel(text: "Folders")
               WorkspaceRow(icon: .plus, title: "New folder") { newFolderPresented = true }
               WorkspaceRow(icon: .folder, title: "All workspace") { model.openFolder(nil) }
                 .accessibilityIdentifier("folder-all")
@@ -294,7 +251,7 @@ struct FoldersPane: View {
       TextField("Folder name", text: $folderName)
       Button("Create") { let name = folderName; folderName = ""; Task { await model.newFolder(name: name) } }
       Button("Cancel", role: .cancel) { folderName = "" }
-    } message: { Text("Saved on this device first, then synced to your Mac.") }
+    }
   }
 }
 
@@ -351,44 +308,157 @@ struct FolderContentsPane: View {
 }
 
 struct CompanionSettingsPane: View {
-  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
-  @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
   var body: some View {
     VStack(spacing: 0) {
       PaneHeader(title: "Settings") { EmptyView() }
       ScrollView {
-        VStack(alignment: .leading, spacing: 8) {
-          if !model.fixture {
-            GroupLabel(text: "Central library")
-            VStack(alignment: .leading, spacing: 8) {
-              Label(model.connectionLabel, systemImage: model.online ? "checkmark.circle" : "laptopcomputer")
-                .font(.headline)
-              Text("Synchronize your app library and saved artifacts with your central Mac. Execution workspaces connect independently.")
-                .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
-            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-              .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
-            WorkspaceRow(systemIcon: "qrcode", title: model.credential == nil ? "Pair your Mac" : "Pairing") { model.pairingPresented = true }
-            WorkspaceRow(icon: .rotate, title: model.connecting ? "Connecting…" : "Sync now") { Task { await model.refresh() } }
-              .disabled(model.credential == nil || model.connecting)
-          }
-          GroupLabel(text: "Agents")
-          WorkspaceRow(icon: .settings, title: "Agents and workspaces", detail: "Pi Durable · inference connections") { model.executionSettingsPresented = true }
-          GroupLabel(text: "Appearance")
-          DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
-            DashboardTheme(rawValue: $0)?.title ?? $0
-          }.accessibilityLabel("Theme").padding(.horizontal, 14)
-          GroupLabel(text: "Sync")
-          Text(model.state.outbox.isEmpty ? "No saved changes waiting to sync." : "\(model.state.outbox.count) saved changes waiting to sync.")
-            .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 14)
-          if !model.state.conflicts.isEmpty {
-            WorkspaceRow(systemIcon: "doc.on.doc", title: "Review saved conflicts", detail: String(model.state.conflicts.count)) { model.tab = .home }
-          }
-          Text("Notes are saved on this device and remain available offline.")
-            .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 14).padding(.top, 8)
+        VStack(spacing: 2) {
+          SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
+          SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Pi Durable", icon: .bot) { DeviceAgentSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Usage", icon: .barChart) { UsagePane(model: model).mobileNavigationPage("Usage") }
+          SettingsNavigationRow(title: "Trash", icon: .trash) { TrashPane(model: model).mobileNavigationPage("Trash") }
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }
     }
+  }
+}
+
+struct SettingsNavigationRow<Destination: View>: View {
+  let title: String
+  let icon: DashboardLucideGlyph
+  @ViewBuilder let destination: () -> Destination
+  var body: some View {
+    NavigationLink(destination: destination) {
+      HStack(spacing: 14) {
+        DashboardLucideIcon(glyph: icon, size: 22).frame(width: 26)
+        Text(title).frame(maxWidth: .infinity, alignment: .leading)
+        DashboardLucideIcon(glyph: .chevronDown, size: 16).rotationEffect(.degrees(-90)).foregroundStyle(DashboardPalette.mutedForeground)
+      }.padding(.horizontal, 14).padding(.vertical, 13).frame(minHeight: 48).contentShape(Rectangle())
+    }.buttonStyle(.plain)
+  }
+}
+
+private struct MobilePageSurface: ViewModifier {
+  @Environment(\.dashboardTheme) private var theme
+  func body(content: Content) -> some View {
+    content
+      .scrollContentBackground(.hidden)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(theme.palette.workspace.ignoresSafeArea())
+  }
+}
+
+extension View {
+  func mobilePageSurface() -> some View { modifier(MobilePageSurface()) }
+  func mobileNavigationPage(_ title: String) -> some View {
+    mobilePageSurface().navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar)
+  }
+}
+
+struct GeneralSettingsPane: View {
+  @Bindable var model: CompanionModel
+  @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
+  var body: some View {
+    Form {
+      Section("Appearance") {
+        Picker("Theme", selection: $storedTheme) {
+          ForEach(DashboardTheme.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+        }
+      }
+      Section("About") {
+        LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
+        LabeledContent("Build", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
+      }
+    }.scrollIndicators(.never).mobileNavigationPage("General")
+  }
+}
+
+struct WorkspacesSettingsPane: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    List {
+      Section {
+        NavigationLink { DeviceAgentSettingsPane(model: model) } label: {
+          Label(model.deviceWorkspaceName, glyph: .terminal)
+        }
+      }
+      Section {
+        NavigationLink { HostedInferenceSettingsPane(model: model) } label: { Label("Tailscale inference", glyph: .plug) }
+      }
+      Section("Central library") {
+        NavigationLink { PairingPane(model: model) } label: { Label(model.credential == nil ? "Pair a Mac" : "Mac pairing", systemImage: "qrcode") }
+        if model.credential != nil {
+          Button(model.connecting ? "Syncing…" : "Sync now") { Task { await model.refresh() } }.disabled(model.connecting)
+        }
+        if !model.state.conflicts.isEmpty || !model.unresolvedCommands.isEmpty || model.state.launches.contains(where: { !$0.accepted }) {
+          NavigationLink("Review pending changes") { SyncRecoveryPane(model: model) }
+        }
+      }
+      if !model.executionWorkspaces.isEmpty {
+        Section("Connected workspaces") {
+          ForEach(model.executionWorkspaces) { workspace in
+            NavigationLink { WorkspaceSettingsPane(model: model, workspace: workspace) } label: {
+              Label(workspace.name, glyph: workspace.kind == .ios ? .terminal : .container)
+            }
+          }
+        }
+      }
+      if model.errorMessage != nil { Section { CompanionInlineError(model: model) } }
+    }.listStyle(.insetGrouped).scrollContentBackground(.hidden).mobileNavigationPage("Workspaces")
+  }
+}
+
+private struct WorkspaceSettingsPane: View {
+  @Bindable var model: CompanionModel
+  let workspace: CompanionExecutionWorkspace
+  var body: some View {
+    List {
+      if let endpoint = workspace.endpoint { Section("Address") { Text(endpoint.absoluteString).textSelection(.enabled) } }
+      Section("Agents") {
+        ForEach((model.workspaceProviders[workspace.id] ?? []).filter { $0.available && $0.canStart }) { provider in
+          Button { model.launchAgent(.init(workspaceID: workspace.id, workspaceName: workspace.name, providerID: provider.id, name: provider.displayName, runtimeKind: provider.runtimeKind)) } label: {
+            Label { Text(provider.displayName) } icon: { MobileAgentIcon(runtimeKind: provider.runtimeKind, size: 22) }
+          }.disabled(model.workspaceReachable[workspace.id] != true)
+        }
+      }
+      if model.errorMessage != nil { Section { CompanionInlineError(model: model) } }
+      Section {
+        Button("Refresh device access") { Task { await model.renewWorkspaceAccess(workspace.id) } }.disabled(!model.online)
+        if let problem = model.workspaceProblems[workspace.id] { Text(problem).foregroundStyle(DashboardPalette.danger) }
+      }
+    }.listStyle(.insetGrouped).scrollContentBackground(.hidden).mobileNavigationPage(workspace.name)
+  }
+}
+
+private struct SyncRecoveryPane: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    List {
+      CompanionInlineError(model: model)
+      ForEach(Array(model.state.conflicts.keys).sorted(), id: \.self) { id in
+        Button(model.state.notes[id]?.title ?? "Note conflict") { Task { await model.openNote(id) } }
+      }
+      ForEach(model.state.launches.filter { !$0.accepted }) { launch in
+        VStack(alignment: .leading, spacing: 8) {
+          Text(launch.initialSend.text ?? "New conversation").lineLimit(3)
+          if let message = launch.sendReceipt?.message ?? launch.createReceipt?.message { Text(message).font(.caption) }
+          if !launch.terminalFailure {
+            Button("Retry saved request") { Task { await model.continueLaunch(launch) } }
+              .disabled(launch.create.workspaceID.map { model.workspaceReachable[$0] != true } ?? !model.online)
+          }
+        }
+      }
+      ForEach(model.unresolvedCommands) { record in
+        VStack(alignment: .leading, spacing: 8) {
+          Text(record.command.text ?? record.command.kind.rawValue).lineLimit(3)
+          if let message = record.receipt?.message { Text(message).font(.caption) }
+          if record.receipt == nil { Button("Retry saved command") { Task { await model.retry(record) } }.disabled(!model.online) }
+        }
+      }
+    }.listStyle(.plain).scrollContentBackground(.hidden).mobileNavigationPage("Pending changes")
   }
 }
 

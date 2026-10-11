@@ -54,6 +54,12 @@ public enum InferenceModelPolicy {
       if endpoints[provider]?[api] == nil { continue }
       var model = try JSONDecoder().decode(InferenceModel.self, from: JSONSerialization.data(withJSONObject: object))
       model.provider = provider
+      // OpenRouter's dynamic routers use this sentinel for unavailable token prices.
+      // Exclude those entries, but never let that exclusion hide a credential-routing violation.
+      if provider == "openrouter", model.cost["input"] == -1_000_000 || model.cost["output"] == -1_000_000 {
+        guard model.baseUrl == endpoints[provider]?[model.api], model.metadata["headers"] == nil else { throw InferenceError.invalidEndpoint }
+        continue
+      }
       try validate(model, provider: provider)
       guard seen.insert(model.id).inserted else { throw InferenceError.malformedResponse }
       result.append(model)
@@ -138,7 +144,8 @@ public actor ProviderModelCatalog {
     let saved = entries[provider]
     if !force, let saved, (0..<Self.refreshInterval).contains(now().timeIntervalSince(saved.checkedAt)) { return saved.models }
     let source = InferenceModelPolicy.sourceProvider(provider)
-    var request = URLRequest(url: URL(string: "https://pi.dev/api/models/providers/\(source)?types=chat")!)
+    // Request the canonical versioned shard directly; redirects remain disabled.
+    var request = URLRequest(url: URL(string: "https://pi.dev/api/models/providers/\(source)?types=chat&pi-version=\(Self.piVersion)")!)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("pi/\(Self.piVersion)", forHTTPHeaderField: "User-Agent")
     request.cachePolicy = .reloadIgnoringLocalCacheData

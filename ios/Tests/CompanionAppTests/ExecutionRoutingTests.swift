@@ -40,6 +40,61 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
+  @MainActor func testHomeLauncherKeepsExactWorkspaceAndOmitsDisconnectedAgents() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let connected = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Connected")
+    let disconnected = CompanionExecutionWorkspace(id: "disconnected", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Disconnected")
+    model.executionWorkspaces = [connected, disconnected]
+    model.workspaceReachable = [connected.id: true, disconnected.id: false]
+    let agent = CompanionProvider(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    model.workspaceProviders = [connected.id: [agent], disconnected.id: [agent]]
+    model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"
+    let launchers = model.launcherAgents
+    XCTAssertEqual(launchers.map(\.workspaceID), ["local", connected.id])
+    model.launchAgent(try XCTUnwrap(launchers.last))
+    XCTAssertEqual(model.tab, .chat)
+    XCTAssertNil(model.selectedConversationID)
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, connected.id)
+    XCTAssertEqual(model.providerID, agent.id)
+    model.launchAgent(try XCTUnwrap(launchers.first))
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, "local")
+    XCTAssertEqual(model.providerID, "pi-durable-device")
+    model.online = true
+    model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "pi", displayName: "Pi Durable", routeName: connected.name, available: true)]
+    XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "central" }.map(\.providerID), [agent.id])
+    XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
+  }
+
+  @MainActor func testDeviceDefaultsPersistWithoutChangingExistingConversation() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let connection = InferenceConnection(id: "saved", name: "Saved key", provider: "openai", route: .direct, modelID: "existing-model")
+    model.inferenceConnections = [connection]
+    let record = DeviceConversationRecord(id: "existing", title: "Existing", enabledTools: ["read_note"], additionalInstructions: "Original instructions",
+      connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
+    model.executionRecords = [record.id: record]; model.selectedConversationID = record.id
+    let defaults = DeviceAgentDefaults(instructions: "New conversations only", enabledTools: [])
+    try model.saveDeviceAgentDefaults(defaults, connectionID: connection.id)
+    XCTAssertEqual(model.executionRecords[record.id], record)
+    XCTAssertTrue(CompanionModel.instructions(for: record).contains("Original instructions"))
+    XCTAssertFalse(CompanionModel.instructions(for: record).contains(defaults.instructions))
+    let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
+    let persisted = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
+    XCTAssertEqual(persisted.agentDefaults, defaults)
+    XCTAssertEqual(persisted.conversations[record.id], record)
+    let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    reopened.executionDirectory = model.executionDirectory
+    try await reopened.loadExecutionConfiguration()
+    XCTAssertEqual(reopened.deviceAgentDefaults, defaults)
+    XCTAssertEqual(reopened.inferenceConnectionID, connection.id)
+  }
+
   @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -280,6 +335,21 @@ final class InferenceSetupTests: XCTestCase {
     XCTAssertFalse(state.receiveModels([Self.descriptor()], generation: catalogGeneration))
     XCTAssertFalse(state.receiveCredential("late-credential", accountID: "old-account", generation: authenticationGeneration))
     XCTAssertTrue(state.models.isEmpty); XCTAssertTrue(state.secret.isEmpty)
+  }
+  @MainActor func testSignedInAccountWaitsForCatalogBeforeAutomaticSave() throws {
+    let state = InferenceConnectionSetupState(provider: "openai-codex")
+    let generation = state.beginCatalog()
+    XCTAssertTrue(state.receiveCredential("test-credential", accountID: "test-account", generation: state.authenticationGeneration))
+    XCTAssertTrue(state.pendingSignInSave)
+    XCTAssertNotNil(state.saveProblem)
+    state.receiveModels([Self.descriptor(provider: "openai-codex")], generation: generation)
+    state.loadingModels = false
+    XCTAssertNil(state.saveProblem)
+    let saved = try state.configuredConnection()
+    XCTAssertEqual(saved.accountID, "test-account")
+    XCTAssertEqual(saved.modelID, "selected-model")
+    state.chooseProvider("opencode-go")
+    XCTAssertFalse(state.pendingSignInSave)
   }
   @MainActor func testCatalogChoosesVisibleDefaultButPreservesSavedModel() {
     let first = Self.descriptor("alpha", name: "Alpha"), second = Self.descriptor("beta", name: "Beta")

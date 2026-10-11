@@ -22,7 +22,7 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Folders"].exists)
     app.buttons["tab-home"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["action-new-note"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["tab-content"].exists)
     app.buttons["tab-folders"].tap()
     app.buttons["folder-inbox"].tap()
@@ -30,6 +30,11 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.textFields["Search notes and conversations"].exists)
     XCTAssertTrue(app.buttons.containing(.staticText, identifier: "Launch Plan").firstMatch.exists)
     app.buttons["tab-settings"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-settings"].waitForExistence(timeout: 5))
+    app.buttons["General"].tap()
+    XCTAssertTrue(app.navigationBars["General"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Done"].exists)
+    app.navigationBars["General"].buttons.firstMatch.tap()
     XCTAssertTrue(app.staticTexts["pane-heading-settings"].waitForExistence(timeout: 5))
     app.buttons["tab-folders"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
@@ -44,7 +49,7 @@ final class CompanionUITests: XCTestCase {
     add(attachment)
   }
   @MainActor func testOfflineWritingSurvivesTerminationAndRestart() {
-    let app = launch()
+    let app = launch(tab: "Notes")
     app.buttons["action-new-note"].tap()
     let title = app.descendants(matching: .any)["note-title"].firstMatch
     XCTAssertTrue(title.waitForExistence(timeout: 5))
@@ -90,14 +95,14 @@ final class CompanionUITests: XCTestCase {
   }
   @MainActor func testWorkspaceSurfacesAndRotation() {
     let app = launch(tab: "Home")
-    for name in ["library", "calendar", "trash"] {
-      let sidebar = app.buttons["tab-" + name]
-      if sidebar.exists { sidebar.tap() }
-      else { app.buttons["tab-home"].tap(); app.buttons["open-" + name].tap() }
+    for (name, title) in [("library", "Library"), ("calendar", "Calendar"), ("scheduled-tasks", "Scheduled tasks"), ("databases", "Databases"), ("usage", "Usage")] {
+      app.buttons["tab-home"].tap()
+      app.buttons["open-" + name].tap()
+      XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+      XCTAssertFalse(app.buttons["Done"].exists)
+      XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Connect to your Mac'")).firstMatch.exists)
       let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Workspace " + name; attachment.lifetime = .keepAlways
       add(attachment)
-      XCTAssertTrue(app.staticTexts["pane-heading-" + name].waitForExistence(timeout: 5))
-      XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Connect to your Mac'")).firstMatch.waitForExistence(timeout: 5))
     }
     XCUIDevice.shared.orientation = .landscapeLeft
     app.buttons["tab-notes"].tap()
@@ -105,7 +110,7 @@ final class CompanionUITests: XCTestCase {
     XCUIDevice.shared.orientation = .portrait
     app.buttons["tab-home"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["action-new-note"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
   }
 
 }

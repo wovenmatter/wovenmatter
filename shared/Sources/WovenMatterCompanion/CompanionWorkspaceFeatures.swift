@@ -6,6 +6,9 @@ public enum CompanionWorkspaceRead: Codable, Equatable, Sendable {
   case library(search: String, kind: String?, offset: Int)
   case libraryFile(id: String)
   case calendar(from: Date, to: Date)
+  case scheduledTasks
+  case databases
+  case usage(from: Date, to: Date, offset: Int)
   case session(id: String)
   case trash
   case exportNote(id: String, format: String, revision: String)
@@ -89,12 +92,14 @@ public struct CompanionCalendarDraft: Codable, Equatable, Sendable {
   public var recurrenceUnit: String?
   public var recurrenceInterval: Int
   public var task: CompanionScheduledTask?
+  /// Nil preserves the host’s existing visibility for older clients.
+  public var showsOnCalendar: Bool?
   public init(title: String = "", details: String = "", startsAt: Date = Date(), endsAt: Date? = nil,
               allDay: Bool = false, timeZoneID: String = TimeZone.current.identifier,
-              recurrenceUnit: String? = nil, recurrenceInterval: Int = 1, task: CompanionScheduledTask? = nil) {
+              recurrenceUnit: String? = nil, recurrenceInterval: Int = 1, task: CompanionScheduledTask? = nil, showsOnCalendar: Bool? = nil) {
     self.title = title; self.details = details; self.startsAt = startsAt; self.endsAt = endsAt
     self.allDay = allDay; self.timeZoneID = timeZoneID; self.recurrenceUnit = recurrenceUnit
-    self.recurrenceInterval = recurrenceInterval; self.task = task
+    self.recurrenceInterval = recurrenceInterval; self.task = task; self.showsOnCalendar = showsOnCalendar
   }
 }
 
@@ -146,6 +151,9 @@ public enum CompanionWorkspaceResult: Codable, Equatable, Sendable {
   case library(items: [CompanionLibraryItem], hasMore: Bool)
   case file(CompanionFile)
   case calendar([CompanionCalendarEvent])
+  case scheduledTasks([CompanionScheduledTaskItem])
+  case databases([CompanionDatabaseSource])
+  case usage(samples: [CompanionUsageSample], hasMore: Bool)
   case session(CompanionSessionSettings)
   case trash([CompanionTrashedItem])
 }

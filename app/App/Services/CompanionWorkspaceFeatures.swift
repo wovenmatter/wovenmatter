@@ -37,6 +37,36 @@ extension CompanionCommandService {
                     draft: Self.calendarDraft(WorkspaceCalendarDraft(value.event)), occurrence: value.index, startsAt: value.startsAt,
                     status: recorded?.statusLabel, sessionID: recorded?.sessionID)
             })
+        case .scheduledTasks:
+            let events = try await store.database.calendarItems().filter { $0.calendar.task != nil }
+            let runs = try await store.database.calendarRuns()
+            return .scheduledTasks(events.sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }.map { event in
+                let run = runs.filter { $0.eventID == event.id }.max { $0.scheduledAt < $1.scheduledAt }
+                let configuration = event.calendar.task!.configuration
+                return .init(event: .init(id: event.id, revision: event.calendar.revision,
+                    draft: Self.calendarDraft(WorkspaceCalendarDraft(event)), status: run?.statusLabel, sessionID: run?.sessionID),
+                    showsOnCalendar: event.calendar.showsOnCalendar, runtimeName: configuration.runtimeKind.displayName,
+                    workspaceName: configuration.workspaceID.map { model.remoteWorkspaces.configuration(id: $0)?.name ?? "Remote workspace" } ?? "Local workspace",
+                    lastRunAt: run?.scheduledAt)
+            })
+        case .databases:
+            await model.refreshDatabases()
+            return .databases(model.databasesSnapshot.sources.map { source in
+                .init(id: source.id, name: source.name, kind: source.kind.rawValue,
+                    databases: source.databases.map { .init(id: $0.id, name: $0.name, format: $0.preference.displayName, isExternal: $0.isExternal) },
+                    error: source.error)
+            })
+        case let .usage(from, to, offset):
+            guard from.timeIntervalSince1970.isFinite, to.timeIntervalSince1970.isFinite,
+                  to >= from, to.timeIntervalSince(from) <= 93 * 86_400, (0...100_000).contains(offset) else { throw CommandError.invalidCommand }
+            let samples = try await model.recordedUsageSamples(from: from, to: to, limit: 201, offset: offset)
+            return .usage(samples: samples.prefix(200).map { sample in
+                .init(id: sample.sourceID + ":" + sample.id, timestamp: sample.timestamp, provider: sample.provider.displayName,
+                    model: sample.canonicalModel, account: sample.accountLabel, workspace: sample.workspace, sessionID: sample.sessionID,
+                    inputTokens: sample.tokens.inputTokens, outputTokens: sample.tokens.outputTokens,
+                    cacheTokens: sample.tokens.cachedInputTokens, totalTokens: sample.tokens.totalTokens,
+                    requests: sample.requestCount, costUSD: sample.directCostUSD)
+            }, hasMore: samples.count > 200)
         case .session(let id):
             if try await store.database.companionExecutionOwner(conversationID: id) != nil {
                 return try await model.centralExecutionClient().readWorkspace(conversationID: id, request: request)
@@ -156,7 +186,7 @@ extension CompanionCommandService {
                 configuration.thinking = task.thinking ?? configuration.thinking; configuration.permission = task.permission ?? configuration.permission
                 configuration.folderID = task.folderID
                 native.task = .init(prompt: task.prompt, configuration: configuration, sessionMode: task.newSessionEachTime ? .new : .same)
-                native.showsOnCalendar = existing?.calendar.showsOnCalendar ?? true
+                native.showsOnCalendar = draft.showsOnCalendar ?? existing?.calendar.showsOnCalendar ?? true
             }
             _ = try await store.database.saveCalendarEvent(id: id, draft: native, creating: existing == nil, expectedRevision: revision)
         case let .deleteCalendar(id, revision, occurrence):
@@ -197,7 +227,7 @@ extension CompanionCommandService {
                     workspaceID: task.configuration.workspaceID?.uuidString.lowercased(), model: task.configuration.model,
                     thinking: task.configuration.thinking, permission: task.configuration.permission,
                     folderID: task.configuration.folderID, newSessionEachTime: task.sessionMode == .new)
-            })
+            }, showsOnCalendar: value.showsOnCalendar)
     }
 
     nonisolated private static let mobileFileLimit = 32 * 1_024 * 1_024

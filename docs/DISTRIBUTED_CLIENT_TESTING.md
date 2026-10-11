@@ -31,6 +31,12 @@ Use another simulator without these variables for connected acceptance.
   export. Unsupported document structures must retain their original data.
 - Check chat scrolling, drafts, note references, execution workspace selection,
   pending approvals/questions, session settings, and Stop.
+- Home lists on-device Pi Durable and agents from reachable workspaces, followed
+  by Library, Calendar, Scheduled tasks, Databases, and Usage. Open these pages
+  and Settings details; each uses full-page navigation with Back. Home has no
+  setup or connection-status cards.
+- Check **Settings → Pi Durable** defaults for connection, model, instructions,
+  and native tools. New chats use these settings; existing chats stay pinned.
 - Open Library, saved artifacts, Calendar, and Trash. Exercise rename, move,
   pin, trash, and restore on test content.
 - Repeat on iPad in portrait, landscape, and a compact window. Confirm sidebar
@@ -41,14 +47,15 @@ Use another simulator without these variables for connected acceptance.
 Use the regular development app without fixture launch variables. No Mac pairing
 or Tailscale device is required for a direct cloud connection.
 
-1. Open **Settings → Agents and workspaces → Add inference connection**.
+1. Open **Settings → iPhone Connections** (or **iPad Connections**) and choose a provider.
 2. Select ChatGPT or Grok, tap sign in, and complete the displayed device-code
    flow yourself. For Claude, complete browser sign-in and paste the provider’s
    returned code into the app. Cancelling or changing providers must discard the
    previous sign-in attempt; no credentials should appear in app logs or history.
 3. For API access, select the provider (including the appropriate OpenCode Zen or
-   Go option), paste its key, select a model, and save. Reopen the connection and
-   relaunch the app to confirm the selection persists without exposing the key.
+   Go option), paste its key, and save. Choose the connection and model in
+   **Settings → Pi Durable**. Reopen both pages and relaunch the app to confirm
+   the selection persists without exposing the key.
 4. Select **This iPhone** or **This iPad**, send a small prompt, and exercise a
    local file tool. Keep all other Woven Matter devices disconnected. Repeat after
    relaunch; token refresh must happen on this device without a host dependency.

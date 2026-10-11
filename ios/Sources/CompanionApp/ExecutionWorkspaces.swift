@@ -119,7 +119,7 @@ extension CompanionModel {
         let pending = state.launches.first { $0.create.workspaceID == workspaceID && !$0.accepted && !$0.terminalFailure }
         if let pending {
           guard pending.initialSend.text == prompt, pending.create.providerID == route else {
-            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request from Home before sending different input.")
+            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request in Settings → Workspaces → Pending changes before sending different input.")
           }
         }
         conversationID = pending?.create.conversationID ?? UUID().uuidString.lowercased()
@@ -129,7 +129,7 @@ extension CompanionModel {
         create.workspaceID = workspaceID; send.workspaceID = workspaceID
         let launch = try await client.startConversation(pending ?? .init(create: create, initialSend: send))
         guard launch.accepted, let receipt = launch.sendReceipt else {
-          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it from Home when the workspace is available.")
+          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it in Settings → Workspaces → Pending changes when the workspace is available.")
         }
         result = receipt
       } else {

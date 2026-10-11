@@ -10,11 +10,9 @@ struct DeviceWorkspaceFiles: View {
   @State private var status: String?
   @State private var busy = false
   var body: some View {
-    NavigationStack {
+    Group {
       List {
         Section {
-          Text("These working files stay on this device. Save an output to the library to synchronize it with your central Mac.")
-            .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
           Button("Import files", systemImage: "square.and.arrow.down") { importing = true }
         }
         Section("Workspace files") {
@@ -32,7 +30,7 @@ struct DeviceWorkspaceFiles: View {
         }
         if let status { Section { Text(status).font(.caption) } }
       }.scrollIndicators(.never).navigationTitle("Workspace files").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
           do {
             for source in try result.get() {
@@ -64,7 +62,7 @@ struct DeviceWorkspaceFiles: View {
         let data = try Data(contentsOf: file)
         _ = try await store.artifacts.save(data: data, workspaceID: model.deviceWorkspaceID, title: file.lastPathComponent,
           mediaType: UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream")
-        status = "Saved to the library on this device. Central synchronization is queued."
+        status = "Saved to Library."
       } catch { status = error.localizedDescription }
       busy = false
     }

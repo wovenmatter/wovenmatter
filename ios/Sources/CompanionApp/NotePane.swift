@@ -9,9 +9,8 @@ struct EmptyNotePane: View {
   var body: some View {
     VStack(spacing: 18) {
       DashboardLucideIcon(glyph: .fileText, size: 44).foregroundStyle(DashboardPalette.mutedForeground)
-      Text("A place for your next idea").font(.title2.bold())
-      Text("Create a note here or choose one in Folders. Your writing works offline.").foregroundStyle(DashboardPalette.mutedForeground).multilineTextAlignment(.center)
-      Button("New note") { Task { await model.newNote() } }.buttonStyle(DashboardPrimaryButtonStyle())
+      Text("Notes").font(.title2.bold())
+      Button("New note") { Task { await model.newNote() } }.buttonStyle(DashboardPrimaryButtonStyle()).accessibilityIdentifier("action-new-note")
     }.padding(30)
   }
 }
@@ -41,6 +40,8 @@ struct NotePane: View {
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical).font(.title.weight(.semibold)).lineLimit(1...3)
           .accessibilityIdentifier("note-title").disabled(!editable)
+        Button { Task { await model.newNote() } } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
+          .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("New note").accessibilityIdentifier("action-new-note")
         Menu {
           Button("Paragraph") { setStyle(.paragraph) }
           Button("Heading") { setStyle(.heading2) }
@@ -64,10 +65,10 @@ struct NotePane: View {
         Spacer()
       }.font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 20).padding(.bottom, 12)
       if model.state.conflicts[note.id] != nil {
-        Button { conflictsPresented = true } label: { Label("Your writing is safe. Review the Mac version.", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(theme.palette.themeWhisper) }.padding(.horizontal, 20)
+        Button { conflictsPresented = true } label: { Label("Review saved conflict", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(theme.palette.themeWhisper) }.padding(.horizontal, 20)
       }
       if model.state.uncachedNoteIDs.contains(note.id) {
-        ContentUnavailableView("Not saved on this device", systemImage: "icloud.and.arrow.down", description: Text("Connect to your Mac to open the full document. Its title and folder are available offline."))
+        ContentUnavailableView("Not saved on this device", systemImage: "icloud.and.arrow.down", description: Text("Download this document from the central library."))
         if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(DashboardPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {
@@ -128,10 +129,10 @@ struct NotePane: View {
         content = new.content; title = new.title; editorBase = new
       }
     }
-    .sheet(isPresented: $detailsPresented) {
+    .navigationDestination(isPresented: $detailsPresented) {
       ItemManagementSheet(model: model, id: note.id, isNote: true, title: title, folderID: note.folderID ?? "")
     }
-    .sheet(isPresented: $conflictsPresented) {
+    .navigationDestination(isPresented: $conflictsPresented) {
       if let conflict = model.state.conflicts[note.id] { ConflictPane(model: model, id: note.id, conflict: conflict) }
     }
   }
@@ -152,7 +153,7 @@ private struct ConflictPane: View {
   var conflict: MobileNoteConflict
   @Environment(\.dismiss) private var dismiss
   var body: some View {
-    NavigationStack {
+    Group {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Text(conflict.reason).font(.subheadline)
@@ -163,7 +164,7 @@ private struct ConflictPane: View {
           Text("The Mac version keeps its original identity. Your writing becomes a new note, so a deleted note is never silently restored.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }.padding(20)
       }.navigationTitle("Saved conflict").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .mobilePageSurface().toolbar(.visible, for: .navigationBar)
     }.tint(theme.palette.themeAccent)
   }
   private func version(_ label: String, note: CompanionNote?) -> some View {

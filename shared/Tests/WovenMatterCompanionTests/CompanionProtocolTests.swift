@@ -28,4 +28,20 @@ struct CompanionProtocolTests {
     let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
     #expect(object["runID"] == nil)
   }
+  @Test("scheduled task visibility survives editing and legacy drafts preserve host visibility")
+  func scheduledTaskVisibility() throws {
+    let hidden = CompanionCalendarDraft(title: "Daily check", task: .init(prompt: "Review"), showsOnCalendar: false)
+    let action = CompanionWorkspaceAction.saveCalendar(id: "task", revision: 4, draft: hidden)
+    #expect(try JSONDecoder().decode(CompanionWorkspaceAction.self, from: JSONEncoder().encode(action)) == action)
+    let event = CompanionCalendarEvent(id: "task", revision: 4, draft: hidden)
+    let response = CompanionWorkspaceResult.scheduledTasks([.init(event: event, showsOnCalendar: false,
+      runtimeName: "Pi Durable", workspaceName: "Local workspace", lastRunAt: nil)])
+    #expect(try JSONDecoder().decode(CompanionWorkspaceResult.self, from: JSONEncoder().encode(response)) == response)
+    var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(hidden)) as? [String: Any])
+    legacy.removeValue(forKey: "showsOnCalendar")
+    let decoded = try JSONDecoder().decode(CompanionCalendarDraft.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.showsOnCalendar == nil)
+    #expect(decoded.task?.prompt == hidden.task?.prompt)
+  }
+
 }

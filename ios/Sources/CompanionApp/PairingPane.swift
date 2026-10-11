@@ -9,12 +9,10 @@ struct PairingPane: View {
   @State private var scanning = false
   @State private var scannerError: String?
   var body: some View {
-    NavigationStack {
+    Group {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
-          Image(systemName: "iphone.and.arrow.forward").font(.system(size: 40)).foregroundStyle(theme.palette.themeAccent)
-          Text("Your workspace, within reach.").font(.title.bold())
-          Text("On your Mac, open Woven Matter → Settings → iPhone Companion and create a pairing code. Keep both devices connected to the same Tailscale network.").foregroundStyle(DashboardPalette.mutedForeground)
+          Text("On your Mac, open Woven Matter → Settings → Devices and create a pairing code. Keep both devices connected to the same Tailscale network.").foregroundStyle(DashboardPalette.mutedForeground)
           Button { Task { await beginScanning() } } label: { Label("Scan Mac pairing code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity).padding(6) }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(model.connecting)
           if let scannerError { Text(scannerError).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
           Text("Or paste the pairing link").font(.subheadline.weight(.semibold))
@@ -25,11 +23,10 @@ struct PairingPane: View {
             guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else { model.errorMessage = "Paste the full pairing link from your Mac."; return }
             Task { await model.pair(url: url) }
           }.buttonStyle(DashboardQuietButtonStyle()).disabled(model.connecting || model.pairingText.isEmpty)
-          Text("Pairing gives this device access to your Mac workspace. Provider credentials stay on your Mac. You can revoke this device in desktop Settings.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-          Text("Closing the Mac window can leave Woven Matter running. Quitting the app, stopping companion access, sleep, or a network interruption ends the connection. Notes saved here remain available.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          CompanionInlineError(model: model)
         }.padding(24)
       }.navigationTitle("Pair your Mac").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .sheet(isPresented: $scanning) {
           NavigationStack {
             QRScanner(found: { value in

@@ -27,6 +27,7 @@
 		8DB14441037CE005DF2F7E34 /* CompanionClient in Frameworks */ = {isa = PBXBuildFile; productRef = 2D737224ECEC31DBAA4CA755 /* CompanionClient */; };
 		A92AB2463209562B4E3AA5CC /* CompanionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9850315B032C364C200D69F /* CompanionModel.swift */; };
 		A9483CAF62A494A126BFEF2A /* ExecutionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14486989616346BE7D7F4EF4 /* ExecutionSettings.swift */; };
+		AF2B07FD41AEE1C52E7A3E6A /* HomeDataPanes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C5AC2A9D61EA42F4983352 /* HomeDataPanes.swift */; };
 		C15CE66C5C92162C0BC80CBC /* DeviceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96C40BE9C11BC9755F5A39D6 /* DeviceSessionManagement.swift */; };
 		DD5566D65F5CAFEF4BA3F0B9 /* SharedAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 26F3D77F42E2E7768A4BC7BF /* SharedAssets.xcassets */; };
 		E38FE017B57846FB27355028 /* CompanionModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C64A0A0DD03AB9848BC4949 /* CompanionModelTests.swift */; };
@@ -68,6 +69,7 @@
 		51E6AD164458836BD60AFA58 /* DeviceExecution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceExecution.swift; sourceTree = "<group>"; };
 		731407A642C2125A3B7C02B2 /* DeviceWorkspaceFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceWorkspaceFiles.swift; sourceTree = "<group>"; };
 		7A7EEDB76467AB9FECCD5E52 /* CompanionAppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CompanionAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		91C5AC2A9D61EA42F4983352 /* HomeDataPanes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeDataPanes.swift; sourceTree = "<group>"; };
 		9629C131A94C4EEA152D5629 /* ChatPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPane.swift; sourceTree = "<group>"; };
 		96C40BE9C11BC9755F5A39D6 /* DeviceSessionManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSessionManagement.swift; sourceTree = "<group>"; };
 		AD5CF78B55599027310424E6 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
@@ -110,6 +112,7 @@
 				731407A642C2125A3B7C02B2 /* DeviceWorkspaceFiles.swift */,
 				14486989616346BE7D7F4EF4 /* ExecutionSettings.swift */,
 				22CB94BB1FE76AEF28F124AF /* ExecutionWorkspaces.swift */,
+				91C5AC2A9D61EA42F4983352 /* HomeDataPanes.swift */,
 				316B1891F265DE4E356B02BA /* MobileDesign.swift */,
 				19598AFD98C07A606D32DCE5 /* NotePane.swift */,
 				032EBB6F955F52445FFDB1FC /* PairingPane.swift */,
@@ -342,6 +345,7 @@
 				0F9A4E9FA0116086B9887DEE /* DeviceWorkspaceFiles.swift in Sources */,
 				A9483CAF62A494A126BFEF2A /* ExecutionSettings.swift in Sources */,
 				0AC9BF1DE82D8FE4E01D882E /* ExecutionWorkspaces.swift in Sources */,
+				AF2B07FD41AEE1C52E7A3E6A /* HomeDataPanes.swift in Sources */,
 				234EB3BE45378206F3566AAD /* MobileDesign.swift in Sources */,
 				28CEC0B02F6E6ABE6CC30610 /* NotePane.swift in Sources */,
 				54B08E7CECB6333E45109680 /* PairingPane.swift in Sources */,
@@ -364,11 +368,11 @@
 		};
 		8B34D8412EB141465EBBC070 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_4D8251C6-ABA6-4341-8FD9-29C6EE2A9F35" /* WovenMatterCompanion */;
+			productRef = "TEMP_DBE56770-420F-42FE-8C29-532271B08272" /* WovenMatterCompanion */;
 		};
 		970CA8BDC681306F33B0361C /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_DB5D51CA-2480-4D3D-BCD3-0518A70913AE" /* CompanionClient */;
+			productRef = "TEMP_C53F97C1-9844-4498-B2FE-F6608B2EFDB5" /* CompanionClient */;
 		};
 /* End PBXTargetDependency section */
 
@@ -379,7 +383,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3M84Q9NAMN;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -482,7 +486,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3M84Q9NAMN;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -675,13 +679,13 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = CompanionInference;
 		};
-		"TEMP_4D8251C6-ABA6-4341-8FD9-29C6EE2A9F35" /* WovenMatterCompanion */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = WovenMatterCompanion;
-		};
-		"TEMP_DB5D51CA-2480-4D3D-BCD3-0518A70913AE" /* CompanionClient */ = {
+		"TEMP_C53F97C1-9844-4498-B2FE-F6608B2EFDB5" /* CompanionClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CompanionClient;
+		};
+		"TEMP_DBE56770-420F-42FE-8C29-532271B08272" /* WovenMatterCompanion */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WovenMatterCompanion;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

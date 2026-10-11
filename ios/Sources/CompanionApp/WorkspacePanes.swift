@@ -16,7 +16,6 @@ struct LibraryPane: View {
   @State private var preview: URL?
   var body: some View {
     VStack(spacing: 0) {
-      PaneHeader(title: "Library") { if loading { ProgressView() } }
       HStack {
         DashboardSearchField(text: $search, prompt: "Search files, links and photos").onSubmit { Task { await load() } }
         Button("Search") { Task { await load() } }.buttonStyle(DashboardQuietButtonStyle()).disabled(!model.online || loading)
@@ -25,6 +24,7 @@ struct LibraryPane: View {
         ["": "All", "file": "Files", "link": "Links", "photo": "Photos"][$0] ?? $0
       }.accessibilityLabel("Library item kind").padding()
       List {
+        CompanionInlineError(model: model)
         if !savedArtifacts.isEmpty {
           Section("Saved artifacts") {
             ForEach(savedArtifacts.filter { item in
@@ -34,14 +34,11 @@ struct LibraryPane: View {
               Button { Task { await openSavedArtifact(item) } } label: {
                 VStack(alignment: .leading, spacing: 5) {
                   Label(item.title, systemImage: item.mediaType.hasPrefix("image/") ? "photo" : "doc")
-                  Text(item.revision > 0 ? "Synchronized with central library" : "Saved on this device · waiting to sync")
-                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                 }
               }
             }
           }
         }
-        if !model.online { Text("Saved artifacts remain available here. Connect to your central library to load other files and links.").foregroundStyle(DashboardPalette.mutedForeground) }
         if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
         ForEach(items) { item in
           VStack(alignment: .leading, spacing: 6) {
@@ -62,7 +59,8 @@ struct LibraryPane: View {
         if items.isEmpty && model.online && !loading && failure == nil { Text("No Library items match this search.").foregroundStyle(DashboardPalette.mutedForeground) }
         if hasMore { Button("Load more") { Task { await load(more: true) } }.disabled(loading) }
       }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
-    }.task(id: model.online) { await load() }.onChange(of: kind) { Task { await load() } }
+    }.mobileNavigationPage("Library").toolbar { if loading { ToolbarItem(placement: .topBarTrailing) { ProgressView() } } }
+      .task(id: model.online) { await load() }.onChange(of: kind) { Task { await load() } }
       .quickLookPreview($preview)
   }
   private func load(more: Bool = false) async {
@@ -99,8 +97,8 @@ struct TrashPane: View {
   @State private var failure: String?
   var body: some View {
     VStack {
-      PaneHeader(title: "Trash") { EmptyView() }
       List {
+        CompanionInlineError(model: model)
         ForEach(model.executionRecords.values.filter { $0.isTrashed == true }.sorted { $0.updatedAt > $1.updatedAt }, id: \.id) { record in
           HStack {
             Label(record.title, glyph: .messageSquare)
@@ -108,7 +106,6 @@ struct TrashPane: View {
             Button("Restore") { Task { await model.restoreDeviceConversation(record.id) } }
           }
         }
-        if !model.online { Text("Device conversations can be restored here. Connect to your central library to restore other items.") }
         if let failure { Text(failure) }
         ForEach(items) { item in
           HStack {
@@ -119,7 +116,7 @@ struct TrashPane: View {
         }
         if model.online && items.isEmpty && !model.executionRecords.values.contains(where: { $0.isTrashed == true }) && failure == nil { Text("Trash is empty.").foregroundStyle(DashboardPalette.mutedForeground) }
       }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
-    }.task(id: model.online) { await load() }
+    }.mobileNavigationPage("Trash").task(id: model.online) { await load() }
   }
   private func load() async {
     guard model.online else { return }; failure = nil
@@ -145,9 +142,9 @@ struct ItemManagementSheet: View {
   @State private var preview: URL?
   @Environment(\.dismiss) private var dismiss
   var body: some View {
-    NavigationStack {
+    Group {
       Form {
-        if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
+        CompanionInlineError(model: model)
         if busy { ProgressView("Saving…") }
         Section("Title") {
           TextField("Title", text: $title)
@@ -167,10 +164,9 @@ struct ItemManagementSheet: View {
           Button(isNote ? "Export original document" : "Export full run") { Task { await export(original: true) } }
         }
         Section { Button("Move to Trash", role: .destructive) { confirmTrash = true } }
-        if !(isNote ? model.online : model.executionAvailable(for: id)) { Text("Connect to this item’s owner to manage it.").foregroundStyle(DashboardPalette.mutedForeground) }
       }.disabled(busy || !(isNote ? model.online : model.executionAvailable(for: id)))
         .navigationTitle(isNote ? "Note details" : "Conversation details")
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .confirmationDialog("Move this item to Trash?", isPresented: $confirmTrash, titleVisibility: .visible) {
           Button("Move to Trash", role: .destructive) { Task { await perform("trash") } }
         }
@@ -214,9 +210,9 @@ struct SessionSettingsSheet: View {
   @State private var confirmTimers = false
   @Environment(\.dismiss) private var dismiss
   var body: some View {
-    NavigationStack {
+    Group {
       Form {
-        if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
+        CompanionInlineError(model: model)
         if busy { ProgressView("Saving…") }
         if let settings {
           Section("Agent settings") {
@@ -225,7 +221,6 @@ struct SessionSettingsSheet: View {
             selection("Permission", value: $permission, options: settings.permissions)
             Button("Apply settings") { Task { await apply() } }.disabled(!settings.canConfigure)
             if !settings.canConfigure { Text("Wait for the active run to finish before changing settings.").font(.caption) }
-            if settings.models.isEmpty { Text("Options appear after this agent has connected in its workspace.").font(.caption) }
           }
           Section("Workspace tools") {
             ForEach(settings.availableTools) { tool in
@@ -239,7 +234,7 @@ struct SessionSettingsSheet: View {
         } else if let failure { Text(failure) } else { ProgressView("Loading settings…") }
       }.disabled(busy || !model.executionAvailable(for: id))
         .navigationTitle("Session settings")
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .task { await load() }
         .confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
           Button("Pause timers and save") { Task { await saveTools(confirmed: true) } }

@@ -9,12 +9,13 @@ struct ChatPane: View {
   @State private var detailsPresented = false
   @State private var settingsPresented = false
   @State private var filesPresented = false
+  @State private var pendingPresented = false
   var body: some View {
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
           Text(model.selectedConversation?.title ?? "New chat").font(.headline).lineLimit(1)
-          Text(model.executionStatus).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Text(model.executionName).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }
         Spacer()
         Menu {
@@ -25,6 +26,7 @@ struct ChatPane: View {
             Button("Details and export") { detailsPresented = true }
             Button("Session settings and tools") { settingsPresented = true }.disabled(!model.executionOnline)
           }
+          if !model.allPending.isEmpty { Button("Pending requests (\(model.allPending.count))") { pendingPresented = true } }
           Button("New chat", glyph: .squarePen) { model.newChat() }
           if model.activeRunID != nil { Button("Stop this run", systemImage: "stop.fill", role: .destructive) { Task { await model.stop() } }.disabled(!model.executionOnline || model.activeProvider?.canStop != true) }
           Button("Refresh", glyph: .rotate) { Task { await model.refreshConversation() } }
@@ -39,13 +41,9 @@ struct ChatPane: View {
             if model.transcript?.olderCursor != nil {
               Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.executionOnline || model.loadingHistory)
             }
-            if model.selectedConversationID == nil {
-              VStack(alignment: .leading, spacing: 12) {
-                Text("Continue the work from here.").font(.title2.weight(.semibold))
-                Text("Choose a workspace and inference connection. Pi Durable can run on this device, or you can control agents in another workspace over Tailscale.").foregroundStyle(DashboardPalette.mutedForeground)
-              }.padding(.vertical, 30)
-            } else if model.transcript == nil {
-              ContentUnavailableView { Label("Transcript isn’t saved here", glyph: .messageSquare) } description: { Text("Connect to the conversation’s execution workspace or your central library to load its history.") }
+            if model.selectedConversationID != nil && model.transcript == nil {
+              Button("Load conversation") { Task { await model.refreshConversation() } }.buttonStyle(DashboardQuietButtonStyle())
+                .disabled(!model.executionOnline)
             }
             ForEach(model.transcript?.messages ?? []) { message in MessageView(message: message) }
             ForEach(model.transcript?.activities ?? []) { activity in
@@ -77,17 +75,27 @@ struct ChatPane: View {
       }
       composer
     }
-    .sheet(isPresented: $filesPresented) {
+    .navigationDestination(isPresented: $pendingPresented) {
+      List(model.allPending) { request in
+        Button { Task { await model.selectConversation(request.conversationID); pendingPresented = false } } label: {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(request.title)
+            Text(model.state.conversations[request.conversationID]?.title ?? "Conversation").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          }
+        }
+      }.mobileNavigationPage("Pending requests")
+    }
+    .navigationDestination(isPresented: $filesPresented) {
       if let id = model.selectedConversationID { DeviceWorkspaceFiles(model: model, conversationID: id) }
     }
-    .sheet(isPresented: $detailsPresented) {
+    .navigationDestination(isPresented: $detailsPresented) {
       if let item = model.selectedConversation { ItemManagementSheet(model: model, id: item.id, isNote: false, title: item.title, folderID: item.folderID ?? "") }
     }
-    .sheet(isPresented: $settingsPresented) {
+    .navigationDestination(isPresented: $settingsPresented) {
       if let id = model.selectedConversationID { SessionSettingsSheet(model: model, id: id) }
     }
-    .sheet(isPresented: $referencesPresented) {
-      NavigationStack {
+    .navigationDestination(isPresented: $referencesPresented) {
+      Group {
         List {
           Button("No note reference") { model.referencedNoteID = nil; referencesPresented = false }
           ForEach(model.notes.filter { !model.state.uncachedNoteIDs.contains($0.id) }) { note in
@@ -95,7 +103,7 @@ struct ChatPane: View {
               VStack(alignment: .leading) { Text(note.title); Text(model.state.isDirty(note.id) ? "Will sync before sending" : "Revision \(note.revision)").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
             }.disabled(model.state.conflicts[note.id] != nil)
           }
-        }.navigationTitle("Reference a note").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { referencesPresented = false } } }
+        }.mobileNavigationPage("Reference a note")
       }
     }
   }
@@ -114,7 +122,7 @@ struct ChatPane: View {
             ForEach(model.inferenceConnections) { connection in
               Button(connection.name + " · " + connection.modelID) { model.selectInferenceConnection(connection.id) }
             }
-            Button("Manage inference connections") { model.executionSettingsPresented = true }
+            Button(model.deviceConnectionsTitle) { model.executionSettingsPresented = true }
           } label: { Text(model.selectedInferenceConnection?.modelID ?? "Choose model").font(.caption).lineLimit(1).frame(minHeight: 44) }
             .disabled(model.selectedConversationID != nil)
         }
@@ -155,7 +163,9 @@ struct ChatPane: View {
             .frame(width: 44, height: 44).foregroundStyle(.white).background(canSend ? DashboardPalette.primary : Color.gray.opacity(0.35), in: Circle())
         }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
       }
-      if let help = model.composerHelp { Text(help).font(.caption2).foregroundStyle(DashboardPalette.mutedForeground) }
+      if model.selectedExecutionWorkspaceID == "local" && model.selectedInferenceConnection == nil {
+        Button("Add connection") { model.executionSettingsPresented = true }.buttonStyle(DashboardQuietButtonStyle())
+      }
     }.padding(15).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)).padding(.horizontal, 18).padding(.vertical, 12)
   }
   private var canSend: Bool {

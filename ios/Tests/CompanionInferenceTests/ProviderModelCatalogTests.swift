@@ -79,7 +79,7 @@ final class ProviderModelCatalogTests: XCTestCase {
     XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-None-Match"), "\"fixture\"")
     XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-Modified-Since"), "Thu, 01 Oct 2026 12:00:00 GMT")
     for request in requests {
-      XCTAssertEqual(request.url?.absoluteString, "https://pi.dev/api/models/providers/openai?types=chat")
+      XCTAssertEqual(request.url?.absoluteString, "https://pi.dev/api/models/providers/openai?types=chat&pi-version=1.1.0")
       XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "pi/1.1.0")
       XCTAssertNil(request.httpBody)
       let allowed = Set(["accept", "user-agent", "if-none-match", "if-modified-since"])
@@ -127,6 +127,27 @@ final class ProviderModelCatalogTests: XCTestCase {
     let xai = try InferenceModelPolicy.parse(data([model("xai")]), provider: "xai-api")
     XCTAssertEqual(xai.first?.provider, "xai-api")
     XCTAssertEqual(xai.first?.api, "openai-responses")
+  }
+  func testOpenRouterExcludesOnlySentinelPricedRoutersWithoutWeakeningDestinationValidation() throws {
+    let normal = InferenceModel(id: "fixture-chat", name: "Priced model", provider: "openrouter", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", cost: ["input": 1, "output": 2])
+    let routers = ["openrouter/auto", "openrouter/auto-beta", "typesafe/jev-router"].map { id in
+      InferenceModel(id: id, name: "Dynamic router", provider: "openrouter", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", cost: ["input": -1_000_000, "output": -1_000_000])
+    }
+    XCTAssertEqual(try InferenceModelPolicy.parse(data([normal] + routers), provider: "openrouter"), [normal])
+    XCTAssertThrowsError(try InferenceModelPolicy.parse(data(routers), provider: "openrouter")) { XCTAssertEqual($0 as? InferenceError, .modelUnavailable) }
+    for router in routers { XCTAssertThrowsError(try InferenceModelPolicy.validate(router, provider: "openrouter")) }
+    for sentinel in [false, true] {
+      var bad = sentinel ? routers[0] : normal; bad.baseUrl = "https://foreign.invalid"
+      XCTAssertThrowsError(try InferenceModelPolicy.parse(data([normal, bad]), provider: "openrouter")) { XCTAssertEqual($0 as? InferenceError, .invalidEndpoint) }
+      bad = sentinel ? routers[0] : normal; bad.metadata["headers"] = .object(["Authorization": .string("fixture-secret")])
+      XCTAssertThrowsError(try InferenceModelPolicy.parse(data([normal, bad]), provider: "openrouter")) { XCTAssertEqual($0 as? InferenceError, .invalidEndpoint) }
+    }
+    let negative = InferenceModel(id: "invalid", name: "Invalid", provider: "openrouter", api: normal.api, baseUrl: normal.baseUrl, cost: ["input": -1, "output": 2])
+    XCTAssertThrowsError(try InferenceModelPolicy.parse(data([normal, negative]), provider: "openrouter"))
+    var unsupported = normal; unsupported.api = "future-api"
+    XCTAssertThrowsError(try InferenceModelPolicy.parse(data(routers + [unsupported]), provider: "openrouter")) { XCTAssertEqual($0 as? InferenceError, .modelUnavailable) }
+    let otherProvider = InferenceModel(id: "invalid", name: "Invalid", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", cost: ["input": -1_000_000, "output": -1_000_000])
+    XCTAssertThrowsError(try InferenceModelPolicy.parse(data([otherProvider]), provider: "openai"))
   }
   func testRejectsForeignDestinationsAndMalformedMetadataBeforeReadingCredentials() async throws {
     for endpoint in ["https://foreign.invalid", "https://api.openai.com:8443/v1", "https://api.openai.com/v1/other", "https://u:p@api.openai.com/v1", "https://api.openai.com/v1?token=secret"] {

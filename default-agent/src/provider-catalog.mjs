@@ -42,6 +42,12 @@ export function parseProviderModels(value, provider) {
     if (!entry || entry.provider !== source) throw invalid();
     if (![undefined, 'chat'].includes(entry.type)) continue;
     if (!providerEndpoints[provider]?.[entry.api]) continue;
+    // Dynamic OpenRouter routers use this sentinel for unavailable token prices.
+    // Exclusion must not hide an invalid credential destination or injected headers.
+    if (provider === 'openrouter' && [entry.cost?.input, entry.cost?.output].includes(-1_000_000)) {
+      if (entry.baseUrl !== providerEndpoints[provider][entry.api] || entry.headers !== undefined) throw invalid();
+      continue;
+    }
     const model = validatePublicModel({ ...entry, provider }, provider);
     if (seen.has(model.id)) throw invalid();
     seen.add(model.id); models.push(model);
@@ -99,7 +105,8 @@ export class ProviderCatalog {
     if (!force && saved && this.now() >= saved.checkedAt && this.now() - saved.checkedAt < refreshInterval) return saved;
     const source = provider === 'xai-api' ? 'xai' : provider;
     this.path(provider);
-    const response = await this.fetchCatalog(`https://pi.dev/api/models/providers/${source}?types=chat`, {
+    // Avoid the service’s version-normalization redirect without relaxing redirect policy.
+    const response = await this.fetchCatalog(`https://pi.dev/api/models/providers/${source}?types=chat&pi-version=${encodeURIComponent(this.version)}`, {
       headers: { accept: 'application/json', 'User-Agent': `pi/${this.version}`,
         ...(saved && validator(saved.etag) ? { 'If-None-Match': saved.etag } : {}),
         ...(saved && validator(saved.lastModifiedHeader) ? { 'If-Modified-Since': saved.lastModifiedHeader } : {}) },

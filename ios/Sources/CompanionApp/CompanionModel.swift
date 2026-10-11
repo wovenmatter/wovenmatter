@@ -6,7 +6,7 @@ import PiDurableRuntime
 import CompanionInference
 
 @MainActor @Observable final class CompanionModel {
-  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", library = "Library", calendar = "Calendar", trash = "Trash"
+  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", library = "Library", calendar = "Calendar", scheduledTasks = "Scheduled tasks", databases = "Databases", usage = "Usage", trash = "Trash"
     var icon: DashboardLucideGlyph {
       switch self {
       case .home: .house
@@ -16,6 +16,9 @@ import CompanionInference
       case .settings: .settings
       case .library: .libraryBig
       case .calendar: .calendarDays
+      case .scheduledTasks: .calendarClock
+      case .databases: .database
+      case .usage: .barChart
       case .trash: .trash
       }
     }
@@ -66,6 +69,7 @@ import CompanionInference
   var initialized = false
   var executionWorkspaceID = "local"
   var executionSettingsPresented = false
+  var deviceAgentDefaults = DeviceAgentDefaults()
   var inferenceConnections: [InferenceConnection] = []
   var inferenceConnectionID = ""
   var conversationWorkspaceIDs: [String: String] = [:]
@@ -147,7 +151,8 @@ import CompanionInference
     return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
   }
   var centralProvider: CompanionProvider? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
-  var currentPending: [CompanionPendingInteraction] { (pending + localPending + remotePending.values.flatMap { $0 }).filter { $0.conversationID == selectedConversationID } }
+  var allPending: [CompanionPendingInteraction] { pending + localPending + remotePending.values.flatMap { $0 } }
+  var currentPending: [CompanionPendingInteraction] { allPending.filter { $0.conversationID == selectedConversationID } }
   var unresolvedCommands: [MobileCommandRecord] { state.commands.filter { $0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown } }
 
   func run() async {
@@ -228,7 +233,7 @@ import CompanionInference
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
     } catch {
       online = false
-      connectionLabel = (error as? MobileConnectionError).map { _ in error.localizedDescription } ?? "Mac unavailable · notes work offline"
+      connectionLabel = (error as? MobileConnectionError).map { _ in error.localizedDescription } ?? "Mac unavailable"
       if error is MobileStore.Failure { errorMessage = error.localizedDescription }
       await reload()
     }
@@ -360,7 +365,7 @@ import CompanionInference
         let launch: MobileLaunchRecord
         if let pendingLaunch {
           guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it from Home before starting another."; return
+            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Workspaces → Pending changes before starting another."; return
           }
           launch = pendingLaunch
         } else {
@@ -373,7 +378,7 @@ import CompanionInference
             updateChatDraft(key: conversationID, draft: .init(text: text, noteID: noteID))
             selectedConversationID = conversationID
           }
-          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it from Home when the Mac is available."; return
+          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Workspaces → Pending changes when the Mac is available."; return
         }
         receipt = accepted
         if selectedConversationID == target { selectedConversationID = receipt.conversationID ?? conversationID }
@@ -382,7 +387,7 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "This conversation has an unacknowledged command. Resolve it from Home before sending different input."; return
+            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Workspaces → Pending changes before sending different input."; return
           }
           command = unresolved.command
         } else {
@@ -482,7 +487,7 @@ import CompanionInference
     await reload()
     let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "An earlier workspace change still needs acknowledgement. Review it on Home before making another change."
+      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Workspaces → Pending changes before making another change."
       return false
     }
     errorMessage = nil

@@ -49,8 +49,8 @@ Implementation status and exact test evidence belong in the PR handoff; this doc
 ## Provider model metadata
 
 The app has no first-party bundled model inventory or catalog generator. Opening
-one provider fetches only its credential-free `https://pi.dev/api/models/providers/{provider}?types=chat`
-shard, using `User-Agent: pi/<SDK compatibility version>`. `types` selects the
+one provider fetches only its credential-free `https://pi.dev/api/models/providers/{provider}?types=chat&pi-version={SDK-version}`
+shard directly, avoiding the service’s version-normalization redirect while retaining a no-redirect policy, using `User-Agent: pi/<SDK compatibility version>`. `types` selects the
 representation; both loaders explicitly retain only supported chat APIs. Native
 API-key xAI connections retain the `xai-api` identity while fetching the `xai` shard. Device Claude subscriptions retain `claude-subscription` while fetching the `anthropic` shard.
 
@@ -83,3 +83,5 @@ own provider baseline (about 951 KB in Pi 1.1.0). Woven's provider catalogs and
 selected-label UI no longer depend on it. Removing those upstream bytes requires
 an SDK packaging change and is outside this cleanup. The actual iOS Pi Durable
 runtime bundle and `harnesses/catalog.json` installation manifest are retained.
+
+OpenRouter catalog entries that declare the dynamic-router unavailable-price sentinel are omitted; their prices are never replaced with zero. Normal chat entries remain available, and destination/header validation still runs before exclusion.

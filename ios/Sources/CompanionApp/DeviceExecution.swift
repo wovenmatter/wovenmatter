@@ -12,6 +12,7 @@ struct DeviceConversationRecord: Codable, Equatable {
   var isPinned: Bool?
   var isTrashed: Bool?
   var enabledTools: [String]?
+  var additionalInstructions: String?
   var connectionID: String
   var connection: InferenceConnection?
   var modelJSON: String
@@ -24,11 +25,26 @@ struct DeviceConversationRecord: Codable, Equatable {
   var updatedAt: String
 }
 
+struct DeviceAgentDefaults: Codable, Equatable {
+  var instructions = ""
+  var enabledTools: [String]?
+}
+
+struct CompanionAgentLauncher: Identifiable, Equatable {
+  var workspaceID: String
+  var workspaceName: String
+  var providerID: String
+  var name: String
+  var runtimeKind: String
+  var id: String { workspaceID + ":" + providerID }
+}
+
 struct DeviceExecutionPreferences: Codable {
   var connections: [InferenceConnection] = []
   var selectedConnectionID = ""
   var workspaceID = "local"
   var conversations: [String: DeviceConversationRecord] = [:]
+  var agentDefaults: DeviceAgentDefaults?
 }
 
 struct InferenceSetupCredential: InferenceCredentialReading {
@@ -107,7 +123,53 @@ enum DeviceExecutionError: LocalizedError {
 
 extension CompanionModel {
   var deviceWorkspaceName: String { UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone" }
+  var deviceConnectionsTitle: String { UIDevice.current.userInterfaceIdiom == .pad ? "iPad Connections" : "iPhone Connections" }
   var deviceWorkspaceID: String { state.deviceID }
+  var launcherAgents: [CompanionAgentLauncher] {
+    var agents: [CompanionAgentLauncher] = [.init(workspaceID: "local", workspaceName: deviceWorkspaceName,
+      providerID: "pi-durable-device", name: "Pi Durable", runtimeKind: "pi")]
+    if online {
+      agents += providers.filter { provider in
+        guard provider.available && provider.canStart else { return false }
+        let parts = provider.id.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 3, parts[0] == "remote", let id = UUID(uuidString: String(parts[1]))?.uuidString.lowercased(),
+           executionWorkspaces.contains(where: { $0.id == id }), workspaceReachable[id] == true,
+           (workspaceProviders[id] ?? []).contains(where: { $0.available && $0.canStart && $0.runtimeKind == provider.runtimeKind }) {
+          return false
+        }
+        return true
+      }.map {
+        .init(workspaceID: "central", workspaceName: $0.routeName.isEmpty ? "Central Mac" : $0.routeName,
+          providerID: $0.id, name: $0.displayName, runtimeKind: $0.runtimeKind)
+      }
+    }
+    for workspace in executionWorkspaces.sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) where workspaceReachable[workspace.id] == true {
+      agents += (workspaceProviders[workspace.id] ?? []).filter { $0.available && $0.canStart }.map {
+        .init(workspaceID: workspace.id, workspaceName: workspace.name, providerID: $0.id, name: $0.displayName, runtimeKind: $0.runtimeKind)
+      }
+    }
+    return agents
+  }
+  func launchAgent(_ launcher: CompanionAgentLauncher) {
+    guard launcherAgents.contains(where: { $0.id == launcher.id }) else { return }
+    newChat(); selectExecutionWorkspace(launcher.workspaceID); providerID = launcher.providerID
+  }
+  func saveDeviceAgentDefaults(_ defaults: DeviceAgentDefaults, connectionID: String) throws {
+    guard let executionDirectory else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
+    guard connectionID.isEmpty || inferenceConnections.contains(where: { $0.id == connectionID }) else { throw InferenceError.invalidConfiguration }
+    let available = Set(Self.deviceToolDefinitions.compactMap { $0["name"] as? String })
+    guard defaults.enabledTools.map({ Set($0).isSubset(of: available) }) ?? true else { throw DeviceExecutionError.unavailable("An unknown device tool was selected.") }
+    let preferences = DeviceExecutionPreferences(connections: inferenceConnections, selectedConnectionID: connectionID,
+      workspaceID: executionWorkspaceID, conversations: executionRecords, agentDefaults: defaults)
+    try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    deviceAgentDefaults = defaults; inferenceConnectionID = connectionID
+  }
+  static func instructions(for record: DeviceConversationRecord) -> String {
+    let base = "You are Pi Durable running on an iOS Woven Matter workspace. Use provided native tools for notes and workspace files. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Never claim shell, process, or unrestricted filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."
+    let additional = record.additionalInstructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return additional.isEmpty ? base : base + "\n\nUser instructions for this conversation:\n" + additional
+  }
   func executionOwner(of conversationID: String) -> String {
     if executionRecords[conversationID] != nil { return "local" }
     if let workspaceID = conversationWorkspaceIDs[conversationID] { return workspaceID == deviceWorkspaceID ? "local" : workspaceID }
@@ -184,6 +246,7 @@ extension CompanionModel {
       let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
       inferenceConnections = saved.connections; inferenceConnectionID = saved.selectedConnectionID
       executionWorkspaceID = saved.workspaceID; executionRecords = saved.conversations
+      deviceAgentDefaults = saved.agentDefaults ?? .init()
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
       }
@@ -196,7 +259,7 @@ extension CompanionModel {
   func persistExecutionConfiguration() throws {
     guard let executionDirectory else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
     let saved = DeviceExecutionPreferences(connections: inferenceConnections, selectedConnectionID: inferenceConnectionID,
-                                           workspaceID: executionWorkspaceID, conversations: executionRecords)
+                                           workspaceID: executionWorkspaceID, conversations: executionRecords, agentDefaults: deviceAgentDefaults)
     try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
     try JSONEncoder().encode(saved).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
   }
@@ -215,7 +278,7 @@ extension CompanionModel {
       }
       let workspaceID = credential == nil && selectedConversationID == nil ? "local" : executionWorkspaceID
       let preferences = DeviceExecutionPreferences(connections: connections, selectedConnectionID: saved.id,
-        workspaceID: workspaceID, conversations: records)
+        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults)
       try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
       try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       executionRecords = records
@@ -242,6 +305,7 @@ extension CompanionModel {
           !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     guard let connection = selectedInferenceConnection else { executionSettingsPresented = true; return }
     let sourceKey = draftKey, text = composer, draft = currentDraft, noteID = referencedNoteID
+    let defaults = deviceAgentDefaults
     let selection = selectedConversationID
     let id = selection ?? UUID().uuidString.lowercased()
     guard localRunTokens[id] == nil, !localStopping.contains(id), executionRecords[id]?.status != "stopping" else { return }
@@ -252,7 +316,7 @@ extension CompanionModel {
         let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: defaults.enabledTools, additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
       }
       let runtime = try await deviceRuntime(id)
@@ -296,7 +360,7 @@ extension CompanionModel {
     let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned)
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
       configuration: .init(conversationID: id, modelJSON: record.modelJSON, toolsJSON: try toolsJSON(for: record),
-        instructions: "You are Pi Durable running on an iOS Woven Matter workspace. Use provided native tools for notes and workspace files. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Never claim shell, process, or unrestricted filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."),
+        instructions: Self.instructions(for: record)),
       inference: { request, emit in try await service.stream(requestJSON: request, emit: emit) },
       tool: { [weak self] request in
         guard let self else { throw CancellationError() }

@@ -5,53 +5,138 @@ import WovenMatterCompanion
 
 struct ExecutionSettingsPane: View {
   @Bindable var model: CompanionModel
-  @Environment(\.dashboardTheme) private var theme
-  @Environment(\.dismiss) private var dismiss
-  @State private var editing: InferenceConnection?
-  @State private var adding = false
+  private var connections: [InferenceConnection] { model.inferenceConnections.filter { $0.route == .direct && !$0.provider.hasPrefix("local-server-") } }
   var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 10) {
-          GroupLabel(text: "This device")
-          VStack(alignment: .leading, spacing: 8) {
-            Label("Pi Durable", systemImage: "iphone.gen3").font(.headline)
-            Text("Agents and tools run on \(model.deviceWorkspaceName.lowercased()). Inference uses a cloud provider or a host on Tailscale. Notes and saved outputs sync with your central library.")
-              .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
-            Text("Progress is saved during execution. If iOS interrupts a run, reopen its conversation to resume.")
-              .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-          }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
-          GroupLabel(text: "Inference connections")
-          ForEach(model.inferenceConnections) { connection in
-            WorkspaceRow(icon: .settings, title: connection.name, detail: connection.modelID) { editing = connection }
+    List {
+      if !connections.isEmpty {
+        Section("Saved accounts") {
+          ForEach(connections) { connection in
+            NavigationLink(connection.name) { InferenceConnectionEditor(model: model, connection: connection) }
           }
-          WorkspaceRow(icon: .plus, title: "Add inference connection") { adding = true }
-          if let problem = model.inferenceProblem { Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 14) }
-          GroupLabel(text: "Execution workspaces")
-          WorkspaceRow(systemIcon: "iphone.gen3", title: model.deviceWorkspaceName, detail: "Pi Durable · on device") { dismiss(); model.newChat(); model.selectExecutionWorkspace("local") }
-          if model.credential != nil {
-            WorkspaceRow(systemIcon: "laptopcomputer", title: "Central Mac", detail: model.online ? "Available" : "Unavailable") { dismiss(); model.newChat(); model.selectExecutionWorkspace("central") }
+        }
+      }
+      Section("Add connection") {
+        ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") }) { provider in
+          NavigationLink(provider.name) { InferenceConnectionEditor(model: model, connection: nil, provider: provider.id) }
+        }
+      }
+    }.listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never).mobileNavigationPage(model.deviceConnectionsTitle)
+  }
+}
+
+struct HostedInferenceSettingsPane: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    List {
+      ForEach(model.inferenceConnections.filter { $0.route == .adapter || $0.provider.hasPrefix("local-server-") }) { connection in
+        NavigationLink(connection.name) { InferenceConnectionEditor(model: model, connection: connection) }
+      }
+      NavigationLink("Add model server") { InferenceConnectionEditor(model: model, connection: nil, provider: "local-server-openai") }
+      NavigationLink("Use a workspace account") { InferenceConnectionEditor(model: model, connection: nil, hosted: true) }
+    }.listStyle(.insetGrouped).scrollContentBackground(.hidden).mobileNavigationPage("Tailscale inference")
+  }
+}
+
+struct DeviceAgentSettingsPane: View {
+  @Environment(\.dismiss) private var dismiss
+  @Bindable var model: CompanionModel
+  @State private var defaults = DeviceAgentDefaults()
+  @State private var connectionID = ""
+  @State private var selectedModelID = ""
+  @State private var models: [InferenceModel] = []
+  @State private var loaded = false
+  @State private var loading = false
+  @State private var saving = false
+  @State private var failure: String?
+  @State private var catalogTask: Task<Void, Never>?
+  @State private var saveTask: Task<Void, Never>?
+  @State private var generation = UUID()
+  private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
+  private var toolDefinitions: [(id: String, name: String)] {
+    CompanionModel.deviceToolDefinitions.compactMap { definition in
+      guard let id = definition["name"] as? String else { return nil }
+      return (id, id.replacingOccurrences(of: "_", with: " ").capitalized)
+    }
+  }
+  var body: some View {
+    Form {
+      Section("New conversations") {
+        Picker("Connection", selection: $connectionID) {
+          Text("Choose a connection").tag("")
+          ForEach(model.inferenceConnections) { connection in Text(connection.name).tag(connection.id) }
+        }
+        if selectedConnection != nil {
+          Picker("Model", selection: $selectedModelID) {
+            ForEach(models) { Text($0.name).tag($0.id) }
           }
-          ForEach(model.executionWorkspaces) { workspace in
-            WorkspaceRow(systemIcon: workspace.kind == .ios ? "iphone.gen3" : "server.rack", title: workspace.name,
-              detail: model.workspaceClients[workspace.id] == nil ? "Connect through your central library to authorize" : model.workspaceReachable[workspace.id] == true ? "Available over Tailscale" : "Unavailable") {
-              dismiss(); model.newChat(); model.selectExecutionWorkspace(workspace.id)
-            }
-            if let problem = model.workspaceProblems[workspace.id] {
-              Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 14)
-              Button("Refresh device access") { Task { await model.renewWorkspaceAccess(workspace.id) } }
-                .buttonStyle(DashboardQuietButtonStyle()).disabled(!model.online)
-            }
-          }
-          Text("A workspace owns its running agents and working files. Your central Mac stores the shared app library and saved artifacts.")
-            .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(14)
-        }.padding(18)
-      }.scrollIndicators(.never).navigationTitle("Agents and workspaces").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        .sheet(isPresented: $adding) { InferenceConnectionEditor(model: model, connection: nil) }
-        .sheet(item: $editing) { connection in InferenceConnectionEditor(model: model, connection: connection) }
-    }.tint(theme.palette.themeAccent)
+          if loading { ProgressView() }
+        }
+        NavigationLink(model.deviceConnectionsTitle) { ExecutionSettingsPane(model: model) }
+      }
+      Section("Instructions") { TextEditor(text: $defaults.instructions).frame(minHeight: 130).accessibilityLabel("Pi Durable instructions") }
+      Section("Tool access") {
+        ForEach(toolDefinitions, id: \.id) { tool in
+          Toggle(tool.name, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
+            var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id))
+            if enabled { selected.insert(tool.id) } else { selected.remove(tool.id) }
+            defaults.enabledTools = selected.sorted()
+          }))
+        }
+      }
+      if let failure { Section { Text(failure).foregroundStyle(DashboardPalette.danger); Button("Retry") { loadModels() } } }
+    }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Pi Durable")
+      .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || loading) } }
+      .onAppear {
+        if !loaded {
+          loaded = true; defaults = model.deviceAgentDefaults; connectionID = model.inferenceConnectionID
+        } else if selectedConnection == nil { connectionID = model.inferenceConnectionID }
+        loadModels(preservingSelection: true)
+      }
+      .onChange(of: connectionID) { loadModels() }
+      .onDisappear { catalogTask?.cancel(); saveTask?.cancel(); generation = UUID() }
+      .navigationBarBackButtonHidden(saving)
+  }
+  private func loadModels(preservingSelection: Bool = false) {
+    let preferred = preservingSelection ? selectedModelID : ""
+    catalogTask?.cancel(); generation = UUID(); let current = generation
+    failure = nil; loading = false; models = []
+    guard let connection = selectedConnection else { selectedModelID = ""; return }
+    selectedModelID = connection.modelID
+    if let selected = connection.selectedModel { models = [selected] }
+    else { models = [.init(id: connection.modelID, name: connection.modelID, provider: connection.provider, api: "", baseUrl: "")] }
+    guard !model.fixture, !model.isolatedTestHost, !connection.provider.hasPrefix("local-server-") else { return }
+    loading = true
+    catalogTask = Task {
+      do {
+        let service = CompanionInferenceService(connection: connection, credentials: model.executionCredentialStore)
+        var available = try await service.catalog().sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        guard !Task.isCancelled, generation == current else { return }
+        if let pinned = connection.selectedModel {
+          if let index = available.firstIndex(where: { $0.id == pinned.id }) { available[index] = pinned }
+          else { available.insert(pinned, at: 0) }
+        }
+        models = available
+        if !preferred.isEmpty && available.contains(where: { $0.id == preferred }) { selectedModelID = preferred }
+      } catch { if !Task.isCancelled, generation == current { failure = "Couldn’t refresh models." } }
+      if generation == current { loading = false }
+    }
+  }
+  private func save() {
+    guard !saving else { return }; saving = true; failure = nil
+    let defaults = defaults, id = connectionID, selected = models.first { $0.id == selectedModelID }
+    var connection = selectedConnection
+    if let selected { connection?.modelID = selected.id; connection?.selectedModel = selected }
+    saveTask = Task {
+      do {
+        if let connection, let original = model.inferenceConnections.first(where: { $0.id == connection.id }), connection.modelID != original.modelID {
+          try await model.saveInferenceConnection(connection, secret: "")
+        }
+        try Task.checkCancellation()
+        try model.saveDeviceAgentDefaults(defaults, connectionID: id)
+        dismiss()
+      } catch { if !Task.isCancelled { failure = error.localizedDescription } }
+      saving = false
+    }
   }
 }
 
@@ -76,6 +161,7 @@ enum InferenceSetupMode: String, CaseIterable {
   var loadingModels = false
   var saving = false
   var signingIn = false
+  var pendingSignInSave = false
   var problem: String?
   var catalogGeneration = UUID()
   var authenticationGeneration = UUID()
@@ -127,7 +213,7 @@ enum InferenceSetupMode: String, CaseIterable {
   }
   func resetCredentials() {
     secret = ""; storedCredentialAvailable = false; authenticatedAccountID = nil
-    signingIn = false; problem = nil; invalidateRequests()
+    signingIn = false; pendingSignInSave = false; problem = nil; invalidateRequests()
   }
   func invalidateRequests() {
     catalogGeneration = UUID(); authenticationGeneration = UUID(); loadingModels = false
@@ -153,7 +239,7 @@ enum InferenceSetupMode: String, CaseIterable {
   @discardableResult func receiveCredential(_ value: String, accountID: String, generation: UUID) -> Bool {
     guard authenticationGeneration == generation, isOAuth else { return false }
     secret = value; self.accountID = accountID; authenticatedAccountID = accountID
-    signingIn = false; problem = nil
+    signingIn = false; pendingSignInSave = true; problem = nil
     return true
   }
   func configuredConnection() throws -> InferenceConnection {
@@ -179,103 +265,81 @@ private struct InferenceConnectionEditor: View {
   @State private var authorizationCode = ""
   @State private var completingSignIn = false
   @State private var loaded = false
-  init(model: CompanionModel, connection: InferenceConnection?) {
+  init(model: CompanionModel, connection: InferenceConnection?, provider: String = "openai-codex", hosted: Bool = false) {
     self.model = model
-    _state = State(initialValue: InferenceConnectionSetupState(connection: connection))
+    let state = InferenceConnectionSetupState(connection: connection, provider: provider)
+    if hosted { state.chooseMode(.hosted) }
+    _state = State(initialValue: state)
   }
   private var setupAllowed: Bool { !model.fixture && !model.isolatedTestHost }
   private var signInName: String {
     switch state.provider { case "openai-codex": "ChatGPT"; case "claude-subscription": "Claude"; case "xai": "Grok"; default: InferenceConnectionSetupState.providerName(state.provider) }
   }
   var body: some View {
-    NavigationStack {
-      Form {
-        Section("Connection") {
+    Form {
+      if !setupAllowed { Section { Text("Account setup is disabled in this test build.") } }
+      else if state.mode == .hosted {
+        Section {
           Picker("Provider", selection: Binding(get: { state.provider }, set: chooseProvider)) {
-            ForEach(InferenceCatalog.providers) { item in Text(item.name).tag(item.id) }
-          }.disabled(state.original != nil || state.saving)
-          TextField("Name", text: $state.name).disabled(state.saving)
-          if state.mode == .device {
-            Text("Saved on this device. A Mac, paired library, and inference host are not required.")
+            ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") }) { Text($0.name).tag($0.id) }
+          }.disabled(state.original != nil)
+        }
+        hostedFields
+        modelFields
+      } else if state.isCustomServer {
+        Section {
+          TextField("Tailscale HTTPS address", text: $state.endpoint).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+          TextField("Model ID", text: $state.modelID).textInputAutocapitalization(.never).autocorrectionDisabled()
+        }
+        apiKeyFields
+      } else if state.isOAuth { subscriptionFields }
+      else { apiKeyFields }
+      if state.saving || state.pendingSignInSave && state.loadingModels { Section { ProgressView("Saving…") } }
+      else if state.loadingModels && !state.isOAuth { Section { ProgressView() } }
+      if let problem = state.problem {
+        Section {
+          Text(problem).foregroundStyle(DashboardPalette.danger)
+          if state.modelID.isEmpty || state.pendingSignInSave {
+            Button("Retry") { if state.modelID.isEmpty { loadModels(force: true) } else { save() } }.disabled(state.saving)
           }
         }
-        if !setupAllowed {
-          Section { Text("Connection setup is available in the regular app. Preview and test modes do not access accounts or credentials.") }
-        } else if state.mode == .hosted { hostedFields }
-        else if state.definition?.supportsDirect != true {
-          Section("Sign-in unavailable") {
-            Text("This subscription does not support sign-in in this app. You can use the provider’s API-key connection on this device.")
-          }
-        } else if state.isOAuth { subscriptionFields }
-        else { apiKeyFields }
-        if state.mode == .hosted || state.definition?.supportsDirect == true { modelFields }
-        Section {
-          Picker("Inference location", selection: Binding(get: { state.mode }, set: chooseMode)) {
-            ForEach(InferenceSetupMode.allCases, id: \.self) { mode in Text(mode.rawValue).tag(mode) }
-          }.disabled(state.saving)
-          Text("An inference host is optional. Choose it only to use an account already configured on an authorized Tailscale workspace.")
-        } header: { Text("Advanced") }
-        if let problem = state.problem { Section { Text(problem).foregroundStyle(.red) } }
-        if !state.saving, let hint = state.saveProblem { Section { Text(hint).foregroundStyle(DashboardPalette.mutedForeground) } }
-      }.scrollIndicators(.never).navigationTitle(state.original == nil ? "Add connection" : "Edit connection")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { cancelAll(); dismiss() } }
+      }
+    }.scrollIndicators(.never).mobileNavigationPage(state.mode == .hosted ? "Workspace account" : InferenceConnectionSetupState.providerName(state.provider))
+      .toolbar {
+        if !state.isOAuth {
           ToolbarItem(placement: .confirmationAction) {
             Button(state.saving ? "Saving…" : "Save") { save() }.disabled(!setupAllowed || state.saving || state.saveProblem != nil)
           }
-        }.task { await initialize() }
-        .onDisappear { cancelAll() }
-        .interactiveDismissDisabled(state.saving)
-    }
+        }
+      }.task { await initialize() }
+      .onDisappear { cancelAll() }
+      .navigationBarBackButtonHidden(state.saving)
   }
   private var apiKeyFields: some View {
-    Group {
-      if state.isCustomServer {
-        Section("Model server") {
-          TextField("Tailscale HTTPS address", text: $state.endpoint).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-          Text("Use a Tailscale server with the Responses API and an API key. Agents and tools still run on this device.")
-        }.disabled(state.saving)
-      }
-      Section("API key") {
-        SecureField(state.storedCredentialAvailable ? "Replace API key (optional)" : "Paste API key", text: $state.secret)
-          .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(state.saving)
-        if state.storedCredentialAvailable { Label("API key saved on this device", systemImage: "checkmark.circle") }
-        Text("Use your \(InferenceConnectionSetupState.providerName(state.provider)) API key. It stays in this device’s Keychain and is never included in library sync.")
-      }
+    Section {
+      SecureField(state.storedCredentialAvailable ? "Replace API key" : "API key", text: $state.secret)
+        .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(state.saving)
     }
   }
   private var subscriptionFields: some View {
-    Section("Sign in on this device") {
-      if state.authenticatedAccountID != nil || state.storedCredentialAvailable {
-        Label("Signed in on this device", systemImage: "checkmark.circle")
-        if !state.accountID.isEmpty { Text(state.accountID).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
-      }
+    Section {
       if let challenge {
-        if let code = challenge.userCode {
-          Text("Enter this code when asked:")
-          Text(code).font(.title3.monospaced().weight(.semibold)).textSelection(.enabled)
-        }
+        if let code = challenge.userCode { Text(code).font(.title3.monospaced().weight(.semibold)).textSelection(.enabled) }
         Link("Open \(signInName) sign-in", destination: challenge.verificationURL)
         if challenge.kind == .authorizationCode {
-          Text("Finish sign-in with \(signInName), then copy the authorization code back into this app.")
-          SecureField("Paste authorization code", text: $authorizationCode).textInputAutocapitalization(.never).autocorrectionDisabled()
-            .disabled(completingSignIn)
-          Button(completingSignIn ? "Finishing sign-in…" : "Complete sign-in") { completeAuthorizationCode() }
+          SecureField("Paste authorization code", text: $authorizationCode).textInputAutocapitalization(.never).autocorrectionDisabled().disabled(completingSignIn)
+          Button(completingSignIn ? "Finishing…" : "Complete sign-in") { completeAuthorizationCode() }
             .disabled(completingSignIn || authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        } else { ProgressView("Waiting for you to finish sign-in…") }
-        Text("This sign-in request expires \(challenge.expiresAt, style: .relative).")
+        } else { ProgressView("Waiting for sign-in…") }
         Button("Cancel sign-in") { cancelSignIn() }
       } else if state.signingIn { ProgressView("Preparing sign-in…") }
-      else {
-        Button(state.storedCredentialAvailable || state.authenticatedAccountID != nil ? "Sign in with another account" : "Sign in with \(signInName)") { signIn() }
-          .disabled(state.saving)
+      else if !state.pendingSignInSave {
+        Button("Sign in with \(signInName)") { signIn() }.disabled(state.saving)
       }
-      Text("You complete sign-in with the provider. Credentials stay in this device’s Keychain; inference connects directly from this device.")
     }
   }
   private var hostedFields: some View {
-    Section("Optional inference host") {
+    Section("Workspace") {
       Picker("Host", selection: Binding(get: { state.hostID }, set: chooseHost)) {
         Text(state.hasSavedHost ? "Saved host" : "Choose an authorized workspace").tag("")
         ForEach(model.executionWorkspaces.filter { $0.endpoint != nil }) { Text($0.name).tag($0.id) }
@@ -287,7 +351,6 @@ private struct InferenceConnectionEditor: View {
         ForEach(state.accounts.filter { $0.provider == state.provider && $0.connected }) { Text($0.label).tag($0.id) }
       }
       Button("Refresh host connections") { loadHost() }.disabled(state.hostID.isEmpty || state.loadingModels)
-      if model.credential == nil { Text("Pair with your central library to authorize a host. Device connections above work independently of pairing.") }
     }.disabled(state.saving)
   }
   private var modelFields: some View {
@@ -327,11 +390,6 @@ private struct InferenceConnectionEditor: View {
     cancelSignIn(); catalogTask?.cancel(); state.chooseProvider(id)
     loadModels()
   }
-  private func chooseMode(_ mode: InferenceSetupMode) {
-    guard !state.saving else { return }
-    cancelSignIn(); catalogTask?.cancel(); state.chooseMode(mode)
-    loadModels()
-  }
   private func chooseHost(_ id: String) {
     guard !state.saving else { return }
     catalogTask?.cancel(); state.hostID = id; state.models = []; state.accounts = []; state.modelID = ""; state.accountID = ""; state.endpoint = ""
@@ -353,9 +411,10 @@ private struct InferenceConnectionEditor: View {
         state.receiveModels(fetched, generation: generation)
       } catch {
         guard !Task.isCancelled, state.catalogGeneration == generation else { return }
-        state.problem = "Models could not be refreshed. Check your connection and try Refresh models. Any saved selection remains available."
+        state.problem = "Couldn’t refresh models."
       }
       state.loadingModels = false
+      saveSignedInAccountWhenReady()
     }
   }
   private func loadHost() {
@@ -398,6 +457,7 @@ private struct InferenceConnectionEditor: View {
         guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
         state.receiveCredential(try credential.serialized(), accountID: credential.accountID, generation: generation)
         challenge = nil; oauthSession = nil
+        saveSignedInAccountWhenReady()
       } catch {
         guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
         state.signingIn = false; challenge = nil; oauthSession = nil; state.problem = error.localizedDescription
@@ -415,6 +475,7 @@ private struct InferenceConnectionEditor: View {
         guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
         state.receiveCredential(try credential.serialized(), accountID: credential.accountID, generation: generation)
         authorizationCode = ""; challenge = nil; oauthSession = nil
+        saveSignedInAccountWhenReady()
       } catch {
         guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
         // The OAuth session consumes this challenge even if code exchange fails.
@@ -430,10 +491,15 @@ private struct InferenceConnectionEditor: View {
   private func cancelSignIn() {
     state.authenticationGeneration = UUID(); authenticationTask?.cancel(); authenticationTask = nil
     if let session = oauthSession { Task { await session.cancel() } }
-    oauthSession = nil; challenge = nil; authorizationCode = ""; completingSignIn = false; state.signingIn = false
+    oauthSession = nil; challenge = nil; authorizationCode = ""; completingSignIn = false; state.signingIn = false; state.pendingSignInSave = false
   }
   private func cancelAll() {
     catalogTask?.cancel(); saveTask?.cancel(); cancelSignIn(); state.invalidateRequests()
+  }
+  private func saveSignedInAccountWhenReady() {
+    guard state.pendingSignInSave, !state.loadingModels, !state.saving else { return }
+    guard !state.modelID.isEmpty else { state.problem = "Couldn’t load models."; return }
+    save()
   }
   private func save() {
     guard setupAllowed, !state.saving else { return }
@@ -474,7 +540,7 @@ struct ExecutionWorkspaceMenu: View {
         Button(workspace.name) { model.selectExecutionWorkspace(workspace.id) }
       }
       Divider()
-      Button("Manage workspaces and inference") { model.executionSettingsPresented = true }
+      NavigationLink("Manage workspaces") { WorkspacesSettingsPane(model: model) }
     } label: {
       HStack(spacing: 6) {
         Image(systemName: model.selectedExecutionWorkspaceID == "local" ? "iphone.gen3" : "server.rack")

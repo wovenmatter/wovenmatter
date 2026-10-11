@@ -21,10 +21,10 @@ WOVENMATTER_IOS_DEVICE_ID=<registered-device-id> scripts/build-ios.sh --device
 ## Standalone setup
 
 Start in the regular app, without UI-fixture launch variables. Open **Settings →
-Agents and workspaces → Add inference connection**. Choose ChatGPT, Claude, or
-Grok and complete sign-in yourself, or select an API-key provider and paste the
-key. OpenCode Zen and Go are separate provider choices. Select a model and save;
-then start a chat with **This iPhone** or **This iPad** as the execution workspace.
+iPhone Connections** (or **iPad Connections**) and choose a provider. Complete
+ChatGPT, Claude, or Grok sign-in yourself, or paste an API key and save.
+OpenCode Zen and Go are separate provider choices. Choose the connection and
+model in **Settings → Pi Durable**, then start a chat from Home’s Pi Durable row.
 No other Woven Matter device or Tailscale connection is needed for cloud inference.
 Provider credentials and refresh stay on this device. Native Claude transport
 uses Woven Matter identity and does not impersonate Claude Code. Real account
@@ -46,7 +46,7 @@ Every mutation has a stable operation ID and conditional base revision. Submitte
 
 The default note-body budget is 64 MB, counting bases, conflict variants and outbox bodies. Clean body eviction keeps IDs, titles, folders and revisions discoverable; an online open downloads the original document. Pending writing is never evicted. The durable transcript cache retains about 20 recent conversations under 16 MB. It is read only while disconnected. Media is not downloaded into this cache.
 
-New-chat creation and its first send are separate durable commands with separate stable IDs. Receipt recovery never automatically executes an unsent continuation. Home offers an explicit Continue action after an interrupted request. Existing-session drafts and capabilities are scoped by conversation, and a send captures its target before any asynchronous save or network work.
+New-chat creation and its first send are separate durable commands with separate stable IDs. Receipt recovery never automatically executes an unsent continuation. Settings → Workspaces → Pending changes offers an explicit retry of the same request after interruption. Existing-session drafts and capabilities are scoped by conversation, and a send captures its target before any asynchronous save or network work.
 
 ## Editing and online assets
 
@@ -58,9 +58,9 @@ A device workspace uses a confined app directory, imported files, supported nati
 
 ## Current workspace features
 
-Library searches files, links and photos from the Mac, opens retained files with native preview/share, and links back to their conversation. File downloads and exports are capped at 32 MB. Calendar supports events, recurring series, scheduled prompts, occurrence/series deletion, and task conversations. Device inference credentials remain in device-only Keychain. Workspace provider credentials remain with their configured inference host. Conversation and note detail sheets expose rename, pin/unpin, move, trash, restore and export. Session settings use negotiated model, thinking, permission and workspace-tool choices, including timer-pause confirmation.
+Library searches files, links and photos from the Mac, opens retained files with native preview/share, and links back to their conversation. File downloads and exports are capped at 32 MB. Calendar supports events, recurring series, scheduled prompts, occurrence/series deletion, and task conversations. Device inference credentials remain in device-only Keychain. Workspace provider credentials remain with their configured inference host. Conversation and note detail pages expose rename, pin/unpin, move, trash, restore and export. Session settings use negotiated model, thinking, permission and workspace-tool choices, including timer-pause confirmation.
 
-On iPad, a persistent sidebar replaces the phone tab bar and remains available while editing; compact windows use the phone layout. The first phone UI pass is in place; further styling follows simulator feedback. Central-only operations explain their connection requirement. Notes, device execution, and previously authorized direct workspaces remain usable independently; sheets retain entered values when a request fails.
+On iPad, a persistent sidebar replaces the phone tab bar and remains available while editing; compact windows use the phone layout. The first phone UI pass is in place; further styling follows simulator feedback. Connection management lives in Settings → Workspaces. Notes, device execution, and previously authorized direct workspaces remain usable independently; detail pages retain entered values when a request fails.
 
 Pair each phone/tablet with a fresh code. Up to 16 devices can use one canonical Mac, each with independent revocation. Protocol 3 requires compatible Mac and mobile builds; existing local notes and stored pairing credentials are retained on upgrade. When background execution is enabled, the service owns sharing and the Settings window controls it over the existing local RPC connection. When disabled, keep the Mac app running.
 
@@ -119,7 +119,7 @@ simulator. Use a separate simulator without fixture variables for real pairing.
 
 The primary tabs are Home, Folders, Chats, Notes, and Settings. Opening a folder
 shows its searchable notes and chats within Folders; Back to Folders returns to
-the folder list. Settings contains Mac connection, sync controls, and the Green/Cognac appearance choice.
+the folder list. Home lists agents and opens Library, Calendar, Scheduled tasks, Databases, and Usage. Settings has General, iPhone/iPad Connections, Pi Durable, Workspaces, Usage, and Trash. Pi Durable owns on-device model, instructions, and tool defaults; the device Connections page owns provider sign-in and API keys. Details use full-page navigation with Back.
 
 ## Styling parity
 
@@ -134,6 +134,6 @@ The audit covered Home, folder navigation and contents, chat/composer and agent
 selection, note editing/conflicts/read-only assets, Library, Calendar/event forms,
 Trash, Settings, pairing, item management and session settings. Palettes, muted
 text, links, radii, search, segmented selectors, and primary/quiet buttons now use the shared definitions.
-System typography remains Dynamic Type; touch targets and native iOS sheets,
+System typography remains Dynamic Type; touch targets and native iOS
 pickers, switches, share/camera controls are intentionally adapted for mobile.
 Desktop SF document-kind and formatting symbols remain consistent exceptions.

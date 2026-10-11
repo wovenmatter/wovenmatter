@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ProviderCatalog, parseProviderModels, refreshInterval } from '../src/provider-catalog.mjs';
+import { ProviderCatalog, parseProviderModels, refreshInterval, validatePublicModel } from '../src/provider-catalog.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { ClaudeRuntime } from '../src/claude-runtime.mjs';
@@ -32,7 +32,7 @@ test('cold/warm/restart/stale/304 use bounded version-aware public provider shar
   assert.equal(requests[1].options.headers['If-None-Match'], '"fixture"');
   assert.equal(requests[1].options.headers['If-Modified-Since'], 'Thu, 01 Oct 2026 12:00:00 GMT');
   for (const { url, options } of requests) {
-    assert.equal(url, 'https://pi.dev/api/models/providers/openai?types=chat');
+    assert.equal(url, 'https://pi.dev/api/models/providers/openai?types=chat&pi-version=1.1.0');
     assert.equal(options.headers['User-Agent'], 'pi/1.1.0');
     assert.equal(options.credentials, 'omit'); assert.equal(options.redirect, 'error');
     assert.equal(options.body, undefined);
@@ -61,6 +61,22 @@ test('only supported chat types/APIs survive; complete metadata and xAI identity
   assert.deepEqual(parseProviderModels([value, { ...value, type: 'image', api: 'openrouter-images' }, { ...value, type: 'classifier', api: 'openai-decisions' }, { ...value, api: 'future-api' }], 'openai'), [value]);
   const xai = descriptor({ provider: 'xai', baseUrl: 'https://api.x.ai/v1' });
   assert.deepEqual(parseProviderModels({ models: [xai] }, 'xai-api'), [{ ...xai, provider: 'xai-api' }]);
+});
+
+test('OpenRouter sentinel-price routers are excluded without weakening routing or price validation', () => {
+  const normal = descriptor({ provider: 'openrouter', api: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1' });
+  const routers = ['openrouter/auto', 'openrouter/auto-beta', 'typesafe/jev-router'].map(id => ({ ...normal, id, cost: { input: -1_000_000, output: -1_000_000 } }));
+  assert.deepEqual(parseProviderModels([normal, ...routers], 'openrouter'), [normal]);
+  assert.throws(() => parseProviderModels(routers, 'openrouter'), /No supported chat models/);
+  for (const router of routers) assert.throws(() => validatePublicModel(router, 'openrouter'), /invalid model metadata/);
+  for (const entry of [normal, routers[0]]) {
+    for (const patch of [{ baseUrl: 'https://foreign.invalid' }, { headers: { Authorization: 'fixture-secret' } }]) {
+      assert.throws(() => parseProviderModels([normal, { ...entry, ...patch }], 'openrouter'), /invalid model metadata/);
+    }
+  }
+  assert.throws(() => parseProviderModels([normal, { ...normal, id: 'invalid', cost: { input: -1, output: 2 } }], 'openrouter'), /invalid model metadata/);
+  assert.throws(() => parseProviderModels([...routers, { ...normal, api: 'future-api' }], 'openrouter'), /No supported chat models/);
+  assert.throws(() => parseProviderModels([descriptor({ cost: { input: -1_000_000, output: -1_000_000 } })], 'openai'), /invalid model metadata/);
 });
 
 test('foreign destinations, provider mismatches, malformed fields and oversized bodies fail closed', async t => {

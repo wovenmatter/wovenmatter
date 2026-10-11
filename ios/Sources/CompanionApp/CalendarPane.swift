@@ -13,9 +13,6 @@ struct CalendarPane: View {
   @State private var failure: String?
   var body: some View {
     VStack(spacing: 0) {
-      PaneHeader(title: "Calendar") {
-        Button { creating = true } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }.disabled(!model.online).accessibilityLabel("New calendar event")
-      }
       HStack {
         Button { shift(-1) } label: { DashboardLucideIcon(glyph: .arrowLeft, size: 20).frame(width: 44, height: 44) }.accessibilityLabel("Previous month")
         Spacer()
@@ -24,7 +21,6 @@ struct CalendarPane: View {
         Button { shift(1) } label: { DashboardLucideIcon(glyph: .arrowRight, size: 20).frame(width: 44, height: 44) }.accessibilityLabel("Next month")
       }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 24).padding(.bottom)
       List {
-        if !model.online { Text("Connect to your Mac to view Calendar and scheduled tasks.").foregroundStyle(DashboardPalette.mutedForeground) }
         if loading { ProgressView() }
         if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
         ForEach(events, id: \.occurrenceID) { event in
@@ -42,13 +38,22 @@ struct CalendarPane: View {
           }.buttonStyle(.plain)
         }
         if model.online && events.isEmpty && !loading && failure == nil { Text("No events this month.").foregroundStyle(DashboardPalette.mutedForeground) }
-      }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
-    }.task(id: month) { await load() }.onChange(of: model.online) { Task { await load() } }
-      .sheet(isPresented: $creating, onDismiss: { Task { await load() } }) {
+      }.listStyle(.plain).scrollContentBackground(.hidden).scrollIndicators(.never).refreshable { await load() }
+    }.navigationTitle("Calendar").navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button { creating = true } label: { DashboardLucideIcon(glyph: .plus, size: 20) }
+            .disabled(!model.online).accessibilityLabel("New calendar event")
+        }
+      }
+      .task(id: month) { await load() }.onChange(of: model.online) { Task { await load() } }
+      .onChange(of: creating) { if !creating { Task { await load() } } }
+      .onChange(of: selected) { if selected == nil { Task { await load() } } }
+      .navigationDestination(isPresented: $creating) {
         CalendarEventSheet(model: model, event: nil)
       }
-      .sheet(item: $selected, onDismiss: { Task { await load() } }) { event in
-        CalendarEventSheet(model: model, event: event)
+      .navigationDestination(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
+        if let selected { CalendarEventSheet(model: model, event: selected) }
       }
   }
   private func eventColor(_ event: CompanionCalendarEvent) -> Color {
@@ -78,15 +83,14 @@ struct CalendarEventSheet: View {
   @State private var busy = false
   @State private var confirmDelete = false
   @Environment(\.dismiss) private var dismiss
-  init(model: CompanionModel, event: CompanionCalendarEvent?) {
+  init(model: CompanionModel, event: CompanionCalendarEvent?, newTask: Bool = false) {
     self.model = model; self.event = event
-    _draft = State(initialValue: event?.draft ?? .init(startsAt: Date().addingTimeInterval(3_600)))
+    _draft = State(initialValue: event?.draft ?? .init(startsAt: Date().addingTimeInterval(3_600), task: newTask ? .init() : nil, showsOnCalendar: newTask ? false : true))
     _eventID = State(initialValue: event?.id ?? UUID().uuidString.lowercased())
   }
   private var recurrence: Binding<String> { Binding(get: { draft.recurrenceUnit ?? "" }, set: { draft.recurrenceUnit = $0.isEmpty ? nil : $0 }) }
   private var scheduled: Binding<Bool> { Binding(get: { draft.task != nil }, set: { draft.task = $0 ? .init() : nil }) }
   var body: some View {
-    NavigationStack {
       Form {
         if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
         if busy { ProgressView("Saving…") }
@@ -117,11 +121,11 @@ struct CalendarEventSheet: View {
           }
           Section { Button("Delete event", role: .destructive) { confirmDelete = true } }
         }
-      }.environment(\.timeZone, TimeZone(identifier: draft.timeZoneID) ?? .current)
+      }.scrollIndicators(.never).scrollContentBackground(.hidden).environment(\.timeZone, TimeZone(identifier: draft.timeZoneID) ?? .current)
         .disabled(busy || !model.online)
-        .navigationTitle(event == nil ? "New event" : "Edit event")
+        .navigationTitle(draft.task == nil ? (event == nil ? "New event" : "Edit event") : (event == nil ? "New task" : "Edit task"))
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
           ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(busy || !model.online || draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }
         .confirmationDialog("Delete this calendar event?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -130,21 +134,19 @@ struct CalendarEventSheet: View {
             Button(event.draft.recurrenceUnit == nil ? "Delete event" : "Delete entire series", role: .destructive) { Task { await delete(occurrence: nil) } }
           }
         }
-    }
   }
   @ViewBuilder private var taskFields: some View {
-    if let task = draft.task {
+    if draft.task != nil {
+      Toggle("Show on calendar", isOn: Binding(get: { draft.showsOnCalendar ?? true }, set: { draft.showsOnCalendar = $0 }))
       Picker("Agent and workspace", selection: Binding(get: { selectedRoute }, set: { selectRoute($0) })) {
         ForEach(routeChoices) { Text($0.label).tag($0.id) }
       }
-      if task.workspaceID != nil { Text("Runs in the remote workspace configured on your Mac.").font(.caption) }
       TextField("Prompt", text: Binding(get: { draft.task?.prompt ?? "" }, set: { draft.task?.prompt = $0 }), axis: .vertical).lineLimit(4...12)
       Picker("Session folder", selection: Binding(get: { draft.task?.folderID ?? "" }, set: { draft.task?.folderID = $0.isEmpty ? nil : $0 })) {
         Text("No folder").tag("")
         ForEach(model.folders) { Text($0.name).tag($0.id) }
       }
       if draft.recurrenceUnit != nil { Toggle("New session each time", isOn: Binding(get: { draft.task?.newSessionEachTime ?? false }, set: { draft.task?.newSessionEachTime = $0 })) }
-      Text("Runs on your Mac using its saved agent settings. Keep the Mac and its background service available at the scheduled time.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
     }
   }
   private var selectedRoute: String {
