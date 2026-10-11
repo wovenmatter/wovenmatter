@@ -377,9 +377,9 @@ struct GeneralSettingsPane: View {
   var body: some View {
     Form {
       Section("Appearance") {
-        Picker("Theme", selection: $storedTheme) {
-          ForEach(DashboardTheme.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-        }
+        DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
+          DashboardTheme(rawValue: $0)?.title ?? $0
+        }.accessibilityLabel("Theme")
       }
       Section("About") {
         LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
