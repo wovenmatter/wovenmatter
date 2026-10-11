@@ -8,8 +8,9 @@ public struct InferenceProvider: Identifiable, Sendable {
   public let name: String
   public let defaultRoute: InferenceRoute
   public let supportsDirect: Bool
-  public init(id: String, name: String, defaultRoute: InferenceRoute, supportsDirect: Bool) {
-    self.id = id; self.name = name; self.defaultRoute = defaultRoute; self.supportsDirect = supportsDirect
+  public let supportsOAuth: Bool
+  public init(id: String, name: String, defaultRoute: InferenceRoute, supportsDirect: Bool, supportsOAuth: Bool = false) {
+    self.id = id; self.name = name; self.defaultRoute = defaultRoute; self.supportsDirect = supportsDirect; self.supportsOAuth = supportsOAuth
   }
 }
 
@@ -149,13 +150,14 @@ public struct InferenceModel: Codable, Sendable, Identifiable, Equatable {
 
 public enum InferenceCatalog {
   public static let providers: [InferenceProvider] = [
-    .init(id: "openai-codex", name: "OpenAI · ChatGPT subscription", defaultRoute: .adapter, supportsDirect: false),
+    .init(id: "openai-codex", name: "OpenAI · ChatGPT subscription", defaultRoute: .direct, supportsDirect: true, supportsOAuth: true),
     .init(id: "openai", name: "OpenAI · API key", defaultRoute: .direct, supportsDirect: true),
     .init(id: "openrouter", name: "OpenRouter", defaultRoute: .direct, supportsDirect: true),
+    .init(id: "opencode", name: "OpenCode Zen", defaultRoute: .direct, supportsDirect: true),
     .init(id: "opencode-go", name: "OpenCode Go", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "xai", name: "Grok subscription", defaultRoute: .adapter, supportsDirect: false),
+    .init(id: "xai", name: "Grok subscription", defaultRoute: .direct, supportsDirect: true, supportsOAuth: true),
     .init(id: "xai-api", name: "xAI · API key", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "claude-subscription", name: "Claude · Subscription", defaultRoute: .adapter, supportsDirect: false),
+    .init(id: "claude-subscription", name: "Claude · Subscription", defaultRoute: .direct, supportsDirect: true, supportsOAuth: true),
     .init(id: "anthropic", name: "Claude · API key", defaultRoute: .direct, supportsDirect: true),
     .init(id: "local-server-openai", name: "Tailscale model server", defaultRoute: .direct, supportsDirect: true),
   ]
@@ -169,8 +171,8 @@ public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
     switch self {
     case .invalidConfiguration: "Choose a connection, account, and model before starting this agent."
     case .invalidEndpoint: "Use the inference host's Tailscale address without embedded credentials, query parameters, or fragments."
-    case .adapterRequired: "This subscription uses an inference adapter on an authorized Tailscale host. The agent and its tools still run on this device."
-    case .missingCredential: "This connection needs an API key or an authorized inference-host credential in Settings."
+    case .adapterRequired: "Choose direct sign-in on this device for a supported subscription, or configure the authorized Tailscale host for this adapter connection."
+    case .missingCredential: "Add an API key, sign in to this subscription on this device, or configure the credential for the selected inference host in Settings."
     case .modelUnavailable: "The selected model is unavailable on this connection. Choose a model explicitly; no fallback was attempted."
     case .accountUnavailable: "The selected account is unavailable on this inference host. No account fallback was attempted."
     case .malformedResponse: "The inference endpoint returned an unsupported response."

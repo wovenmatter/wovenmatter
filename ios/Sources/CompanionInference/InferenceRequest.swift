@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 typealias InferenceObject = [String: Any]
 func inferenceObject(_ value: Any?) -> InferenceObject { value as? InferenceObject ?? [:] }
@@ -13,7 +14,7 @@ func inferenceText(_ message: InferenceObject) -> String { inferenceContent(mess
 struct InferenceRequestBuilder {
   let connection: InferenceConnection
   let model: InferenceModel
-  func request(_ input: InferenceObject, secret: String) throws -> URLRequest {
+  func request(_ input: InferenceObject, secret: String, accountID: String? = nil) throws -> URLRequest {
     try connection.validate()
     guard model.id == connection.modelID, model.provider == connection.provider else { throw InferenceError.modelUnavailable }
     if !connection.provider.hasPrefix("local-server-") { try InferenceModelPolicy.validate(model, provider: connection.provider) }
@@ -44,14 +45,30 @@ struct InferenceRequestBuilder {
       if let map = model.thinkingLevelMap { return map[value] ?? nil }
       return value
     }
+    let codex = model.api == "openai-codex-responses"
+    let session = options["sessionId"] as? String ?? inferenceObject(input["scope"])["conversationID"] as? String
+    let sessionID = session.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
     var path: String
     switch model.api {
-    case "openai-responses":
-      path = "responses"; body["store"] = false; body["max_output_tokens"] = maxTokens
-      if !prompt.isEmpty { body["instructions"] = prompt }
+    case "openai-responses", "openai-codex-responses":
+      path = codex ? "codex/responses" : "responses"; body["store"] = false
+      if codex {
+        body["instructions"] = prompt.isEmpty ? "You are a helpful assistant." : prompt
+        body["text"] = ["verbosity": "low"]; body["include"] = ["reasoning.encrypted_content"]
+        body["tool_choice"] = "auto"; body["parallel_tool_calls"] = true
+        body["prompt_cache_key"] = sessionID
+      } else {
+        body["max_output_tokens"] = maxTokens
+        if !prompt.isEmpty { body["instructions"] = prompt }
+      }
       body["input"] = try responsesMessages(messages)
       if !inventory.isEmpty { body["tools"] = inventory.map { ["type": "function", "name": $0["name"] ?? "", "description": $0["description"] ?? "", "parameters": $0["parameters"] ?? [:], "strict": false] } }
+      if codex, !inventory.isEmpty { body["tools"] = inventory.map { ["type": "function", "name": $0["name"] ?? "", "description": $0["description"] ?? "", "parameters": $0["parameters"] ?? [:], "strict": NSNull()] } }
       if let reasoning { body["reasoning"] = ["effort": reasoning, "summary": "auto"]; body["include"] = ["reasoning.encrypted_content"] }
+      else if codex, model.reasoning {
+        if let map = model.thinkingLevelMap, map.keys.contains("off") { if let off = map["off"] ?? nil { body["reasoning"] = ["effort": off] } }
+        else { body["reasoning"] = ["effort": "none"] }
+      }
     case "anthropic-messages":
       path = "v1/messages"; body["max_tokens"] = maxTokens; body["messages"] = try anthropicMessages(messages)
       if !prompt.isEmpty { body["system"] = prompt }
@@ -75,17 +92,30 @@ struct InferenceRequestBuilder {
       }
     default: throw InferenceError.modelUnavailable
     }
-    if let temperature = options["temperature"] as? Double, reasoning == nil { body["temperature"] = temperature }
+    if let temperature = options["temperature"] as? Double, reasoning == nil, !codex { body["temperature"] = temperature }
     var base = connection.provider.hasPrefix("local-server-") ? try InferenceURLPolicy.tailnet(connection.baseURL ?? "") : try cloudURL(model.baseUrl)
     if connection.provider.hasPrefix("local-server-"), base.path.isEmpty || base.path == "/" { base.appendPathComponent("v1") }
     var request = URLRequest(url: base.appendingPathComponent(path))
     request.httpMethod = "POST"; request.httpBody = try JSONSerialization.data(withJSONObject: body)
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    request.setValue("WovenMatter/1 iOS", forHTTPHeaderField: "User-Agent")
     if model.api == "anthropic-messages" {
-      request.setValue(secret, forHTTPHeaderField: "x-api-key"); request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+      request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+      if connection.provider == "claude-subscription" {
+        request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+      } else { request.setValue(secret, forHTTPHeaderField: "x-api-key") }
     } else { request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization") }
-    if model.provider == "opencode-go", let scope = input["scope"] as? InferenceObject, let session = scope["conversationID"] as? String {
+    if codex {
+      guard let accountID, !accountID.isEmpty, !accountID.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw InferenceOAuthError.signInRequired }
+      request.setValue(accountID, forHTTPHeaderField: "chatgpt-account-id")
+      request.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
+      request.setValue("wovenmatter", forHTTPHeaderField: "originator")
+      request.setValue(sessionID, forHTTPHeaderField: "session-id")
+      request.setValue(sessionID, forHTTPHeaderField: "x-client-request-id")
+    }
+    if ["opencode", "opencode-go"].contains(model.provider), let scope = input["scope"] as? InferenceObject, let session = scope["conversationID"] as? String {
       request.setValue(session, forHTTPHeaderField: "x-opencode-session")
     }
     return request
@@ -121,7 +151,22 @@ struct InferenceRequestBuilder {
       var content = [InferenceObject]()
       for block in inferenceContent(message) {
         switch block["type"] as? String {
-        case "text": content.append(["type": role == "assistant" ? "output_text" : "input_text", "text": block["text"] ?? ""])
+        case "text":
+          if role == "assistant", message["wovenInferenceConnectionID"] as? String == connection.id,
+            message["provider"] as? String == model.provider, message["api"] as? String == model.api, message["model"] as? String == model.id,
+            let raw = block["textSignature"] as? String, raw.utf8.count <= 2048, let data = raw.data(using: .utf8),
+            let signature = try? JSONSerialization.jsonObject(with: data) as? InferenceObject, signature["v"] as? Int == 1,
+            let originalID = signature["id"] as? String, !originalID.isEmpty, originalID.utf8.count <= 512 {
+            if !content.isEmpty { result.append(["role": role, "content": content]); content = [] }
+            let id = originalID.count <= 64 ? originalID : "msg_" + SHA256.hash(data: Data(originalID.utf8)).prefix(24).map { String(format: "%02x", $0) }.joined()
+            let text: InferenceObject = ["type": "output_text", "text": block["text"] ?? "", "annotations": []]
+            var item: InferenceObject = ["type": "message", "role": "assistant", "id": id, "status": "completed", "content": [text]]
+            if let phase = signature["phase"] as? String, ["commentary", "final_answer"].contains(phase) { item["phase"] = phase }
+            if let last = result.last, last["type"] as? String == "message", last["id"] as? String == id,
+              last["phase"] as? String == item["phase"] as? String {
+              result[result.count - 1]["content"] = inferenceObjects(last["content"]) + [text]
+            } else { result.append(item) }
+          } else { content.append(["type": role == "assistant" ? "output_text" : "input_text", "text": block["text"] ?? ""]) }
         case "image": let (mime, data) = try image(block); content.append(["type": "input_image", "image_url": "data:\(mime);base64,\(data)"])
         case "toolCall":
           if !content.isEmpty { result.append(["role": role, "content": content]); content = [] }

@@ -18,10 +18,11 @@ public actor CompanionInferenceService {
   private let catalogLoader: ProviderModelCatalog
   private let credentials: any InferenceCredentialReading
   private let transport: any InferenceHTTPTransport
+  private let oauthResolver: InferenceOAuthCredentialResolver
   public init(connection: InferenceConnection, credentials: any InferenceCredentialReading = InferenceCredentialStore(),
-              transport: any InferenceHTTPTransport = InferenceURLSessionTransport(), catalogLoader: ProviderModelCatalog = .shared, model: InferenceModel? = nil) {
+              transport: any InferenceHTTPTransport = InferenceURLSessionTransport(), catalogLoader: ProviderModelCatalog = .shared, model: InferenceModel? = nil, oauthResolver: InferenceOAuthCredentialResolver = .shared) {
     self.connection = connection; self.credentials = credentials; self.transport = transport
-    self.catalogLoader = catalogLoader; self.pinnedModel = model ?? connection.selectedModel
+    self.catalogLoader = catalogLoader; self.pinnedModel = model ?? connection.selectedModel; self.oauthResolver = oauthResolver
   }
   public func model() async throws -> InferenceModel {
     try connection.validate()
@@ -75,7 +76,10 @@ public actor CompanionInferenceService {
     guard requested["id"] as? String == connection.modelID, requested["provider"] as? String == connection.provider else { throw InferenceError.modelUnavailable }
     // Validate the pinned routing metadata before even reading the credential.
     let selected = connection.route == .direct ? try await model() : nil
-    let secret = try await secret()
+    let oauth = connection.route == .direct && InferenceOAuthSession.supports(connection.provider)
+      ? try await oauthResolver.resolve(connection: connection, credentials: credentials) : nil
+    let secret: String
+    if let oauth { secret = oauth.access } else { secret = try await self.secret() }
     if connection.route == .adapter {
       input["accountID"] = connection.accountID
       // Endpoint selection, native directories, auth and credential headers are server-owned.
@@ -106,8 +110,8 @@ public actor CompanionInferenceService {
       guard let selected else { throw InferenceError.modelUnavailable }
       // A credential replacement must not replay account-bound thinking signatures to another principal.
       var route = connection
-      route.id = SHA256.hash(data: Data([connection.id, connection.provider, connection.modelID, secret].joined(separator: "\u{0}").utf8)).map { String(format: "%02x", $0) }.joined()
-      let request = try InferenceRequestBuilder(connection: route, model: selected).request(input, secret: secret)
+      route.id = SHA256.hash(data: Data([connection.id, connection.provider, connection.modelID, oauth?.bindingID ?? secret].joined(separator: "\u{0}").utf8)).map { String(format: "%02x", $0) }.joined()
+      let request = try InferenceRequestBuilder(connection: route, model: selected).request(input, secret: secret, accountID: oauth?.accountID)
       let decoder = InferenceStreamDecoder(model: selected, connectionID: route.id, emit: emit)
       var payload = [String]()
       for try await event in try await transport.stream(request) {

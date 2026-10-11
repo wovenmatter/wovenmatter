@@ -18,6 +18,18 @@ WOVENMATTER_IOS_DEVICE_ID=<registered-device-id> scripts/build-ios.sh --device
 
 `--package` (the default) runs client/store, inference, and actual JavaScriptCore SDK tests on macOS. `--simulator` adds an unsigned simulator build and app-hosted model tests; `--ui` also runs the native interaction suite. `--all-devices` runs it on both disposable iPhone and iPad simulators, including rotation. `--device-compile` verifies the physical-device architecture without signing. Device builds use existing local signing assets; they do not initiate account setup. Simulator test modes create and remove a disposable device by default. `WOVENMATTER_IOS_SIMULATOR_DESTINATION` explicitly selects an existing test device; `WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE` and `WOVENMATTER_IOS_SIMULATOR_RUNTIME` customize disposable creation. These commands use isolated temporary build caches. The app-hosted XCTest process detects its test bundle before opening any store or Keychain, creates a unique temporary library, and suppresses automatic connection. Package and UI tests use temporary stores and fake adapters; they never consume provider services. UI tests seed an isolated local fixture library in Debug builds using `WOVENMATTER_UI_FIXTURE=1`. `WOVENMATTER_UI_TAB=Home|Folders|Chats|Notes|Settings|Library|Calendar|Trash` chooses the initial fixture screen. Fixture mode does not pair or run agents.
 
+## Standalone setup
+
+Start in the regular app, without UI-fixture launch variables. Open **Settings →
+Agents and workspaces → Add inference connection**. Choose ChatGPT, Claude, or
+Grok and complete sign-in yourself, or select an API-key provider and paste the
+key. OpenCode Zen and Go are separate provider choices. Select a model and save;
+then start a chat with **This iPhone** or **This iPad** as the execution workspace.
+No other Woven Matter device or Tailscale connection is needed for cloud inference.
+Provider credentials and refresh stay on this device. Native Claude transport
+uses Woven Matter identity and does not impersonate Claude Code. Real account
+and inference acceptance must be checked by the user, separately from fixtures.
+
 ## Pairing and test workflow
 
 1. Run the development Mac app with its isolated workspace. Open Settings → Devices, enable sharing, and create a pairing code.
@@ -40,7 +52,7 @@ New-chat creation and its first send are separate durable commands with separate
 
 Native text views edit individual rich text blocks in the original JSON tree. Block IDs, links, run styling, table structures and untouched extension fields remain intact. The smaller toolbar offers paragraphs, headings, bullets and paragraph bold. Tables are displayed without editing. Unknown document versions or unsupported blocks remain read only, with original-document export. HTML assets use an ephemeral read-only WebKit view. Inline scripts can render the desktop-compatible `window.wovenMatterData` value; remote resources, network requests, forms, navigation and native bridges remain unavailable. Linked spreadsheets and HTML request only the canonical registered database link from the Mac, verify the note revision, and show the desktop unavailable-data reason when the source cannot be read. Preview rows are never persisted into the note. Oversized text pastes or paragraph additions are rejected before the native editor adopts them.
 
-Agent routes and controls come from the selected execution workspace. Settings exposes device inference connections and authorized inference hosts. API-key connections can call supported providers directly; subscription integrations that need a desktop SDK use an inference-only host. The phone still owns its Pi Durable loop, tools, checkpoints, subagents and isolated code execution. Losing the central library does not stop a device run or direct control of a reachable workspace. Losing the selected inference connection can pause/fail model work; accepted work is retained for recovery.
+Agent routes and controls come from the selected execution workspace. Settings exposes device inference connections and authorized inference hosts. ChatGPT and Grok sign in through native device-code flows; Claude uses a PKCE browser-and-return-code flow. API keys and subscription access/refresh credentials stay in the phone’s own Keychain. Direct connections call and refresh against their provider without Mac pairing; hosted connections remain an explicit alternative. The phone still owns its Pi Durable loop, tools, checkpoints, subagents and isolated code execution. Losing the central library does not stop a device run or direct control of a reachable workspace. Losing the selected inference connection can pause/fail model work; accepted work is retained for recovery.
 
 A device workspace uses a confined app directory, imported files, supported native tools and explicit approvals. iOS may suspend the app; durable recovery preserves work without promising unlimited background execution or replaying ambiguous tool effects. Push notifications, billing, hosted accounts and on-device inference are not part of this work.
 
@@ -72,7 +84,7 @@ Portable tests cover controlled provider streams and real SDK/tool persistence. 
 
 ## First testing session
 
-1. Build the Mac host from the same PR revision with `scripts/build-companion-desktop.sh build`. When ready to test, `scripts/build-companion-desktop.sh run` opens its separate workspace. Keep an existing signed-in Tailscale connection available on the Mac. Provider setup stays in the Mac app.
+1. Build the Mac host from the same PR revision with `scripts/build-companion-desktop.sh build`. When ready to test, `scripts/build-companion-desktop.sh run` opens its separate workspace. Keep an existing signed-in Tailscale connection available on the Mac. The phone’s own inference connections are configured and signed in on the phone.
 2. Open `ios/WovenMatterCompanion.xcodeproj`, select the WovenMatterCompanion scheme, and run on an iPhone simulator. Repeat on an iPad simulator. Pair each with its own fresh URL from Mac Settings → Devices; the simulator can use the pasted pairing URL.
 3. Exercise a note in both directions, then edit the same note while disconnected, terminate/reopen the mobile app, reconnect, and review its conflict/recovery UI. Check that deleting a note on the Mac preserves unsynced mobile writing as a recovery copy.
 4. Try each configured agent route: create, send, continue, respond to approvals/questions, and Stop. Switch conversations while a request is pending. Check that the Mac keeps accepted work running when the mobile app closes.

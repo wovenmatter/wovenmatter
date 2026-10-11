@@ -184,7 +184,7 @@ import CompanionInference
   }
   func reload() async { if let store { let next = await store.snapshot(); if next != state { state = next } } }
   private func configureTransport() throws {
-    guard let credential, let store else { connectionLabel = "Pair your Mac · notes work offline"; return }
+    guard let credential, let store else { connectionLabel = "Saved on this device"; return }
     guard credential.deviceID == state.deviceID else { throw CompanionAPIError(code: "device_identity_changed", message: "Pair this local library with your Mac again. The saved credential belongs to a previous app installation; your local notes are safe.") }
     let client = try HTTPSCompanionTransport(credential: credential)
     transport = client; engine = MobileSyncEngine(store: store, transport: client)

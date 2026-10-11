@@ -55,170 +55,411 @@ struct ExecutionSettingsPane: View {
   }
 }
 
+enum InferenceSetupMode: String, CaseIterable {
+  case device = "On this device", hosted = "Use an inference host"
+}
+
+@MainActor @Observable final class InferenceConnectionSetupState {
+  let original: InferenceConnection?
+  var mode: InferenceSetupMode
+  var provider: String
+  var name: String
+  var modelID: String
+  var accountID: String
+  var endpoint: String
+  var secret = ""
+  var storedCredentialAvailable = false
+  var authenticatedAccountID: String?
+  var models: [InferenceModel]
+  var accounts: [InferenceHostAccount] = []
+  var hostID = ""
+  var loadingModels = false
+  var saving = false
+  var signingIn = false
+  var problem: String?
+  var catalogGeneration = UUID()
+  var authenticationGeneration = UUID()
+
+  init(connection: InferenceConnection? = nil, provider: String = "openai-codex") {
+    original = connection
+    let selectedProvider = connection?.provider ?? provider
+    self.provider = selectedProvider
+    mode = connection?.route == .adapter ? .hosted : .device
+    name = connection?.name ?? Self.providerName(selectedProvider)
+    modelID = connection?.modelID ?? ""
+    accountID = connection?.accountID ?? "default"
+    endpoint = connection?.baseURL ?? ""
+    models = connection?.selectedModel.map { [$0] } ?? []
+  }
+  static func providerName(_ id: String) -> String { InferenceCatalog.providers.first { $0.id == id }?.name ?? id }
+  var definition: InferenceProvider? { InferenceCatalog.providers.first { $0.id == provider } }
+  var isOAuth: Bool { mode == .device && definition?.supportsOAuth == true }
+  var isCustomServer: Bool { provider.hasPrefix("local-server-") }
+  var trimmedSecret: String { secret.trimmingCharacters(in: .whitespacesAndNewlines) }
+  var hasSavedHost: Bool { original?.route == .adapter && original?.hostScope != nil && !(original?.baseURL ?? "").isEmpty }
+  var saveProblem: String? {
+    if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give this connection a name." }
+    if loadingModels { return "Loading the provider’s models…" }
+    if signingIn { return "Complete sign-in before saving this connection." }
+    if mode == .device && definition?.supportsDirect != true { return "This provider does not offer sign-in for this app. Choose its API-key connection instead." }
+    if modelID.isEmpty { return "Choose a model to use with this connection." }
+    if mode == .hosted {
+      if hostID.isEmpty && !hasSavedHost { return "Choose an authorized host for this optional hosted connection." }
+      if accountID.isEmpty { return "Choose an account from this host." }
+    } else {
+      if isCustomServer && endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Enter the model server’s Tailscale address." }
+      if trimmedSecret.isEmpty && !storedCredentialAvailable { return isOAuth ? "Sign in on this device before saving." : "Enter an API key before saving." }
+    }
+    return nil
+  }
+  func chooseProvider(_ id: String) {
+    let oldName = Self.providerName(provider)
+    provider = id
+    if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == oldName { name = Self.providerName(id) }
+    resetCredentials()
+    endpoint = ""; hostID = ""; models = []; accounts = []; modelID = ""
+    accountID = mode == .device ? "default" : ""
+  }
+  func chooseMode(_ value: InferenceSetupMode) {
+    guard mode != value else { return }
+    mode = value; resetCredentials(); models = []; accounts = []; modelID = ""
+    endpoint = ""; hostID = ""; accountID = value == .device ? "default" : ""
+  }
+  func resetCredentials() {
+    secret = ""; storedCredentialAvailable = false; authenticatedAccountID = nil
+    signingIn = false; problem = nil; invalidateRequests()
+  }
+  func invalidateRequests() {
+    catalogGeneration = UUID(); authenticationGeneration = UUID(); loadingModels = false
+  }
+  func beginCatalog() -> UUID { catalogGeneration = UUID(); loadingModels = true; problem = nil; return catalogGeneration }
+  @discardableResult func receiveModels(_ fetched: [InferenceModel], generation: UUID) -> Bool {
+    guard catalogGeneration == generation else { return false }
+    models = fetched.filter { $0.provider == provider }.sorted {
+      if $0.name == $1.name { return $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+      return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+    }
+    if let selected = original?.selectedModel, original?.provider == provider, selected.id == modelID {
+      if let index = models.firstIndex(where: { $0.id == selected.id }) { models[index] = selected }
+      else { models.insert(selected, at: 0) }
+    }
+    if !modelID.isEmpty && !models.contains(where: { $0.id == modelID }) { modelID = "" }
+    if modelID.isEmpty {
+      let preferred = models.first { $0.metadata["default"] == .bool(true) || $0.metadata["recommended"] == .bool(true) }
+      modelID = (preferred ?? models.first)?.id ?? ""
+    }
+    return true
+  }
+  @discardableResult func receiveCredential(_ value: String, accountID: String, generation: UUID) -> Bool {
+    guard authenticationGeneration == generation, isOAuth else { return false }
+    secret = value; self.accountID = accountID; authenticatedAccountID = accountID
+    signingIn = false; problem = nil
+    return true
+  }
+  func configuredConnection() throws -> InferenceConnection {
+    if let saveProblem { throw DeviceExecutionError.unavailable(saveProblem) }
+    let route: InferenceRoute = mode == .hosted ? .adapter : .direct
+    return .init(id: original?.id ?? UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+      provider: provider, accountID: mode == .device && !isOAuth ? "default" : accountID, route: route,
+      baseURL: route == .adapter || isCustomServer ? endpoint.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+      modelID: modelID, hostScope: route == .adapter ? original?.hostScope : nil,
+      selectedModel: models.first { $0.id == modelID && $0.provider == provider })
+  }
+}
+
 private struct InferenceConnectionEditor: View {
   @Bindable var model: CompanionModel
-  let connection: InferenceConnection?
   @Environment(\.dismiss) private var dismiss
-  @State private var name = ""
-  @State private var provider = "openai"
-  @State private var modelID = ""
-  @State private var accountID = "default"
-  @State private var endpoint = ""
-  @State private var secret = ""
-  @State private var saving = false
-  @State private var problem: String?
-  @State private var models: [InferenceModel] = []
-  @State private var hostID = ""
-  @State private var accounts: [InferenceHostAccount] = []
-  @State private var loadingHost = false
+  @State private var state: InferenceConnectionSetupState
   @State private var catalogTask: Task<Void, Never>?
-  @State private var catalogGeneration = UUID()
-  private var definition: InferenceProvider? { InferenceCatalog.providers.first { $0.id == provider } }
+  @State private var authenticationTask: Task<Void, Never>?
+  @State private var saveTask: Task<Void, Never>?
+  @State private var oauthSession: InferenceOAuthSession?
+  @State private var challenge: InferenceOAuthChallenge?
+  @State private var authorizationCode = ""
+  @State private var completingSignIn = false
+  @State private var loaded = false
+  init(model: CompanionModel, connection: InferenceConnection?) {
+    self.model = model
+    _state = State(initialValue: InferenceConnectionSetupState(connection: connection))
+  }
+  private var setupAllowed: Bool { !model.fixture && !model.isolatedTestHost }
+  private var signInName: String {
+    switch state.provider { case "openai-codex": "ChatGPT"; case "claude-subscription": "Claude"; case "xai": "Grok"; default: InferenceConnectionSetupState.providerName(state.provider) }
+  }
   var body: some View {
     NavigationStack {
       Form {
         Section("Connection") {
-          TextField("Name", text: $name)
-          Picker("Provider", selection: $provider) {
+          Picker("Provider", selection: Binding(get: { state.provider }, set: chooseProvider)) {
             ForEach(InferenceCatalog.providers) { item in Text(item.name).tag(item.id) }
-          }.disabled(connection != nil)
-        }
-        Section("Model") {
-          if !models.isEmpty {
-            Picker("Model", selection: $modelID) {
-              Text("Choose a model").tag("")
-              ForEach(models) { item in Text(item.name).tag(item.id) }
-            }
-          } else if provider.hasPrefix("local-server-") {
-            TextField("Model ID", text: $modelID).textInputAutocapitalization(.never).autocorrectionDisabled()
-          } else {
-            Text("Choose a model after loading this provider’s catalog.")
-          }
-          if definition?.defaultRoute == .direct && !provider.hasPrefix("local-server-") {
-            if loadingHost { ProgressView("Loading models…") }
-            Button("Refresh models") { updateModels(force: true) }.disabled(loadingHost)
+          }.disabled(state.original != nil || state.saving)
+          TextField("Name", text: $state.name).disabled(state.saving)
+          if state.mode == .device {
+            Text("Saved on this device. A Mac, paired library, and inference host are not required.")
           }
         }
-        if definition?.defaultRoute == .adapter {
-          Section("Inference host") {
-            Picker("Host", selection: $hostID) {
-              Text("Choose an authorized workspace").tag("")
-              ForEach(model.executionWorkspaces.filter { $0.endpoint != nil }) { workspace in Text(workspace.name).tag(workspace.id) }
-            }
-            if loadingHost { ProgressView("Loading accounts and models…") }
-            Picker("Account", selection: $accountID) {
-              Text("Choose an account").tag("")
-              if !accountID.isEmpty && !accounts.contains(where: { $0.id == accountID && $0.provider == provider && $0.connected }) {
-                Text(accountID).tag(accountID)
-              }
-              ForEach(accounts.filter { $0.provider == provider && $0.connected }) { account in Text(account.label).tag(account.id) }
-            }
-            Button("Refresh host connections") { loadHost() }.disabled(hostID.isEmpty || loadingHost)
-            Text("Uses this host’s existing subscription for inference. Device access comes from your paired central library. Pi Durable and its tools continue to run on this iPhone or iPad.")
+        if !setupAllowed {
+          Section { Text("Connection setup is available in the regular app. Preview and test modes do not access accounts or credentials.") }
+        } else if state.mode == .hosted { hostedFields }
+        else if state.definition?.supportsDirect != true {
+          Section("Sign-in unavailable") {
+            Text("This subscription does not support sign-in in this app. You can use the provider’s API-key connection on this device.")
           }
-        } else {
-          if provider.hasPrefix("local-server-") {
-            Section("Model server") {
-              TextField("Tailscale HTTPS address", text: $endpoint).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-              Text("Use a Tailscale HTTPS server with the Responses API and an API key. Only inference runs there; agents and tools stay on this device.")
-            }
-          }
-          Section("API key") {
-            SecureField(connection == nil ? "API key" : "Replace API key (optional)", text: $secret)
-              .textInputAutocapitalization(.never).autocorrectionDisabled()
-            Text("Stored in this device’s Keychain. Keys are never included in library synchronization.")
-          }
-        }
-        if let problem { Section { Text(problem).foregroundStyle(.red) } }
-      }.scrollIndicators(.never).navigationTitle(connection == nil ? "Add connection" : "Edit connection")
+        } else if state.isOAuth { subscriptionFields }
+        else { apiKeyFields }
+        if state.mode == .hosted || state.definition?.supportsDirect == true { modelFields }
+        Section {
+          Picker("Inference location", selection: Binding(get: { state.mode }, set: chooseMode)) {
+            ForEach(InferenceSetupMode.allCases, id: \.self) { mode in Text(mode.rawValue).tag(mode) }
+          }.disabled(state.saving)
+          Text("An inference host is optional. Choose it only to use an account already configured on an authorized Tailscale workspace.")
+        } header: { Text("Advanced") }
+        if let problem = state.problem { Section { Text(problem).foregroundStyle(.red) } }
+        if !state.saving, let hint = state.saveProblem { Section { Text(hint).foregroundStyle(DashboardPalette.mutedForeground) } }
+      }.scrollIndicators(.never).navigationTitle(state.original == nil ? "Add connection" : "Edit connection")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
-          ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.isEmpty) }
-        }.task {
-          if let connection {
-            name = connection.name; provider = connection.provider; modelID = connection.modelID
-            accountID = connection.accountID; endpoint = connection.baseURL ?? ""
+          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { cancelAll(); dismiss() } }
+          ToolbarItem(placement: .confirmationAction) {
+            Button(state.saving ? "Saving…" : "Save") { save() }.disabled(!setupAllowed || state.saving || state.saveProblem != nil)
           }
-          if let endpoint = connection?.baseURL { hostID = model.executionWorkspaces.first { $0.endpoint?.absoluteString == endpoint }?.id ?? "" }
-          updateModels()
-        }.onDisappear { catalogTask?.cancel() }.onChange(of: provider) { _, _ in modelID = ""; accountID = ""; updateModels(); if definition?.defaultRoute == .adapter { loadHost() } }
-        .onChange(of: hostID) { previous, _ in
-          if !previous.isEmpty { models = []; accounts = []; modelID = ""; accountID = ""; endpoint = "" }
-          loadHost()
-        }
+        }.task { await initialize() }
+        .onDisappear { cancelAll() }
+        .interactiveDismissDisabled(state.saving)
     }
   }
-  private func updateModels(force: Bool = false) {
-    catalogTask?.cancel(); catalogGeneration = UUID(); loadingHost = false; problem = nil
-    models = connection?.provider == provider ? [connection?.selectedModel].compactMap { $0 } : []
-    guard definition?.defaultRoute == .direct else { return }
-    accountID = "default"
-    guard !provider.hasPrefix("local-server-") else { return }
-    let selectedProvider = provider, generation = catalogGeneration
-    loadingHost = true
-    catalogTask = Task {
-      @MainActor func publish(_ fetched: [InferenceModel]) {
-        models = fetched
-        if let selected = connection?.selectedModel, selected.provider == selectedProvider,
-           selected.id == modelID, !models.contains(where: { $0.id == selected.id }) { models.insert(selected, at: 0) }
+  private var apiKeyFields: some View {
+    Group {
+      if state.isCustomServer {
+        Section("Model server") {
+          TextField("Tailscale HTTPS address", text: $state.endpoint).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+          Text("Use a Tailscale server with the Responses API and an API key. Agents and tools still run on this device.")
+        }.disabled(state.saving)
       }
-      let cached = await ProviderModelCatalog.shared.cached(provider: selectedProvider)
-      guard !Task.isCancelled, catalogGeneration == generation else { return }
-      if !cached.isEmpty { publish(cached) }
+      Section("API key") {
+        SecureField(state.storedCredentialAvailable ? "Replace API key (optional)" : "Paste API key", text: $state.secret)
+          .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(state.saving)
+        if state.storedCredentialAvailable { Label("API key saved on this device", systemImage: "checkmark.circle") }
+        Text("Use your \(InferenceConnectionSetupState.providerName(state.provider)) API key. It stays in this device’s Keychain and is never included in library sync.")
+      }
+    }
+  }
+  private var subscriptionFields: some View {
+    Section("Sign in on this device") {
+      if state.authenticatedAccountID != nil || state.storedCredentialAvailable {
+        Label("Signed in on this device", systemImage: "checkmark.circle")
+        if !state.accountID.isEmpty { Text(state.accountID).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+      }
+      if let challenge {
+        if let code = challenge.userCode {
+          Text("Enter this code when asked:")
+          Text(code).font(.title3.monospaced().weight(.semibold)).textSelection(.enabled)
+        }
+        Link("Open \(signInName) sign-in", destination: challenge.verificationURL)
+        if challenge.kind == .authorizationCode {
+          Text("Finish sign-in with \(signInName), then copy the authorization code back into this app.")
+          SecureField("Paste authorization code", text: $authorizationCode).textInputAutocapitalization(.never).autocorrectionDisabled()
+            .disabled(completingSignIn)
+          Button(completingSignIn ? "Finishing sign-in…" : "Complete sign-in") { completeAuthorizationCode() }
+            .disabled(completingSignIn || authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } else { ProgressView("Waiting for you to finish sign-in…") }
+        Text("This sign-in request expires \(challenge.expiresAt, style: .relative).")
+        Button("Cancel sign-in") { cancelSignIn() }
+      } else if state.signingIn { ProgressView("Preparing sign-in…") }
+      else {
+        Button(state.storedCredentialAvailable || state.authenticatedAccountID != nil ? "Sign in with another account" : "Sign in with \(signInName)") { signIn() }
+          .disabled(state.saving)
+      }
+      Text("You complete sign-in with the provider. Credentials stay in this device’s Keychain; inference connects directly from this device.")
+    }
+  }
+  private var hostedFields: some View {
+    Section("Optional inference host") {
+      Picker("Host", selection: Binding(get: { state.hostID }, set: chooseHost)) {
+        Text(state.hasSavedHost ? "Saved host" : "Choose an authorized workspace").tag("")
+        ForEach(model.executionWorkspaces.filter { $0.endpoint != nil }) { Text($0.name).tag($0.id) }
+      }
+      if state.hostID.isEmpty && state.hasSavedHost { Text(state.endpoint).font(.caption).textSelection(.enabled) }
+      Picker("Account", selection: $state.accountID) {
+        Text("Choose an account").tag("")
+        if !state.accountID.isEmpty && !state.accounts.contains(where: { $0.id == state.accountID && $0.provider == state.provider && $0.connected }) { Text(state.accountID).tag(state.accountID) }
+        ForEach(state.accounts.filter { $0.provider == state.provider && $0.connected }) { Text($0.label).tag($0.id) }
+      }
+      Button("Refresh host connections") { loadHost() }.disabled(state.hostID.isEmpty || state.loadingModels)
+      if model.credential == nil { Text("Pair with your central library to authorize a host. Device connections above work independently of pairing.") }
+    }.disabled(state.saving)
+  }
+  private var modelFields: some View {
+    Section("Model") {
+      if state.loadingModels { ProgressView(state.mode == .hosted ? "Loading host models and accounts…" : "Loading provider models…") }
+      if !state.models.isEmpty {
+        Picker("Model", selection: $state.modelID) {
+          Text("Choose a model").tag("")
+          ForEach(state.models) { Text($0.name).tag($0.id) }
+        }
+      } else if state.isCustomServer {
+        TextField("Model ID", text: $state.modelID).textInputAutocapitalization(.never).autocorrectionDisabled()
+      } else if !state.loadingModels { Text("No models are loaded. Refresh the catalog to choose one.") }
+      if state.mode == .device && !state.isCustomServer {
+        Button("Refresh models") { loadModels(force: true) }.disabled(state.loadingModels)
+      }
+      if !state.modelID.isEmpty { Text(state.modelID).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+    }.disabled(!setupAllowed || state.saving)
+  }
+  private func initialize() async {
+    guard !loaded else { return }; loaded = true
+    guard setupAllowed else { return }
+    if let original = state.original {
+      let generation = state.authenticationGeneration
       do {
-        let fetched = try await ProviderModelCatalog.shared.load(provider: selectedProvider, force: force)
-        guard !Task.isCancelled, catalogGeneration == generation else { return }
-        publish(fetched)
+        let present = try await model.executionCredentialStore.read(connectionID: original.id) != nil
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
+        state.storedCredentialAvailable = present
+      } catch { state.problem = "This device’s saved credential could not be opened. Enter it again to replace it." }
+      if let scope = original.hostScope, model.executionWorkspaces.contains(where: { $0.id == scope.workspaceID }) { state.hostID = scope.workspaceID }
+    }
+    if state.mode == .device { loadModels() }
+    else if !state.hostID.isEmpty && model.workspaceReachable[state.hostID] == true { loadHost() }
+  }
+  private func chooseProvider(_ id: String) {
+    guard !state.saving else { return }
+    cancelSignIn(); catalogTask?.cancel(); state.chooseProvider(id)
+    loadModels()
+  }
+  private func chooseMode(_ mode: InferenceSetupMode) {
+    guard !state.saving else { return }
+    cancelSignIn(); catalogTask?.cancel(); state.chooseMode(mode)
+    loadModels()
+  }
+  private func chooseHost(_ id: String) {
+    guard !state.saving else { return }
+    catalogTask?.cancel(); state.hostID = id; state.models = []; state.accounts = []; state.modelID = ""; state.accountID = ""; state.endpoint = ""
+    loadHost()
+  }
+  private func loadModels(force: Bool = false) {
+    catalogTask?.cancel()
+    guard setupAllowed else { return }
+    if state.mode == .hosted { if !state.hostID.isEmpty { loadHost() }; return }
+    guard state.definition?.supportsDirect == true, !state.isCustomServer else { state.loadingModels = false; return }
+    let provider = state.provider, generation = state.beginCatalog()
+    catalogTask = Task {
+      let cached = await ProviderModelCatalog.shared.cached(provider: provider)
+      guard !Task.isCancelled, state.catalogGeneration == generation else { return }
+      if !cached.isEmpty { state.receiveModels(cached, generation: generation) }
+      do {
+        let fetched = try await ProviderModelCatalog.shared.load(provider: provider, force: force)
+        guard !Task.isCancelled, state.catalogGeneration == generation else { return }
+        state.receiveModels(fetched, generation: generation)
       } catch {
-        guard !Task.isCancelled, catalogGeneration == generation else { return }
-        problem = "Models could not be refreshed. Saved selections remain available. Retry with Refresh models."
+        guard !Task.isCancelled, state.catalogGeneration == generation else { return }
+        state.problem = "Models could not be refreshed. Check your connection and try Refresh models. Any saved selection remains available."
       }
-      loadingHost = false
+      state.loadingModels = false
     }
   }
   private func loadHost() {
-    catalogTask?.cancel(); catalogGeneration = UUID(); loadingHost = false
-    guard !hostID.isEmpty else { return }
-    let selectedHost = hostID, selectedProvider = provider, generation = catalogGeneration
-    loadingHost = true; problem = nil
+    catalogTask?.cancel()
+    guard setupAllowed, state.mode == .hosted, !state.hostID.isEmpty else { state.loadingModels = false; return }
+    let selectedHost = state.hostID, provider = state.provider, generation = state.beginCatalog()
     catalogTask = Task {
       do {
         let credential = try await model.authorizedWorkspaceCredential(selectedHost)
-        let catalogID = "catalog-" + selectedHost
-        try await model.executionCredentialStore.save(credential.token, connectionID: catalogID)
-        let connection = InferenceConnection(id: catalogID, name: "Host catalog", provider: selectedProvider, accountID: "catalog", route: .adapter, baseURL: credential.endpoint.absoluteString, modelID: "catalog", hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version))
-        let catalog = try await CompanionInferenceService(connection: connection, credentials: model.executionCredentialStore).hostCatalog()
-        guard !Task.isCancelled, catalogGeneration == generation else { return }
-        endpoint = credential.endpoint.absoluteString
-        models = catalog.models.filter { $0.provider == selectedProvider }; accounts = catalog.accounts
+        let catalog = InferenceConnection(name: "Host catalog", provider: provider, accountID: "catalog", route: .adapter,
+          baseURL: credential.endpoint.absoluteString, modelID: "catalog",
+          hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version))
+        let result = try await CompanionInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
+        guard !Task.isCancelled, state.catalogGeneration == generation else { return }
+        state.endpoint = credential.endpoint.absoluteString
+        state.accounts = result.accounts
+        state.receiveModels(result.models, generation: generation)
+        let accounts = state.accounts.filter { $0.provider == provider && $0.connected }
+        if !accounts.contains(where: { $0.id == state.accountID }) { state.accountID = accounts.count == 1 ? accounts[0].id : "" }
       } catch {
-        guard !Task.isCancelled, catalogGeneration == generation else { return }
-        problem = error.localizedDescription
+        guard !Task.isCancelled, state.catalogGeneration == generation else { return }
+        state.problem = error.localizedDescription
       }
-      loadingHost = false
+      state.loadingModels = false
     }
   }
-  private func save() {
-    saving = true; problem = nil
-    let value = InferenceConnection(id: connection?.id ?? UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-      provider: provider, accountID: accountID, route: definition?.defaultRoute ?? .direct,
-      baseURL: endpoint.isEmpty ? nil : endpoint, modelID: modelID,
-      selectedModel: models.first { $0.id == modelID && $0.provider == provider })
-    Task {
+  private func signIn() {
+    guard setupAllowed, state.isOAuth, !state.saving else { return }
+    cancelSignIn()
+    let session = InferenceOAuthSession(), provider = state.provider
+    let generation = state.authenticationGeneration
+    oauthSession = session; state.signingIn = true; state.problem = nil
+    authenticationTask = Task {
       do {
-        var configured = value
-        let valueSecret: String
-        if value.route == .adapter {
-          let credential = try await model.authorizedWorkspaceCredential(hostID)
-          configured.baseURL = credential.endpoint.absoluteString
-          configured.hostScope = .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version)
-          valueSecret = credential.token
-        } else { valueSecret = secret }
-        try await model.saveInferenceConnection(configured, secret: valueSecret); secret = ""; dismiss()
+        let value = try await session.start(provider: provider)
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { await session.cancel(); return }
+        challenge = value
+        if value.kind == .authorizationCode { return }
+        let credential = try await session.poll()
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
+        state.receiveCredential(try credential.serialized(), accountID: credential.accountID, generation: generation)
+        challenge = nil; oauthSession = nil
+      } catch {
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
+        state.signingIn = false; challenge = nil; oauthSession = nil; state.problem = error.localizedDescription
       }
-      catch { problem = error.localizedDescription }
-      saving = false
+    }
+  }
+  private func completeAuthorizationCode() {
+    guard setupAllowed, challenge?.kind == .authorizationCode, let session = oauthSession, !completingSignIn else { return }
+    let code = authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines), generation = state.authenticationGeneration
+    guard !code.isEmpty else { return }
+    completingSignIn = true; state.problem = nil
+    authenticationTask = Task {
+      do {
+        let credential = try await session.complete(code: code)
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
+        state.receiveCredential(try credential.serialized(), accountID: credential.accountID, generation: generation)
+        authorizationCode = ""; challenge = nil; oauthSession = nil
+      } catch {
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
+        // The OAuth session consumes this challenge even if code exchange fails.
+        // Clear it so a retry starts a fresh request instead of reusing a spent code.
+        await session.cancel()
+        guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
+        authorizationCode = ""; challenge = nil; oauthSession = nil; state.signingIn = false
+        state.problem = error.localizedDescription
+      }
+      completingSignIn = false
+    }
+  }
+  private func cancelSignIn() {
+    state.authenticationGeneration = UUID(); authenticationTask?.cancel(); authenticationTask = nil
+    if let session = oauthSession { Task { await session.cancel() } }
+    oauthSession = nil; challenge = nil; authorizationCode = ""; completingSignIn = false; state.signingIn = false
+  }
+  private func cancelAll() {
+    catalogTask?.cancel(); saveTask?.cancel(); cancelSignIn(); state.invalidateRequests()
+  }
+  private func save() {
+    guard setupAllowed, !state.saving else { return }
+    let configured: InferenceConnection
+    do { configured = try state.configuredConnection() }
+    catch { state.problem = error.localizedDescription; return }
+    let hostID = state.hostID, suppliedSecret = state.trimmedSecret
+    state.saving = true; state.problem = nil
+    saveTask = Task {
+      do {
+        var value = configured, secret = suppliedSecret
+        if value.route == .adapter, !hostID.isEmpty {
+          let credential = try await model.authorizedWorkspaceCredential(hostID)
+          value.baseURL = credential.endpoint.absoluteString
+          value.hostScope = .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version)
+          secret = credential.token
+        }
+        try Task.checkCancellation()
+        try await model.saveInferenceConnection(value, secret: secret)
+        guard !Task.isCancelled else { return }
+        state.secret = ""; dismiss()
+      } catch {
+        guard !Task.isCancelled else { return }
+        state.problem = error.localizedDescription
+      }
+      state.saving = false
     }
   }
 }

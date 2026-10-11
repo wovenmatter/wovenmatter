@@ -68,7 +68,7 @@ final class InferenceStreamDecoder {
     if value["error"] != nil || value["type"] as? String == "error" { throw InferenceError.malformedResponse }
     try start()
     switch model.api {
-    case "openai-responses": try responses(value)
+    case "openai-responses", "openai-codex-responses": try responses(value)
     case "anthropic-messages": try anthropic(value)
     case "openai-completions": try chat(value)
     default: throw InferenceError.modelUnavailable
@@ -101,6 +101,12 @@ final class InferenceStreamDecoder {
     if let reasoning { usage["reasoning"] = reasoning }
     message["usage"] = usage
   }
+  private func saveTextSignature(_ item: InferenceObject, index: Int) throws {
+    guard let id = item["id"] as? String, !id.isEmpty, id.utf8.count <= 512 else { return }
+    var signature: InferenceObject = ["v": 1, "id": id]
+    if let phase = item["phase"] as? String, ["commentary", "final_answer"].contains(phase) { signature["phase"] = phase }
+    content[index]["textSignature"] = try inferenceJSONString(signature)
+  }
   private func responses(_ value: InferenceObject) throws {
     let type = value["type"] as? String ?? ""
     let output = value["output_index"] as? Int ?? 0
@@ -119,7 +125,7 @@ final class InferenceStreamDecoder {
     } else if type == "response.function_call_arguments.delta" {
       guard let i = indices["tool:\(output)"] else { throw InferenceError.malformedResponse }
       try toolDelta(value["delta"] as? String ?? "", index: i)
-    } else if type == "response.completed" || type == "response.incomplete" {
+    } else if type == "response.completed" || type == "response.incomplete" || (model.api == "openai-codex-responses" && type == "response.done") {
       let response = inferenceObject(value["response"])
       guard ["completed", "incomplete"].contains(response["status"] as? String ?? "") else { throw InferenceError.malformedResponse }
       // Completed output is authoritative, including encrypted reasoning records and tool identities.
@@ -129,8 +135,10 @@ final class InferenceStreamDecoder {
           for (part, block) in inferenceObjects(item["content"]).enumerated() {
             if block["type"] as? String == "output_text" {
               let i = try index("text:\(offset):\(part)", block: ["type": "text", "text": ""]); content[i]["text"] = block["text"] ?? ""
+              try saveTextSignature(item, index: i)
             } else if block["type"] as? String == "refusal" {
               let i = try index("text:\(offset):\(part)", block: ["type": "text", "text": ""]); content[i]["text"] = block["refusal"] ?? ""
+              try saveTextSignature(item, index: i)
             }
           }
         case "function_call":
@@ -148,7 +156,7 @@ final class InferenceStreamDecoder {
       usage(input: input - read, output: reported["output_tokens"] as? Int ?? 0, read: read,
         reasoning: inferenceObject(reported["output_tokens_details"])["reasoning_tokens"] as? Int)
       message["responseId"] = response["id"]; message["responseModel"] = response["model"]
-      message["stopReason"] = type == "response.incomplete" ? "length" : "stop"
+      message["stopReason"] = response["status"] as? String == "incomplete" ? "length" : "stop"
       providerFinished = true; try finish()
     } else if ["response.failed", "response.cancelled"].contains(type) { throw InferenceError.interrupted }
   }

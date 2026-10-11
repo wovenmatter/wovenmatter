@@ -31,6 +31,69 @@ struct DeviceExecutionPreferences: Codable {
   var conversations: [String: DeviceConversationRecord] = [:]
 }
 
+struct InferenceSetupCredential: InferenceCredentialReading {
+  let value: String
+  func read(connectionID: String) async throws -> String? { value }
+}
+
+/// Saves credentials before metadata, rolling back the credential if metadata cannot commit.
+/// Tests use an in-memory credential store and resolver; app fixtures never open the real store.
+@MainActor enum InferenceConnectionSaveTransaction {
+  static func save(_ proposed: InferenceConnection, secret: String, existing: [InferenceConnection],
+                   credentials: any InferenceCredentialWriting,
+                   resolveModel: @Sendable (InferenceConnection, String) async throws -> InferenceModel = { connection, credential in
+                     try await CompanionInferenceService(connection: connection, credentials: InferenceSetupCredential(value: credential)).model()
+                   },
+                   persist: @MainActor (InferenceConnection) throws -> Void) async throws -> InferenceConnection {
+    var saved = proposed
+    saved.name = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    try saved.validate()
+    try Task.checkCancellation()
+    let previous = existing.first { $0.id == proposed.id }
+    let previousSecret = try await credentials.read(connectionID: proposed.id)
+    let supplied = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+    let sameAuthority = previous.map {
+      $0.provider == proposed.provider && $0.route == proposed.route && $0.baseURL == proposed.baseURL &&
+      $0.accountID == proposed.accountID && $0.hostScope == proposed.hostScope
+    } ?? false
+    let credential: String
+    if !supplied.isEmpty { credential = supplied }
+    else {
+      guard sameAuthority, let previousSecret, !previousSecret.isEmpty else { throw InferenceError.missingCredential }
+      credential = previousSecret
+    }
+    let reusesCredential = previous != nil && sameAuthority && previousSecret == credential
+    if previous != nil && !reusesCredential {
+      // Running conversations retain the old account/credential binding after edits.
+      saved.id = UUID().uuidString.lowercased()
+    }
+    saved.selectedModel = try await resolveModel(saved, credential)
+    try Task.checkCancellation()
+    if reusesCredential {
+      // Model/name edits share the credential identity. Never overwrite a token that may
+      // have refreshed while the model was being resolved, or duplicate rotating tokens.
+      try persist(saved)
+      return saved
+    }
+    let overwritten = saved.id == proposed.id ? previousSecret : try await credentials.read(connectionID: saved.id)
+    try await credentials.save(credential, connectionID: saved.id)
+    do {
+      try Task.checkCancellation()
+      try persist(saved)
+      return saved
+    } catch {
+      // Keep the original failure useful while making rollback failures explicit.
+      do {
+        if let overwritten { try await credentials.save(overwritten, connectionID: saved.id) }
+        else { try await credentials.remove(connectionID: saved.id) }
+      } catch {
+        throw DeviceExecutionError.unavailable("The connection was not saved. Its temporary credential could not be removed; retry saving this connection.")
+      }
+      throw error
+    }
+  }
+}
+
 struct LocalToolApproval {
   var token: String
   var conversationID: String
@@ -139,26 +202,27 @@ extension CompanionModel {
   }
   func saveInferenceConnection(_ connection: InferenceConnection, secret: String) async throws {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to configure inference connections.") }
-    try connection.validate()
-    var saved = connection
-    saved.selectedModel = try await CompanionInferenceService(connection: connection, credentials: executionCredentialStore).model()
-    if let existing = inferenceConnections.first(where: { $0.id == connection.id }),
-       existing.provider != connection.provider || existing.route != connection.route || existing.baseURL != connection.baseURL ||
-       existing.accountID != connection.accountID || existing.hostScope != connection.hostScope || existing.modelID != connection.modelID {
-      // Freeze the old credential binding for conversations already using it. A changed endpoint/account gets a fresh Keychain identity.
-      saved.id = UUID().uuidString.lowercased()
+    guard let executionDirectory else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
+    let saved = try await InferenceConnectionSaveTransaction.save(connection, secret: secret, existing: inferenceConnections,
+      credentials: executionCredentialStore) { saved in
+      var connections = inferenceConnections.filter { $0.id != connection.id }
+      connections.append(saved)
+      var records = executionRecords
+      if let previous = inferenceConnections.first(where: { $0.id == connection.id }) {
+        for id in records.keys where records[id]?.connectionID == previous.id && records[id]?.connection == nil {
+          records[id]?.connection = previous
+        }
+      }
+      let workspaceID = credential == nil && selectedConversationID == nil ? "local" : executionWorkspaceID
+      let preferences = DeviceExecutionPreferences(connections: connections, selectedConnectionID: saved.id,
+        workspaceID: workspaceID, conversations: records)
+      try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
+      try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      executionRecords = records
     }
-    if !secret.isEmpty { try await executionCredentialStore.save(secret, connectionID: saved.id) }
-    else if saved.id != connection.id {
-      guard let previous = inferenceConnections.first(where: { $0.id == connection.id }), previous.provider == connection.provider,
-            previous.baseURL == connection.baseURL, previous.accountID == connection.accountID, previous.hostScope == connection.hostScope,
-            let old = try await executionCredentialStore.read(connectionID: connection.id) else { throw InferenceError.missingCredential }
-      try await executionCredentialStore.save(old, connectionID: saved.id)
-    }
-    guard try await executionCredentialStore.read(connectionID: saved.id) != nil else { throw InferenceError.missingCredential }
     inferenceConnections.removeAll { $0.id == connection.id }; inferenceConnections.append(saved)
     inferenceConnectionID = saved.id
-    try persistExecutionConfiguration()
+    if credential == nil && selectedConversationID == nil { executionWorkspaceID = "local"; providerID = "" }
     inferenceProblem = nil
   }
   func selectExecutionWorkspace(_ id: String) {

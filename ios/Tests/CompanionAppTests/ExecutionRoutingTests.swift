@@ -1,5 +1,6 @@
 import XCTest
 import CompanionClient
+import CompanionInference
 import WovenMatterCompanion
 @testable import WovenMatterMobileApp
 
@@ -173,5 +174,129 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertThrowsError(try model.deviceWorkspaceURL(conversationID: id, path: "/etc/passwd"))
     try FileManager.default.createSymbolicLink(at: workspace.appendingPathComponent("outside"), withDestinationURL: root)
     XCTAssertThrowsError(try model.deviceWorkspaceURL(conversationID: id, path: "outside/library.json"))
+  }
+}
+
+private actor InferenceSetupMemoryCredentials: InferenceCredentialWriting {
+  private var values: [String: String]
+  init(_ values: [String: String] = [:]) { self.values = values }
+  func read(connectionID: String) -> String? { values[connectionID] }
+  func save(_ secret: String, connectionID: String) { values[connectionID] = secret }
+  func remove(connectionID: String) { values.removeValue(forKey: connectionID) }
+  func snapshot() -> [String: String] { values }
+}
+
+final class InferenceSetupTests: XCTestCase {
+  private static func descriptor(_ id: String = "selected-model", name: String = "Selected model", provider: String = "opencode-go") -> InferenceModel {
+    .init(id: id, name: name, provider: provider, api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1")
+  }
+  @MainActor func testUnpairedAPIKeySaveAndReopenUsesOnlyInjectedDeviceCredentials() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("preferences.json"), credentials = InferenceSetupMemoryCredentials()
+    let descriptor = Self.descriptor()
+    let connection = InferenceConnection(name: " OpenCode Go ", provider: "opencode-go", route: .direct, modelID: descriptor.id)
+    let saved = try await InferenceConnectionSaveTransaction.save(connection, secret: " \n device-key \t", existing: [], credentials: credentials,
+      resolveModel: { candidate, key in
+        XCTAssertEqual(candidate.route, .direct); XCTAssertNil(candidate.hostScope); XCTAssertNil(candidate.baseURL)
+        XCTAssertEqual(key, "device-key")
+        return descriptor
+      }) { value in
+        try JSONEncoder().encode(DeviceExecutionPreferences(connections: [value], selectedConnectionID: value.id)).write(to: file, options: .atomic)
+      }
+    let reopened = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
+    XCTAssertEqual(reopened.workspaceID, "local")
+    XCTAssertEqual(reopened.connections, [saved])
+    XCTAssertEqual(reopened.selectedConnectionID, saved.id)
+    XCTAssertEqual(saved.name, "OpenCode Go")
+    XCTAssertEqual(saved.selectedModel, descriptor)
+    let stored = await credentials.read(connectionID: saved.id)
+    XCTAssertEqual(stored, "device-key")
+    XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("device-key"))
+    let resaved = try await InferenceConnectionSaveTransaction.save(saved, secret: "  ", existing: reopened.connections, credentials: credentials,
+      resolveModel: { _, key in XCTAssertEqual(key, "device-key"); return descriptor }, persist: { _ in })
+    XCTAssertEqual(resaved.id, saved.id)
+    let reopenedKeys = await credentials.snapshot()
+    XCTAssertEqual(reopenedKeys, [saved.id: "device-key"])
+  }
+  @MainActor func testCredentialReplacementKeepsOldBindingAndRollsBackFailedSave() async throws {
+    let descriptor = Self.descriptor()
+    let original = InferenceConnection(id: "existing-device-connection", name: "OpenCode Go", provider: "opencode-go", route: .direct, modelID: descriptor.id, selectedModel: descriptor)
+    let credentials = InferenceSetupMemoryCredentials([original.id: "old-device-key"])
+    let saved = try await InferenceConnectionSaveTransaction.save(original, secret: "new-device-key", existing: [original], credentials: credentials,
+      resolveModel: { _, _ in descriptor }, persist: { _ in })
+    XCTAssertNotEqual(saved.id, original.id)
+    let beforeFailure = await credentials.snapshot()
+    XCTAssertEqual(beforeFailure[original.id], "old-device-key")
+    XCTAssertEqual(beforeFailure[saved.id], "new-device-key")
+    do {
+      _ = try await InferenceConnectionSaveTransaction.save(original, secret: "unsaved-device-key", existing: [original], credentials: credentials,
+        resolveModel: { _, _ in descriptor }, persist: { _ in throw CocoaError(.fileWriteOutOfSpace) })
+      XCTFail("Preference write failure must fail the save")
+    } catch let error as CocoaError { XCTAssertEqual(error.code, .fileWriteOutOfSpace) }
+    let afterFailure = await credentials.snapshot()
+    XCTAssertEqual(afterFailure, beforeFailure)
+  }
+  @MainActor func testOAuthModelEditKeepsBindingAndDoesNotOverwriteRefreshedCredential() async throws {
+    let originalModel = Self.descriptor("first-model", provider: "openai-codex")
+    let replacementModel = Self.descriptor("second-model", provider: "openai-codex")
+    let original = InferenceConnection(id: "phone-account", name: "ChatGPT", provider: "openai-codex", accountID: "signed-in-account",
+      route: .direct, modelID: originalModel.id, selectedModel: originalModel)
+    let credentials = InferenceSetupMemoryCredentials([original.id: "oauth-before-refresh"])
+    var proposed = original; proposed.modelID = replacementModel.id; proposed.selectedModel = replacementModel
+    let saved = try await InferenceConnectionSaveTransaction.save(proposed, secret: "", existing: [original], credentials: credentials,
+      resolveModel: { candidate, credential in
+        XCTAssertEqual(candidate.id, original.id)
+        XCTAssertEqual(credential, "oauth-before-refresh")
+        // A concurrent inference run refreshes this account while setup awaits its model.
+        await credentials.save("oauth-after-refresh", connectionID: original.id)
+        return replacementModel
+      }, persist: { _ in })
+    XCTAssertEqual(saved.id, original.id)
+    XCTAssertEqual(saved.modelID, replacementModel.id)
+    let stored = await credentials.snapshot()
+    XCTAssertEqual(stored, [original.id: "oauth-after-refresh"])
+  }
+  @MainActor func testEmptyKeyCannotCreateConnectionOrStartModelResolution() async throws {
+    let credentials = InferenceSetupMemoryCredentials(), descriptor = Self.descriptor()
+    let connection = InferenceConnection(name: "OpenCode Go", provider: "opencode-go", route: .direct, modelID: descriptor.id)
+    do {
+      _ = try await InferenceConnectionSaveTransaction.save(connection, secret: " \n\t", existing: [], credentials: credentials,
+        resolveModel: { _, _ in XCTFail("No credential was supplied"); return descriptor }, persist: { _ in XCTFail("Invalid setup cannot persist") })
+      XCTFail("A new connection requires a nonempty key")
+    } catch InferenceError.missingCredential {}
+    let stored = await credentials.snapshot()
+    XCTAssertTrue(stored.isEmpty)
+  }
+  @MainActor func testProviderSwitchFencesOldCatalogAndSignInResults() {
+    let state = InferenceConnectionSetupState(provider: "openai-codex")
+    let catalogGeneration = state.beginCatalog(), authenticationGeneration = state.authenticationGeneration
+    state.secret = "old-provider-credential"; state.storedCredentialAvailable = true
+    state.chooseProvider("opencode-go")
+    XCTAssertEqual(state.mode, .device)
+    XCTAssertEqual(state.name, InferenceConnectionSetupState.providerName("opencode-go"))
+    XCTAssertEqual(state.secret, ""); XCTAssertFalse(state.storedCredentialAvailable)
+    XCTAssertFalse(state.receiveModels([Self.descriptor()], generation: catalogGeneration))
+    XCTAssertFalse(state.receiveCredential("late-credential", accountID: "old-account", generation: authenticationGeneration))
+    XCTAssertTrue(state.models.isEmpty); XCTAssertTrue(state.secret.isEmpty)
+  }
+  @MainActor func testCatalogChoosesVisibleDefaultButPreservesSavedModel() {
+    let first = Self.descriptor("alpha", name: "Alpha"), second = Self.descriptor("beta", name: "Beta")
+    let state = InferenceConnectionSetupState(provider: "opencode-go")
+    state.receiveModels([second, first], generation: state.beginCatalog())
+    XCTAssertEqual(state.modelID, "alpha")
+    state.loadingModels = false; state.secret = " device-key "
+    XCTAssertNil(state.saveProblem)
+    let existing = InferenceConnection(name: "My provider", provider: "opencode-go", route: .direct, modelID: second.id, selectedModel: second)
+    let editing = InferenceConnectionSetupState(connection: existing)
+    var changedCatalogModel = second; changedCatalogModel.contextWindow *= 2
+    editing.receiveModels([first, changedCatalogModel], generation: editing.beginCatalog())
+    XCTAssertEqual(editing.modelID, "beta")
+    XCTAssertEqual(editing.models.first(where: { $0.id == second.id }), second)
+    var recommended = second; recommended.metadata["recommended"] = .bool(true)
+    let fresh = InferenceConnectionSetupState(provider: "opencode-go")
+    fresh.receiveModels([first, recommended], generation: fresh.beginCatalog())
+    XCTAssertEqual(fresh.modelID, "beta")
   }
 }

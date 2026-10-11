@@ -36,6 +36,29 @@ Use another simulator without these variables for connected acceptance.
 - Repeat on iPad in portrait, landscape, and a compact window. Confirm sidebar
   selection and editing survive layout changes. Both apps use the green cube.
 
+## Standalone phone connections first
+
+Use the regular development app without fixture launch variables. No Mac pairing
+or Tailscale device is required for a direct cloud connection.
+
+1. Open **Settings → Agents and workspaces → Add inference connection**.
+2. Select ChatGPT or Grok, tap sign in, and complete the displayed device-code
+   flow yourself. For Claude, complete browser sign-in and paste the provider’s
+   returned code into the app. Cancelling or changing providers must discard the
+   previous sign-in attempt; no credentials should appear in app logs or history.
+3. For API access, select the provider (including the appropriate OpenCode Zen or
+   Go option), paste its key, select a model, and save. Reopen the connection and
+   relaunch the app to confirm the selection persists without exposing the key.
+4. Select **This iPhone** or **This iPad**, send a small prompt, and exercise a
+   local file tool. Keep all other Woven Matter devices disconnected. Repeat after
+   relaunch; token refresh must happen on this device without a host dependency.
+5. Check provider denial, cancellation, expired sign-in, and invalid API keys.
+   Provider errors must be visible without substituting another account or route.
+
+Automated tests use fake token endpoints and in-memory credentials. They do not
+sign into accounts or consume provider services. Actual sign-in, plan eligibility,
+and inference acceptance remain a human test for each provider.
+
 ## Central library and direct execution
 
 1. In the isolated central Mac app, open **Settings → Devices**, start sharing,
@@ -66,8 +89,8 @@ Use another simulator without these variables for connected acceptance.
 
 ## Pi Durable on iPhone and iPad
 
-Configure a supported API-key connection, or select an authorized inference
-host with an existing provider account and model. Select **This iPhone** or
+Configure a direct provider sign-in or API-key connection on the device. An
+authorized inference host remains an explicitly selected alternative. Select **This iPhone** or
 **This iPad** for execution. A subscription adapter performs inference only;
 the agent loop, native tools, code execution, and checkpoints remain on iOS.
 

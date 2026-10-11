@@ -24,7 +24,7 @@ Pi Durable executes on the iOS device. Its SDK owns the agent loop, submissions,
 
 The reviewed SDK is bundled with the app and hosted through JavaScriptCore. Native bridges provide durable storage, network streams, credentials, cancellation and mobile tools. The mobile workspace exposes only supported local capabilities. Mac/Linux workspace operations require an explicit target; a suspended local run is never silently moved elsewhere.
 
-Supported API-key connections can call providers directly. A provider integration requiring a desktop SDK can use an authenticated inference-only adapter. That adapter may translate model requests but cannot execute the phone's tools or own its agent loop. The selected adapter's availability is a model-connection dependency, separate from central-library availability.
+Device connections are independent of central-library pairing. ChatGPT and Grok use native device-code sign-in; Claude uses native PKCE sign-in with the provider’s returned code. API-key connections, including OpenCode Zen and Go, save their keys on the device. Access and refresh tokens stay in the device-only Keychain, and refresh calls the provider directly. Native Claude requests identify Woven Matter and retain Pi’s actual prompt and tool names; they do not claim to be Claude Code. Real provider authorization and inference acceptance require user testing. An explicitly selected hosted connection can still use an authenticated inference-only adapter. That adapter may translate model requests but cannot execute the phone's tools or own its agent loop. The selected adapter's availability is a model-connection dependency, separate from central-library availability.
 
 Accepted work and tool intent are persisted before display/dispatch. iOS background execution is opportunistic: interruption recovery uses native checkpoints and tool receipts. User cancellation remains cancellation after restart. Ambiguous external effects are reconciled or surfaced rather than blindly replayed.
 
@@ -52,7 +52,7 @@ The app has no first-party bundled model inventory or catalog generator. Opening
 one provider fetches only its credential-free `https://pi.dev/api/models/providers/{provider}?types=chat`
 shard, using `User-Agent: pi/<SDK compatibility version>`. `types` selects the
 representation; both loaders explicitly retain only supported chat APIs. Native
-API-key xAI connections retain the `xai-api` identity while fetching the `xai` shard.
+API-key xAI connections retain the `xai-api` identity while fetching the `xai` shard. Device Claude subscriptions retain `claude-subscription` while fetching the `anthropic` shard.
 
 The native cache and the shared desktop/remote cache store bounded provider files
 with ETag, Last-Modified and a four-hour freshness window. They perform no launch
@@ -72,7 +72,7 @@ Catalog refresh cannot replace a run's model, provider, account or execution own
 Authorized subscription-host discovery and explicitly configured Tailscale server
 IDs remain separate from public metadata discovery.
 
-Claude model names and effort options come from the SDK's demand-driven
+On desktop and hosted Claude connections, model names and effort options come from the SDK's demand-driven
 `supportedModels()` with empty streaming input, or its last valid saved result.
 An empty cache has an unavailable/retry state, with no app-authored aliases. The
 SDK does not expose context/output limits in that result; the existing native

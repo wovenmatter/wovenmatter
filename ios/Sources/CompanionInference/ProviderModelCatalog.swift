@@ -3,12 +3,17 @@ import Foundation
 /// Protocol policy, not an inventory. Downloaded descriptors never choose a credential destination.
 public enum InferenceModelPolicy {
   static let endpoints: [String: [String: String]] = [
+    "openai-codex": ["openai-codex-responses": "https://chatgpt.com/backend-api"],
+    "claude-subscription": ["anthropic-messages": "https://api.anthropic.com"],
+    "xai": ["openai-responses": "https://api.x.ai/v1"],
+    "opencode": ["openai-completions": "https://opencode.ai/zen/v1", "openai-responses": "https://opencode.ai/zen/v1", "anthropic-messages": "https://opencode.ai/zen"],
     "openai": ["openai-responses": "https://api.openai.com/v1"],
     "anthropic": ["anthropic-messages": "https://api.anthropic.com"],
     "openrouter": ["openai-completions": "https://openrouter.ai/api/v1", "anthropic-messages": "https://openrouter.ai/api"],
     "opencode-go": ["openai-completions": "https://opencode.ai/zen/go/v1", "openai-responses": "https://opencode.ai/zen/go/v1", "anthropic-messages": "https://opencode.ai/zen/go"],
     "xai-api": ["openai-responses": "https://api.x.ai/v1"],
   ]
+  static func sourceProvider(_ provider: String) -> String { provider == "xai-api" ? "xai" : provider == "claude-subscription" ? "anthropic" : provider }
   public static func validate(_ model: InferenceModel, provider: String) throws {
     guard model.provider == provider, !model.id.isEmpty, model.id.utf8.count <= 512,
           !model.name.isEmpty, model.name.utf8.count <= 512,
@@ -43,7 +48,7 @@ public enum InferenceModelPolicy {
     var result: [InferenceModel] = [], seen = Set<String>()
     for entry in entries {
       guard let object = entry as? [String: Any], let source = object["provider"] as? String,
-            source == (provider == "xai-api" ? "xai" : provider) else { throw InferenceError.malformedResponse }
+            source == sourceProvider(provider) else { throw InferenceError.malformedResponse }
       if let type = object["type"] as? String, type != "chat" { continue }
       guard let api = object["api"] as? String else { throw InferenceError.malformedResponse }
       if endpoints[provider]?[api] == nil { continue }
@@ -132,7 +137,7 @@ public actor ProviderModelCatalog {
     _ = cached(provider: provider)
     let saved = entries[provider]
     if !force, let saved, (0..<Self.refreshInterval).contains(now().timeIntervalSince(saved.checkedAt)) { return saved.models }
-    let source = provider == "xai-api" ? "xai" : provider
+    let source = InferenceModelPolicy.sourceProvider(provider)
     var request = URLRequest(url: URL(string: "https://pi.dev/api/models/providers/\(source)?types=chat")!)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("pi/\(Self.piVersion)", forHTTPHeaderField: "User-Agent")

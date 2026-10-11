@@ -175,16 +175,20 @@ struct HomePane: View {
         VStack(alignment: .leading, spacing: 8) {
           if !model.fixture {
             HStack(alignment: .top, spacing: 12) {
-              Image(systemName: model.online ? "checkmark.circle.fill" : "laptopcomputer")
+              Image(systemName: model.credential == nil ? "iphone.gen3" : model.online ? "checkmark.circle.fill" : "laptopcomputer")
                 .font(.title3).foregroundStyle(theme.palette.themeAccent)
               VStack(alignment: .leading, spacing: 6) {
-                Text(model.connectionLabel).font(.subheadline.weight(.semibold))
-                Text(model.online ? "Your central library is synchronized. Choose where agents run in Chats."
-                  : "Your notes stay available here. Connect to your central Mac to synchronize your library.")
+                Text(model.credential == nil ? model.deviceWorkspaceName : model.connectionLabel).font(.subheadline.weight(.semibold))
+                Text(model.credential == nil
+                  ? "Your notes and agents work here. Add a provider connection on this device to start chatting. Pair a Mac whenever you want to synchronize your library."
+                  : model.online ? "Your central library is synchronized. Choose where agents run in Chats."
+                  : "Your notes and device agents stay available here. Reconnect to synchronize your library.")
                   .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
                 if !model.online {
                   if model.credential == nil {
-                    Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(DashboardPrimaryButtonStyle())
+                    Button(model.inferenceConnections.isEmpty ? "Set up agents" : "Manage connections") { model.executionSettingsPresented = true }
+                      .buttonStyle(DashboardPrimaryButtonStyle())
+                    Button("Pair your Mac") { model.pairingPresented = true }.buttonStyle(DashboardQuietButtonStyle())
                   } else {
                     Button(model.connecting ? "Connecting…" : "Reconnect") { Task { await model.refresh() } }.disabled(model.connecting)
                   }
