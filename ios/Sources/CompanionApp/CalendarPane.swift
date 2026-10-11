@@ -124,7 +124,7 @@ struct CalendarEventSheet: View {
       }.scrollIndicators(.never).scrollContentBackground(.hidden).environment(\.timeZone, TimeZone(identifier: draft.timeZoneID) ?? .current)
         .disabled(busy || !model.online)
         .navigationTitle(draft.task == nil ? (event == nil ? "New event" : "Edit event") : (event == nil ? "New task" : "Edit task"))
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .toolbar {
           ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(busy || !model.online || draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }

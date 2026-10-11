@@ -50,6 +50,7 @@ struct CompanionShell: View {
             pane
             if CompanionModel.Tab.allCases.prefix(5).contains(model.tab) { CompanionInlineError(model: model).padding(.horizontal, 20) }
           }
+            .mobilePageSurface()
             .toolbar(CompanionModel.Tab.allCases.prefix(5).contains(model.tab) ? .hidden : .visible, for: .navigationBar)
             .toolbar {
               if !CompanionModel.Tab.allCases.prefix(5).contains(model.tab) {
@@ -379,7 +380,7 @@ struct GeneralSettingsPane: View {
       Section("Appearance") {
         DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
           DashboardTheme(rawValue: $0)?.title ?? $0
-        }.accessibilityLabel("Theme")
+        }.accessibilityLabel("Theme").listRowBackground(Color.clear)
       }
       Section("About") {
         LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")

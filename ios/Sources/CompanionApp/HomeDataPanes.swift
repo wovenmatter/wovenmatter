@@ -169,7 +169,7 @@ private struct DatabaseDetailPane: View {
         }
       }
     }.listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never)
-      .navigationTitle(database.name).navigationBarTitleDisplayMode(.inline)
+      .mobileNavigationPage(database.name)
   }
 }
 
