@@ -6,7 +6,7 @@ import PiDurableRuntime
 import CompanionInference
 
 @MainActor @Observable final class CompanionModel {
-  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", library = "Library", calendar = "Calendar", scheduledTasks = "Scheduled tasks", databases = "Databases", usage = "Usage", trash = "Trash"
+  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", calendar = "Calendar", scheduledTasks = "Scheduled tasks", library = "Library", databases = "Databases", usage = "Usage", trash = "Trash"
     var icon: DashboardLucideGlyph {
       switch self {
       case .home: .house
@@ -26,6 +26,8 @@ import CompanionInference
   var tab: Tab = .home
   var state = MobileStoreState()
   var providers: [CompanionProvider] = []
+  var knownAgentIDs: Set<String> = []
+  var savedAgentCatalog: CompanionAgentCatalog?
   var pending: [CompanionPendingInteraction] = []
   var sessionCapabilities: [String: CompanionProvider] = [:]
   var historyPages: [String: CompanionTranscript] = [:]
@@ -229,6 +231,7 @@ import CompanionInference
       if frame % 5 == 0 { try await engine.recoverCommandReceipts() }
       frame += 1
       await reload()
+      rememberAgentCatalog()
       online = true; connectionLabel = "Library synchronized"
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
     } catch {

@@ -280,7 +280,7 @@ private struct InferenceConnectionEditor: View {
       if !setupAllowed { Section { Text("Account setup is disabled in this test build.") } }
       else if state.mode == .hosted {
         Section {
-          Picker("Provider", selection: Binding(get: { state.provider }, set: chooseProvider)) {
+          Picker("Provider", selection: Binding(get: { state.provider }, set: { chooseProvider($0) })) {
             ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") }) { Text($0.name).tag($0.id) }
           }.disabled(state.original != nil)
         }
@@ -340,7 +340,7 @@ private struct InferenceConnectionEditor: View {
   }
   private var hostedFields: some View {
     Section("Workspace") {
-      Picker("Host", selection: Binding(get: { state.hostID }, set: chooseHost)) {
+      Picker("Host", selection: Binding(get: { state.hostID }, set: { chooseHost($0) })) {
         Text(state.hasSavedHost ? "Saved host" : "Choose an authorized workspace").tag("")
         ForEach(model.executionWorkspaces.filter { $0.endpoint != nil }) { Text($0.name).tag($0.id) }
       }

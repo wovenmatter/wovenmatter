@@ -30,15 +30,6 @@ struct DeviceAgentDefaults: Codable, Equatable {
   var enabledTools: [String]?
 }
 
-struct CompanionAgentLauncher: Identifiable, Equatable {
-  var workspaceID: String
-  var workspaceName: String
-  var providerID: String
-  var name: String
-  var runtimeKind: String
-  var id: String { workspaceID + ":" + providerID }
-}
-
 struct DeviceExecutionPreferences: Codable {
   var connections: [InferenceConnection] = []
   var selectedConnectionID = ""
@@ -126,33 +117,41 @@ extension CompanionModel {
   var deviceConnectionsTitle: String { UIDevice.current.userInterfaceIdiom == .pad ? "iPad Connections" : "iPhone Connections" }
   var deviceWorkspaceID: String { state.deviceID }
   var launcherAgents: [CompanionAgentLauncher] {
-    var agents: [CompanionAgentLauncher] = [.init(workspaceID: "local", workspaceName: deviceWorkspaceName,
-      providerID: "pi-durable-device", name: "Pi Durable", runtimeKind: "pi")]
-    if online {
-      agents += providers.filter { provider in
-        guard provider.available && provider.canStart else { return false }
-        let parts = provider.id.split(separator: ":", omittingEmptySubsequences: false)
-        if parts.count == 3, parts[0] == "remote", let id = UUID(uuidString: String(parts[1]))?.uuidString.lowercased(),
-           executionWorkspaces.contains(where: { $0.id == id }), workspaceReachable[id] == true,
-           (workspaceProviders[id] ?? []).contains(where: { $0.available && $0.canStart && $0.runtimeKind == provider.runtimeKind }) {
-          return false
-        }
-        return true
-      }.map {
-        .init(workspaceID: "central", workspaceName: $0.routeName.isEmpty ? "Central Mac" : $0.routeName,
-          providerID: $0.id, name: $0.displayName, runtimeKind: $0.runtimeKind)
-      }
+    var known = knownAgentIDs
+    for conversation in conversations {
+      if let provider = conversation.providerID { known.insert(executionOwner(of: conversation.id) + ":" + provider) }
     }
-    for workspace in executionWorkspaces.sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) where workspaceReachable[workspace.id] == true {
-      agents += (workspaceProviders[workspace.id] ?? []).filter { $0.available && $0.canStart }.map {
-        .init(workspaceID: workspace.id, workspaceName: workspace.name, providerID: $0.id, name: $0.displayName, runtimeKind: $0.runtimeKind)
-      }
-    }
-    return agents
+    return CompanionAgentLauncher.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
+      workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known)
   }
-  func launchAgent(_ launcher: CompanionAgentLauncher) {
-    guard launcherAgents.contains(where: { $0.id == launcher.id }) else { return }
-    newChat(); selectExecutionWorkspace(launcher.workspaceID); providerID = launcher.providerID
+  func launchAgent(_ launcher: CompanionAgentLauncher) async {
+    guard let current = launcherAgents.first(where: { $0.id == launcher.id }), current.isAvailable else { return }
+    if let latest = current.latestConversation(in: conversations, owner: { executionOwner(of: $0) }) {
+      await selectConversation(latest.id)
+    } else {
+      newChat(); selectExecutionWorkspace(current.workspaceID); providerID = current.providerID
+    }
+  }
+  func rememberAgentCatalog() {
+    guard let libraryID = state.workspaceID, let executionDirectory else { return }
+    for provider in providers where provider.available && provider.canStart { knownAgentIDs.insert("central:" + provider.id) }
+    for (workspace, providers) in workspaceProviders {
+      for provider in providers where provider.available && provider.canStart { knownAgentIDs.insert(workspace + ":" + provider.id) }
+    }
+    let saved = CompanionAgentCatalog(libraryID: libraryID, providers: providers, workspaceProviders: workspaceProviders, knownAgentIDs: knownAgentIDs)
+    guard saved != savedAgentCatalog else { return }
+    do {
+      try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
+      try JSONEncoder().encode(saved).write(to: executionDirectory.appendingPathComponent("agents.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      savedAgentCatalog = saved
+    } catch { /* Discovery caching must not interrupt an otherwise working connection. */ }
+  }
+  func restoreAgentCatalog() {
+    guard let executionDirectory,
+      let data = try? Data(contentsOf: executionDirectory.appendingPathComponent("agents.json")),
+      let saved = try? JSONDecoder().decode(CompanionAgentCatalog.self, from: data), saved.libraryID == state.workspaceID else { return }
+    providers = saved.providers; workspaceProviders = saved.workspaceProviders; knownAgentIDs = saved.knownAgentIDs
+    savedAgentCatalog = saved
   }
   func saveDeviceAgentDefaults(_ defaults: DeviceAgentDefaults, connectionID: String) throws {
     guard let executionDirectory else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
@@ -252,6 +251,7 @@ extension CompanionModel {
       }
       try persistExecutionConfiguration()
     }
+    restoreAgentCatalog()
     try await store?.restoreExecutionProjection()
     for record in executionRecords.values where record.isTrashed != true { try await adoptDeviceConversation(record, transcript: nil) }
     await reload()

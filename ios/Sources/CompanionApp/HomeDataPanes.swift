@@ -173,6 +173,32 @@ private struct DatabaseDetailPane: View {
   }
 }
 
+private enum UsagePreferences {
+  static let sourceKey = "mobile.usage.defaultSource"
+  static let daysKey = "mobile.usage.defaultDays"
+}
+
+struct UsageSettingsPane: View {
+  @Bindable var model: CompanionModel
+  @AppStorage(UsagePreferences.sourceKey) private var source = "device"
+  @AppStorage(UsagePreferences.daysKey) private var days = 7
+  var body: some View {
+    Form {
+      Section("Default view") {
+        Picker("Source", selection: $source) {
+          Text(model.deviceWorkspaceName).tag("device")
+          if model.credential != nil || source == "central" { Text("Central library").tag("central") }
+        }
+        Picker("Time range", selection: $days) {
+          Text("24 hours").tag(1)
+          Text("7 days").tag(7)
+          Text("30 days").tag(30)
+        }
+      }
+    }.scrollIndicators(.never).mobileNavigationPage("Usage Settings")
+  }
+}
+
 struct UsagePane: View {
   @Bindable var model: CompanionModel
   @State private var samples: [CompanionUsageSample] = []
@@ -187,6 +213,13 @@ struct UsagePane: View {
   @State private var failure: String?
   private var scope: String { "\(source):\(model.state.workspaceID ?? ""):\(model.online):\(days)" }
   private var available: Bool { source == "device" ? model.store != nil : model.online }
+  init(model: CompanionModel) {
+    self.model = model
+    let defaults = UserDefaults.standard
+    let days = defaults.object(forKey: UsagePreferences.daysKey) as? Int ?? 7
+    _days = State(initialValue: [1, 7, 30].contains(days) ? days : 7)
+    _source = State(initialValue: defaults.string(forKey: UsagePreferences.sourceKey) == "central" && model.credential != nil ? "central" : "device")
+  }
   private var totalTokens: Int64 { samples.reduce(0) { $0 + $1.totalTokens } }
   private var groups: [(name: String, tokens: Int64, requests: Int)] {
     Dictionary(grouping: samples, by: { $0.model }).map { name, values in

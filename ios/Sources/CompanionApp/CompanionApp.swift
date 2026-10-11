@@ -37,8 +37,8 @@ struct CompanionShell: View {
           ScrollView {
             VStack(spacing: 4) {
               ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in sidebarRow(tab) }
-              GroupLabel(text: "Workspace")
-              ForEach(Array(CompanionModel.Tab.allCases.dropFirst(5)), id: \.self) { tab in sidebarRow(tab) }
+              Divider().padding(.vertical, 12)
+              ForEach(Array(CompanionModel.Tab.allCases.dropFirst(5).filter { $0 != .trash }), id: \.self) { tab in sidebarRow(tab) }
             }.padding(.horizontal, 12)
           }
         }.frame(width: DashboardMetrics.railWidth).background(theme.palette.themeWhisper)
@@ -194,20 +194,32 @@ struct HomePane: View {
       PaneHeader(title: "Woven Matter") { EmptyView() }
       ScrollView {
         VStack(alignment: .leading, spacing: 2) {
+          let agents = model.launcherAgents
           GroupLabel(text: "Agents")
-          ForEach(model.launcherAgents) { agent in
-            WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name, detail: agent.workspaceName) {
-              model.launchAgent(agent)
-            }.accessibilityIdentifier("launch-agent-" + agent.id)
+          ForEach(agents.filter { $0.workspaceID == "local" }) { agent in agentRow(agent) }
+          let macAgents = agents.filter(\.isLocalMac)
+          if !macAgents.isEmpty {
+            GroupLabel(text: "Local agent workspace")
+            ForEach(macAgents) { agent in agentRow(agent) }
           }
-          GroupLabel(text: "Workspace")
-          ForEach([CompanionModel.Tab.library, .calendar, .scheduledTasks, .databases, .usage], id: \.self) { tab in
+          let remoteAgents = agents.filter { $0.workspaceID != "local" && !$0.isLocalMac }
+          if !remoteAgents.isEmpty {
+            GroupLabel(text: "Remote workspaces")
+            ForEach(remoteAgents) { agent in agentRow(agent) }
+          }
+          Divider().padding(.horizontal, 14).padding(.vertical, 18)
+          ForEach([CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
             SettingsNavigationRow(title: tab.rawValue, icon: tab.icon) { destination(tab) }
               .accessibilityIdentifier("open-" + tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))
           }
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
     }
+  }
+  private func agentRow(_ agent: CompanionAgentLauncher) -> some View {
+    WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name, detail: agent.workspaceName) {
+      Task { await model.launchAgent(agent) }
+    }.disabled(!agent.isAvailable).accessibilityIdentifier("launch-agent-" + agent.id)
   }
   @ViewBuilder private func destination(_ tab: CompanionModel.Tab) -> some View {
     switch tab {
@@ -242,6 +254,8 @@ struct FoldersPane: View {
                   detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
                   .accessibilityIdentifier("folder-" + folder.id)
               }
+              SettingsNavigationRow(title: "Trash", icon: .trash) { TrashPane(model: model).mobileNavigationPage("Trash") }
+                .padding(.top, 18).accessibilityIdentifier("folders-trash")
             }.padding(.horizontal, 18).padding(.bottom, 24)
           }.refreshable { await model.refresh() }
         }
@@ -315,11 +329,10 @@ struct CompanionSettingsPane: View {
       ScrollView {
         VStack(spacing: 2) {
           SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
-          SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
           SettingsNavigationRow(title: "Pi Durable", icon: .bot) { DeviceAgentSettingsPane(model: model) }
+          SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
           SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }
-          SettingsNavigationRow(title: "Usage", icon: .barChart) { UsagePane(model: model).mobileNavigationPage("Usage") }
-          SettingsNavigationRow(title: "Trash", icon: .trash) { TrashPane(model: model).mobileNavigationPage("Trash") }
+          SettingsNavigationRow(title: "Usage Settings", icon: .barChart) { UsageSettingsPane(model: model) }
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }
     }
@@ -419,7 +432,7 @@ private struct WorkspaceSettingsPane: View {
       if let endpoint = workspace.endpoint { Section("Address") { Text(endpoint.absoluteString).textSelection(.enabled) } }
       Section("Agents") {
         ForEach((model.workspaceProviders[workspace.id] ?? []).filter { $0.available && $0.canStart }) { provider in
-          Button { model.launchAgent(.init(workspaceID: workspace.id, workspaceName: workspace.name, providerID: provider.id, name: provider.displayName, runtimeKind: provider.runtimeKind)) } label: {
+          Button { Task { await model.launchAgent(.init(workspaceID: workspace.id, workspaceName: workspace.name, providerID: provider.id, name: provider.displayName, runtimeKind: provider.runtimeKind)) } } label: {
             Label { Text(provider.displayName) } icon: { MobileAgentIcon(runtimeKind: provider.runtimeKind, size: 22) }
           }.disabled(model.workspaceReachable[workspace.id] != true)
         }

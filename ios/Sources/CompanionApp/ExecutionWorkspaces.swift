@@ -95,6 +95,7 @@ extension CompanionModel {
           sessionCapabilities[id] = try await client.capabilities(id)
         }
       }
+      rememberAgentCatalog()
       workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID)
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()

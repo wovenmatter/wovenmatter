@@ -40,7 +40,7 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
-  @MainActor func testHomeLauncherKeepsExactWorkspaceAndOmitsDisconnectedAgents() throws {
+  @MainActor func testHomeLauncherKeepsExactWorkspaceAndDimsDisconnectedAgents() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
@@ -53,13 +53,16 @@ final class ExecutionRoutingTests: XCTestCase {
     model.workspaceProviders = [connected.id: [agent], disconnected.id: [agent]]
     model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"
     let launchers = model.launcherAgents
-    XCTAssertEqual(launchers.map(\.workspaceID), ["local", connected.id])
-    model.launchAgent(try XCTUnwrap(launchers.last))
+    XCTAssertEqual(launchers.map(\.workspaceID), ["local", "central", connected.id, disconnected.id])
+    XCTAssertFalse(try XCTUnwrap(launchers.last).isAvailable)
+    await model.launchAgent(try XCTUnwrap(launchers.last))
+    XCTAssertEqual(model.selectedConversationID, "existing-chat")
+    await model.launchAgent(try XCTUnwrap(launchers.first { $0.workspaceID == connected.id }))
     XCTAssertEqual(model.tab, .chat)
     XCTAssertNil(model.selectedConversationID)
     XCTAssertEqual(model.selectedExecutionWorkspaceID, connected.id)
     XCTAssertEqual(model.providerID, agent.id)
-    model.launchAgent(try XCTUnwrap(launchers.first))
+    await model.launchAgent(try XCTUnwrap(launchers.first))
     XCTAssertEqual(model.selectedExecutionWorkspaceID, "local")
     XCTAssertEqual(model.providerID, "pi-durable-device")
     model.online = true
