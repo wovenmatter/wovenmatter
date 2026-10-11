@@ -11,7 +11,7 @@ struct EmptyNotePane: View {
       DashboardLucideIcon(glyph: .fileText, size: 44).foregroundStyle(DashboardPalette.mutedForeground)
       Text("Notes").font(.title2.bold())
       Button("New note") { Task { await model.newNote() } }.buttonStyle(DashboardPrimaryButtonStyle()).accessibilityIdentifier("action-new-note")
-    }.padding(30)
+    }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 

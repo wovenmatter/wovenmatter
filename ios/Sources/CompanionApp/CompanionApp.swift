@@ -189,12 +189,17 @@ struct GroupLabel: View {
 }
 
 struct HomePane: View {
+  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   var body: some View {
     VStack(spacing: 0) {
       PaneHeader(title: "Woven Matter") { EmptyView() }
       ScrollView {
         VStack(alignment: .leading, spacing: 2) {
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { quickActions }
+            VStack(spacing: 12) { quickActions }
+          }.padding(.vertical, 12)
           let agents = model.launcherAgents
           GroupLabel(text: "Agents")
           ForEach(agents.filter { $0.workspaceID == "local" }) { agent in agentRow(agent) }
@@ -216,6 +221,23 @@ struct HomePane: View {
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
     }
+  }
+  @ViewBuilder private var quickActions: some View {
+    quickAction("New chat", icon: .squarePen, detail: "Continue your work") { model.newChat() }
+      .accessibilityIdentifier("action-new-chat")
+    quickAction("New note", icon: .fileText, detail: "Capture an idea") {
+      Task { await model.newNote() }
+    }.accessibilityIdentifier("action-new-note")
+  }
+  private func quickAction(_ title: String, icon: DashboardLucideGlyph, detail: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 8) {
+        DashboardLucideIcon(glyph: icon, size: 24).foregroundStyle(theme.palette.themeAccent)
+        Text(title).font(.headline)
+        Text(detail).font(.caption).foregroundStyle(DashboardPalette.foreground)
+      }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+    }.buttonStyle(.plain)
   }
   private func agentRow(_ agent: CompanionAgentLauncher) -> some View {
     WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name, detail: agent.workspaceName) {
@@ -247,6 +269,10 @@ struct FoldersPane: View {
           PaneHeader(title: "Folders") { EmptyView() }
           ScrollView {
             VStack(spacing: 0) {
+              WorkspaceRow(icon: .squarePen, title: "New chat") { model.newChat() }
+                .accessibilityIdentifier("action-new-chat")
+              WorkspaceRow(icon: .fileText, title: "New note") { Task { await model.newNote() } }
+                .accessibilityIdentifier("action-new-note")
               WorkspaceRow(icon: .plus, title: "New folder") { newFolderPresented = true }
               WorkspaceRow(icon: .folder, title: "All workspace") { model.openFolder(nil) }
                 .accessibilityIdentifier("folder-all")
