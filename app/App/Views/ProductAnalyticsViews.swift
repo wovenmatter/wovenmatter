@@ -3,12 +3,16 @@ import SwiftUI
 import WovenMatterCore
 
 struct ProductAnalyticsDisclosureView: View {
+    var errorMessage: String? = nil
     let onChoose: (Bool) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Product analytics").font(.title2.weight(.semibold))
             Text(ProductAnalyticsPolicy.disclosure).fixedSize(horizontal: false, vertical: true)
             Link("Read our privacy policy", destination: ProductAnalyticsPolicy.url)
+            if let errorMessage {
+                Text(errorMessage).font(.caption).foregroundStyle(.red)
+            }
             HStack {
                 Button("Turn off analytics") { onChoose(false) }.buttonStyle(
                     SettingsQuietButtonStyle())

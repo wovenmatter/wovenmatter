@@ -26,7 +26,7 @@ struct RootView: View {
             await model.analytics.openInterface()
         }
         .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) {
-            ProductAnalyticsDisclosureView { enabled in Task { await model.analytics.setEnabled(enabled,disclose:true) } }
+            ProductAnalyticsDisclosureView(errorMessage: model.analytics.errorMessage) { enabled in Task { await model.analytics.setEnabled(enabled,disclose:true) } }
         }
         .environment(\.dashboardTheme, theme)
         .toggleStyle(DashboardSwitchToggleStyle())
