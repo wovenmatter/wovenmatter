@@ -40,6 +40,8 @@ struct DashboardNoteEditorTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        try verifyNativeListPersistence(in: directory)
+
         let link = DatabaseArtifactLink(
             sourceID: "test-source",
             databaseID: "test-database",
@@ -111,6 +113,126 @@ struct DashboardNoteEditorTests {
             }
         }
         print("PASS: \(cases) actual AppKit edit/parse/save/reopen and clear/reopen cases preserve document metadata and table links")
+    }
+
+    struct NativeListSnapshot: Equatable {
+        var formats: [String]
+        var identities: [Int]
+        var startingNumbers: [Int]
+        var options: [UInt]
+        var headIndent: CGFloat
+        var firstLineHeadIndent: CGFloat
+        var tabLocations: [CGFloat]
+        var tabAlignments: [Int]
+        var defaultTabInterval: CGFloat
+    }
+
+    static func listSnapshots(_ textView: NSTextView) -> [NativeListSnapshot] {
+        let string = textView.string as NSString
+        var identities: [ObjectIdentifier: Int] = [:]
+        var snapshots: [NativeListSnapshot] = []
+        var location = 0
+        while location < string.length {
+            let range = string.paragraphRange(for: NSRange(location: location, length: 0))
+            let paragraph = textView.textStorage!.attribute(.paragraphStyle, at: location, effectiveRange: nil)
+                as? NSParagraphStyle ?? .default
+            snapshots.append(NativeListSnapshot(
+                formats: paragraph.textLists.map { $0.markerFormat.rawValue },
+                identities: paragraph.textLists.map {
+                    let key = ObjectIdentifier($0)
+                    if let existing = identities[key] { return existing }
+                    let identity = identities.count
+                    identities[key] = identity
+                    return identity
+                },
+                startingNumbers: paragraph.textLists.map(\.startingItemNumber),
+                options: paragraph.textLists.map { $0.listOptions.rawValue },
+                headIndent: paragraph.headIndent, firstLineHeadIndent: paragraph.firstLineHeadIndent,
+                tabLocations: paragraph.tabStops.map(\.location),
+                tabAlignments: paragraph.tabStops.map { $0.alignment.rawValue },
+                defaultTabInterval: paragraph.defaultTabInterval
+            ))
+            location = NSMaxRange(range)
+        }
+        return snapshots
+    }
+
+    static func nativeEditor(_ document: Binding<NoteDocument>) -> (NSTextView, DashboardNoteEditor.Coordinator) {
+        let editor = DashboardNoteEditor(document: document, controller: DashboardNoteEditorController())
+        let coordinator = editor.makeCoordinator()
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.isRichText = true
+        textView.delegate = coordinator
+        coordinator.bind(textView)
+        coordinator.apply(document.wrappedValue, to: textView)
+        return (textView, coordinator)
+    }
+
+    static func verifyNativeListPersistence(in directory: URL) throws {
+        _ = NSApplication.shared
+        let parents = ["One", "Two", "Three", "Four", "Abstraction"]
+        var saved = NoteDocument(blocks: parents.map {
+            .richText(NoteRichTextBlock(style: .numberedList, text: $0))
+        })
+        let (textView, coordinator) = nativeEditor(Binding(get: { saved }, set: { saved = $0 }))
+        let children = ["To abstract", "Levels", "Layers"]
+        for child in children {
+            textView.setSelectedRange(NSRange(location: textView.string.utf16.count - 1, length: 0))
+            textView.doCommand(by: #selector(NSTextView.insertNewline(_:)))
+            try require(listSnapshots(textView).last?.formats == ["{decimal}."],
+                        "Enter must keep creating a numbered item")
+            textView.doCommand(by: #selector(NSTextView.insertTab(_:)))
+            try require(listSnapshots(textView).last?.formats == ["{decimal}.", "{hyphen}"],
+                        "Tab must keep creating a nested dash item")
+            textView.insertText(child, replacementRange: textView.selectedRange())
+        }
+        let before = listSnapshots(textView)
+        try require(before.count == 8 && before.suffix(3).allSatisfy { $0.headIndent > before[4].headIndent },
+                    "The three children must be indented under item 5")
+        try require(before.allSatisfy { $0.identities.first == before[0].identities.first },
+                    "Parent numbering must share one list across nested children")
+        try require(saved.blocks.count == 8 && saved.blocks.suffix(3).allSatisfy {
+            if case .richText(let text) = $0 { return text.list?.levels.last?.markerFormat == "{hyphen}" }
+            return false
+        }, "Native edits must publish nesting through the normal notification path")
+
+        let path = directory.appendingPathComponent("native-nested-list.json")
+        try saved.encoded().write(to: path, atomically: true, encoding: .utf8)
+        var reopened = NoteDocument.decode(try String(contentsOf: path, encoding: .utf8))
+        let (reopenedView, reopenedCoordinator) = nativeEditor(Binding(get: { reopened }, set: { reopened = $0 }))
+        try require(listSnapshots(reopenedView) == before,
+                    "Fresh editor must restore markers, hierarchy, identities, indents, and native tab stops")
+        let persisted = reopened
+        reopenedCoordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: reopenedView))
+        try require(reopened == persisted, "A no-op parse must preserve saved list identities")
+
+        // A further Tab and Shift-Tab must still use native editing after reopening.
+        let layers = (reopenedView.string as NSString).range(of: "Layers")
+        reopenedView.setSelectedRange(NSRange(location: layers.location, length: 0))
+        reopenedView.doCommand(by: #selector(NSTextView.insertTab(_:)))
+        let deeper = listSnapshots(reopenedView)
+        try require(deeper.last?.formats.count == 3, "A second Tab must retain deeper native nesting")
+        reopenedCoordinator.apply(NoteDocument.decode(try reopened.encoded()), to: reopenedView)
+        try require(listSnapshots(reopenedView) == deeper, "Deeper nesting must survive reopening")
+        reopenedView.setSelectedRange(NSRange(location: layers.location, length: 0))
+        reopenedView.doCommand(by: #selector(NSTextView.insertBacktab(_:)))
+        try require(listSnapshots(reopenedView) == before, "Shift-Tab must restore the previous nesting")
+
+        // Continue the user's Enter/Tab workflow from a restored child item.
+        reopenedView.setSelectedRange(NSRange(location: reopenedView.string.utf16.count - 1, length: 0))
+        reopenedView.doCommand(by: #selector(NSTextView.insertNewline(_:)))
+        try require(listSnapshots(reopenedView).last?.formats == ["{decimal}."],
+                    "Enter after reopening must still create a numbered item")
+        reopenedView.doCommand(by: #selector(NSTextView.insertTab(_:)))
+        let emptyNested = listSnapshots(reopenedView)
+        reopenedCoordinator.apply(NoteDocument.decode(try reopened.encoded()), to: reopenedView)
+        try require(listSnapshots(reopenedView) == emptyNested && emptyNested.last?.formats.last == "{hyphen}",
+                    "An empty nested item must retain its dash and indentation on reopen")
+
+        // Earlier documents have no list metadata; native rendering remains flat.
+        coordinator.apply(NoteDocument(blocks: [.richText(.init(style: .bulletedList, text: "Old bullet"))]), to: textView)
+        try require(listSnapshots(textView).first?.formats == ["{disc}"], "Old bulleted lists must render unchanged")
+        print("PASS: native Enter/Tab lists, nested dash save/fresh reopen, deeper nesting, Shift-Tab, empty items, and stable list identities")
     }
 
     static func verifyDocumentBindingCache() throws {
