@@ -37,7 +37,7 @@ extension CompanionModel {
     let object = try Self.executionObject(request)
     guard let name = object["name"] as? String, let conversationID = object["conversationID"] as? String,
           executionRecords[conversationID] != nil else { throw DeviceExecutionError.unavailable("The tool request has no valid execution owner.") }
-    if let enabled = executionRecords[conversationID]?.enabledTools, !enabled.contains(name) { throw DeviceExecutionError.unavailable("This tool is disabled for this conversation.") }
+    if !Self.deviceToolEnabled(name, selection: executionRecords[conversationID]?.enabledTools) { throw DeviceExecutionError.unavailable("This tool is disabled for this conversation.") }
     let arguments = object["arguments"] as? [String: Any] ?? [:]
     func string(_ key: String) throws -> String {
       guard let value = arguments[key] as? String else { throw DeviceExecutionError.unavailable("Missing tool argument: " + key) }

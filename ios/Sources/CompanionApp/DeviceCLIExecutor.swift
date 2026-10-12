@@ -17,12 +17,11 @@ extension CompanionModel {
   func executeDeviceExecutorTool(_ c: WovenMatterToolCommand, request: WovenMatterToolRequest, conversationID: String) async throws -> WovenMatterToolResponse {
     try Task.checkCancellation()
     guard let store, let record = executionRecords[conversationID] else { throw WorkspaceToolError.notFound("The local execution owner is unavailable.") }
-    // Only user-selected native capabilities enter the worker. Executor cannot
-    // call itself recursively or activate an unselected tool through code.
-    let selected = record.enabledTools.map(Set.init)
+    // Native capabilities are always available; CLI groups follow Tool Access.
+    // Executor cannot call itself recursively or activate a disabled CLI group.
     let available = Self.deviceToolDefinitions.filter { tool in
       guard let name = tool["name"] as? String, name != "wovenmatter_executor" else { return false }
-      return selected == nil || selected!.contains(name)
+      return Self.deviceToolEnabled(name, selection: record.enabledTools)
     }
     if c.action == "search" {
       let query = c.options["query"] ?? "", limit = try c.integer("limit", default: 50, range: 1...100)

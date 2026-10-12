@@ -25,7 +25,7 @@ extension CompanionModel {
         let descriptor = try await CompanionInferenceService(connection: connection, credentials: executionCredentialStore).model()
         let id = UUID().uuidString.lowercased()
         let record = DeviceConversationRecord(id: id, title: "New chat", folderID: folder,
-          enabledTools: deviceAgentDefaults.enabledTools, thinkingLevel: "off", executionPolicy: deviceAgentDefaults.executionPolicy ?? .init(), additionalInstructions: deviceAgentDefaults.instructions,
+          enabledTools: deviceAgentDefaults.enabledTools, thinkingLevel: deviceAgentDefaults.thinking(for: descriptor), executionPolicy: deviceAgentDefaults.executionPolicy ?? .init(), additionalInstructions: deviceAgentDefaults.instructions,
           connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         executionRecords[id] = record
         do { try persistExecutionConfiguration() } catch { executionRecords.removeValue(forKey: id); throw error }
@@ -87,11 +87,11 @@ extension CompanionModel {
     return selectedInferenceConnection?.selectedModel
   }
   var deviceChatThinking: String {
-    selectedConversationID.flatMap { executionRecords[$0]?.thinkingLevel } ?? (selectedConversationID == nil ? draftDeviceSettings.thinkingLevel : "off")
+    selectedConversationID.flatMap { executionRecords[$0]?.thinkingLevel } ?? (selectedConversationID == nil ? draftDeviceSettings.thinkingLevel ?? deviceAgentDefaults.thinking(for: deviceChatModel) : "off")
   }
   var deviceChatTools: [String] {
     let enabled = selectedConversationID.flatMap { executionRecords[$0]?.enabledTools } ?? (selectedConversationID == nil ? draftDeviceSettings.enabledTools ?? deviceAgentDefaults.enabledTools : nil)
-    return enabled ?? Self.deviceToolDefinitions.compactMap { $0["name"] as? String }
+    return Self.deviceCLITools.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: enabled) }
   }
   var canConfigureDeviceChat: Bool { canConfigureDeviceChat(selectedConversationID) }
   private func canConfigureDeviceChat(_ id: String?) -> Bool {
@@ -116,14 +116,14 @@ extension CompanionModel {
     if let connection { selected = try await CompanionInferenceService(connection: connection, credentials: executionCredentialStore).model() }
     else if let id, let record = executionRecords[id] { selected = try JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8)) }
     else { selected = deviceChatModel }
-    if let thinking, thinking != "off", selected?.supportedThinkingLevels.contains(thinking) != true { throw InferenceError.invalidConfiguration }
+    if let thinking, selected?.supportedThinkingLevels.contains(thinking) != true { throw InferenceError.invalidConfiguration }
     if let id, var record = executionRecords[id] {
       // The runtime captures its credential/model binding; reopen it only after the idle change is saved.
       try await localRuntimes[id]?.close(); localRuntimes.removeValue(forKey: id)
       let previous = record
       if let connection, let selected { record.connectionID = connection.id; record.connection = connection; record.modelJSON = try selected.descriptorJSON() }
       if let thinking { record.thinkingLevel = thinking }
-      if selected?.supportedThinkingLevels.contains(record.thinkingLevel ?? "off") != true { record.thinkingLevel = "off" }
+      if selected?.supportedThinkingLevels.contains(record.thinkingLevel ?? "off") != true { record.thinkingLevel = deviceAgentDefaults.thinking(for: selected) }
       if let tools { record.enabledTools = tools }
       executionRecords[id] = record
       do { try persistExecutionConfiguration() } catch { executionRecords[id] = previous; throw error }
@@ -132,7 +132,7 @@ extension CompanionModel {
       let previous = draftDeviceSettings
       if let connection { draftDeviceSettings.connection = connection }
       if let thinking { draftDeviceSettings.thinkingLevel = thinking }
-      if selected?.supportedThinkingLevels.contains(draftDeviceSettings.thinkingLevel) != true { draftDeviceSettings.thinkingLevel = "off" }
+      if selected?.supportedThinkingLevels.contains(draftDeviceSettings.thinkingLevel ?? "") != true { draftDeviceSettings.thinkingLevel = deviceAgentDefaults.thinking(for: selected) }
       if let tools { draftDeviceSettings.enabledTools = tools }
       do { try persistExecutionConfiguration() } catch { draftDeviceSettings = previous; throw error }
     }

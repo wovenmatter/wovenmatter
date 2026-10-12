@@ -4,6 +4,19 @@ import CompanionClient
 import WovenMatterCompanion
 
 extension CompanionModel {
+  static var deviceToolAccessOptions: [CompanionSelection] {
+    WorkspaceToolGroup.allCases.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
+  }
+  static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool {
+    let group: String
+    if ["list_notes", "read_note", "save_note"].contains(name) { group = "wovenmatter_notes" }
+    else if name.hasPrefix("wovenmatter_") { group = name }
+    else { return true }
+    guard let selection else { return true }
+    // Retain access granted by older note-only selections, without broadening
+    // those individual aliases into additional CLI capabilities.
+    return selection.contains(group) || (group == "wovenmatter_notes" && selection.contains(name))
+  }
   static var deviceCLITools: [[String: Any]] {
     WorkspaceToolGroup.allCases.map { group in
       ["name": "wovenmatter_" + group.rawValue,
@@ -16,7 +29,7 @@ extension CompanionModel {
     let selected = record.enabledTools.map(Set.init)
     let enabled = Set(WorkspaceToolGroup.allCases.filter { selected == nil || selected!.contains("wovenmatter_" + $0.rawValue) })
     return .init(sessionID: conversationID, workspaceID: deviceWorkspaceID,
-      folderID: state.conversations[conversationID]?.folderID, enabled: enabled, nativeToolIDs: record.enabledTools ?? Self.deviceToolDefinitions.compactMap { $0["name"] as? String })
+      folderID: state.conversations[conversationID]?.folderID, enabled: enabled, nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) })
   }
   static func deviceCLIRequestID(_ string: String) -> String {
     if let uuid = UUID(uuidString: string) { return uuid.uuidString.lowercased() }

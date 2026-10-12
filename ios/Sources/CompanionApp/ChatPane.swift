@@ -181,7 +181,7 @@ struct ChatPane: View {
       }
       TextField(model.activeRunID == nil ? "Chat…" : "Steer this run…", text: $model.composer, axis: .vertical)
         .lineLimit(2...6).focused($composerFocused).accessibilityIdentifier("chat-composer")
-      HStack(spacing: 4) {
+      HStack(spacing: 8) {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
           if model.selectedExecutionWorkspaceID == "local", model.selectedConversationID != nil {

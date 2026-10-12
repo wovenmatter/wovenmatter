@@ -47,6 +47,10 @@ final class PiCodeModePolicyTests: XCTestCase {
     do { _ = try await task.value; XCTFail("Stopped program completed") } catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
   }
 
+  func testLegacyDepthAlwaysNormalizesToRootAndOneChildLevel() throws {
+    for value in 1...4 { XCTAssertEqual(try PiExecutionPolicy(subagentDepth: value).validated().subagentDepth, 2) }
+  }
+
   func testInvalidResourcePolicyRejected() throws {
     XCTAssertThrowsError(try PiExecutionPolicy(unresponsiveCodeSeconds: .infinity).validated())
     XCTAssertThrowsError(try PiExecutionPolicy(concurrentTools: 0).validated())

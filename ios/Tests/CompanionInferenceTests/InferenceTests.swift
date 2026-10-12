@@ -33,10 +33,30 @@ final class InferenceTests: XCTestCase {
   let model = InferenceModel(id: "gpt-4", name: "GPT", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
   func testThinkingChoicesFollowSelectedModelCapabilities() {
     var model = InferenceModel(id: "test", name: "Test", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
-    XCTAssertEqual(model.supportedThinkingLevels, [])
+    XCTAssertEqual(model.supportedThinkingLevels, ["off"])
+    XCTAssertEqual(model.middleThinkingLevel, "off")
     model.reasoning = true
-    model.thinkingLevelMap = ["low": "low", "high": "high", "xhigh": nil]
-    XCTAssertEqual(model.supportedThinkingLevels, ["off", "low", "high"])
+    XCTAssertEqual(model.supportedThinkingLevels, ["off", "minimal", "low", "medium", "high"])
+    XCTAssertEqual(model.middleThinkingLevel, "medium")
+    // An omitted ordinary level is supported. Explicit null disables it;
+    // extended levels must be explicitly enabled, matching the desktop Pi SDK.
+    model.thinkingLevelMap = ["off": nil, "minimal": nil, "xhigh": "xhigh", "max": "ultra"]
+    XCTAssertEqual(model.supportedThinkingLevels, ["low", "medium", "high", "xhigh", "max"])
+    XCTAssertEqual(model.middleThinkingLevel, "high")
+    model.thinkingLevelMap = ["minimal": nil, "xhigh": "xhigh", "max": nil]
+    XCTAssertEqual(model.supportedThinkingLevels, ["off", "low", "medium", "high", "xhigh"])
+    XCTAssertEqual(model.middleThinkingLevel, "high")
+  }
+
+  func testThinkingMappingKeepsImplicitLevelsAndTranslatesExtendedLevels() throws {
+    var descriptor = model; descriptor.reasoning = true
+    descriptor.thinkingLevelMap = ["minimal": nil, "max": "ultra"]
+    for (level, expected) in [("high", "high"), ("max", "ultra"), ("minimal", nil), ("off", nil)] {
+      let request = try InferenceRequestBuilder(connection: connection, model: descriptor).request(
+        ["context": ["messages": [["role": "user", "content": "hello"]]], "options": ["reasoning": level]], secret: "fixture")
+      let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
+      XCTAssertEqual(inferenceObject(body["reasoning"])["effort"] as? String, expected)
+    }
   }
 
   func testConnectionPersistsSelectedDescriptorWithoutCredentials() throws {

@@ -6,8 +6,7 @@ import WovenMatterCompanion
 extension CompanionModel {
   static var deviceToolDefinitions: [[String: Any]] { (try? JSONSerialization.jsonObject(with: Data(deviceToolsJSON.utf8))) as? [[String: Any]] ?? [] }
   func toolsJSON(for record: DeviceConversationRecord) throws -> String {
-    guard let enabled = record.enabledTools else { return Self.deviceToolsJSON }
-    return try Self.toolJSON(Self.deviceToolDefinitions.filter { ($0["name"] as? String).map { enabled.contains($0) } == true })
+    return try Self.toolJSON(Self.deviceToolDefinitions.filter { ($0["name"] as? String).map { Self.deviceToolEnabled($0, selection: record.enabledTools) } == true })
   }
   func restoreDeviceConversation(_ id: String) async {
     guard var record = executionRecords[id], record.isTrashed == true else { return }
@@ -24,13 +23,10 @@ extension CompanionModel {
     switch request {
     case .session(let id):
       guard let record = executionRecords[id] else { throw DeviceExecutionError.unavailable("This device conversation is unavailable.") }
-      let tools: [CompanionSelection] = Self.deviceToolDefinitions.compactMap { definition in
-        guard let name = definition["name"] as? String else { return nil }
-        return .init(id: name, label: name.replacingOccurrences(of: "_", with: " ").capitalized)
-      }
+      let tools = Self.deviceToolAccessOptions
       return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: nil,
         models: inferenceConnections.map { .init(id: $0.id, label: $0.name + " · " + $0.modelID) }, thinkingLevels: ((try? JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8)))?.supportedThinkingLevels ?? []).map { .init(id: $0, label: $0.capitalized) }, permissions: [],
-        availableTools: tools, enabledTools: record.enabledTools ?? tools.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted"))
+        availableTools: tools, enabledTools: tools.filter { Self.deviceToolEnabled($0.id, selection: record.enabledTools) }.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted"))
     case .exportConversation(let id, let format):
       guard executionRecords[id] != nil else { throw DeviceExecutionError.unavailable("This device conversation is unavailable.") }
       if format == "fullRun" {

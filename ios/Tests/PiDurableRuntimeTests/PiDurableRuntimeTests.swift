@@ -260,6 +260,18 @@ final class PiDurableRuntimeTests: XCTestCase {
     let scopes = try requests.map { try object($0)["scope"] as? [String:Any] }
     XCTAssertEqual(Set(scopes.compactMap { $0?["conversationID"] as? String }).count, 2)
     XCTAssertTrue(try requests.allSatisfy { (try object($0)["model"] as? [String:Any])?["id"] as? String == "test-model" })
+    let rootScope = scopes.first.flatMap { $0 }?["conversationID"] as? String
+    for request in requests {
+      let payload = try object(request)
+      let scope = payload["scope"] as? [String: Any]
+      let context = payload["context"] as? [String: Any]
+      var inventory = Set<String>()
+      for message in context?["messages"] as? [[String: Any]] ?? [] {
+        for tool in message["toolsRemoved"] as? [[String: Any]] ?? [] { if let name = tool["name"] as? String { inventory.remove(name) } }
+        for tool in message["toolsAdded"] as? [[String: Any]] ?? [] { if let name = tool["name"] as? String { inventory.insert(name) } }
+      }
+      XCTAssertEqual(inventory.contains("subagent"), scope?["conversationID"] as? String == rootScope, "Only the root can delegate")
+    }
     try await engine.close()
   }
 

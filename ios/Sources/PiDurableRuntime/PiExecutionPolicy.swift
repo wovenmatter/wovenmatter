@@ -22,6 +22,8 @@ public struct PiExecutionPolicy: Codable, Equatable, Sendable {
           (1...4).contains(subagentDepth) else {
       throw PiDurableRuntimeError.unavailable("Invalid execution resource settings.")
     }
-    return self
+    var fixed = self
+    fixed.subagentDepth = 2 // Root plus one child level; never grandchildren.
+    return fixed
   }
 }

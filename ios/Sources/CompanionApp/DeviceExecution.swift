@@ -28,6 +28,12 @@ struct DeviceConversationRecord: Codable, Equatable {
 }
 
 struct DeviceAgentDefaults: Codable, Equatable {
+  var thinkingLevel: String?
+  func thinking(for model: InferenceModel?) -> String {
+    guard let model else { return "off" }
+    if let thinkingLevel, model.supportedThinkingLevels.contains(thinkingLevel) { return thinkingLevel }
+    return model.middleThinkingLevel
+  }
   var executionPolicy: PiExecutionPolicy?
   var instructions = ""
   var enabledTools: [String]?
@@ -35,7 +41,7 @@ struct DeviceAgentDefaults: Codable, Equatable {
 
 struct DeviceChatSettings: Codable, Equatable {
   var connection: InferenceConnection?
-  var thinkingLevel: String = "off"
+  var thinkingLevel: String?
   var enabledTools: [String]?
 }
 
@@ -331,7 +337,7 @@ extension CompanionModel {
         let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
       }
       if executionRecords[id]?.title == "New chat", state.transcripts[id]?.messages.isEmpty != false {

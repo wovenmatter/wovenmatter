@@ -59,11 +59,10 @@ struct DeviceAgentSettingsPane: View {
     })
   }
   private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
-  private var toolDefinitions: [(id: String, name: String)] {
-    CompanionModel.deviceToolDefinitions.compactMap { definition in
-      guard let id = definition["name"] as? String else { return nil }
-      return (id, id.replacingOccurrences(of: "_", with: " ").capitalized)
-    }
+  private var toolDefinitions: [CompanionSelection] { CompanionModel.deviceToolAccessOptions }
+  private var selectedModel: InferenceModel? { models.first { $0.id == selectedModelID } }
+  private var thinkingSelection: Binding<String> {
+    Binding(get: { defaults.thinking(for: selectedModel) }, set: { defaults.thinkingLevel = $0 })
   }
   var body: some View {
     Form {
@@ -73,9 +72,14 @@ struct DeviceAgentSettingsPane: View {
           ForEach(model.inferenceConnections) { connection in Text(connection.name).tag(connection.id) }
         }
         if selectedConnection != nil {
-          Picker("Model", selection: $selectedModelID) {
+          Picker("Default Model", selection: $selectedModelID) {
             ForEach(models) { Text($0.name).tag($0.id) }
           }
+          Picker("Default Think Level", selection: thinkingSelection) {
+            ForEach(selectedModel?.supportedThinkingLevels ?? ["off"], id: \.self) { level in
+              Text(level == "xhigh" ? "Extra High" : level.capitalized).tag(level)
+            }
+          }.disabled(selectedModel?.reasoning != true)
           if loading { ProgressView() }
         }
         NavigationLink(model.deviceConnectionsTitle) { ExecutionSettingsPane(model: model) }
@@ -83,16 +87,16 @@ struct DeviceAgentSettingsPane: View {
       Section("Instructions") { TextEditor(text: $defaults.instructions).frame(minHeight: 130).accessibilityLabel("Pi Durable instructions") }
       Section("Execution") {
         Stepper("Concurrent subagents: \(policy.concurrentSubagents)", value: policyBinding(\.concurrentSubagents), in: 1...16)
-        Stepper("Delegation depth: \(policy.subagentDepth)", value: policyBinding(\.subagentDepth), in: 1...4)
-        Stepper("Concurrent tools: \(policy.concurrentTools)", value: policyBinding(\.concurrentTools), in: 1...64)
-        Stepper("Uninterrupted code: \(Int(policy.unresponsiveCodeSeconds)) seconds", value: policyBinding(\.unresponsiveCodeSeconds), in: 5...300, step: 5)
       }
 
       Section("Tool access") {
         ForEach(toolDefinitions, id: \.id) { tool in
-          Toggle(tool.name, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
+          Toggle(tool.label, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
             var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id))
-            if enabled { selected.insert(tool.id) } else { selected.remove(tool.id) }
+            if enabled { selected.insert(tool.id) } else {
+              selected.remove(tool.id)
+              if tool.id == "wovenmatter_notes" { selected.subtract(["list_notes", "read_note", "save_note"]) }
+            }
             defaults.enabledTools = selected.sorted()
           }))
         }

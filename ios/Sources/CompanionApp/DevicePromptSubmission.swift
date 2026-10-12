@@ -24,8 +24,8 @@ extension CompanionModel {
       descriptor = selected; saved.modelID = selected.id; saved.selectedModel = selected
     }
     try Task.checkCancellation()
-    let selectedThinking = thinking ?? "off"
-    guard selectedThinking == "off" || descriptor.supportedThinkingLevels.contains(selectedThinking) else { throw WorkspaceToolError.invalid("This model does not support the requested thinking level.") }
+    let selectedThinking = thinking ?? deviceAgentDefaults.thinking(for: descriptor)
+    guard descriptor.supportedThinkingLevels.contains(selectedThinking) else { throw WorkspaceToolError.invalid("This model does not support the requested thinking level.") }
     if executionRecords[id] != nil { return }
     let record = DeviceConversationRecord(id: id, title: title, folderID: folderID,
       enabledTools: enabledTools ?? deviceAgentDefaults.enabledTools, thinkingLevel: selectedThinking,

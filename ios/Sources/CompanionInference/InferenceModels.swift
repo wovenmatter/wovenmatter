@@ -146,10 +146,18 @@ public struct InferenceModel: Codable, Sendable, Identifiable, Equatable {
     else { try box.encode(cost, forKey: Field("cost")) }
   }
   public var supportedThinkingLevels: [String] {
-    guard reasoning else { return [] }
-    let levels = ["off", "minimal", "low", "medium", "high", "xhigh"]
-    guard let thinkingLevelMap else { return levels.filter { $0 != "xhigh" } }
-    return levels.filter { $0 == "off" || (thinkingLevelMap[$0] ?? nil) != nil }
+    guard reasoning else { return ["off"] }
+    // Match Pi AI's getSupportedThinkingLevels: null disables a level;
+    // omitted ordinary levels use their native names. Extended levels are opt-in.
+    return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].filter { level in
+      if let mapped = thinkingLevelMap?[level], mapped == nil { return false }
+      if level == "xhigh" || level == "max" { return thinkingLevelMap?[level] != nil }
+      return true
+    }
+  }
+  public var middleThinkingLevel: String {
+    let levels = supportedThinkingLevels.filter { $0 != "off" }
+    return levels.isEmpty ? "off" : levels[levels.count / 2]
   }
   public func descriptorJSON() throws -> String { String(decoding: try JSONEncoder().encode(self), as: UTF8.self) }
 }

@@ -137,6 +137,7 @@ final class ExecutionRoutingTests: XCTestCase {
     await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first))
     let created = try XCTUnwrap(model.selectedConversationID)
     XCTAssertEqual(model.executionRecords[created]?.status, "ready")
+    XCTAssertEqual(model.executionRecords[created]?.thinkingLevel, "medium", "New chats use the middle supported non-Off level")
     XCTAssertTrue(model.localRuntimes.isEmpty, "Choosing an agent must not start inference")
     XCTAssertEqual(model.state.transcripts[created]?.messages, [])
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
@@ -160,12 +161,13 @@ final class ExecutionRoutingTests: XCTestCase {
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    let connection = InferenceConnection(id: "saved", name: "Saved key", provider: "openai", route: .direct, modelID: "existing-model")
+    let descriptor = InferenceModel(id: "existing-model", name: "Saved model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
+    let connection = InferenceConnection(id: "saved", name: "Saved key", provider: "openai", route: .direct, modelID: descriptor.id, selectedModel: descriptor)
     model.inferenceConnections = [connection]
     let record = DeviceConversationRecord(id: "existing", title: "Existing", enabledTools: ["read_note"], additionalInstructions: "Original instructions",
       connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
     model.executionRecords = [record.id: record]; model.selectedConversationID = record.id
-    let defaults = DeviceAgentDefaults(instructions: "New conversations only", enabledTools: [])
+    let defaults = DeviceAgentDefaults(thinkingLevel: "high", instructions: "New conversations only", enabledTools: [])
     try model.saveDeviceAgentDefaults(defaults, connectionID: connection.id)
     XCTAssertEqual(model.executionRecords[record.id], record)
     XCTAssertTrue(CompanionModel.instructions(for: record).contains("Original instructions"))
@@ -179,6 +181,52 @@ final class ExecutionRoutingTests: XCTestCase {
     try await reopened.loadExecutionConfiguration()
     XCTAssertEqual(reopened.deviceAgentDefaults, defaults)
     XCTAssertEqual(reopened.inferenceConnectionID, connection.id)
+    await reopened.startNewChat(with: try XCTUnwrap(reopened.launcherAgents.first))
+    let newID = try XCTUnwrap(reopened.selectedConversationID)
+    XCTAssertNotEqual(newID, record.id)
+    XCTAssertEqual(reopened.executionRecords[newID]?.thinkingLevel, "high")
+    XCTAssertEqual(reopened.executionRecords[record.id], record)
+  }
+
+  @MainActor func testThinkingDefaultMigratesAndFallsBackForDifferentModels() throws {
+    let legacy = try JSONDecoder().decode(DeviceAgentDefaults.self, from: Data(#"{"instructions":"","enabledTools":[]}"#.utf8))
+    var descriptor = InferenceModel(id: "reasoning", name: "Reasoning", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true,
+      thinkingLevelMap: ["minimal": nil, "xhigh": "xhigh", "max": "max"])
+    XCTAssertNil(legacy.thinkingLevel)
+    XCTAssertEqual(legacy.thinking(for: descriptor), "high")
+    let explicit = DeviceAgentDefaults(thinkingLevel: "max")
+    XCTAssertEqual(explicit.thinking(for: descriptor), "max")
+    descriptor.thinkingLevelMap = nil
+    XCTAssertEqual(explicit.thinking(for: descriptor), "medium")
+    descriptor.reasoning = false
+    XCTAssertEqual(explicit.thinking(for: descriptor), "off")
+  }
+
+  @MainActor func testToolAccessGatesOnlyCLIAndItsLegacyNoteAliases() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let connection = InferenceConnection(id: "saved", name: "Saved", provider: "openai", route: .direct, modelID: "test")
+    let record = DeviceConversationRecord(id: "tools", title: "Tools", enabledTools: [], connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
+    model.executionRecords[record.id] = record
+    let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
+    let names = Set(tools.compactMap { $0["name"] as? String })
+    XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command"]))
+    XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
+    XCTAssertFalse(names.contains("read_note"))
+    let context = try model.deviceToolContext(conversationID: record.id)
+    XCTAssertTrue(context.enabled.isEmpty)
+    for name in ["wovenmatter_calendar", "read_note"] {
+      do {
+        _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
+        XCTFail("Disabled app-data access was accepted")
+      } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
+    }
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["wovenmatter_notes"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["read_note"]))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_notes", selection: ["read_note"]))
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.map { "wovenmatter_" + $0.rawValue }))
   }
 
   @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {

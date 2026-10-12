@@ -18955,21 +18955,11 @@ ${SUMMARIZATION_PROMPT}${focus}`;
     let active = 0;
     const extension = defineExtension({ name: "wovenmatter-ios-subagents", tools: [defineTool({
       name: "subagent",
-      description: "Delegate a self-contained task to an on-device Pi Durable child and return its answer. Children use this exact inference connection/model and workspace tools, stop with the parent, and may delegate within the configured depth and concurrency budget. Supply only the selected context needed for the task.",
+      description: "Delegate a self-contained task to an on-device Pi Durable child and return its answer. Children use this exact inference connection/model and workspace tools, stop with the parent, and cannot create further subagents. Supply only the selected context needed for the task.",
       parameters: { type: "object", properties: { task: { type: "string", minLength: 1 }, name: { type: "string" } }, required: ["task"], additionalProperties: false },
       replay: "safe",
       execute: async (args, api, context) => {
-        const depth = api.conversationId === rootID() ? 0 : await api.commit(async (tx) => {
-          let cursor;
-          do {
-            const page2 = await tx.scanEntries({ conversationId: api.conversationId }, 100, cursor);
-            const marker = page2.items.find((entry) => entry.kind === "woven.ios-subagent-lineage");
-            if (marker) return marker.data.depth;
-            cursor = page2.next;
-          } while (cursor);
-          return policy.subagentDepth ?? 2;
-        }, context);
-        if (depth >= (policy.subagentDepth ?? 2)) throw new Error("This task reached the configured subagent depth.");
+        if (api.conversationId !== rootID()) throw new Error("Only the root session can create subagents. Grandchildren are not supported.");
         if (active >= (policy.concurrentSubagents ?? 4)) return { isError: true, content: [{ type: "text", text: "The configured child-agent capacity is in use. Complete existing child work before delegating more." }] };
         active++;
         try {
@@ -18977,8 +18967,8 @@ ${SUMMARIZATION_PROMPT}${focus}`;
             const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
             if (existing) return existing.id;
             const child2 = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-            await configure(tx, child2.id, { extensions: { remove: depth + 1 >= (policy.subagentDepth ?? 2) ? [extension] : [] }, instructions: `You are the on-device subagent ${JSON.stringify(args.name ?? "assistant")}. Complete only the delegated task using the selected context. Your exact model/account is inherited; do not claim another execution location. Delegate only when the subagent tool is available and within its limits. Return your result to the parent.` });
-            await tx.appendEntry(child2.id, { kind: "woven.ios-subagent-lineage", data: { depth: depth + 1 } });
+            await configure(tx, child2.id, { extensions: { remove: [extension] }, instructions: `You are the on-device subagent ${JSON.stringify(args.name ?? "assistant")}. Complete only the delegated task using the selected context. Your exact model/account is inherited; do not claim another execution location. Do not delegate further; only the parent session may create subagents. Return your result to the parent.` });
+            await tx.appendEntry(child2.id, { kind: "woven.ios-subagent-lineage", data: { depth: 2 } });
             return child2.id;
           }, context);
           await api.details({ nativeConversationID: childID, name: args.name ?? "assistant" }, context);

@@ -42,10 +42,7 @@ struct ChatComposerSettings: View {
     thinkingOptions.first { $0.id == (local ? model.deviceChatThinking : settings?.thinking) }?.label ?? "Thinking"
   }
   private var toolOptions: [CompanionSelection] {
-    local ? CompanionModel.deviceToolDefinitions.compactMap {
-      guard let name = $0["name"] as? String else { return nil }
-      return .init(id: name, label: name.replacingOccurrences(of: "_", with: " ").capitalized)
-    } : settings?.availableTools ?? []
+    local ? CompanionModel.deviceToolAccessOptions : settings?.availableTools ?? []
   }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }
   var body: some View {
@@ -85,7 +82,7 @@ struct ChatComposerSettings: View {
         HStack(spacing: 3) {
           DashboardLucideIcon(glyph: .brain, size: 16)
           Text(thinkingLabel).lineLimit(1).minimumScaleFactor(0.8)
-        }.font(.caption.weight(.medium)).frame(minWidth: 44, minHeight: 44)
+        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
       }.buttonStyle(.plain).accessibilityLabel("Thinking level").disabled(thinkingOptions.isEmpty || !configurable)
         .popover(isPresented: $thinkingOpen) {
           popout("Thinking Level", height: min(380, CGFloat(thinkingOptions.count) * 44 + 70)) {
@@ -99,7 +96,7 @@ struct ChatComposerSettings: View {
         }
       Button { dismissKeyboard(); problem = nil; toolsOpen = true } label: {
         HStack(spacing: 3) { Text("Tools"); DashboardLucideIcon(glyph: .chevronDown, size: 10) }
-          .font(.caption.weight(.medium)).frame(minWidth: 44, minHeight: 44)
+          .font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
       }.buttonStyle(.plain).accessibilityLabel("Session tools").disabled(saving)
         .popover(isPresented: $toolsOpen) {
           popout("Tools") {
