@@ -15,6 +15,7 @@ import SwiftUI
           #endif
           await model.run()
         }
+        .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) { MobileAnalyticsDisclosure(model:model) }
         .onChange(of: scenePhase) { _, phase in model.sceneChanged(phase) }
         .onOpenURL { url in Task { await model.pair(url: url) } }
     }
@@ -412,6 +413,15 @@ struct GeneralSettingsPane: View {
         LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
         LabeledContent("Build", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
       }
+      Section("Product analytics") {
+        Toggle("Share product analytics",isOn:Binding(get:{model.analytics.enabled},set:{value in Task { await model.analytics.setEnabled(value) } }))
+        Text("This choice applies to the whole central library. Turning analytics off stops collection here immediately. Offline changes reach the other devices after reconnection.").font(.caption).foregroundStyle(.secondary)
+        if model.analytics.state.pendingEnabled != nil { Text("Preference waiting to sync.").font(.caption).foregroundStyle(.secondary) }
+        Link("Privacy policy",destination:ProductAnalyticsPolicy.url)
+        NavigationLink("View analytics log") { MobileAnalyticsLog(model:model) }
+        if let id=model.analytics.state.preference?.analyticsID { Text("Library analytics ID: " + id).font(.caption.monospaced()).textSelection(.enabled) }
+        if let error=model.analytics.errorMessage { Text(error).foregroundStyle(.red) }
+      }
     }.scrollIndicators(.never).mobileNavigationPage("General")
   }
 }
@@ -504,3 +514,37 @@ private struct SyncRecoveryPane: View {
 
 import CompanionClient
 import WovenMatterCompanion
+
+private struct MobileAnalyticsDisclosure: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment:.leading,spacing:20) {
+          Text(ProductAnalyticsPolicy.disclosure)
+          Link("Read our privacy policy",destination:ProductAnalyticsPolicy.url)
+          Button("Continue") { Task { await model.analytics.setEnabled(true,disclose:true) } }.buttonStyle(.borderedProminent)
+          Button("Turn off analytics") { Task { await model.analytics.setEnabled(false,disclose:true) } }
+          if let error=model.analytics.errorMessage { Text(error).foregroundStyle(.red) }
+        }.padding(24)
+      }.navigationTitle("Product analytics")
+    }.interactiveDismissDisabled()
+  }
+}
+private struct MobileAnalyticsLog: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    List {
+      Text("Only the listed event fields are queued. The central Mac adds the shared random analytics ID; PostHog adds approximate country and discards IP and precise location.").font(.caption)
+      if model.analytics.state.log.isEmpty { Text("No analytics events recorded.") }
+      ForEach(Array(model.analytics.state.log.reversed())) { entry in
+        VStack(alignment:.leading,spacing:6) {
+          Text(entry.event.name.rawValue).font(.headline)
+          Text(entry.event.timestamp.formatted() + " · " + entry.status).font(.caption)
+          Text(entry.event.id).font(.caption.monospaced())
+          Text(entry.event.inspectionJSON(analyticsID:model.analytics.state.preference?.analyticsID ?? "unavailable")).font(.caption.monospaced())
+        }.textSelection(.enabled)
+      }
+    }.mobileNavigationPage("Analytics log").task { await model.analytics.refresh() }
+  }
+}

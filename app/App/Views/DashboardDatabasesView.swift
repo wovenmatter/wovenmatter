@@ -109,6 +109,7 @@ struct DashboardDatabasesView: View {
                         name: name,
                         preference: preference
                     ) {
+                        await model.analytics.record(.contentChanged, properties: ["action": "create", "item_category": "database"])
                         selectedSourceID = sourceID
                         selectedDatabaseID = id
                         showsCreateDatabase = false

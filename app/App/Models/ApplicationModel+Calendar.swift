@@ -59,8 +59,10 @@ extension ApplicationModel {
             isCreatingCalendarItem = true
             defer { isCreatingCalendarItem = false }
             do {
-                return try await sendBackendCommand(.saveCalendar(draft: draft, eventID: event?.id,
+                let accepted = try await sendBackendCommand(.saveCalendar(draft: draft, eventID: event?.id,
                     expectedRevision: event?.calendar.revision, occurrence: occurrence)).accepted
+                if accepted { await analytics.record(.contentChanged,properties:["action":event == nil ? "create":"edit","item_category":"calendar"]) }
+                return accepted
             } catch { calendarMutationError = error.localizedDescription; return false }
         }
 
@@ -72,6 +74,7 @@ extension ApplicationModel {
             try await database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: draft,
                 creating: event == nil, expectedRevision: event?.calendar.revision, detaching: occurrence)
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties:["action":event == nil ? "create":"edit","item_category":"calendar"]) }
             return true
         } catch { calendarMutationError = error.localizedDescription; return false }
     }
@@ -80,8 +83,10 @@ extension ApplicationModel {
         if isBackendFrontend {
             calendarMutationError = nil
             do {
-                return try await sendBackendCommand(.deleteCalendar(eventID: event.id,
+                let accepted = try await sendBackendCommand(.deleteCalendar(eventID: event.id,
                     expectedRevision: event.calendar.revision, occurrence: occurrence)).accepted
+                if accepted { await analytics.record(.contentChanged,properties:["action":"delete","item_category":"calendar"]) }
+                return accepted
             } catch { calendarMutationError = error.localizedDescription; return false }
         }
 
@@ -90,6 +95,7 @@ extension ApplicationModel {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
             try await database.deleteCalendarEvent(id: event.id, occurrence: occurrence, expectedRevision: event.calendar.revision)
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties:["action":"delete","item_category":"calendar"]) }
             return true
         } catch { calendarMutationError = error.localizedDescription; return false }
     }

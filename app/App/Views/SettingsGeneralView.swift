@@ -42,6 +42,7 @@ struct SettingsGeneralView: View {
             dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
+            ProductAnalyticsSettingsCard(analytics:model.analytics)
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()

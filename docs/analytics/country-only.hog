@@ -1,0 +1,20 @@
+// Woven Matter: country only, no retained IP or person properties.
+let ip := event.properties?.$ip
+let geoipDisabled := event.properties?.$geoip_disable
+let clean := {}
+for (let key, value in (event.properties ?? {})) {
+    if (substring(key, 1, 7) != '$geoip_' and substring(key, 1, 15) != '$initial_geoip_' and not has(['$ip', 'ip', 'ip_address', '$set', '$set_once', 'city', 'region', 'postal_code', 'latitude', 'longitude', 'timezone'], key)) {
+        clean[key] := value
+    }
+}
+if (not geoipDisabled and not empty(ip)) {
+    let response := geoipLookup(ip)
+    if (response?.country) {
+        clean.$geoip_country_code := response.country.isoCode
+        clean.$geoip_country_name := response.country.names?.en
+    }
+}
+clean.$process_person_profile := false
+let returnEvent := event
+returnEvent.properties := clean
+return returnEvent

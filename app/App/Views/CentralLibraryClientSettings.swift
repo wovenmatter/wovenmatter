@@ -63,6 +63,7 @@ struct CentralLibraryClientSettings: View {
                     }
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
             }
+            MobileAnalyticsSettingsCard(analytics:model.analytics)
         }.task { await model.initialize() }
         .sheet(isPresented: $executionSettings) {
             if let execution = model.localExecution {

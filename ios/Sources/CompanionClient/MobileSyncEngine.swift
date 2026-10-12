@@ -18,8 +18,12 @@ public actor MobileSyncEngine {
     try await task.value
   }
   private func performSynchronization() async throws {
-    try await store.restoreExecutionProjection()
     try await store.verifyWorkspace(transport.workspaceIdentity())
+    if let analyticsTransport = transport as? any ProductAnalyticsTransport {
+      // Optional capability: telemetry errors must never break library synchronization.
+      try? await store.analytics.synchronize(using: analyticsTransport)
+    }
+    try await store.restoreExecutionProjection()
     let local = await store.snapshot()
     if local.workspaceID == nil {
       let snapshot = try await transport.snapshot()
@@ -70,6 +74,7 @@ public actor MobileSyncEngine {
       command.noteRevision = note.revision
     }
     try await store.rememberCommand(command)
+    if stored == nil { try? await store.analytics.recordCommand(command) }
     let receipt = try await transport.command(command)
     try await store.rememberReceipt(receipt)
     return receipt

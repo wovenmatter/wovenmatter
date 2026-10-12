@@ -56,6 +56,7 @@ struct CentralLibraryClientView: View {
         .navigationSplitViewStyle(.balanced)
         .disabled(model.preparingTransition)
         .task { await model.run() }
+        .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) { ProductAnalyticsDisclosureView { enabled in Task { await model.analytics.setEnabled(enabled,disclose:true) } } }
         .alert("Woven Matter", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }

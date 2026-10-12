@@ -13,6 +13,11 @@ extension ApplicationModel {
             try await dashboardStore.mutateConversation(id: id, mutation: mutation)
         }
         await refreshWorkspace()
+        if LocalExecutionRole.current != .backend {
+            let action: String
+            switch mutation { case .moveToTrash: action = "delete"; case .restore: action = "restore"; default: action = "edit" }
+            await analytics.record(.contentChanged,properties:["action":action,"item_category":"session"])
+        }
     }
 
     func trashedConversations() async throws -> [WorkspaceTrashedConversation] {

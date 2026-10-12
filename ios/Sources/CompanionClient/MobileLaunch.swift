@@ -33,7 +33,9 @@ extension MobileSyncEngine {
     return try await task.value
   }
   private func performLaunch(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
+    let alreadySaved = await store.snapshot().launches.contains { $0.id == requested.id }
     try await store.rememberLaunchIfMissing(requested)
+    if !alreadySaved { try? await store.analytics.recordCommand(requested.create); try? await store.analytics.recordCommand(requested.initialSend) }
     var launch = await store.snapshot().launches.first { $0.id == requested.id } ?? requested
     try await verifyRemoteWorkspace()
     try await synchronize()

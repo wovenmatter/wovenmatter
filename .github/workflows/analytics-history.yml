@@ -1,0 +1,51 @@
+name: Analytics history
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: analytics-history
+  cancel-in-progress: false
+jobs:
+  collect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Restore complete previous history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANALYTICS_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p analytics-history
+          previous=$(gh api "repos/$ANALYTICS_REPOSITORY/actions/artifacts?name=analytics-history&per_page=100" --jq '[.artifacts[] | select(.expired == false)] | first | .id // empty')
+          if [ -n "$previous" ]; then
+            gh api "repos/$ANALYTICS_REPOSITORY/actions/artifacts/$previous/zip" > "$RUNNER_TEMP/analytics-history.zip"
+            python3 - <<'PYTHON'
+          import os, zipfile
+          from pathlib import Path
+          archive = zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'analytics-history.zip')
+          Path('analytics-history/history.json').write_bytes(archive.read('history.json'))
+          PYTHON
+          fi
+      - name: Collect aggregate traffic and downloads
+        env:
+          GH_TOKEN: ${{ secrets.ANALYTICS_GITHUB_TOKEN }}
+          ANALYTICS_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Configure ANALYTICS_GITHUB_TOKEN with repository Administration read access; the default workflow token cannot read traffic." >&2
+            exit 1
+          fi
+          python3 scripts/collect-github-analytics.py --repository "$ANALYTICS_REPOSITORY" --output analytics-history/history.json
+      - name: Preserve complete rolling history
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: analytics-history
+          path: analytics-history/history.json
+          retention-days: 90
+          if-no-files-found: error

@@ -139,6 +139,8 @@
 		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
 		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
 		04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969050270F91397F88F6A49D /* FederatedConversationPane.swift */; };
+		BB19447D10499B1B7094401B /* ProductAnalyticsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35B856CA9704E5408840D77 /* ProductAnalyticsModel.swift */; };
+		9C717BDF5AA9D68422B42FCE /* ProductAnalyticsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -274,6 +276,8 @@
 		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
 		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
 		969050270F91397F88F6A49D /* FederatedConversationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedConversationPane.swift; sourceTree = "<group>"; };
+		D35B856CA9704E5408840D77 /* ProductAnalyticsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ProductAnalyticsModel.swift; sourceTree = "<group>"; };
+		F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ProductAnalyticsViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -324,6 +328,8 @@
 				A11C00000000000000000002 /* Assets.xcassets */,
 				D57200000000000000000002 /* SharedAssets.xcassets */,
 				5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */,
+				F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */,
+				D35B856CA9704E5408840D77 /* ProductAnalyticsModel.swift */,
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
 				AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */,
@@ -692,6 +698,8 @@
 				A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */,
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
+				9C717BDF5AA9D68422B42FCE /* ProductAnalyticsViews.swift in Sources */,
+				BB19447D10499B1B7094401B /* ProductAnalyticsModel.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,
 				D49400000000000000000001 /* ConversationResponse.swift in Sources */,
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,

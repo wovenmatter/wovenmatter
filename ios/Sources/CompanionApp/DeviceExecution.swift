@@ -318,6 +318,7 @@ extension CompanionModel {
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
           enabledTools: defaults.enabledTools, additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
+        await analytics.record(.sessionCreated,properties:["harness":"pi"])
       }
       let runtime = try await deviceRuntime(id)
       let requestID = UUID().uuidString.lowercased()
@@ -331,6 +332,7 @@ extension CompanionModel {
       executionRecords[id]?.updatedAt = Self.executionTimestamp()
       try persistExecutionConfiguration()
       if selectedConversationID == selection { selectedConversationID = id }
+      await analytics.record(.messageSubmitted,properties:["harness":"pi"])
       let receipt = try await runtime.submit(text: prompt, requestID: requestID)
       guard executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" else { return }
       let object = try Self.executionObject(receipt)

@@ -6,6 +6,9 @@ public protocol CompanionCommandServing: AnyObject {
     func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace
     func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential
     func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
+    func analyticsPreference() async throws -> ProductAnalyticsPreference
+    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference
+    func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement
     func providers() -> [CompanionProvider]
     func pendingInteractions() async -> [CompanionPendingInteraction]
     func sessionCapabilities(conversationID: String) async throws -> CompanionProvider
@@ -15,6 +18,10 @@ public protocol CompanionCommandServing: AnyObject {
 }
 
 public extension CompanionCommandServing {
+    func analyticsPreference() async throws -> ProductAnalyticsPreference { throw CompanionAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
+    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { throw CompanionAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
+    func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement { throw CompanionAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
+
     func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace {
         throw CompanionAPIError(code: "unsupported", message: "This host does not accept secondary execution management grants.")
     }
@@ -80,6 +87,9 @@ public final class CompanionWorkspaceAPI {
                 return .error("workspace_mismatch", "This credential belongs to a different workspace. Your local writing is preserved.", status: 409)
             }
             onRequest()
+            if path == "/v1/analytics/preference", request.method == "GET" { return try .json(await commands.analyticsPreference()) }
+            if path == "/v1/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
+            if path == "/v1/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
             if path.hasPrefix("/v1/federation/") {

@@ -1072,6 +1072,7 @@ struct WorkspaceView: View {
                 )
                 return
             }
+            await model.analytics.record(.sessionCreated)
             closeNewChatChooser()
             selectConversation(conversationID)
         }
@@ -1088,6 +1089,7 @@ struct WorkspaceView: View {
                 )
                 return
             }
+            await model.analytics.record(.sessionCreated)
             closeNewChatChooser()
             selectConversation(conversationID)
         }
@@ -1105,6 +1107,7 @@ struct WorkspaceView: View {
                 )
                 return
             }
+            await model.analytics.record(.sessionCreated)
             closeNewChatChooser()
             selectConversation(conversationID)
         }

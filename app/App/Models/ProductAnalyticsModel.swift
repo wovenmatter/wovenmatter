@@ -1,0 +1,216 @@
+import Foundation
+import Observation
+import WovenMatterClient
+import WovenMatterCore
+import WovenMatterDashboardStore
+
+@MainActor @Observable
+final class ProductAnalyticsModel {
+  private(set) var preference: ProductAnalyticsPreference?
+  private(set) var log: [ProductAnalyticsLogEntry] = []
+  var errorMessage: String?
+  var disclosurePresented = false
+  private var database: WorkspaceDatabase?
+  private var rpc: BackendRPCClient?
+  private var task: Task<Void, Never>?
+  private var generation = 0
+  private let startedAt = Date()
+  private var lastEdit: Date?
+  private var completedRunIDs: Set<String> = []
+  private var opened = false
+  private var interface = false
+  private var locallyDisabled = false
+  var enabled: Bool { !locallyDisabled && (preference?.enabled ?? true) }
+  private var disclosureKey: String? {
+    preference.map { "wovenmatter.analytics.disclosed." + $0.analyticsID }
+  }
+  private var session = URLSession(configuration: .ephemeral)
+  static let projectToken = "phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh"
+  func configure(database: WorkspaceDatabase, publisher: Bool) {
+    self.database = database
+    if publisher, task == nil { session = URLSession(configuration: .ephemeral) }
+    if publisher, task == nil {
+      task = Task { [weak self] in
+        while !Task.isCancelled {
+          guard self != nil else { return }
+          await self?.upload()
+          do { try await Task.sleep(for: .seconds(30)) } catch { return }
+        }
+      }
+    }
+  }
+  func configure(rpc: BackendRPCClient) { self.rpc = rpc }
+  func openInterface() async {
+    interface = true
+    await refresh()
+    guard preference != nil else { return }
+    disclosurePresented = disclosureKey.map { !UserDefaults.standard.bool(forKey: $0) } ?? true
+    if !disclosurePresented, !opened {
+      opened = true
+      await record(.appOpened)
+    }
+  }
+  func refresh() async {
+    do {
+      if let rpc {
+        preference = try JSONDecoder().decode(
+          ProductAnalyticsPreference.self,
+          from: await rpc.call(method: "analytics.preference", payload: Data()))
+        log = try JSONDecoder().decode(
+          [ProductAnalyticsLogEntry].self,
+          from: await rpc.call(method: "analytics.log", payload: Data()))
+      } else if let database {
+        preference = try await database.productAnalyticsPreference()
+        log = try await database.productAnalyticsLog()
+      }
+    } catch { errorMessage = "Analytics settings are temporarily unavailable." }
+  }
+  func setEnabled(_ enabled: Bool, disclose: Bool = false) async {
+    generation += 1
+    let effectiveEnabled = disclose && enabled ? (preference?.enabled ?? true) : enabled
+    let epoch = generation
+    locallyDisabled = !effectiveEnabled
+    if !effectiveEnabled {
+      task?.cancel()
+      task = nil
+      session.invalidateAndCancel()
+    }
+    guard let preference else { return }
+    do {
+      let change = ProductAnalyticsPreferenceChange(
+        enabled: effectiveEnabled, expectedRevision: preference.revision,
+        acknowledgeDisclosure: disclose)
+      let updated: ProductAnalyticsPreference
+      if let rpc {
+        updated = try JSONDecoder().decode(
+          ProductAnalyticsPreference.self,
+          from: await rpc.call(
+            method: "analytics.setPreference", payload: JSONEncoder().encode(change)))
+      } else if let database {
+        updated = try await database.setProductAnalyticsPreference(change)
+      } else {
+        return
+      }
+      guard epoch == generation else { return }
+      self.preference = updated
+      if disclose, let key = disclosureKey { UserDefaults.standard.set(true, forKey: key) }
+      disclosurePresented = false
+      errorMessage = nil
+      if effectiveEnabled, let database {
+        configure(database: database, publisher: !database.isReadOnlyProjection)
+      }
+      if disclose, effectiveEnabled, interface {
+        opened = true
+        await record(.appOpened)
+      }
+      await refresh()
+    } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
+  }
+  func record(_ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:]) async {
+    guard !locallyDisabled, !disclosurePresented, let preference, preference.collects else {
+      return
+    }
+    if name == .contentChanged, properties["action"] == "edit" {
+      if let lastEdit, Date().timeIntervalSince(lastEdit) < 30 { return }
+      lastEdit = Date()
+    }
+    var values = properties
+    values["platform"] = "macos"
+    values["app_version"] =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    values["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    let event = ProductAnalyticsEvent(
+      preferenceRevision: preference.revision, name: name, properties: values)
+    let epoch = generation
+    do {
+      if let rpc {
+        let acknowledgement = try JSONDecoder().decode(
+          ProductAnalyticsAcknowledgement.self,
+          from: await rpc.call(
+            method: "analytics.events",
+            payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event]))))
+        if epoch == generation { self.preference = acknowledgement.preference }
+      } else if let database {
+        _ = try await database.enqueueProductAnalytics([event])
+      }
+    } catch { /* Analytics must never interrupt a user action. */  }
+  }
+  private static func analyticsDate(_ value: String) -> Date? {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+  }
+  func completedRun(_ run: WorkspaceRunRecord, harness: String?) async {
+    guard let completed = run.completedAt.flatMap(Self.analyticsDate), completed >= startedAt
+    else { return }
+    guard completedRunIDs.insert(run.id).inserted else { return }
+    if completedRunIDs.count > 1000 { completedRunIDs = [run.id] }
+    let outcome: String
+    switch run.status {
+    case "completed", "succeeded", "success": outcome = "success"
+    case "cancelled", "canceled", "stopped": outcome = "cancelled"
+    default: outcome = "failure"
+    }
+    var values = ["outcome": outcome]
+    values["harness"] = harness
+    if let start = run.startedAt.flatMap(Self.analyticsDate) {
+      values["duration_range"] = ProductAnalyticsEvent.durationRange(
+        max(0, completed.timeIntervalSince(start)))
+    }
+    await record(.agentRunCompleted, properties: values)
+  }
+  func ingest(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
+    guard let database else { throw WorkspaceDatabaseError.corruptRow }
+    return try await database.enqueueProductAnalytics(batch.events)
+  }
+  func change(_ change: ProductAnalyticsPreferenceChange) async throws
+    -> ProductAnalyticsPreference
+  {
+    generation += 1
+    let epoch = generation
+    if !change.enabled {
+      task?.cancel()
+      task = nil
+      session.invalidateAndCancel()
+    }
+    guard let database else { throw WorkspaceDatabaseError.corruptRow }
+    let value = try await database.setProductAnalyticsPreference(change)
+    if epoch == generation {
+      preference = value
+      if value.collects { configure(database: database, publisher: true) }
+    }
+    return value
+  }
+  private func upload() async {
+    #if DEBUG
+      return  // Test and developer builds never transmit to production PostHog.
+    #else
+      guard let database, !database.isReadOnlyProjection else { return }
+      let epoch = generation
+      do {
+        let current = try await database.productAnalyticsPreference()
+        preference = current
+        guard current.collects else { return }
+        let rows = try await database.productAnalyticsLog(limit: 1000)
+        let events = rows.filter { $0.status == "pending" }.reversed().compactMap {
+          $0.event.validated(preference: current)
+        }.prefix(20)
+        guard !locallyDisabled, !events.isEmpty, epoch == generation, !Task.isCancelled
+        else { return }
+        let batch = events.map { $0.postHogObject(analyticsID: current.analyticsID) }
+        var request = URLRequest(url: URL(string: "https://us.i.posthog.com/batch/")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+          "api_key": Self.projectToken, "batch": batch,
+        ])
+        let (_, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse,
+          (200..<300).contains(response.statusCode), epoch == generation
+        else { return }
+        try await database.markProductAnalyticsDelivered(events.map(\.id))
+      } catch { /* Retain bounded events for retry with their original UUID/timestamp. */  }
+    #endif
+  }
+}

@@ -21,6 +21,13 @@ struct RootView: View {
                 failureView(message: message)
             }
         }
+        .task(id:model.state) {
+            guard model.state == .ready, !model.isLibraryClient else { return }
+            await model.analytics.openInterface()
+        }
+        .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) {
+            ProductAnalyticsDisclosureView { enabled in Task { await model.analytics.setEnabled(enabled,disclose:true) } }
+        }
         .environment(\.dashboardTheme, theme)
         .toggleStyle(DashboardSwitchToggleStyle())
         .preferredColorScheme(.light)
