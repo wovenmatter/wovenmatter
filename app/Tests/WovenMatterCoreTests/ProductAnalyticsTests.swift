@@ -52,8 +52,15 @@ struct ProductAnalyticsTests {
       try await db.setProductAnalyticsPreference(
         .init(enabled: true, expectedRevision: on.revision))
     }
+    let reaffirmed = try await db.setProductAnalyticsPreference(
+      .init(enabled: false, expectedRevision: off.revision))
+    #expect(reaffirmed.revision > off.revision)
+    await #expect(throws: (any Error).self) {
+      try await db.setProductAnalyticsPreference(
+        .init(enabled: true, expectedRevision: off.revision))
+    }
     let again = try await db.setProductAnalyticsPreference(
-      .init(enabled: true, expectedRevision: off.revision))
+      .init(enabled: true, expectedRevision: reaffirmed.revision))
     #expect(try await db.enqueueProductAnalytics([malicious]).acceptedEventIDs.isEmpty)
     let future = ProductAnalyticsEvent(preferenceRevision: again.revision, name: .sessionCreated)
     _ = try await db.enqueueProductAnalytics([future])

@@ -37,7 +37,9 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceDatabaseError.execute(
           "Analytics preference changed. Refresh before enabling it.")
       }
-      if value.enabled != change.enabled
+      // Reaffirming opt-out is a newer choice too: invalidate any queued opt-in,
+      // even when the library was already disabled when this request arrived.
+      if value.enabled != change.enabled || !change.enabled
         || (change.acknowledgeDisclosure && value.disclosedAt == nil)
       {
         value.revision += 1
