@@ -35,10 +35,11 @@ UUIDs and original timestamps survive central upload retries. Delayed events are
 attributed to their original activity date.
 
 The configured [dashboard](https://us.posthog.com/project/659360/dashboard/2198735)
-contains DAU/WAU/MAU, daily activity, opens, feature usage, countries and separate
-website visits/conversions. All eight query definitions were executed successfully
-before release, with no app usage events ingested. Do not interpret that initial
-empty state as an adoption measurement.
+contains DAU/WAU/MAU, daily activity, opens, feature usage, countries, website
+visits/conversions and aggregate GitHub traffic/downloads. All thirteen query
+definitions were executed successfully. GitHub data is loaded; app and website
+data appears after release/deployment. Do not interpret their initial empty state
+as an adoption measurement.
 
 ## Disclosure, preferences, and privacy
 
@@ -77,6 +78,11 @@ PostHog settings verified on October 11, 2026:
   is `validation`, so it is excluded from product and acquisition metrics.
 - Every app and website event sets `$process_person_profile: false`.
 
+The token-free Privacy and transformation interfaces reverified IP discard and
+the active country-only rule on October 12, 2026. Stored GitHub snapshots also
+verified `propertyless` person mode, profiles false, qualifying activity false,
+and no IP or GeoIP fields. GitHub aggregates disable location enrichment entirely.
+
 Country describes the central publisher network, not each connected device's
 physical location. VPNs and proxies can alter it. Do not add a location lookup on
 phones or retain more precise geography.
@@ -93,20 +99,55 @@ not installation. Release asset counters measure downloads, not unique users.
 `python3 scripts/collect-github-analytics.py --output PATH/history.json` preserves
 GitHub's daily views/clones and cumulative release asset counters. Existing rows
 outside GitHub's 14-day traffic window remain in the output. Daily download
-observations retain asset IDs, including replaced/deleted assets in older snapshots.
+observations retain asset IDs, including replaced/deleted assets in older snapshots
+and assets replaced between reruns on the same UTC day.
 Missing dates and historical download deltas are never invented. GitHub daily
 uniques cannot be summed to produce weekly/monthly unique people.
+
+`python3 scripts/publish-github-analytics.py --history PATH/history.json` sends
+only aggregate snapshots to the existing PostHog project. `--dry-run` reports
+pending event counts without transmitting. `POSTHOG_PROJECT_TOKEN` is the public
+write token already shipped in the app, not an administrative API credential.
+No additional GitHub permission or PostHog administrative secret is needed.
+
+| Event | Aggregate fields |
+| --- | --- |
+| `github_traffic_snapshot` | UTC reporting day, observation time, views/clones, total and daily unique counts |
+| `github_download_snapshot` | Observation day/time, cumulative DMG/all-asset download counts, known asset counts |
+
+Both use one repository aggregate ID, `source: github`, profiles false,
+qualifying activity false and `$geoip_disable: true`. No GitHub visitor IDs,
+locations, release tags or asset filenames are sent to PostHog. App and browser
+identities remain independent. Never add these counts to DAU/WAU/MAU or infer
+cross-source unique people.
+
+The publisher checkpoints each acknowledged batch in `posthog_accepted`. Failed
+batches retry with the same deterministic event UUID. Changed observations produce
+new revisions. The collector preserves these checkpoints with the archive.
+HTTP acknowledgement means accepted for processing; verify stored events separately.
+
+The dashboard takes the latest observed snapshot per reporting day and traffic
+metric, so revisions and retries do not add to totals. Download charts preserve
+last known asset counters across replaced/deleted assets. DMG downloads and all
+release-file downloads remain separate cumulative counters. They are not installs,
+unique users or historical daily download deltas. Missing observation days are
+not synthesized. The collection-time tile shows freshness. The saved SQL/chart
+configurations are in [github-dashboard-insights.json](github-dashboard-insights.json).
 
 The daily `Analytics history` workflow restores the full previous artifact and
 uploads a complete successor, so the artifact's 90-day retention does not trim
 rows from the history while daily collection continues. Download durable backups
 periodically: an outage longer than artifact retention can lose the latest archive.
 The workflow fails visibly if its credential or prior archive cannot be read.
+If PostHog publication fails, the complete history and acknowledged checkpoints
+are still uploaded as an artifact so the next run can retry.
 Artifact access follows repository Actions permissions; only aggregate counts
 and public release asset metadata are retained.
 
-Configure `ANALYTICS_GITHUB_TOKEN` in repository Actions secrets before enabling
-collection. GitHub requires repository **Administration: read** for traffic; the
+`ANALYTICS_GITHUB_TOKEN` has been added to repository Actions secrets. After the
+workflow reaches main, run it once manually and verify its traffic permission,
+PostHog ingestion and complete artifact before relying on the nightly schedule.
+GitHub requires repository **Administration: read** for traffic; the
 default workflow token cannot supply it. Use a repository-scoped fine-grained
 credential with that read permission. Account authentication and credential setup
 must be completed by the human operator; never extract an existing CLI token.

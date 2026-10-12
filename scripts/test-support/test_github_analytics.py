@@ -20,6 +20,22 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(result["download_observations"]["2026-01-02"]["assets"][0]["asset_id"],2)
         self.assertNotIn("2026-01-02",history["download_observations"])
         with self.assertRaises(ValueError): collector.collect(history,"different/repo",fetch)
+    def test_same_day_rerun_retains_replaced_asset_and_updates_existing_counter(self):
+        previous = {"schema_version": 1, "repository": "o/r", "download_observations": {
+            "2026-01-02": {"assets": [
+                {"asset_id": 1, "name": "Old.dmg", "download_count": 5},
+                {"asset_id": 2, "name": "Current.dmg", "download_count": 2}]}}}
+        def fetch(path):
+            if "traffic" in path:
+                return {"views" if "views" in path else "clones": []}
+            return [{"draft": False, "tag_name": "v2", "assets": [
+                {"id": 2, "name": "Current.dmg", "download_count": 7},
+                {"id": 3, "name": "New.dmg", "download_count": 1}]}]
+        result = collector.collect(previous, "o/r", fetch, "2026-01-02T15:00:00+00:00")
+        assets = {a["asset_id"]: a["download_count"] for a in result["download_observations"]["2026-01-02"]["assets"]}
+        self.assertEqual(assets, {1: 5, 2: 7, 3: 1})
+        self.assertEqual(previous["download_observations"]["2026-01-02"]["assets"][1]["download_count"], 2)
+
     def test_failure_preserves_previous_history(self):
         previous={}
         def unavailable(_): raise RuntimeError("unavailable")

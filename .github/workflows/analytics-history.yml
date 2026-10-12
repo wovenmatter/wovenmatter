@@ -42,7 +42,13 @@ jobs:
             exit 1
           fi
           python3 scripts/collect-github-analytics.py --repository "$ANALYTICS_REPOSITORY" --output analytics-history/history.json
+      - name: Publish aggregate snapshots to PostHog
+        env:
+          # Public ingestion token already shipped in the app; no admin key.
+          POSTHOG_PROJECT_TOKEN: phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh
+        run: python3 scripts/publish-github-analytics.py --history analytics-history/history.json
       - name: Preserve complete rolling history
+        if: ${{ always() && hashFiles('analytics-history/history.json') != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: analytics-history

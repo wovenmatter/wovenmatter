@@ -38,7 +38,13 @@ def collect(history, repository, fetch=api, now=None):
         page += 1
     # Daily snapshots retain asset IDs and cumulative counters. Replaced/deleted
     # assets remain in earlier observations; missing days are never synthesized.
-    history.setdefault("download_observations", {})[now[:10]] = {"observed_at": now, "assets": assets}
+    observations = history.setdefault("download_observations", {})
+    day = now[:10]
+    # A rerun can see a replacement on the same UTC day. Preserve the last known
+    # counters for assets that disappeared between observations, too.
+    daily_assets = {asset["asset_id"]: asset for asset in observations.get(day, {}).get("assets", [])}
+    daily_assets.update({asset["asset_id"]: asset for asset in assets})
+    observations[day] = {"observed_at": now, "assets": list(daily_assets.values())}
     history["last_collected_at"] = now
     return history
 

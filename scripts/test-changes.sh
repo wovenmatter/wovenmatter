@@ -20,6 +20,7 @@ run_static_checks() {
     bash -n "$file"
   done
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_github_analytics.py
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_github_analytics_publisher.py
   scripts/test-release.sh
   bash scripts/test-dev-signing.sh
   scripts/test-app-termination.sh
