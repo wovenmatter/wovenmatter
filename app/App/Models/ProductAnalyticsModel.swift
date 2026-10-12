@@ -6,7 +6,11 @@ import WovenMatterDashboardStore
 
 @MainActor @Observable
 final class ProductAnalyticsModel {
-  private(set) var preference: ProductAnalyticsPreference?
+  private(set) var preference: ProductAnalyticsPreference? {
+    didSet {
+      if interface { disclosurePresented = !localDisclosureAcknowledged }
+    }
+  }
   private(set) var log: [ProductAnalyticsLogEntry] = []
   var errorMessage: String?
   var disclosurePresented = false
@@ -23,6 +27,10 @@ final class ProductAnalyticsModel {
   var enabled: Bool { !locallyDisabled && (preference?.enabled ?? true) }
   private var disclosureKey: String? {
     preference.map { "wovenmatter.analytics.disclosed." + $0.analyticsID }
+  }
+  // The library acknowledgement does not replace this frontend’s disclosure.
+  private var localDisclosureAcknowledged: Bool {
+    disclosureKey.map { UserDefaults.standard.bool(forKey: $0) } ?? false
   }
   private var session = URLSession(configuration: .ephemeral)
   static let projectToken = "phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh"
@@ -44,7 +52,7 @@ final class ProductAnalyticsModel {
     interface = true
     await refresh()
     guard preference != nil else { return }
-    disclosurePresented = disclosureKey.map { !UserDefaults.standard.bool(forKey: $0) } ?? true
+    disclosurePresented = !localDisclosureAcknowledged
     if !disclosurePresented, !opened {
       opened = true
       await record(.appOpened)
@@ -107,7 +115,8 @@ final class ProductAnalyticsModel {
     } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
   }
   func record(_ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:]) async {
-    guard !locallyDisabled, !disclosurePresented, let preference, preference.collects else {
+    guard !locallyDisabled, !disclosurePresented, !interface || localDisclosureAcknowledged,
+      let preference, preference.collects else {
       return
     }
     if name == .contentChanged, properties["action"] == "edit" {
