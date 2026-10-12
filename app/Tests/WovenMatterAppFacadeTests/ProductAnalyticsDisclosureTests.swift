@@ -30,6 +30,38 @@ struct ProductAnalyticsDisclosureTests {
         #expect(log.allSatisfy { !$0.event.qualifying })
     }
 
+    @Test @MainActor func delayedCompletionAcknowledgementCannotEraseANewerUpdate() async throws {
+        let url = URL(fileURLWithPath: "/private/tmp/wm-update-ack-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
+        let preference = ProductAnalyticsPreference(analyticsID: UUID().uuidString.lowercased(),
+            disclosedAt: Date().addingTimeInterval(-60))
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            defaults.removePersistentDomain(forName: domain)
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+        defaults.set(true, forKey: "wovenmatter.analytics.disclosed." + preference.analyticsID)
+        let fixture = AnalyticsUpdateAcknowledgementFixture(preference: preference)
+        let server = BackendRPCServer(socketURL: url)
+        try server.start { await fixture.handle($0) }
+        defer { server.stop() }
+        let model = ProductAnalyticsModel(defaults: defaults)
+        model.configure(rpc: BackendRPCClient(socketURL: url))
+        await model.openInterface()
+        let old = ProductAnalyticsUpdateReceipt(analyticsID: preference.analyticsID, version: "1.2.3", build: 4,
+            event: .init(preferenceRevision: preference.revision, name: .updateInstallCompleted), confirmed: true)
+        defaults.set(try JSONEncoder().encode(old), forKey: ProductAnalyticsModel.updateReceiptKey)
+        let completion = Task { await model.confirmUpdateInstallation(version: "1.2.3", build: 4) }
+        await fixture.waitUntilCompletion()
+        let newer = ProductAnalyticsUpdateReceipt(analyticsID: preference.analyticsID, version: "1.2.4", build: 5,
+            event: .init(preferenceRevision: preference.revision, name: .updateInstallCompleted))
+        let newerData = try JSONEncoder().encode(newer)
+        defaults.set(newerData, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await fixture.releaseAcknowledgement()
+        await completion.value
+        #expect(defaults.data(forKey: ProductAnalyticsModel.updateReceiptKey) == newerData)
+    }
+
     @Test @MainActor func confirmedInstallRetriesOnceAndOptOutClearsTheReceipt() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -163,4 +195,34 @@ private actor AnalyticsDisclosureFixture {
     }
     func releaseLogRead() { logWaiter?.resume(); logWaiter = nil }
     func recordedCount() -> Int { recorded }
+}
+
+private actor AnalyticsUpdateAcknowledgementFixture {
+    let preference: ProductAnalyticsPreference
+    private var held = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+    init(preference: ProductAnalyticsPreference) { self.preference = preference }
+    func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
+        switch request.method {
+        case "analytics.preference": return .init(id: request.id, result: try! JSONEncoder().encode(preference))
+        case "analytics.log": return .init(id: request.id, result: Data("[]".utf8))
+        case "analytics.events":
+            let batch = try! JSONDecoder().decode(ProductAnalyticsBatch.self, from: request.payload)
+            if batch.events.contains(where: { $0.name == .updateInstallCompleted }) {
+                held = true
+                await withCheckedContinuation { continuation in
+                    waiter = continuation; observer?.resume(); observer = nil
+                }
+            }
+            let ack = ProductAnalyticsAcknowledgement(acceptedEventIDs: batch.events.map(\.id), preference: preference)
+            return .init(id: request.id, result: try! JSONEncoder().encode(ack))
+        default: return .init(id: request.id, result: Data())
+        }
+    }
+    func waitUntilCompletion() async {
+        if held { return }
+        await withCheckedContinuation { observer = $0 }
+    }
+    func releaseAcknowledgement() { waiter?.resume(); waiter = nil }
 }

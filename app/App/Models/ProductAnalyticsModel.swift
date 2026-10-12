@@ -207,7 +207,9 @@ final class ProductAnalyticsModel {
       cancelUpdateInstallation()
       return
     }
-    if await enqueue(receipt.event) { cancelUpdateInstallation() }
+    if await enqueue(receipt.event), defaults.data(forKey: Self.updateReceiptKey) == data {
+      cancelUpdateInstallation()
+    }
   }
   private static func analyticsDate(_ value: String) -> Date? {
     let fractional = ISO8601DateFormatter()

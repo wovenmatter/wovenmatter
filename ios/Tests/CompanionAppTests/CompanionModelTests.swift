@@ -56,7 +56,7 @@ private actor ModelAnalyticsTransport: ProductAnalyticsTransport {
     preference.enabled = change.enabled; preference.revision += 1
     return preference
   }
-  func analyticsEvents(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
+  func sendAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
     .init(acceptedEventIDs: batch.events.map(\.id), preference: preference)
   }
 }
