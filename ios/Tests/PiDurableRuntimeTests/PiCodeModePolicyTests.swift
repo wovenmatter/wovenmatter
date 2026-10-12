@@ -51,6 +51,16 @@ final class PiCodeModePolicyTests: XCTestCase {
     for value in 1...4 { XCTAssertEqual(try PiExecutionPolicy(subagentDepth: value).validated().subagentDepth, 2) }
   }
 
+  func testRestoredPoliciesRaiseLegacyWatchdogWithoutReducingLongerBudgets() throws {
+    for (saved, expected) in [(30.0, 120.0), (120.0, 120.0), (240.0, 240.0)] {
+      let original = PiExecutionPolicy(unresponsiveCodeSeconds: saved, concurrentTools: 8, concurrentSubagents: 3)
+      let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: JSONEncoder().encode(original)).validated()
+      XCTAssertEqual(restored.unresponsiveCodeSeconds, expected)
+      XCTAssertEqual(restored.concurrentTools, 8)
+      XCTAssertEqual(restored.concurrentSubagents, 3)
+    }
+  }
+
   func testInvalidResourcePolicyRejected() throws {
     XCTAssertThrowsError(try PiExecutionPolicy(unresponsiveCodeSeconds: .infinity).validated())
     XCTAssertThrowsError(try PiExecutionPolicy(concurrentTools: 0).validated())

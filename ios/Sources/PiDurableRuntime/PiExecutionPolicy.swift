@@ -8,12 +8,26 @@ public struct PiExecutionPolicy: Codable, Equatable, Sendable {
   public var concurrentSubagents: Int
   public var subagentDepth: Int
 
-  public init(unresponsiveCodeSeconds: Double = 30, concurrentTools: Int = 16,
+  public init(unresponsiveCodeSeconds: Double = 120, concurrentTools: Int = 16,
               concurrentSubagents: Int = 4, subagentDepth: Int = 2) {
     self.unresponsiveCodeSeconds = unresponsiveCodeSeconds
     self.concurrentTools = concurrentTools
     self.concurrentSubagents = concurrentSubagents
     self.subagentDepth = subagentDepth
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case unresponsiveCodeSeconds, concurrentTools, concurrentSubagents, subagentDepth
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    // Existing chats and saved defaults may carry the former 30-second watchdog.
+    // Keep longer saved budgets, while giving every restored worker at least two minutes.
+    self.init(unresponsiveCodeSeconds: max(120, try values.decode(Double.self, forKey: .unresponsiveCodeSeconds)),
+              concurrentTools: try values.decode(Int.self, forKey: .concurrentTools),
+              concurrentSubagents: try values.decode(Int.self, forKey: .concurrentSubagents),
+              subagentDepth: try values.decode(Int.self, forKey: .subagentDepth))
   }
 
   public func validated() throws -> Self {

@@ -89,7 +89,7 @@ struct DeviceAgentSettingsPane: View {
         Stepper("Concurrent subagents: \(policy.concurrentSubagents)", value: policyBinding(\.concurrentSubagents), in: 1...16)
       }
 
-      Section("Tool access") {
+      Section {
         ForEach(toolDefinitions, id: \.id) { tool in
           Toggle(tool.label, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
             var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id))
@@ -100,6 +100,12 @@ struct DeviceAgentSettingsPane: View {
             defaults.enabledTools = selected.sorted()
           }))
         }
+      } header: {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Tool Access")
+          Text("Choose which Woven Matter CLI tools are available to new chats by default.")
+            .font(.subheadline).fontWeight(.regular).foregroundStyle(DashboardPalette.mutedForeground)
+        }.textCase(nil)
       }
       if let failure { Section { Text(failure).foregroundStyle(DashboardPalette.danger); Button("Retry") { loadModels() } } }
     }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Pi Durable")
