@@ -34,6 +34,7 @@ final class DashboardNoteEditorController {
     @ObservationIgnored weak var textView: NSTextView?
     @ObservationIgnored private var document = NoteDocument()
     @ObservationIgnored private var onChange: ((NoteDocument) -> Void)?
+    @ObservationIgnored private var documentText: NSAttributedString?
     @ObservationIgnored private var undoObservers: [NSObjectProtocol] = []
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -70,6 +71,7 @@ final class DashboardNoteEditorController {
             }
         }
         self.document = document
+        documentText = NSAttributedString(attributedString: textView.attributedString())
         self.onChange = onChange
         refreshUndoState()
     }
@@ -79,6 +81,7 @@ final class DashboardNoteEditorController {
         removeUndoObservers()
         textView.undoManager?.removeAllActions()
         self.textView = nil
+        documentText = nil
         onChange = nil
         refreshUndoState()
     }
@@ -97,8 +100,10 @@ final class DashboardNoteEditorController {
         // Native undo can restore text storage before its text-change delegate
         // notification arrives. Publish the restored content for saving/counts,
         // including undo invoked through the standard Edit menu or keyboard.
+        // Compare with the actual synchronized storage. Rendering a fresh copy
+        // creates different native list objects, even for an unchanged snapshot.
         if let textView,
-           !textView.attributedString().isEqual(to: NoteAttributedDocument.render(document)) {
+           documentText.map({ !textView.attributedString().isEqual(to: $0) }) ?? true {
             let updated = NoteAttributedDocument.parse(textView.attributedString(), basedOn: document)
             if updated != document {
                 document = updated
@@ -128,6 +133,7 @@ final class DashboardNoteEditorController {
 
     func adopt(_ document: NoteDocument) {
         self.document = document
+        documentText = textView.map { NSAttributedString(attributedString: $0.attributedString()) }
         refreshUndoState()
     }
 
@@ -431,8 +437,9 @@ final class DashboardNoteEditorController {
         }
         textView.undoManager?.setActionName(action)
         document = updated.normalized()
-        onChange?(document)
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+        documentText = NSAttributedString(attributedString: textView.attributedString())
+        onChange?(document)
         textView.needsDisplay = true
         textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
                            types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])

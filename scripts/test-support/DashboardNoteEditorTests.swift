@@ -232,7 +232,9 @@ struct DashboardNoteEditorTests {
             throw Failure(description: "Real editor coordinator missing")
         }
         let beforeAgentEdit = saved
-        let agentEdit = NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "An external revision"))])
+        // List objects are recreated when rendering: redo must retain the
+        // exact document snapshot rather than parse defaults into its runs.
+        let agentEdit = NoteDocument(blocks: [.richText(NoteRichTextBlock(style: .numberedList, text: "An external revision"))])
         manager.beginUndoGrouping()
         coordinator.apply(agentEdit, to: textView)
         // apply is the renderer side of a document binding update.
