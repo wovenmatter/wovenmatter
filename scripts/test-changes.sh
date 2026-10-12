@@ -42,6 +42,7 @@ run_static_checks() {
 run_package_tests() {
   local suite
   local process_suites=(
+    ACPSessionPermissionTests
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
     WorkspaceAgentToolsServiceTests
