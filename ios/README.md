@@ -33,7 +33,7 @@ and inference acceptance must be checked by the user, separately from fixtures.
 ## Pairing and test workflow
 
 1. Run the development Mac app with its isolated workspace. Open Settings → Devices, enable sharing, and create a pairing code.
-2. Connect both devices to the same tailnet. In the iPhone or iPad Home screen, select Pair your Mac and scan the code or paste the pairing link. Its endpoint is the Tailscale HTTPS URL; the short-lived code is exchanged for a per-device credential stored only in Keychain.
+2. Connect both devices to the same tailnet. In Settings → Workspaces, select Pair your Mac and scan the code or paste the pairing link. Its endpoint is the Tailscale HTTPS URL; the short-lived code is exchanged for a per-device credential stored only in Keychain.
 3. Create a folder and an ordinary note while the Mac is unavailable. The note reports **Saved on this device** only after durable local storage commits. Terminate and reopen the app to check that writing persists.
 4. Reconnect and wait for **Saved · synced with Mac**. The note's client-created ID is preserved. Reference it in a new chat; the app flushes the note before binding its canonical revision to the run.
 5. Open the same conversation on the Mac, respond to a pending approval/question on either device, and verify the other sees the first accepted response. Disconnecting the phone never stops a Mac-owned run.
@@ -54,11 +54,11 @@ Native text views edit individual rich text blocks in the original JSON tree. Bl
 
 Agent routes and controls come from the selected execution workspace. Settings exposes device inference connections and authorized inference hosts. ChatGPT and Grok sign in through native device-code flows; Claude uses a PKCE browser-and-return-code flow. API keys and subscription access/refresh credentials stay in the phone’s own Keychain. Direct connections call and refresh against their provider without Mac pairing; hosted connections remain an explicit alternative. The phone still owns its Pi Durable loop, tools, checkpoints, subagents and isolated code execution. Losing the central library does not stop a device run or direct control of a reachable workspace. Losing the selected inference connection can pause/fail model work; accepted work is retained for recovery.
 
-A device workspace uses a confined app directory, imported files, supported native tools and explicit approvals. iOS may suspend the app; durable recovery preserves work without promising unlimited background execution or replaying ambiguous tool effects. Push notifications, billing, hosted accounts and on-device inference are not part of this work.
+A device workspace uses a confined app directory, imported files, the shared Woven Matter CLI contracts, and explicit approvals. Native tools can access local notes, sessions, history, timers, calendar, saved artifacts, usage, and Executor jobs; an explicit central target uses the paired Mac's permissions. Bundled CPython provides real computation and SQLite through an isolated WebAssembly worker, with durable command receipts and cancellable execution. See [embedded execution](../docs/IOS_EMBEDDED_EXECUTION.md) and [continued execution](../docs/IOS_CONTINUED_EXECUTION.md). iOS may suspend the app; durable recovery preserves work without promising unlimited background execution or replaying ambiguous tool effects. Push notifications, billing, hosted accounts and on-device inference are not part of this work.
 
 ## Current workspace features
 
-Library searches files, links and photos from the Mac, opens retained files with native preview/share, and links back to their conversation. File downloads and exports are capped at 32 MB. Calendar supports events, recurring series, scheduled prompts, occurrence/series deletion, and task conversations. Device inference credentials remain in device-only Keychain. Workspace provider credentials remain with their configured inference host. Conversation and note detail pages expose rename, pin/unpin, move, trash, restore and export. Session settings use negotiated model, thinking, permission and workspace-tool choices, including timer-pause confirmation.
+Library searches synchronized files, links and photos, opens retained files with native preview/share, and links back to their conversation. File downloads and exports are capped at 32 MB. Calendar events, recurring series, and scheduled prompts are stored locally and sync when connected. Offline edits retain their revisions and surface conflicts. Scheduled tasks stay on their assigned device; missed recurring occurrences combine into one catch-up run when that device can execute. Device inference credentials remain in device-only Keychain. Workspace provider credentials remain with their configured inference host. Conversation and note detail pages expose rename, pin/unpin, move, trash, restore and export. Session settings use negotiated model, thinking, permission and workspace-tool choices, including timer-pause confirmation.
 
 On iPad, a persistent sidebar replaces the phone tab bar and remains available while editing; compact windows use the phone layout. The first phone UI pass is in place; further styling follows simulator feedback. Connection management lives in Settings → Workspaces. Notes, device execution, and previously authorized direct workspaces remain usable independently; detail pages retain entered values when a request fails.
 
@@ -103,11 +103,21 @@ on the Mac; provider-free facade tests compile against its production Objective-
 interface with an unavailable browser implementation, while the Xcode build and
 browser lifecycle suite validate the actual bridge.
 
+Home and Folders open New Chat as a dismissible agent/workspace chooser. Selecting
+an available remote agent creates an idle session with a durable command before
+loading its negotiated options; it sends no prompt. The chat header's pencil
+starts another session with that same agent/workspace. Long-press the chat title
+for details/export, advanced session settings, and pending requests.
+The composer is text above **+ → Model → Thinking Level → Tools → Send/Stop**.
+Model attribution lives in the model popover. Device model/thinking/tool changes
+are saved per conversation; changing a conversation never rewrites account or
+agent defaults. Provider setup remains in Settings.
+
 The first UI pass focuses on phone navigation, Home actions, chat controls, and
 note editing. Tablets retain a separate sidebar, visible selection, and bounded
 content width; compact windows use phone navigation. Persistence labels refer to
-this device on both iPhone and iPad. The keyboard's Done button returns to navigation
-without losing writing. Preview mode uses sample content and never sends agent work.
+this device on both iPhone and iPad. Tapping an editor opens the keyboard; tapping outside dismisses it without
+losing writing. There is no keyboard Done strip. Preview mode uses sample content and never sends agent work.
 
 For visual iteration, build with `scripts/build-ios.sh`, then install its
 `WovenMatterCompanion.app` in a dedicated simulator. Launch with
@@ -119,7 +129,7 @@ simulator. Use a separate simulator without fixture variables for real pairing.
 
 The primary tabs are Home, Folders, Chats, Notes, and Settings. Opening a folder
 shows its searchable notes and chats within Folders; Back to Folders returns to
-the folder list. Home lists agents and opens Library, Calendar, Scheduled tasks, Databases, and Usage. Settings has General, iPhone/iPad Connections, Pi Durable, Workspaces, Usage, and Trash. Pi Durable owns on-device model, instructions, and tool defaults; the device Connections page owns provider sign-in and API keys. Details use full-page navigation with Back.
+the folder list. Home lists agents and opens Library, Calendar, Scheduled tasks, Databases, and Usage. Settings has General, Pi Durable, iPhone/iPad Connections, Workspaces, and Usage Settings. Trash is at the bottom of Folders. Pi Durable owns on-device model, instructions, and tool defaults; the device Connections page owns provider sign-in and API keys. Details use full-page navigation with Back.
 
 ## Styling parity
 

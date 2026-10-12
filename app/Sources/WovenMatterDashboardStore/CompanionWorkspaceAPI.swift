@@ -3,6 +3,7 @@ import WovenMatterCore
 
 @MainActor
 public protocol CompanionCommandServing: AnyObject {
+    func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse
     func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace
     func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential
     func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
@@ -22,6 +23,9 @@ public extension CompanionCommandServing {
     func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { throw CompanionAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
     func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement { throw CompanionAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
 
+    func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
+        throw CompanionAPIError(code: "unsupported", message: "Update the central Mac to use its tools from this device.")
+    }
     func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace {
         throw CompanionAPIError(code: "unsupported", message: "This host does not accept secondary execution management grants.")
     }
@@ -97,12 +101,26 @@ public final class CompanionWorkspaceAPI {
                 if request.method == "POST", response.status == 200 { onMutation() }
                 return response
             }
+            if path == "/v1/calendar", request.method == "GET" {
+                return try .json(try await database.companionCalendarSnapshot())
+            }
+            if path == "/v1/calendar/runs", request.method == "POST" {
+                let runs = try JSONDecoder().decode([CompanionCalendarRun].self, from: request.body)
+                let accepted = try await database.companionCalendarPublishRuns(runs, deviceID: device.id)
+                onMutation(); return try .json(accepted)
+            }
+            if path == "/v1/calendar/mutations", request.method == "POST" {
+                let mutation = try JSONDecoder().decode(CompanionCalendarMutation.self, from: request.body)
+                let receipt = try await database.companionCalendarMutate(mutation, deviceID: device.id)
+                onMutation()
+                return try .json(receipt)
+            }
             if request.method == "GET" {
                 switch path {
                 case "/v1/hello":
                     return try .json(CompanionHello(workspaceID: workspaceID,
                         hostName: Host.current().localizedName ?? "Woven Matter Mac",
-                        capabilities: [CompanionFederationProtocol.capability, "notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "workspace.management.v1"]))
+                        capabilities: [CompanionFederationProtocol.capability, "notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "calendar.replicas.v1", "workspace.management.v1", "workspace.tools.v1"]))
                 case "/v1/snapshot": return try .json(try await database.companionSnapshot())
                 case "/v1/changes":
                     guard let after = Int64(query("after") ?? query("cursor") ?? "0"), after >= 0 else {
@@ -176,6 +194,15 @@ public final class CompanionWorkspaceAPI {
                     return try .json(note)
                 }
             } else if request.method == "POST" {
+                if path == "/v1/tools" {
+                    let call = try JSONDecoder().decode(CompanionToolRequest.self, from: request.body)
+                    try await database.authorizeCompanionTool(call, deviceID: device.id)
+                    let response = try await commands.executeTool(call, deviceID: device.id)
+                    guard isActive() else { return .error("unavailable", "Companion sharing is stopped.", status: 503) }
+                    _ = try await authentication.authenticate(bearer: bearer)
+                    if response.success { onMutation() }
+                    return try .json(response.bounded())
+                }
                 if path == "/v1/workspace-read" {
                     let read = try JSONDecoder().decode(CompanionWorkspaceRead.self, from: request.body)
                     let value = try await commands.readWorkspace(read)
@@ -200,6 +227,16 @@ public final class CompanionWorkspaceAPI {
         } catch let error as CompanionAPIError {
             let status = error.code == "unauthorized" ? 401 : error.code == "wrong_owner" ? 403 : error.code == "not_found" ? 404 : error.code == "version_mismatch" ? 426 : error.code == "rate_limited" ? 429 : ["revision_conflict", "event_conflict", "origin_gap", "receipt_conflict", "record_conflict", "chunk_conflict"].contains(error.code) ? 409 : 400
             return .error(error.code, error.message, status: status)
+        } catch let error as CompanionCalendarError {
+            let status: Int
+            switch error {
+            case .conflict, .requestMismatch, .wrongWorkspace: status = 409
+            case .missing: status = 404
+            default: status = 400
+            }
+            return .error("calendar_error", error.localizedDescription, status: status)
+        } catch let error as WorkspaceToolError {
+            return .error("tool_unavailable", error.localizedDescription, status: 400)
         } catch is DecodingError { return .error("invalid_request", "The request did not match the companion protocol.", status: 400) }
         catch { return .error("workspace_error", "The Mac could not complete this request. Your pending writing is preserved; check the Mac and retry.", status: 500) }
     }

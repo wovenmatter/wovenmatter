@@ -1,0 +1,3 @@
+# Preserve checksum-verified upstream license notices byte for byte.
+ios/Sources/EmbeddedExecution/Resources/Emscripten-LICENSE.txt whitespace=-blank-at-eol,-blank-at-eof
+ios/Sources/EmbeddedExecution/Resources/xz-COPYING.txt whitespace=-blank-at-eol,-blank-at-eof

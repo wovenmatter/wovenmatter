@@ -32,6 +32,7 @@ import CompanionInference
   var pending: [CompanionPendingInteraction] = []
   var sessionCapabilities: [String: CompanionProvider] = [:]
   var historyPages: [String: CompanionTranscript] = [:]
+  @ObservationIgnored let transcriptStates = MobileConversationStates()
   var loadingHistory = false
   var selectedFolderID: String?
   var folderContentsPresented = false
@@ -72,6 +73,14 @@ import CompanionInference
   var initialized = false
   var executionWorkspaceID = "local"
   var executionSettingsPresented = false
+  var chatChooserPresented = false
+  var startingChat = false
+  var chatSettingsBusy = false
+  var chatSetupProblem: String?
+  var pendingChatCreation: CompanionCommand?
+  var newChatNoteID: String?
+  var draftDeviceSettings = DeviceChatSettings()
+  var configuringDeviceSessions: Set<String> = []
   var deviceAgentDefaults = DeviceAgentDefaults()
   var inferenceConnections: [InferenceConnection] = []
   var inferenceConnectionID = ""
@@ -80,6 +89,8 @@ import CompanionInference
   var localRuntimes: [String: PiDurableRuntime] = [:]
   var localStopping: Set<String> = []
   var localRunTokens: [String: String] = [:]
+  var localExecutionAttempts: [String: String] = [:]
+  var localInterrupting: Set<String> = []
   var deviceSnapshotInProgress: Set<String> = []
   var localRunTasks: [String: Task<Void, Never>] = [:]
   var localApprovals: [String: LocalToolApproval] = [:]
@@ -98,7 +109,12 @@ import CompanionInference
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
   var executionCredentialStore = InferenceCredentialStore()
+  let deviceBackgroundExecution = DeviceBackgroundExecution()
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+  var backgroundFallbackToken: UUID?
+  var calendarRevision = 0
+  var deviceScheduleTask: Task<Void, Never>?
+  var processingDeviceSchedule = false
 
   private var frame = 0
   let fixture: Bool
@@ -169,10 +185,11 @@ import CompanionInference
       else {
         do { credential = try MobileCredentialVault.load(); try configureTransport() }
         catch { errorMessage = error.localizedDescription }
-        do { try await loadExecutionConfiguration() }
+        do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
       }
     }
+    if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
     await withTaskGroup(of: Void.self) { group in
       group.addTask { [weak self] in
         while !Task.isCancelled {
@@ -194,6 +211,7 @@ import CompanionInference
   func reload() async {
     await analytics.refresh()
     if let store { let next = await store.snapshot(); if next != state { state = next } }
+    calendarRevision &+= 1
   }
   private func configureTransport() throws {
     guard let credential, let store else { connectionLabel = "Saved on this device"; return }
@@ -298,7 +316,9 @@ import CompanionInference
     catch { errorMessage = error.localizedDescription }
   }
   func showLatestMessages() { if let selectedConversationID { historyPages.removeValue(forKey: selectedConversationID) } }
-  func newChat() { selectedConversationID = nil; tab = .chat }
+  func newChat(referencing noteID: String? = nil) {
+    newChatNoteID = noteID; chatSetupProblem = nil; chatChooserPresented = true
+  }
   func saveNote(id: String, title: String, content: String, base: CompanionNote) {
     guard let store else { return }
     draftTitles[id] = title; draftContents[id] = content
@@ -346,6 +366,7 @@ import CompanionInference
     }
   }
   func send() async {
+    guard !chatSettingsBusy, !startingChat else { return }
     if selectedExecutionWorkspaceID == "local" { await sendOnDevice(); return }
     if selectedExecutionWorkspaceID != "central" { await sendToExecutionWorkspace(); return }
     guard online, let engine, !sending, !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -458,6 +479,7 @@ import CompanionInference
       runID: interaction.runID, interactionID: interaction.id, response: response))
   }
   func workspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+    if let result = try await readLocalCalendar(request) { return result }
     let conversationID: String?
     switch request { case .session(let id), .exportConversation(let id, _): conversationID = id; default: conversationID = nil }
     if let id = conversationID {
@@ -473,6 +495,10 @@ import CompanionInference
   }
   @discardableResult
   func perform(_ action: CompanionWorkspaceAction) async -> Bool {
+    if let result = await performLocalCalendar(action) {
+      if result, let properties=action.analyticsProperties { await analytics.record(.contentChanged,properties:properties) }
+      return result
+    }
     let conversationID: String?
     switch action {
     case .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
@@ -557,8 +583,8 @@ import CompanionInference
         try await store.apply(CompanionSnapshot(workspaceID: "fixture", cursor: 1, folders: [.init(id: "inbox", name: "Inbox")], notes: [note], conversations: [
           .init(id: "fixture-chat", title: "Launch plan", folderID: "inbox", providerID: "local:codex", runtimeKind: "codex", preview: "A focused plan for the next release.")]))
         try await store.cache(.init(conversationID: "fixture-chat", messages: [
-          .init(id: "user", conversationID: "fixture-chat", role: "user", content: "Summarize the launch plan."),
-          .init(id: "assistant", conversationID: "fixture-chat", role: "assistant", content: "A focused plan for the next release.\n\n• Capture the idea in a note.\n• Review it together on the Mac.\n• Keep the next step small and clear.", status: "completed")], activities: [.init(id: "activity", runID: "fixture-run", title: "Run finished", detail: "The plan is ready for review.", status: "completed")]))
+          .init(id: "user", conversationID: "fixture-chat", runID: "11111111-1111-4111-8111-111111111111", role: "user", content: "Summarize the launch plan.", sequence: 0),
+          .init(id: "assistant", conversationID: "fixture-chat", runID: "11111111-1111-4111-8111-111111111111", role: "assistant", content: "A focused plan for the next release.\n\n• Capture the idea in a note.\n• Review it together on the Mac.\n• Keep the next step small and clear.", status: "completed", sequence: 2)], activities: [.init(id: "activity", runID: "11111111-1111-4111-8111-111111111111", title: "Run finished", detail: "The plan is ready for review.", status: "completed", sequence: 1)], runs: [.init(id: "11111111-1111-4111-8111-111111111111", status: "completed")]))
       }
       await reload()
       if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "conflict", state.conflicts.isEmpty,

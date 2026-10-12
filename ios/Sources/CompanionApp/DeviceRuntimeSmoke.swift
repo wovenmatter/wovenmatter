@@ -1,6 +1,8 @@
 #if DEBUG
 import Foundation
+import UIKit
 import CompanionInference
+import EmbeddedExecution
 import PiDurableRuntime
 
 private struct SmokeCredentials: InferenceCredentialReading {
@@ -67,6 +69,7 @@ private actor SmokeNativeTools {
     do {
       try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      result.merge(try selectableTable()) { _, new in new }
       let transport = SmokeInferenceTransport()
       let native = SmokeNativeTools(file: root.appendingPathComponent("native-note.txt"))
       let model = InferenceModel(id: "offline-smoke", name: "Offline smoke", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
@@ -123,10 +126,85 @@ private actor SmokeNativeTools {
             !stateSnapshot.contains("isError\":true"), await codeTransport.calls == 4 else { throw DeviceExecutionError.unavailable("iOS code-mode JavaScript state did not survive reopening.") }
       try await restoredCode.close()
       result["codeModeOnIOS"] = true; result["codeModeStateReopened"] = true
+      result.merge(try await DeviceBackgroundSmoke.run(root: root, descriptor: model)) { _, new in new }
+      // Exercise the app's packaged SwiftPM resources, without a test-only path override.
+      let pythonWorkspace = root.appendingPathComponent("bundled-python")
+      try FileManager.default.createDirectory(at: pythonWorkspace, withIntermediateDirectories: true)
+      let python = try await EmbeddedCommandExecutor().run(.init(id: UUID(), argv: [
+        "python", "-c", "import sqlite3; db=sqlite3.connect(':memory:'); print(db.execute('select 6*7').fetchone()[0])"
+      ]), workspaceURL: pythonWorkspace) { _, _ in throw CocoaError(.featureUnsupported) }
+      guard python.exitCode == 0, python.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "42" else {
+        throw DeviceExecutionError.unavailable("The bundled iOS Python and SQLite runtime failed: \(python.stderr)")
+      }
+      result["bundledPythonOnIOS"] = true
 
     } catch { result["passed"] = false; result["error"] = error.localizedDescription }
     do { try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: resultFile, options: .atomic) }
     catch { NSLog("Device runtime smoke result could not be written: %@", error.localizedDescription) }
+  }
+  /// App-hosted UIKit coverage remains usable when the simulator XCTest
+  /// service cannot start. The production renderer owns every rendered glyph.
+  private static func selectableTable() throws -> [String: Any] {
+    func require(_ value: Bool, _ message: String) throws {
+      if !value { throw DeviceExecutionError.unavailable("Selectable table smoke: " + message) }
+    }
+    func scalars(_ text: String) -> [UInt32] {
+      text.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.map(\.value).sorted()
+    }
+    func largestFont(_ view: ConversationResponseNativeTextView) -> CGFloat {
+      var maximum: CGFloat = 0
+      view.textStorage.enumerateAttribute(.font, in: NSRange(location: 0, length: view.textStorage.length)) { value, _, _ in
+        if let font = value as? UIFont { maximum = max(maximum, font.pointSize) }
+      }
+      return maximum
+    }
+    let markdown = "| Left | Center | Right |\n| :--- | :---: | ---: |\n| **Bold** and [docs](https://example.com) | LongUnbrokenIdentifier0123456789🍎🍎🍎 | `code` and more words |"
+    let expected = scalars("Left Center Right Bold and docs LongUnbrokenIdentifier0123456789🍎🍎🍎 code and more words")
+    let view = ConversationResponseNativeTextView()
+    var wide = CGSize.zero, narrow = CGSize.zero
+    var regularFont: CGFloat = 0
+    UITraitCollection(preferredContentSizeCategory: .large).performAsCurrent {
+      view.apply(content: markdown, document: nil, isStreaming: false, typeSize: .large)
+      wide = view.fittingSize(width: 600)
+      narrow = view.fittingSize(width: 240)
+      regularFont = largestFont(view)
+    }
+    try require(narrow.height > wide.height, "240-point layout did not wrap more than 600-point layout")
+    try require(view.layoutManager.usedRect(for: view.textContainer).maxX <= 241, "wrapped glyphs exceeded the phone width")
+    try require(scalars(view.text) == expected, "narrow layout changed or omitted cell text")
+    var bold = false, code = false, link = false, alignments: [NSTextAlignment] = []
+    var rows = 0
+    view.textStorage.enumerateAttributes(in: NSRange(location: 0, length: view.textStorage.length)) { attributes, _, _ in
+      if let font = attributes[.font] as? UIFont {
+        bold = bold || font.fontDescriptor.symbolicTraits.contains(.traitBold)
+        code = code || font.fontDescriptor.symbolicTraits.contains(.traitMonoSpace)
+      }
+      link = link || (attributes[.link] as? URL)?.absoluteString == "https://example.com"
+      if let style = attributes[.paragraphStyle] as? NSParagraphStyle { alignments = style.tabStops.map(\.alignment) }
+    }
+    view.textStorage.enumerateAttribute(.init("WovenMatterResponseTableRow"), in: NSRange(location: 0, length: view.textStorage.length)) { value, _, _ in
+      if value != nil { rows += 1 }
+    }
+    try require(bold && code && link, "inline bold, code font, or link attributes were lost")
+    try require(alignments == [.left, .center, .right] && rows == 2, "column alignment or row grid metadata was lost")
+    try require(view.isSelectable && !view.isEditable && !view.isScrollEnabled, "table no longer shares the selectable transcript surface")
+    view.selectedRange = NSRange(location: 0, length: view.textStorage.length)
+    try require(view.selectedRange.length == view.textStorage.length, "full-table native selection was incomplete")
+    var restored = CGSize.zero
+    UITraitCollection(preferredContentSizeCategory: .large).performAsCurrent { restored = view.fittingSize(width: 600) }
+    try require(restored == wide && scalars(view.text) == expected, "widening the viewport did not restore the original layout")
+    var accessibility = CGSize.zero, accessibilityFont: CGFloat = 0
+    UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge).performAsCurrent {
+      view.apply(content: markdown, document: nil, isStreaming: false, typeSize: .accessibility5)
+      accessibility = view.fittingSize(width: 240)
+      accessibilityFont = largestFont(view)
+    }
+    try require(accessibilityFont > regularFont && accessibility.height > narrow.height,
+      "Dynamic Type did not remeasure enlarged rendered fonts")
+    try require(scalars(view.text) == expected, "Dynamic Type changed or omitted cell text")
+    try require(view.layoutManager.usedRect(for: view.textContainer).maxX <= 241, "Dynamic Type glyphs exceeded the phone width")
+    return ["selectableTableOnIOS": true, "tableWideHeight": Double(wide.height), "tableNarrowHeight": Double(narrow.height),
+      "tableAccessibilityHeight": Double(accessibility.height), "tableRegularFont": Double(regularFont), "tableAccessibilityFont": Double(accessibilityFont)]
   }
   private static func object(_ text: String) throws -> [String: Any] {
     guard let value = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw CocoaError(.coderReadCorrupt) }

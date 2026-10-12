@@ -42,7 +42,7 @@ struct InferenceRequestBuilder {
     let requestedReasoning = options["reasoning"] as? String
     let reasoning: String? = requestedReasoning.flatMap { value in
       guard value != "off", model.reasoning else { return nil }
-      if let map = model.thinkingLevelMap { return map[value] ?? nil }
+      if let mapped = model.thinkingLevelMap?[value] { return mapped }
       return value
     }
     let codex = model.api == "openai-codex-responses"

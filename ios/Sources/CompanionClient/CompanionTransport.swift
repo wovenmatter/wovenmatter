@@ -18,6 +18,7 @@ public struct MobileCredential: Codable, Sendable, Equatable {
 }
 
 public protocol CompanionTransport: Sendable {
+  func executeTool(_ request: CompanionToolRequest) async throws -> WovenMatterToolResponse
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
   func workspaceIdentity() async throws -> String
   func snapshot() async throws -> CompanionSnapshot
@@ -34,6 +35,7 @@ public protocol CompanionTransport: Sendable {
 }
 
 public extension CompanionTransport {
+  func executeTool(_ request: CompanionToolRequest) async throws -> WovenMatterToolResponse { throw MobileConnectionError.offline }
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { throw MobileConnectionError.offline }
   func linkedData(_ id: String, tableID: String?) async throws -> CompanionLinkedData { throw MobileConnectionError.offline }
   func transcript(_ id: String, before: String) async throws -> CompanionTranscript { throw MobileConnectionError.http(400, "This connection does not support older transcript pages.") }
@@ -82,6 +84,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     guard result.protocolVersion == CompanionProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID, token: result.credential)
   }
+  public func executeTool(_ value: CompanionToolRequest) async throws -> WovenMatterToolResponse { try await request("v1/tools", method: "POST", body: JSONEncoder().encode(value)) }
   public func readWorkspace(_ value: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {
     let hello: CompanionHello = try await request("v1/hello")

@@ -312,7 +312,9 @@ struct CompanionFacadeTests {
             gatewaySessionMetadata: { id in try await recorder.gatewayMetadata(id) },
             beforeSessionCreation: { await recorder.beforeCreation() }))
         await recorder.configure(database: store.database)
-        model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
+        model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
+            localUsageService: LocalUsageService(homeDirectory: directory.appending(path: "ProviderFixtureHome"),
+                usageDatabaseURL: directory.appending(path: "usage.sqlite")))
         try await database.saveOpenClawGatewayLink(.init(agentID: gatewayID, location: .localAgentWorkspace,
             endpoint: .init(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService), status: OpenClawGatewayConnectionStatus.ready.rawValue))
         let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)

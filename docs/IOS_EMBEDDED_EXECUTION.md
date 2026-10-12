@@ -1,0 +1,118 @@
+# On-device command execution
+
+`EmbeddedExecution` embeds **real CPython 3.14.2 via Pyodide 314.0.7 / WebAssembly**
+inside an independently terminable WebKit worker. It executes without a Mac,
+inference service, network connection, installation step, or runtime download.
+Pi Durable still owns the agent loop; this is a tool execution environment.
+
+## Commands and Python
+
+The API accepts an argv array, stdin, an optional workspace-relative current
+directory, and a stable command UUID. It deliberately does not claim a POSIX shell:
+there is no `sh`, process spawning, command substitution, or shell pipe grammar.
+
+`python` / `python3` run `-c SOURCE`, `-m MODULE`, or a script file, with arguments.
+The real bundled standard library includes JSON, CSV, SQLite, regular expressions,
+statistics, decimal arithmetic, archives, file operations, asyncio, and unittest.
+Top-level `await` is supported for scripts and `-c`; for example:
+
+```python
+import csv, io, json, sqlite3
+rows = list(csv.DictReader(io.StringIO("name,count\nA,2\nB,3\n")))
+with sqlite3.connect("report.sqlite") as db:
+    db.execute("create table if not exists counts(name text, count integer)")
+    db.executemany("insert into counts values (?, ?)", [(r["name"], int(r["count"])) for r in rows])
+print(await wovenmatter(["notes", "list"]))
+```
+
+Other bundled commands are implemented using those standard-library operations:
+`pwd`, `ls [-a]`, `cat`, `mkdir [-p]`, `cp [-r]`, `mv`, `rm [-rf]`, `find`,
+`grep [-in]`, and `sqlite3 DATABASE SQL`. `help` returns the exact accepted syntax.
+`wovenmatter ...` uses the same awaited native CLI bridge available to Python.
+These are useful builtins, not imported Unix binaries or aliases to a remote Mac.
+
+There is no arbitrary native executable, native Python extension installation,
+package download, raw socket, browser cookie, Keychain, or host filesystem access.
+Pure Python modules placed in the workspace can be imported. The underlying WASM
+runtime is portable between physical iOS and Apple Silicon Simulator; it has no
+CPU-specific native binary dependency.
+
+## Isolation, persistence, and cancellation
+
+- A job snapshots only regular workspace files. No host filesystem mount exists.
+  The worker has a separate virtual `/workspace` plus bundled Python system files.
+- CSP blocks network and frame loads. Pyodide asset requests resolve from an exact,
+  bundled byte map; there is no CDN fallback. Native CLI calls are the sole bridge.
+- CLI `--file` input for notes apply/set-html and Executor execute is read from
+  the live virtual workspace and converted to the same inline arguments as the
+  native CLI. Strict UTF-8 and the shared 4 MiB input-file ceiling apply.
+- A native library read can explicitly return newly created artifact paths through
+  the host's `importFiles` callback. Only those named files are loaded into Python
+  and added to the original snapshot baseline; unrelated native edits still cause
+  a conflict, and existing virtual files cannot be overwritten by an import.
+- Native code validates every returned path, rejects symlinks and reserved metadata
+  names, and enforces workspace byte/entry budgets. It checks the workspace again
+  before applying a result, rejecting concurrent changes without partial writes.
+- A staging directory receives all changes and the durable result receipt, then
+  `renameatx_np(RENAME_SWAP)` atomically publishes the complete result. Only one
+  command per workspace runs at a time. Native app writes must continue using
+  their normal serialized workspace ownership; a separate process holding an open
+  file descriptor cannot be governed by an in-process lock.
+- A durable acceptance marker precedes execution. If a process dies or is cancelled
+  without a completed receipt, reusing that ID refuses to rerun the script: native
+  effects may already have committed. Inspect the saved output and intentionally
+  create a new job after reviewing those effects.
+- Replaying a completed command UUID and arguments returns its receipt without
+  repeating mutations. Each nested CLI call derives a stable UUID from the job and
+  its call ordinal, so the CLI's receipt machinery can deduplicate committed work.
+- Stop/cancellation terminates the worker independently of Python's interpreter.
+  Uncommitted virtual file changes are discarded. Already committed native CLI
+  effects are governed by CLI receipts; they are not rolled back.
+- Execution has no blanket wall-clock deadline. A 90-second startup watchdog
+  detects a runtime that fails to initialize. iOS can still interrupt WebKit or
+  suspend the app; failures never imply arbitrary instruction-level resumability.
+- Full stdout/stderr stream to `.woven-execution/<job UUID>/stdout.txt` and
+  `stderr.txt`. Responses contain a bounded preview and explicitly indicate when
+  full output requires those files. Resource budgets are configured in Swift
+  (`EmbeddedExecutionLimits`); exceeding a budget fails the job explicitly.
+- This is a single-worker WASM environment. Python OS processes and native thread
+  behavior are unavailable. Memory pressure can terminate the WebKit process;
+  native code reports that interruption and keeps prior workspace files intact.
+
+## Reproducibility and licensing
+
+```sh
+npm ci --ignore-scripts --prefix ios/EmbeddedRuntime
+node scripts/build-ios-embedded-runtime.mjs
+node scripts/build-ios-embedded-runtime.mjs --check
+```
+
+The npm lockfile pins upstream package integrity; `Resources/provenance.json`
+records source/resource SHA-256 values, the upstream source tag and npm integrity.
+Checked-in resources make native builds independent of a runtime CDN. The bundled
+lock metadata deliberately contains an empty third-party package catalog: no
+optional downloads are advertised or permitted. MPL-2.0,
+PSF, libffi, hiwire, Emscripten, XZ and Zstandard notices are included in the app's
+resource bundle; `licenses.json` pins the source URLs and notice hashes. SQLite is
+public domain. No downloaded package files are modified; the generated JavaScript
+bundle includes the unchanged upstream modules and our bridge.
+
+## Validation
+
+`EmbeddedExecutionTests` covers native path/resource validation, conflict rejection,
+atomic result/receipt publication, and deterministic native CLI identities.
+
+The standalone simulator harness exercises the actual WebKit worker, rather than
+substituting desktop Python or a mocked interpreter:
+
+```sh
+scripts/test-ios-embedded-runtime.sh <booted-simulator-uuid>
+```
+
+It installs a separate test bundle (`com.wovenmatter.embedded-smoke`), with synthetic
+files and an in-memory CLI stub. It does not touch the Woven Matter app or providers.
+The report covers CPython/CSV/JSON/SQLite, persistence between commands, native
+bridging, receipt replay, stopping an infinite Python loop, refusing interrupted
+script replay, concurrent edit preservation, file-backed output previews, actual
+Python unittest execution, virtual-file CLI input, library-file import into Python,
+continued conflict protection during imports, and symlink rejection.

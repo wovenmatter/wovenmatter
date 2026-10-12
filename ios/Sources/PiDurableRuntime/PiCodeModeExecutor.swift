@@ -14,8 +14,16 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
   private var allowed = Set<String>()
   private var request: [String: Any] = [:]
   private var finished = false
+  private var lastHeartbeat = ContinuousClock.now
+  private var checkpoint: (@MainActor (String) async throws -> Void)?
+  private var policy = PiExecutionPolicy()
 
-  func run(requestJSON: String, timeout: Duration = .seconds(120), tool: @escaping Tool) async throws -> String {
+  func run(requestJSON: String, timeout: Duration? = nil, policy: PiExecutionPolicy = .init(),
+           checkpoint: @escaping @MainActor (String) async throws -> Void = { _ in
+             throw PiDurableRuntimeError.unavailable("No durable checkpoint host is available.")
+           }, tool: @escaping Tool) async throws -> String {
+    self.policy = try policy.validated(); self.checkpoint = checkpoint
+    guard continuation == nil, !finished else { throw PiDurableRuntimeError.unavailable("This code worker has already been used.") }
     guard let request = try JSONSerialization.jsonObject(with: Data(requestJSON.utf8)) as? [String: Any],
           let source = request["source"] as? String, source.utf8.count <= 131_072,
           let tools = request["tools"] as? [[String: Any]] else {
@@ -27,6 +35,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
       try Task.checkCancellation()
       return try await withCheckedThrowingContinuation { continuation in
         self.continuation = continuation
+        self.lastHeartbeat = .now
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(self, name: "wovenCodeMode")
@@ -34,8 +43,18 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
         browser = view; view.navigationDelegate = self
         view.loadHTMLString(Self.html, baseURL: nil)
         watchdog = Task { [weak self] in
-          do { try await Task.sleep(for: timeout) } catch { return }
-          self?.finish(.failure(PiDurableRuntimeError.unavailable("Code execution exceeded its two-minute limit.")))
+          let started = ContinuousClock.now
+          while !Task.isCancelled {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard let self, !self.finished else { return }
+            let now = ContinuousClock.now
+            if let timeout, started.duration(to: now) >= timeout {
+              self.finish(.failure(PiDurableRuntimeError.unavailable("Code exceeded its explicit execution limit."))); return
+            }
+            if self.lastHeartbeat.duration(to: now) >= .seconds(self.policy.unresponsiveCodeSeconds) {
+              self.finish(.failure(PiDurableRuntimeError.unavailable("The code worker stopped responding. Yield during long computations with await yield_control(); saved tool effects have not been replayed."))); return
+            }
+          }
         }
       }
     } onCancel: {
@@ -48,8 +67,9 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
     let source = request["source"] as? String ?? ""
     let tools = request["tools"] as? [[String: Any]] ?? []
     let state = request["state"] as? [String: Any] ?? [:]
+    let concurrency = policy.concurrentTools
     Task { [weak self] in
-      do { _ = try await webView.callAsyncJavaScript("window.__wovenRun(source, tools, state)", arguments: ["source":source,"tools":tools,"state":state], in: nil, contentWorld: .page) }
+      do { _ = try await webView.callAsyncJavaScript("window.__wovenRun(source, tools, state, concurrency)", arguments: ["source":source,"tools":tools,"state":state,"concurrency":concurrency], in: nil, contentWorld: .page) }
       catch { self?.finish(.failure(error)) }
     }
   }
@@ -64,7 +84,9 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
   func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
     guard !finished, message.name == "wovenCodeMode", let body = message.body as? [String: Any],
           let kind = body["type"] as? String else { return }
-    if kind == "done" {
+    if kind == "heartbeat" {
+      lastHeartbeat = .now
+    } else if kind == "done" {
       do {
         let data = try JSONSerialization.data(withJSONObject: body["result"] ?? [:])
         guard data.count <= 1_048_576 else { throw PiDurableRuntimeError.unavailable("Code output exceeds one MiB.") }
@@ -72,9 +94,10 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
       } catch { finish(.failure(error)) }
     } else if kind == "failure" {
       finish(.failure(PiDurableRuntimeError.unavailable(body["message"] as? String ?? "Code execution failed.")))
-    } else if kind == "tool" {
-      guard pending.count < 32, let id = body["id"] as? String, pending[id] == nil,
-            let name = body["name"] as? String, allowed.contains(name), let tool else {
+    } else if kind == "tool" || kind == "checkpoint" {
+      let name = body["name"] as? String ?? ""
+      guard pending.count < policy.concurrentTools, let id = body["id"] as? String, pending[id] == nil,
+            (kind == "checkpoint" ? pending.isEmpty : allowed.contains(name)), let tool else {
         finish(.failure(PiDurableRuntimeError.unavailable("Code requested an unavailable tool."))); return
       }
       do {
@@ -84,7 +107,11 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
         pending[id] = Task { [weak self] in
           let response: [String: Any]
           do {
-            let result = try await tool(name, arguments)
+            let result: String
+            if kind == "checkpoint" {
+              guard let checkpoint = self?.checkpoint else { throw CancellationError() }
+              try await checkpoint(arguments); result = "{}"
+            } else { result = try await tool(name, arguments) }
             response = ["id":id,"ok":true,"value":try JSONSerialization.jsonObject(with: Data(result.utf8))]
           } catch { response = ["id":id,"ok":false,"error":error.localizedDescription] }
           guard let self, !self.finished else { return }
@@ -104,7 +131,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
     browser?.stopLoading()
     browser?.configuration.userContentController.removeScriptMessageHandler(forName: "wovenCodeMode")
     browser?.navigationDelegate = nil; browser = nil
-    tool = nil; request = [:]
+    tool = nil; checkpoint = nil; request = [:]
     let continuation = self.continuation; self.continuation = nil
     continuation?.resume(with: result)
   }
@@ -115,7 +142,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
     let worker;
     window.__wovenStop = () => { worker?.terminate(); worker = null; };
     window.__wovenReply = response => worker?.postMessage({type:'reply',...response});
-    window.__wovenRun = (source, definitions, initialState) => {
+    window.__wovenRun = (source, definitions, initialState, concurrency) => {
       const boot = async function() {
         let next = 0, started = false;
         const waiting = new Map();
@@ -128,6 +155,9 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
           }
           if (started || value.type !== 'run') return;
           started = true;
+          const heartbeat = () => self.postMessage({type:'heartbeat'});
+          heartbeat(); const heartbeatTimer = setInterval(heartbeat, 250);
+          const yield_control = () => new Promise(resolve => setTimeout(() => { heartbeat(); resolve(); }, 0));
           const state = Object.assign(Object.create(null),value.state), output = [];
           let outputBytes = 0;
           const text = value => {
@@ -136,31 +166,44 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
             if (outputBytes > 524288) throw new Error('Code text output exceeds 512 KiB.');
             output.push({type:'text',text:text??'undefined'});
           };
-          const tools = Object.create(null);
-          for (const definition of value.tools) {
-            tools[definition.name] = args => new Promise((resolve,reject) => {
-              const id = String(++next); waiting.set(id,{resolve,reject});
-              self.postMessage({type:'tool',id,name:definition.name,arguments:args??{}});
+          const tools = Object.create(null), queued = [];
+          const drain = () => {
+            while (waiting.size < value.concurrency && queued.length) queued.shift()();
+          };
+          const send = message => new Promise((resolve,reject) => {
+            queued.push(() => {
+              const id = String(++next);
+              const settle = fn => result => { fn(result); drain(); };
+              waiting.set(id,{resolve:settle(resolve),reject:settle(reject)});
+              self.postMessage({...message,id});
             });
+            drain();
+          });
+          for (const definition of value.tools) {
+            tools[definition.name] = args => send({type:'tool',name:definition.name,arguments:args??{}});
           }
           const store = (key, data) => { state[String(key)] = JSON.parse(JSON.stringify(data)); };
           const load = key => state[String(key)];
+          const checkpoint = async () => {
+            if (waiting.size || queued.length) throw new Error('Await pending tools before checkpointing.');
+            await send({type:'checkpoint',arguments:JSON.parse(JSON.stringify(state))});
+          };
           try {
             const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-            const fn = new AsyncFunction('tools','ALL_TOOLS','text','store','load',value.source);
-            await fn(Object.freeze(tools),value.tools,text,store,load);
-            if (waiting.size) throw new Error('Await every tool call before returning from code.');
+            const fn = new AsyncFunction('tools','ALL_TOOLS','text','store','load','checkpoint','yield_control',value.source);
+            await fn(Object.freeze(tools),value.tools,text,store,load,checkpoint,yield_control);
+            if (waiting.size || queued.length) throw new Error('Await every tool call before returning from code.');
             self.postMessage({type:'done',result:{content:output,state}});
           } catch (error) {
             self.postMessage({type:'failure',message:String(error?.message??error)});
-          }
+          } finally { clearInterval(heartbeatTimer); }
         };
       };
       const url = URL.createObjectURL(new Blob(['('+boot.toString()+')()'],{type:'text/javascript'}));
       worker = new Worker(url); URL.revokeObjectURL(url);
       worker.onmessage = event => window.webkit.messageHandlers.wovenCodeMode.postMessage(event.data);
       worker.onerror = event => window.webkit.messageHandlers.wovenCodeMode.postMessage({type:'failure',message:event.message??'Code worker failed.'});
-      worker.postMessage({type:'run',source,tools:definitions,state:initialState});
+      worker.postMessage({type:'run',source,tools:definitions,state:initialState,concurrency});
     };
   })();
   </script>

@@ -18951,23 +18951,24 @@ ${SUMMARIZATION_PROMPT}${focus}`;
   };
 
   // ios/Runtime/subagents.js
-  function createSubagents(rootID) {
+  function createSubagents(rootID, policy = {}) {
     let active = 0;
     const extension = defineExtension({ name: "wovenmatter-ios-subagents", tools: [defineTool({
       name: "subagent",
-      description: "Delegate a self-contained task to an on-device Pi Durable child and return its answer. Children use this exact inference connection/model and workspace tools, cannot delegate further, and stop with the parent. Supply only the selected context needed for the task. Up to four children may work concurrently.",
+      description: "Delegate a self-contained task to an on-device Pi Durable child and return its answer. Children use this exact inference connection/model and workspace tools, stop with the parent, and cannot create further subagents. Supply only the selected context needed for the task.",
       parameters: { type: "object", properties: { task: { type: "string", minLength: 1 }, name: { type: "string" } }, required: ["task"], additionalProperties: false },
       replay: "safe",
       execute: async (args, api, context) => {
-        if (api.conversationId !== rootID()) throw new Error("Subagents cannot delegate to further subagents.");
-        if (active >= 4) return { isError: true, content: [{ type: "text", text: "Four subagents are already working. Wait for their results before delegating more work." }] };
+        if (api.conversationId !== rootID()) throw new Error("Only the root session can create subagents. Grandchildren are not supported.");
+        if (active >= (policy.concurrentSubagents ?? 4)) return { isError: true, content: [{ type: "text", text: "The configured child-agent capacity is in use. Complete existing child work before delegating more." }] };
         active++;
         try {
           const childID = await api.commit(async (tx) => {
             const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
             if (existing) return existing.id;
             const child2 = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-            await configure(tx, child2.id, { extensions: { remove: [extension] }, instructions: `You are the on-device subagent ${JSON.stringify(args.name ?? "assistant")}. Complete only the delegated task using the selected context. Your exact model/account is inherited; do not claim another execution location. You cannot delegate further. Return your result to the parent.` });
+            await configure(tx, child2.id, { extensions: { remove: [extension] }, instructions: `You are the on-device subagent ${JSON.stringify(args.name ?? "assistant")}. Complete only the delegated task using the selected context. Your exact model/account is inherited; do not claim another execution location. Do not delegate further; only the parent session may create subagents. Return your result to the parent.` });
+            await tx.appendEntry(child2.id, { kind: "woven.ios-subagent-lineage", data: { depth: 2 } });
             return child2.id;
           }, context);
           await api.details({ nativeConversationID: childID, name: args.name ?? "assistant" }, context);
@@ -18988,42 +18989,75 @@ ${SUMMARIZATION_PROMPT}${focus}`;
   }
 
   // ios/Runtime/codemode.js
-  function createCodeMode({ hostCall: hostCall2, getHarness }) {
-    const invocations = /* @__PURE__ */ new Map();
+  function createCodeMode({ hostCall: hostCall2, getHarness, policy = {} }) {
+    const invocations = /* @__PURE__ */ new Map(), conversationLocks = /* @__PURE__ */ new Map();
+    async function acquireConversation(id, signal) {
+      signal?.throwIfAborted();
+      while (conversationLocks.has(id)) {
+        const previous = conversationLocks.get(id);
+        await new Promise((resolve2, reject) => {
+          const cancel = () => {
+            signal?.removeEventListener("abort", cancel);
+            reject(signal.reason ?? new Error("Code execution cancelled."));
+          };
+          signal?.addEventListener("abort", cancel, { once: true });
+          previous.done.then(() => {
+            signal?.removeEventListener("abort", cancel);
+            resolve2();
+          });
+          if (signal?.aborted) cancel();
+        });
+        signal?.throwIfAborted();
+      }
+      let release;
+      const lock = { done: new Promise((resolve2) => {
+        release = resolve2;
+      }) };
+      conversationLocks.set(id, lock);
+      return () => {
+        if (conversationLocks.get(id) === lock) conversationLocks.delete(id);
+        release();
+      };
+    }
     const extension = defineExtension({ name: "wovenmatter-ios-codemode", tools: [defineTool({
       name: "codemode",
-      description: "Run JavaScript in an isolated on-device worker with tools, ALL_TOOLS, text(), store() and load(). Only the listed native tools are available; no network, filesystem, shell or model access exists outside those tools. Await tool calls. Code has a two-minute total time limit. Stored JSON values persist in this conversation after successful execution.",
+      description: "Run JavaScript in an isolated on-device worker with tools, ALL_TOOLS, text(), store() and load(). Only the listed native tools are available; no network, filesystem, shell or model access exists outside those tools. Await tool calls. There is no total wall-clock deadline. During long CPU computations call await yield_control() so the worker stays responsive. Use store()/load() for JSON state, then await checkpoint() after all tools settle to commit it before continuing; successful completion also saves state. Interrupted programs are not automatically replayed.",
       parameters: { type: "object", properties: { code: { type: "string", minLength: 1, maxLength: 131072 } }, required: ["code"], additionalProperties: false },
       replay: "unsafe",
       execute: async ({ code }, api, context) => {
-        const allowed = (await api.agent(context)).tools.filter((tool) => tool.name !== "codemode");
-        const id = String(api.taskId);
-        const prior = await api.commit(async (tx) => {
-          let cursor;
-          do {
-            const page2 = await tx.scanEntries({ conversationId: api.conversationId }, 100, cursor);
-            const stored = page2.items.find((entry) => entry.kind === "woven.ios-codemode-store");
-            if (stored) return stored.data;
-            cursor = page2.next;
-          } while (cursor);
-          return {};
-        }, context);
-        const pending = /* @__PURE__ */ new Set();
-        invocations.set(id, { api, context, allowed, pending, next: 0, taskIDs: /* @__PURE__ */ new Set(), closing: false });
-        let result;
+        const release = await acquireConversation(api.conversationId, context.abortSignal);
         try {
-          result = await hostCall2("codemode", { invocationID: id, source: code, tools: allowed.map(({ name, description, parameters }) => ({ name, description, parameters })), state: prior }, context.abortSignal);
-        } finally {
-          const invocation = invocations.get(id);
-          invocations.delete(id);
-          if (invocation) {
-            invocation.closing = true;
-            await Promise.allSettled([...invocation.taskIDs].map((id2) => getHarness().abortTask(id2, context)));
-            await Promise.allSettled([...invocation.pending]);
+          const allowed = (await api.agent(context)).tools.filter((tool) => tool.name !== "codemode");
+          const id = String(api.taskId);
+          const prior = await api.commit(async (tx) => {
+            let cursor;
+            do {
+              const page2 = await tx.scanEntries({ conversationId: api.conversationId }, 100, cursor);
+              const stored = page2.items.find((entry) => entry.kind === "woven.ios-codemode-store");
+              if (stored) return stored.data;
+              cursor = page2.next;
+            } while (cursor);
+            return {};
+          }, context);
+          const pending = /* @__PURE__ */ new Set();
+          invocations.set(id, { api, context, allowed, pending, next: 0, taskIDs: /* @__PURE__ */ new Set(), closing: false });
+          let result;
+          try {
+            result = await hostCall2("codemode", { invocationID: id, source: code, tools: allowed.map(({ name, description, parameters }) => ({ name, description, parameters })), state: prior }, context.abortSignal);
+          } finally {
+            const invocation = invocations.get(id);
+            invocations.delete(id);
+            if (invocation) {
+              invocation.closing = true;
+              await Promise.allSettled([...invocation.taskIDs].map((id2) => getHarness().abortTask(id2, context)));
+              await Promise.allSettled([...invocation.pending]);
+            }
           }
+          if (result.state) await api.commit((tx) => tx.appendEntry(api.conversationId, { kind: "woven.ios-codemode-store", data: result.state }), context);
+          return { content: result.content ?? [], isError: !!result.isError };
+        } finally {
+          release();
         }
-        if (result.state) await api.commit((tx) => tx.appendEntry(api.conversationId, { kind: "woven.ios-codemode-store", data: result.state }), context);
-        return { content: result.content ?? [], isError: !!result.isError };
       }
     })] });
     async function nestedTool({ invocationID, name, arguments: arguments_ }) {
@@ -19032,8 +19066,7 @@ ${SUMMARIZATION_PROMPT}${focus}`;
       const { api, context, allowed, pending } = invocation;
       if (!allowed.some((tool) => tool.name === name)) throw new Error("Tool is not available in this code execution.");
       context.abortSignal?.throwIfAborted();
-      if (invocation.next >= 256) throw new Error("Code execution exceeded 256 tool calls.");
-      if (pending.size >= 32) throw new Error("Code execution exceeded 32 simultaneous tool calls.");
+      if (pending.size >= (policy.concurrentTools ?? 16)) throw new Error("Code exceeded the configured simultaneous tool limit.");
       const work = (async () => {
         const model = (await api.agent(context)).model;
         const callID = `${api.callId}/nested/${++invocation.next}`;
@@ -19069,7 +19102,16 @@ ${SUMMARIZATION_PROMPT}${focus}`;
       work.then(() => pending.delete(work), () => pending.delete(work));
       return work;
     }
-    return { extension, nestedTool };
+    async function checkpoint({ invocationID, state: state2 }) {
+      const invocation = invocations.get(invocationID);
+      if (!invocation || invocation.closing) throw new Error("Code execution has ended.");
+      if (invocation.pending.size) throw new Error("Await pending tools before checkpointing.");
+      const { api, context } = invocation;
+      await api.commit((tx) => tx.appendEntry(api.conversationId, { kind: "woven.ios-codemode-store", data: state2 }), context);
+      await api.details({ checkpointed: true, completedToolCalls: invocation.next }, context);
+      return { saved: true };
+    }
+    return { extension, nestedTool, checkpoint };
   }
 
   // default-agent/node_modules/@earendil-works/pi-durable/dist/storage/jsonl/storage.js
@@ -20890,8 +20932,8 @@ ${SUMMARIZATION_PROMPT}${focus}`;
         }, toolContext.abortSignal)
       }));
       registry.install(defineExtension({ name: "wovenmatter-ios", tools }));
-      registry.install(createSubagents(() => root.id));
-      codemode = createCodeMode({ hostCall, getHarness: () => harness });
+      registry.install(createSubagents(() => root.id, config.executionPolicy));
+      codemode = createCodeMode({ hostCall, getHarness: () => harness, policy: config.executionPolicy });
       registry.install(codemode.extension);
       const storage = await JsonlStorage.open("/", filesystem(), BACKGROUND_CONTEXT, { fsync: true });
       harness = await Harness.open(storage, {
@@ -20901,7 +20943,7 @@ ${SUMMARIZATION_PROMPT}${focus}`;
         onReport: (error) => globalThis.__wmEvents(JSON.stringify({ conversationID: config.conversationID, events: [{ type: "runtime_error", message: String(error?.message ?? error) }] }))
       }, BACKGROUND_CONTEXT);
       root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: { provider: model.provider, modelId: model.id }, instructions: config.instructions } });
-      await root.configure({ model: { provider: model.provider, modelId: model.id }, instructions: config.instructions }, BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: model.provider, modelId: model.id }, instructions: config.instructions, thinkingLevel: config.thinkingLevel ?? "off" }, BACKGROUND_CONTEXT);
       watch = await watchEvents(harness, root.id, BACKGROUND_CONTEXT);
       globalThis.__wmEvents(JSON.stringify({ conversationID: config.conversationID, events: [watch.snapshot] }));
       watch.start(async (events) => globalThis.__wmEvents(JSON.stringify({ conversationID: config.conversationID, events })));
@@ -20913,6 +20955,9 @@ ${SUMMARIZATION_PROMPT}${focus}`;
     },
     async nestedTool(request) {
       return codemode.nestedTool(request);
+    },
+    async checkpointCode(request) {
+      return codemode.checkpoint(request);
     },
     async submission({ requestID }) {
       return root.commit((tx) => tx.submissionByRequest(root.id, requestID), BACKGROUND_CONTEXT);
@@ -20934,10 +20979,10 @@ ${SUMMARIZATION_PROMPT}${focus}`;
       await temporaryWatch.stop();
       return snapshot;
     },
-    async configure({ modelJSON, instructions }) {
+    async configure({ modelJSON, instructions, thinkingLevel }) {
       const model = JSON.parse(modelJSON);
       installModel(model);
-      await root.configure({ model: { provider: model.provider, modelId: model.id }, ...instructions === void 0 ? {} : { instructions } }, BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: model.provider, modelId: model.id }, ...instructions === void 0 ? {} : { instructions }, ...thinkingLevel === void 0 ? {} : { thinkingLevel } }, BACKGROUND_CONTEXT);
     },
     async resume() {
       harness.resume();

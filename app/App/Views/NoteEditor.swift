@@ -49,23 +49,98 @@ final class DashboardNoteEditorController {
         }
     }
 
-    func setParagraphStyle(_ style: NoteParagraphStyle) {
-        guard let textView, let storage = textView.textStorage else { return }
-        let range = paragraphRange(in: textView)
-        guard textView.shouldChangeText(in: range, replacementString: nil) else { return }
-        storage.beginEditing()
-        storage.addAttribute(.noteBlockStyle, value: style.rawValue, range: range)
-        storage.addAttribute(.paragraphStyle, value: paragraphStyle(for: style), range: range)
-        if let headingSize = style.headingSize {
-            storage.enumerateAttribute(.font, in: range) { value, subrange, _ in
-                let font = (value as? NSFont) ?? NSFont.systemFont(ofSize: 14)
-                let resized = NSFontManager.shared.convert(font, toSize: headingSize)
-                let bold = NSFontManager.shared.convert(resized, toHaveTrait: .boldFontMask)
-                storage.addAttribute(.font, value: bold, range: subrange)
+    func setParagraphStyle(_ style: NoteParagraphStyle, blockID: String? = nil) {
+        guard let textView, textView.isEditable, let storage = textView.textStorage else { return }
+        performEdit(action: "Paragraph Style") {
+            let selection = editableRange(in: textView)
+            var range = paragraphRange(in: textView)
+            let paragraph = paragraphStyle(for: style, list: adjacentList(for: style, range: range, in: storage))
+            guard textView.shouldChangeText(in: range, replacementString: range.length == 0 ? "\n" : nil) else { return }
+            storage.beginEditing()
+            // An attributed newline gives an empty item a paragraph of its own,
+            // including when the caret is past the document's final newline.
+            if range.length == 0 {
+                var attributes = textView.typingAttributes
+                for key in [NSAttributedString.Key.noteTableID, .noteRowID, .noteColumnID, .noteCellID] {
+                    attributes.removeValue(forKey: key)
+                }
+                attributes[.noteBlockID] = UUID().uuidString.lowercased()
+                storage.replaceCharacters(in: range, with: NSAttributedString(string: "\n", attributes: attributes))
+                range.length = 1
+            }
+            if let blockID { storage.addAttribute(.noteBlockID, value: blockID, range: range) }
+            storage.addAttribute(.noteBlockStyle, value: style.rawValue, range: range)
+            storage.addAttribute(.paragraphStyle, value: paragraph, range: range)
+            if style.isList {
+                // A converted paragraph can bridge two previously separate lists.
+                // Share one native list across the entire contiguous style run so
+                // numbering matches the saved document before it is reopened.
+                var listRange = range
+                _ = storage.attribute(
+                    .noteBlockStyle, at: range.location,
+                    longestEffectiveRange: &listRange,
+                    in: NSRange(location: 0, length: storage.length)
+                )
+                storage.enumerateAttribute(.paragraphStyle, in: listRange) { value, subrange, _ in
+                    guard let existing = value as? NSParagraphStyle,
+                          existing.textLists.first !== paragraph.textLists.first,
+                          let joined = existing.mutableCopy() as? NSMutableParagraphStyle else { return }
+                    joined.textLists = paragraph.textLists
+                    storage.addAttribute(.paragraphStyle, value: joined, range: subrange)
+                }
+            }
+            if let headingSize = style.headingSize {
+                storage.enumerateAttribute(.font, in: range) { value, subrange, _ in
+                    let font = (value as? NSFont) ?? NSFont.systemFont(ofSize: 14)
+                    let resized = NSFontManager.shared.convert(font, toSize: headingSize)
+                    let bold = NSFontManager.shared.convert(resized, toHaveTrait: .boldFontMask)
+                    storage.addAttribute(.font, value: bold, range: subrange)
+                }
+            }
+            storage.endEditing()
+            textView.setSelectedRange(selection)
+            textView.window?.makeFirstResponder(textView)
+            textView.typingAttributes[.noteBlockID] = storage.attribute(.noteBlockID, at: range.location, effectiveRange: nil)
+            textView.typingAttributes[.noteBlockStyle] = style.rawValue
+            textView.typingAttributes[.paragraphStyle] = paragraph
+            textView.didChangeText()
+        }
+    }
+
+    private func adjacentList(for style: NoteParagraphStyle, range: NSRange, in storage: NSTextStorage) -> NSTextList? {
+        guard style.isList else { return nil }
+        for location in [range.location, range.location - 1, NSMaxRange(range)] where location >= 0 && location < storage.length {
+            let attributes = storage.attributes(at: location, effectiveRange: nil)
+            if attributes[.noteBlockStyle] as? String == style.rawValue,
+               let list = (attributes[.paragraphStyle] as? NSParagraphStyle)?.textLists.first {
+                return list
             }
         }
-        storage.endEditing()
-        textView.didChangeText()
+        return nil
+    }
+
+    // Keep structural list edits and their typing state together in undo/redo.
+    // Native text insertion alone does not restore the custom block attributes.
+    fileprivate func performEdit(action: String, _ edit: () -> Void) {
+        guard let textView, let storage = textView.textStorage else { return }
+        let previous = NSAttributedString(attributedString: storage)
+        let selection = textView.selectedRange()
+        let typing = textView.typingAttributes
+        let undo = textView.undoManager
+        undo?.disableUndoRegistration()
+        edit()
+        undo?.enableUndoRegistration()
+        guard !storage.isEqual(to: previous) else { return }
+        undo?.registerUndo(withTarget: self) { controller in
+            controller.performEdit(action: action) {
+                guard let textView = controller.textView else { return }
+                textView.textStorage?.setAttributedString(previous)
+                textView.setSelectedRange(selection)
+                textView.typingAttributes = typing
+                textView.didChangeText()
+            }
+        }
+        undo?.setActionName(action)
     }
 
     func toggleHighlight(_ color: NSColor) {
@@ -259,6 +334,7 @@ final class DashboardNoteEditorController {
         document = updated.normalized()
         onChange?(document)
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+        textView.needsDisplay = true
         if let cellID, let range = textView.textStorage?.range(ofNoteAttribute: .noteCellID, value: cellID) {
             textView.setSelectedRange(NSRange(location: range.location, length: 0))
         }
@@ -281,7 +357,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
 
-        let textView = NSTextView()
+        let textView = NoteTextView(usingTextLayoutManager: true)
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = true
@@ -334,6 +410,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
             parent.controller.bind(textView: textView, document: parent.document) { [weak self] in
                 self?.emit($0)
             }
+            restoreTypingAttributes(in: textView)
         }
 
         func apply(_ document: NoteDocument, to textView: NSTextView) {
@@ -345,10 +422,12 @@ struct DashboardNoteEditor: NSViewRepresentable {
             textView.undoManager?.setActionName("Agent Edit")
             let selection = textView.selectedRange()
             textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+            textView.needsDisplay = true
             textView.setSelectedRange(NSRange(
                 location: min(selection.location, textView.string.utf16.count),
                 length: 0
             ))
+            restoreTypingAttributes(in: textView)
             lastDocument = document
             parent.controller.adopt(document)
             applying = false
@@ -364,8 +443,128 @@ struct DashboardNoteEditor: NSViewRepresentable {
             guard !applying, let textView = notification.object as? NSTextView else { return }
             emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
         }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            guard !applying, textView.isEditable, !textView.hasMarkedText(), let replacementString else { return true }
+            let string = textView.string as NSString
+            if replacementString.isEmpty, range == NSRange(location: 0, length: string.length), string.length > 0,
+               textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true,
+               let attributes = textView.textStorage?.attributes(at: 0, effectiveRange: nil),
+               attributes[.noteTableID] == nil,
+               let rawStyle = attributes[.noteBlockStyle] as? String,
+               NoteParagraphStyle(rawValue: rawStyle)?.isList == true {
+                parent.controller.performEdit(action: "Delete") {
+                    textView.textStorage?.setAttributedString(NSAttributedString(string: "\n", attributes: attributes))
+                    textView.setSelectedRange(NSRange(location: 0, length: 0))
+                    textView.typingAttributes = attributes
+                    textView.didChangeText()
+                }
+                return false
+            }
+            guard replacementString == " ", range.length == 0 else { return true }
+            let paragraph = string.paragraphRange(for: range)
+            guard range.location == paragraph.location + 2,
+                  string.substring(with: NSRange(location: paragraph.location, length: 2)) == "1.",
+                  let attributes = textView.textStorage?.attributes(at: paragraph.location, effectiveRange: nil),
+                  attributes[.noteTableID] == nil,
+                  attributes[.noteBlockStyle] as? String == NoteParagraphStyle.paragraph.rawValue else { return true }
+            parent.controller.performEdit(action: "Numbered List") {
+                applying = true
+                textView.insertText("", replacementRange: NSRange(location: paragraph.location, length: 2))
+                parent.controller.setParagraphStyle(.numberedList)
+                applying = false
+                emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
+            }
+            return false
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            let selection = textView.selectedRange()
+            guard !applying, textView.isEditable, !textView.hasMarkedText(), selection.length == 0 else { return false }
+            let string = textView.string as NSString
+            let range = string.paragraphRange(for: selection)
+            let attributes = range.length > 0
+                ? textView.textStorage?.attributes(at: range.location, effectiveRange: nil) ?? [:]
+                : textView.typingAttributes
+            guard attributes[.noteTableID] == nil,
+                  let rawStyle = attributes[.noteBlockStyle] as? String,
+                  let style = NoteParagraphStyle(rawValue: rawStyle), style.isList else { return false }
+            let isEmpty = string.substring(with: range).trimmingCharacters(in: .newlines).isEmpty
+            if isEmpty && (commandSelector == #selector(NSTextView.insertNewline(_:))
+                || (commandSelector == #selector(NSTextView.deleteBackward(_:)) && selection.location == range.location)) {
+                parent.controller.setParagraphStyle(.paragraph)
+                return true
+            }
+            guard commandSelector == #selector(NSTextView.insertNewline(_:)) else { return false }
+            parent.controller.performEdit(action: "New List Item") {
+                applying = true
+                textView.insertText("\n", replacementRange: selection)
+                parent.controller.setParagraphStyle(style, blockID: UUID().uuidString.lowercased())
+                applying = false
+                emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
+            }
+            return true
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !applying, let textView = notification.object as? NSTextView else { return }
+            restoreTypingAttributes(in: textView)
+        }
+
+        private func restoreTypingAttributes(in textView: NSTextView) {
+            guard let storage = textView.textStorage, storage.length > 0 else { return }
+            let selection = textView.selectedRange()
+            guard selection.length == 0, selection.location <= storage.length else { return }
+            let paragraph = (textView.string as NSString).paragraphRange(for: selection)
+            let location = min(storage.length - 1, selection.location > paragraph.location ? selection.location - 1 : selection.location)
+            textView.typingAttributes = storage.attributes(at: location, effectiveRange: nil)
+        }
+
         func textDidBeginEditing(_ notification: Notification) {
             if let editor = parent.dictationEditor { DictationModel.shared.activeEditor = editor }
+        }
+    }
+}
+
+private final class NoteTextView: NSTextView {
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        drawHighlights(in: rect)
+        super.drawBackground(in: rect)
+    }
+
+    private func drawHighlights(in rect: NSRect) {
+        guard let manager = textLayoutManager,
+              let content = manager.textContentManager,
+              let storage = textStorage else { return }
+        let viewport = manager.textViewportLayoutController.viewportRange ?? content.documentRange
+        manager.ensureLayout(for: viewport)
+        let start = content.documentRange.location
+        let visibleRange = NSRange(
+            location: content.offset(from: start, to: viewport.location),
+            length: content.offset(from: viewport.location, to: viewport.endLocation)
+        )
+        guard visibleRange.location >= 0, NSMaxRange(visibleRange) <= storage.length else { return }
+        let origin = textContainerOrigin
+        storage.enumerateAttribute(.backgroundColor, in: visibleRange) { value, range, _ in
+            guard let color = value as? NSColor,
+                  let lower = content.location(start, offsetBy: range.location),
+                  let upper = content.location(lower, offsetBy: range.length),
+                  let textRange = NSTextRange(location: lower, end: upper) else { return }
+            // Native list markers inherit the first character's background and
+            // paint it over the selection. Draw highlights behind native selection
+            // instead, keeping the document attributes for saving and copying.
+            manager.addRenderingAttribute(.backgroundColor, value: NSNull(), for: textRange)
+            color.setFill()
+            manager.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+                let background = frame.offsetBy(dx: origin.x, dy: origin.y)
+                if background.intersects(rect) { background.fill() }
+                return true
+            }
         }
     }
 }
@@ -379,10 +578,19 @@ private enum NoteAttributedDocument {
 
     static func render(_ document: NoteDocument) -> NSAttributedString {
         let result = NSMutableAttributedString()
+        var previousStyle: NoteParagraphStyle?
+        var list: NSTextList?
         for block in document.normalized().blocks {
             switch block {
-            case .richText(let richText): append(richText, to: result)
-            case .table(let table): append(table, to: result)
+            case .richText(let richText):
+                let paragraph = paragraphStyle(for: richText.style, list: previousStyle == richText.style ? list : nil)
+                append(richText, paragraph: paragraph, to: result)
+                previousStyle = richText.style
+                list = paragraph.textLists.first
+            case .table(let table):
+                append(table, to: result)
+                previousStyle = nil
+                list = nil
             }
         }
         return result
@@ -451,8 +659,7 @@ private enum NoteAttributedDocument {
         return document.normalized()
     }
 
-    private static func append(_ block: NoteRichTextBlock, to result: NSMutableAttributedString) {
-        let paragraph = paragraphStyle(for: block.style)
+    private static func append(_ block: NoteRichTextBlock, paragraph: NSParagraphStyle, to result: NSMutableAttributedString) {
         let base: [NSAttributedString.Key: Any] = [
             .noteBlockID: block.id,
             .noteBlockStyle: block.style.rawValue,
@@ -564,16 +771,16 @@ private enum NoteAttributedDocument {
     }
 }
 
-private func paragraphStyle(for style: NoteParagraphStyle) -> NSParagraphStyle {
+private func paragraphStyle(for style: NoteParagraphStyle, list: NSTextList? = nil) -> NSParagraphStyle {
     let paragraph = NSMutableParagraphStyle()
     paragraph.paragraphSpacing = style.headingSize == nil ? 8 : 10
     switch style {
     case .bulletedList:
-        paragraph.textLists = [NSTextList(markerFormat: .disc, options: 0)]
+        paragraph.textLists = [list ?? NSTextList(markerFormat: .disc, options: 0)]
         paragraph.headIndent = 22
         paragraph.firstLineHeadIndent = 6
     case .numberedList:
-        paragraph.textLists = [NSTextList(markerFormat: .decimal, options: 0)]
+        paragraph.textLists = [list ?? NSTextList(markerFormat: .init(rawValue: "{decimal}."), options: 0)]
         paragraph.headIndent = 28
         paragraph.firstLineHeadIndent = 6
     default:
@@ -583,6 +790,8 @@ private func paragraphStyle(for style: NoteParagraphStyle) -> NSParagraphStyle {
 }
 
 private extension NoteParagraphStyle {
+    var isList: Bool { self == .bulletedList || self == .numberedList }
+
     var headingSize: Double? {
         switch self {
         case .heading1: 30

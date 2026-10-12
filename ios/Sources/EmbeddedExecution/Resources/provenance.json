@@ -1,0 +1,29 @@
+{
+  "runtime": "Pyodide",
+  "version": "314.0.7",
+  "pythonVersion": "3.14.2",
+  "source": "https://github.com/pyodide/pyodide/tree/314.0.7",
+  "npmIntegrity": "sha512-0YvXxEhfEdpLfb/XkM2BFAeMROq0iMUX2bzzH9pOttyMcWkwq+HbE5uyuGD82LN7y2q+SNvi/6V5JEsOlD2R1A==",
+  "sources": {
+    "worker.js": "cd1c09fd214f1c01061c0ae9617c6926386c053e4e9ed1a4f14b705a08402f29",
+    "commands.py": "63a759349009dde7cbe298a5f15fe08eeb97acb20073ff5860fef18616d5b59d",
+    "package.json": "bfa2a958f34a63d5b0ca56ab33cef0b3df15f5fee179f88e118695375ef0e4af",
+    "package-lock.json": "a6d5467d60531c7efa04931cc4953e69cfe40f94bd251877327695765d6c2014",
+    "licenses.json": "c395c4f43affafb3a13f0bde5b6692e8e126c646b6b0c6e49fa7a6ddeb9703f8"
+  },
+  "resources": {
+    "worker.js": "5cc771bdc80b873115b99cc278e63b97a2b74433dea4f8999a9b7a632f0c4791",
+    "pyodide.asm.wasm": "cc36e3cab04fdfc9a63ff13eb52eae2b911bf46c025cc7b281f394bd3de1d5e6",
+    "python_stdlib.zip": "fa1957e5777068fc4f7437f96d860ae2fbe9c19732ba06c84e004ec16dd7dd7a",
+    "pyodide-lock.json": "a32a0001399cff875f9b8b84059fc756bcca3d78eb7a718d153aafce2244c626",
+    "commands.py": "63a759349009dde7cbe298a5f15fe08eeb97acb20073ff5860fef18616d5b59d",
+    "Pyodide-LICENSE.txt": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+    "Python-LICENSE.txt": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231",
+    "Python-third-party-notices.rst": "c695d550b135e53e38807e76496d1db17d22c40e461d1f3f354c86188d3305dd",
+    "libffi-LICENSE.txt": "2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388",
+    "hiwire-LICENSE.txt": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+    "xz-COPYING.txt": "c4f8e14fafe458d84808a4cd8b69f94673ebe2bf8fc992291629a69ac12218f8",
+    "zstd-LICENSE.txt": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+    "Emscripten-LICENSE.txt": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86"
+  }
+}

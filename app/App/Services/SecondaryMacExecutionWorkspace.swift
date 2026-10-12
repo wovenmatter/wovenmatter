@@ -28,6 +28,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     private let replica: MobileStore
     private let directory: URL
     private var projection: Projection
+    private let calendarProjection: SecondaryMacCalendarProjection
+    private let replicaTools: SecondaryMacReplicaTools
     private var projectionTask: Task<Void, any Error>?
     private var commandsInFlight = 0
     private var acceptsCommands = true
@@ -52,6 +54,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {
         guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         self.descriptor = descriptor; self.model = model; self.database = database; self.replica = replica; self.directory = directory
+        replicaTools = SecondaryMacReplicaTools(model: model, replica: replica, workspaceID: descriptor.id)
+        calendarProjection = try SecondaryMacCalendarProjection(database: database, replica: replica, descriptor: descriptor, directory: directory)
         origin = try WorkspaceJournal(file: directory.appending(path: "execution-journal.json"))
         let projectionFile = directory.appending(path: "replica-projection.json")
         projection = FileManager.default.fileExists(atPath: projectionFile.path)
@@ -62,7 +66,20 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         }
         try await origin.upsertWorkspace(descriptor, pending: false)
         try await reconcileLibrary()
+        model.agentTools?.replicaReadHandler = { [weak self] request, command, callerID in
+            guard let self else { throw CancellationError() }
+            return try await self.replicaTools.read(request, command: command, callerID: callerID) {
+                // Read only this execution owner's journal. The client receives
+                // it through the same replica path as its normal offline refresh.
+                try await WorkspaceClient(store: self.replica, workspaceID: self.descriptor.id, transport: self).refresh()
+            }
+        }
+        model.agentTools?.calendarProjection = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try await self.calendarProjection.reconcile()
+        }
     }
+    func reconcileCalendar() async throws { try await calendarProjection.reconcile() }
     func setEndpoint(_ endpoint: URL?) async throws {
         descriptor.endpoint = endpoint
         try await origin.upsertWorkspace(descriptor, pending: false)
@@ -222,6 +239,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await task.value
     }
     private func performReconcileLibrary() async throws {
+        try await calendarProjection.reconcile()
         var execution = try await database.companionSnapshot(bodyByteBudget: CompanionProtocol.maximumNoteBytes)
         let executionNotes = try await completeNotes(execution.notes)
         var replicaState = await replica.snapshot()

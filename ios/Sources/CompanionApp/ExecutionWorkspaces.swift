@@ -48,6 +48,12 @@ extension CompanionModel {
       try await ensureDeviceWorkspace()
       let journal = await store.journal.snapshot()
       conversationWorkspaceIDs = journal.conversationWorkspaceIDs
+      // A newly created idle session may not have reached the workspace event feed yet.
+      // Its durable creation command already fixes the execution owner.
+      for record in journal.commands.values where record.command.kind == .createSession && record.receipt?.status != .rejected {
+        if let workspaceID = record.command.workspaceID, let id = record.command.conversationID,
+           conversationWorkspaceIDs[id] == nil { conversationWorkspaceIDs[id] = workspaceID }
+      }
       for launch in state.launches {
         if let workspaceID = launch.create.workspaceID, let id = launch.create.conversationID { conversationWorkspaceIDs[id] = workspaceID }
       }

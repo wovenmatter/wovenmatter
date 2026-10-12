@@ -2,6 +2,7 @@ import SwiftUI
 import CompanionInference
 import CompanionClient
 import WovenMatterCompanion
+import PiDurableRuntime
 
 struct ExecutionSettingsPane: View {
   @Bindable var model: CompanionModel
@@ -51,12 +52,17 @@ struct DeviceAgentSettingsPane: View {
   @State private var catalogTask: Task<Void, Never>?
   @State private var saveTask: Task<Void, Never>?
   @State private var generation = UUID()
+  private var policy: PiExecutionPolicy { defaults.executionPolicy ?? .init() }
+  private func policyBinding<Value>(_ path: WritableKeyPath<PiExecutionPolicy, Value>) -> Binding<Value> {
+    Binding(get: { policy[keyPath: path] }, set: { value in
+      var updated = policy; updated[keyPath: path] = value; defaults.executionPolicy = updated
+    })
+  }
   private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
-  private var toolDefinitions: [(id: String, name: String)] {
-    CompanionModel.deviceToolDefinitions.compactMap { definition in
-      guard let id = definition["name"] as? String else { return nil }
-      return (id, id.replacingOccurrences(of: "_", with: " ").capitalized)
-    }
+  private var toolDefinitions: [CompanionSelection] { CompanionModel.deviceToolAccessOptions }
+  private var selectedModel: InferenceModel? { models.first { $0.id == selectedModelID } }
+  private var thinkingSelection: Binding<String> {
+    Binding(get: { defaults.thinking(for: selectedModel) }, set: { defaults.thinkingLevel = $0 })
   }
   var body: some View {
     Form {
@@ -66,19 +72,31 @@ struct DeviceAgentSettingsPane: View {
           ForEach(model.inferenceConnections) { connection in Text(connection.name).tag(connection.id) }
         }
         if selectedConnection != nil {
-          Picker("Model", selection: $selectedModelID) {
+          Picker("Default Model", selection: $selectedModelID) {
             ForEach(models) { Text($0.name).tag($0.id) }
           }
+          Picker("Default Think Level", selection: thinkingSelection) {
+            ForEach(selectedModel?.supportedThinkingLevels ?? ["off"], id: \.self) { level in
+              Text(level == "xhigh" ? "Extra High" : level.capitalized).tag(level)
+            }
+          }.disabled(selectedModel?.reasoning != true)
           if loading { ProgressView() }
         }
         NavigationLink(model.deviceConnectionsTitle) { ExecutionSettingsPane(model: model) }
       }
       Section("Instructions") { TextEditor(text: $defaults.instructions).frame(minHeight: 130).accessibilityLabel("Pi Durable instructions") }
+      Section("Execution") {
+        Stepper("Concurrent subagents: \(policy.concurrentSubagents)", value: policyBinding(\.concurrentSubagents), in: 1...16)
+      }
+
       Section("Tool access") {
         ForEach(toolDefinitions, id: \.id) { tool in
-          Toggle(tool.name, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
+          Toggle(tool.label, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
             var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id))
-            if enabled { selected.insert(tool.id) } else { selected.remove(tool.id) }
+            if enabled { selected.insert(tool.id) } else {
+              selected.remove(tool.id)
+              if tool.id == "wovenmatter_notes" { selected.subtract(["list_notes", "read_note", "save_note"]) }
+            }
             defaults.enabledTools = selected.sorted()
           }))
         }
@@ -527,26 +545,5 @@ private struct InferenceConnectionEditor: View {
       }
       state.saving = false
     }
-  }
-}
-
-struct ExecutionWorkspaceMenu: View {
-  @Bindable var model: CompanionModel
-  var body: some View {
-    Menu {
-      Button(model.deviceWorkspaceName) { model.selectExecutionWorkspace("local") }
-      if model.credential != nil || model.fixture { Button("Central Mac") { model.selectExecutionWorkspace("central") } }
-      ForEach(model.executionWorkspaces) { workspace in
-        Button(workspace.name) { model.selectExecutionWorkspace(workspace.id) }
-      }
-      Divider()
-      NavigationLink("Manage workspaces") { WorkspacesSettingsPane(model: model) }
-    } label: {
-      HStack(spacing: 6) {
-        Image(systemName: model.selectedExecutionWorkspaceID == "local" ? "iphone.gen3" : "server.rack")
-        Text(model.executionName)
-        DashboardLucideIcon(glyph: .chevronDown, size: 12)
-      }.font(.caption).frame(minHeight: 44)
-    }.disabled(model.selectedConversationID != nil).accessibilityLabel("Execution workspace: " + model.executionName)
   }
 }

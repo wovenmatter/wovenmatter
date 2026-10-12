@@ -841,24 +841,6 @@ func dashboardShortTime(_ value: String?) -> String {
     return date.formatted(.dateTime.month(.abbreviated).day())
 }
 
-func dashboardRunDuration(_ interval: TimeInterval) -> String {
-    let milliseconds = max(0, interval * 1_000)
-    if milliseconds < 1_000 {
-        return "\(max(1, Int(milliseconds.rounded())))ms"
-    }
-    if milliseconds < 10_000 {
-        let tenths = (milliseconds / 100).rounded() / 10
-        return tenths >= 10 ? "10s" : String(format: "%.1fs", tenths)
-    }
-    if milliseconds < 60_000 {
-        return "\(Int((milliseconds / 1_000).rounded()))s"
-    }
-    let minutes = Int(milliseconds / 60_000)
-    let seconds = Int(((milliseconds.truncatingRemainder(dividingBy: 60_000)) / 1_000).rounded())
-    if seconds == 0 { return "\(minutes)m" }
-    if seconds == 60 { return "\(minutes + 1)m" }
-    return "\(minutes)m \(seconds)s"
-}
 
 func dashboardParsedDate(_ value: String) -> Date? {
     (try? dashboardFractionalDateStyle.parse(value))

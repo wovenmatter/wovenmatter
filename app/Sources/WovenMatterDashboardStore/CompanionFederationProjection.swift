@@ -64,19 +64,35 @@ extension WorkspaceDatabaseConnection {
       guard let incoming = entry.transcript, incoming.conversationID == entry.conversationID,
             incoming.olderCursor == nil, entry.conversation == nil, entry.receipt == nil, entry.nativeRecord == nil,
             incoming.messages.allSatisfy({ $0.conversationID == entry.conversationID && !$0.id.isEmpty && $0.id.utf8.count <= 256 && ["user", "assistant", "system", "tool"].contains($0.role) }),
-            incoming.activities.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 256 }) else {
+            incoming.activities.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 256 }),
+            (incoming.removedMessageIDs ?? []).allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
         throw federationError("invalid_event", "Transcript records must belong to their conversation and include explicit stable message identities.")
       }
       var transcript = try federationValuesUnlocked("SELECT transcript FROM companion_execution_conversations WHERE id = ? AND transcript IS NOT NULL", bindings: [entry.conversationID], as: CompanionTranscript.self).first ?? CompanionTranscript(conversationID: entry.conversationID)
-      for message in incoming.messages {
+      // Retire exact legacy tool-only rows from this display projection. The
+      // original dashboard messages and immutable native journal stay intact.
+      // User input cannot be hidden by structured-tool migration.
+      let removed = Set((transcript.removedMessageIDs ?? []) + (incoming.removedMessageIDs ?? []))
+      for id in removed {
+        if let existing = transcript.messages.first(where: { $0.id == id }), existing.role == "user" {
+          throw federationError("invalid_event", "Structured-tool migration cannot hide user messages.")
+        }
+        transcript.messages.removeAll { $0.id == id && $0.role != "user" }
+      }
+      transcript.removedMessageIDs = removed.isEmpty ? nil : removed.sorted()
+      for message in incoming.messages where !removed.contains(message.id) || message.role == "user" {
         if let runID = message.runID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
-        let previous = try prepareUnlocked("SELECT conversation_id,run_id,role FROM dashboard_messages WHERE id=?")
+        let previous = try prepareUnlocked("SELECT conversation_id,run_id,role,origin_device_id,desktop_owned FROM dashboard_messages WHERE id=?")
         defer { sqlite3_finalize(previous) }
         try bind(message.id, at: 1, to: previous)
         let previousCode = sqlite3_step(previous)
         if previousCode == SQLITE_ROW {
+          let priorRun = optionalText(previous, column: 1)
+          let canBackfillNativeRun = workspace.kind == .ios && priorRun == nil && message.runID != nil
+            && message.sequence != nil && ((incoming.runs ?? []) + (transcript.runs ?? [])).contains(where: { $0.id == message.runID })
+            && optionalText(previous, column: 3) == workspace.ownerDeviceID && sqlite3_column_int(previous, 4) == 1
           guard try text(previous, column: 0) == entry.conversationID,
-                optionalText(previous, column: 1) == message.runID,
+                priorRun == message.runID || canBackfillNativeRun,
                 try text(previous, column: 2) == message.role else {
             throw federationError("wrong_owner", "A message's conversation, run and role cannot change.")
           }
@@ -85,7 +101,7 @@ extension WorkspaceDatabaseConnection {
         else { transcript.messages.append(message) }
         try companionExecuteUnlocked("""
           INSERT INTO dashboard_messages(id,conversation_id,run_id,role,content,status,authority_device_id,origin_device_id,created_at,updated_at,desktop_owned)
-          VALUES (?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at
+          VALUES (?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(dashboard_messages.run_id,excluded.run_id)
           """, values: [message.id, entry.conversationID, message.runID, message.role, message.content, message.status ?? "completed",
                            workspace.ownerDeviceID, workspace.ownerDeviceID, message.createdAt.isEmpty ? now : message.createdAt, now])
       }
@@ -97,13 +113,14 @@ extension WorkspaceDatabaseConnection {
         guard existingActivity.isEmpty || existingActivity.first == entry.conversationID + "/" + activity.runID else {
           throw federationError("wrong_owner", "An activity identity belongs to another conversation.")
         }
-        let display = AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status)
+        let display = activity.projectionJSON.flatMap { try? JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
+          ?? AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status)
         let encoded = String(decoding: try JSONEncoder().encode(display), as: UTF8.self)
         try companionExecuteUnlocked("""
           INSERT INTO dashboard_run_events(id,run_id,conversation_id,user_id,authority_device_id,origin_device_id,desktop_owned,event_type,content,created_at)
           VALUES (?,?,?,?,?,?,1,'activity',?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content
           """, values: [activity.id, activity.runID, entry.conversationID, try localMutationOperatorIDUnlocked(),
-                           workspace.executionDeviceID ?? workspace.ownerDeviceID, workspace.ownerDeviceID, encoded, now])
+                           workspace.executionDeviceID ?? workspace.ownerDeviceID, workspace.ownerDeviceID, encoded, activity.createdAt ?? now])
       }
       if let runID = incoming.activeRunID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
       var observedRuns = Set(incoming.messages.compactMap(\.runID) + incoming.activities.map(\.runID))
@@ -123,6 +140,30 @@ extension WorkspaceDatabaseConnection {
       if let active = incoming.activeRunID {
         try companionExecuteUnlocked("UPDATE dashboard_runs SET status='running',updated_at=? WHERE id=?", values: [now, active])
       }
+      if let runs = incoming.runs {
+        var values = transcript.runs ?? []
+        for run in runs {
+          guard ["queued", "running", "completed", "failed", "cancelled", "interrupted"].contains(run.status),
+                (run.startedAt?.utf8.count ?? 0) <= 128, (run.completedAt?.utf8.count ?? 0) <= 128 else {
+            throw federationError("invalid_event", "Run metadata requires a supported status and bounded timestamps.")
+          }
+          try claimFederationRunUnlocked(run.id, conversationID: entry.conversationID, workspaceID: workspace.id)
+          try companionExecuteUnlocked("""
+            INSERT INTO dashboard_runs(id,conversation_id,user_id,status,authority_device_id,origin_device_id,desktop_owned,created_at,updated_at,started_at,completed_at)
+            VALUES (?,?,?,?,?,?,1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+            updated_at=excluded.updated_at,started_at=COALESCE(dashboard_runs.started_at,excluded.started_at),completed_at=excluded.completed_at
+            """, values: [run.id, entry.conversationID, try localMutationOperatorIDUnlocked(), run.status,
+              workspace.executionDeviceID ?? workspace.ownerDeviceID, workspace.ownerDeviceID,
+              run.startedAt ?? now, now, run.startedAt, run.completedAt])
+          if let index = values.firstIndex(where: { $0.id == run.id }) { values[index] = run }
+          else { values.append(run) }
+        }
+        transcript.runs = values
+      }
+      transcript.messages = transcript.messages.enumerated().sorted {
+        let left = $0.element.sequence ?? Int64.max, right = $1.element.sequence ?? Int64.max
+        return left == right ? $0.offset < $1.offset : left < right
+      }.map(\.element)
       transcript.activeRunID = incoming.activeRunID
       let statement = try prepareUnlocked("UPDATE companion_execution_conversations SET transcript = ? WHERE id = ?")
       defer { sqlite3_finalize(statement) }

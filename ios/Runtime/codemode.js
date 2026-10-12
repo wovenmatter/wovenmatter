@@ -1,13 +1,34 @@
 import { defineExtension, defineTool, ToolTask } from '@earendil-works/pi-durable';
 
-export function createCodeMode({hostCall,getHarness}) {
-  const invocations = new Map();
+export function createCodeMode({hostCall,getHarness,policy={}}) {
+  const invocations = new Map(), conversationLocks = new Map();
+  async function acquireConversation(id, signal) {
+    signal?.throwIfAborted();
+    while (conversationLocks.has(id)) {
+      const previous = conversationLocks.get(id);
+      await new Promise((resolve,reject) => {
+        const cancel = () => { signal?.removeEventListener('abort',cancel); reject(signal.reason??new Error('Code execution cancelled.')); };
+        signal?.addEventListener('abort',cancel,{once:true});
+        previous.done.then(() => { signal?.removeEventListener('abort',cancel); resolve(); });
+        if (signal?.aborted) cancel();
+      });
+      signal?.throwIfAborted();
+    }
+    let release;
+    const lock = {done:new Promise(resolve=>{release=resolve;})};
+    conversationLocks.set(id,lock);
+    return () => { if (conversationLocks.get(id)===lock) conversationLocks.delete(id); release(); };
+  }
   const extension = defineExtension({name:'wovenmatter-ios-codemode',tools:[defineTool({
     name:'codemode',
-    description:'Run JavaScript in an isolated on-device worker with tools, ALL_TOOLS, text(), store() and load(). Only the listed native tools are available; no network, filesystem, shell or model access exists outside those tools. Await tool calls. Code has a two-minute total time limit. Stored JSON values persist in this conversation after successful execution.',
+    description:'Run JavaScript in an isolated on-device worker with tools, ALL_TOOLS, text(), store() and load(). Only the listed native tools are available; no network, filesystem, shell or model access exists outside those tools. Await tool calls. There is no total wall-clock deadline. During long CPU computations call await yield_control() so the worker stays responsive. Use store()/load() for JSON state, then await checkpoint() after all tools settle to commit it before continuing; successful completion also saves state. Interrupted programs are not automatically replayed.',
     parameters:{type:'object',properties:{code:{type:'string',minLength:1,maxLength:131072}},required:['code'],additionalProperties:false},
     replay:'unsafe',
     execute:async ({code},api,context) => {
+      // Whole-store checkpoints belong to one native conversation. Serializing
+      // its code programs prevents two snapshots from overwriting each other.
+      const release = await acquireConversation(api.conversationId,context.abortSignal);
+      try {
       const allowed = (await api.agent(context)).tools.filter(tool=>tool.name!=='codemode');
       const id = String(api.taskId);
       const prior = await api.commit(async tx => {
@@ -36,6 +57,7 @@ export function createCodeMode({hostCall,getHarness}) {
       }
       if (result.state) await api.commit(tx=>tx.appendEntry(api.conversationId,{kind:'woven.ios-codemode-store',data:result.state}),context);
       return {content:result.content??[],isError:!!result.isError};
+      } finally { release(); }
     },
   })]});
   async function nestedTool({invocationID,name,arguments:arguments_}) {
@@ -44,8 +66,7 @@ export function createCodeMode({hostCall,getHarness}) {
     const {api,context,allowed,pending} = invocation;
     if (!allowed.some(tool=>tool.name===name)) throw new Error('Tool is not available in this code execution.');
     context.abortSignal?.throwIfAborted();
-    if (invocation.next >= 256) throw new Error("Code execution exceeded 256 tool calls.");
-    if (pending.size >= 32) throw new Error("Code execution exceeded 32 simultaneous tool calls.");
+    if (pending.size >= (policy.concurrentTools??16)) throw new Error("Code exceeded the configured simultaneous tool limit.");
     const work = (async () => {
       const model = (await api.agent(context)).model;
       const callID = `${api.callId}/nested/${++invocation.next}`;
@@ -74,5 +95,14 @@ export function createCodeMode({hostCall,getHarness}) {
     pending.add(work); work.then(()=>pending.delete(work),()=>pending.delete(work));
     return work;
   }
-  return {extension,nestedTool};
+  async function checkpoint({invocationID,state}) {
+    const invocation = invocations.get(invocationID);
+    if (!invocation || invocation.closing) throw new Error('Code execution has ended.');
+    if (invocation.pending.size) throw new Error('Await pending tools before checkpointing.');
+    const {api,context} = invocation;
+    await api.commit(tx=>tx.appendEntry(api.conversationId,{kind:'woven.ios-codemode-store',data:state}),context);
+    await api.details({checkpointed:true,completedToolCalls:invocation.next},context);
+    return {saved:true};
+  }
+  return {extension,nestedTool,checkpoint};
 }

@@ -53,6 +53,34 @@ final class CompanionUITests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
+  @MainActor func testNewChatChooserAndKeyboardDismissal() {
+    let app = launch(tab: "Home")
+    app.buttons["action-new-chat"].tap()
+    let chooser = app.buttons["choose-chat-agent-local:pi-durable-device"]
+    XCTAssertTrue(chooser.waitForExistence(timeout: 5))
+    app.buttons["Close agent chooser"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
+    app.buttons["tab-folders"].tap()
+    app.buttons["action-new-chat"].tap()
+    XCTAssertTrue(chooser.waitForExistence(timeout: 5))
+    chooser.tap()
+    let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
+    XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Conversation actions"].exists)
+    XCTAssertFalse(app.buttons["Add connection"].exists)
+    XCTAssertTrue(app.buttons["Choose model"].exists)
+    XCTAssertTrue(app.buttons["Thinking level"].exists)
+    XCTAssertTrue(app.buttons["Session tools"].exists)
+    composer.tap()
+    XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
+    app.staticTexts["New chat"].firstMatch.tap()
+    XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
+    app.buttons["chat-new-session"].tap()
+    XCTAssertFalse(chooser.exists)
+    XCTAssertTrue(composer.exists)
+  }
+
   @MainActor func testOfflineWritingSurvivesTerminationAndRestart() {
     let app = launch(tab: "Notes")
     app.buttons["action-new-note"].tap()
@@ -68,9 +96,8 @@ final class CompanionUITests: XCTestCase {
     body.typeText(bodyText)
     let writtenBody = body.value as? String
     XCTAssertEqual(writtenBody?.lowercased(), bodyText.lowercased())
-    let dismissKeyboard = app.buttons["dismiss-keyboard"]
-    XCTAssertTrue(dismissKeyboard.waitForExistence(timeout: 5))
-    dismissKeyboard.tap()
+    XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
+    app.staticTexts["note-save-state"].tap()
     XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
     let saved = app.staticTexts["note-save-state"]
     let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on this device'")

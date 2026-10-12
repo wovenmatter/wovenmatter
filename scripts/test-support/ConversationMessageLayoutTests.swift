@@ -60,6 +60,35 @@ struct ConversationMessageLayoutTests {
 
         try require(!ConversationMessageLayout.showsAssistantBody(content: "ignored", displayedBody: "", failedRunError: nil),
             "An empty projected reply became visible")
-        print("PASS: single response rows, stable message/file/media anchors, spacing and failure visibility")
+        var scroll = DashboardConversationScrollState()
+        scroll.conversationChanged(to: "first")
+        try require(scroll.contentChanged(conversationID: "first", hasMessages: true, isPrependingHistory: false) == .jumpToBottom,
+            "Opening a populated chat must initially position at its latest reply")
+        let before = DashboardConversationGeometry(contentHeight: 800, isNearBottom: true, viewportHeight: 500)
+        let toolGrowth = DashboardConversationGeometry(contentHeight: 1100, isNearBottom: false, viewportHeight: 500)
+        try require(scroll.geometryChanged(from: before, to: toolGrowth, isUserScrolling: false, transcriptOwnsScroll: false, isPrependingHistory: false),
+            "Tool-only growth stopped following a transcript that was already at the bottom")
+        scroll.setNearBottom(false)
+        try require(scroll.contentChanged(conversationID: "first", hasMessages: true, isPrependingHistory: false) == .none,
+            "A new message pulled the reader away from earlier work")
+        try require(!scroll.geometryChanged(from: before, to: toolGrowth, isUserScrolling: false, transcriptOwnsScroll: false, isPrependingHistory: false),
+            "Tool growth pulled the reader away from earlier work")
+        scroll.setNearBottom(true)
+        try require(!scroll.geometryChanged(from: before, to: toolGrowth, isUserScrolling: false, transcriptOwnsScroll: true, isPrependingHistory: false),
+            "Opening old work unexpectedly followed the enlarged content to the bottom")
+        scroll.setNearBottom(true)
+        try require(!scroll.geometryChanged(from: before, to: toolGrowth, isUserScrolling: true, transcriptOwnsScroll: false, isPrependingHistory: false),
+            "An active user scroll lost ownership to streaming output")
+        scroll.setNearBottom(true)
+        try require(!scroll.geometryChanged(from: before, to: toolGrowth, isUserScrolling: false, transcriptOwnsScroll: false, isPrependingHistory: true),
+            "Loading earlier history jumped to the latest reply")
+        scroll.setNearBottom(true)
+        let keyboard = DashboardConversationGeometry(contentHeight: 800, isNearBottom: false, viewportHeight: 280)
+        try require(scroll.geometryChanged(from: before, to: keyboard, isUserScrolling: false, transcriptOwnsScroll: false, isPrependingHistory: false),
+            "Keyboard resizing lost bottom positioning")
+        scroll.conversationChanged(to: "second")
+        try require(scroll.contentChanged(conversationID: "second", hasMessages: true, isPrependingHistory: false) == .jumpToBottom,
+            "Switching chats retained another conversation's reading position")
+        print("PASS: response rows, anchors, spacing, failure visibility and shared transcript scroll policy")
     }
 }

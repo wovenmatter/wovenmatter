@@ -440,7 +440,8 @@ final class ApplicationModel {
         applicationDefaults: UserDefaults = .standard,
         dashboardStore: DashboardStore? = nil,
         startsAutomatically: Bool? = nil,
-        ownsExecutionOverride: Bool? = nil
+        ownsExecutionOverride: Bool? = nil,
+        localUsageService: LocalUsageService? = nil
     ) {
         self.applicationDefaults = applicationDefaults
         self.isLibraryClient = LocalExecutionRole.current != .backend
@@ -452,7 +453,7 @@ final class ApplicationModel {
             ownsExecution: ownsExecutionOverride ?? LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults,
             closedLidPolicy: closedLidProtection.snapshot.policy,
             onWorkChanged: { [weak closedLidProtection] in closedLidProtection?.setWorking($0) })
-        self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults, localUsageService: LocalUsageService(
+        self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults, localUsageService: localUsageService ?? LocalUsageService(
             homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
                 ?? FileManager.default.homeDirectoryForCurrentUser,
             usageDatabaseURL: CompanionTestWorkspace.supportDirectory?.appending(path: "workspace.sqlite")))

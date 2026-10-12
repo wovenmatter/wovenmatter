@@ -19,7 +19,7 @@ private actor ControlledHost {
   var toolCalls = 0
   var toolsSeen: [String] = []
   var requests: [String] = []
-  enum Mode: Sendable { case normal, subagent, code }
+  enum Mode: Sendable { case normal, subagent, code, checkpointThenWait, parallelCode }
   var mode: Mode = .normal
   func mode(_ value: Mode) { mode = value }
   var holdTool = false
@@ -35,13 +35,18 @@ private actor ControlledHost {
     let call: [String: Any]
     if mode == .subagent && !isChild {
       call = ["type":"toolCall","id":"call-child","name":"subagent","arguments":["task":"delegated task","name":"Researcher"]]
+    } else if mode == .checkpointThenWait {
+      call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"store('phase', 'prepared'); await checkpoint(); await tools.save_note({text:'checkpointed'});"]]
     } else if mode == .code {
       call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"const result = await tools.save_note({text:'café 🟩'}); text(result); store('saved', true);"]]
     } else {
       call = ["type":"toolCall","id":"call-native-note","name":"save_note","arguments":["text":"café 🟩"]]
     }
     let content: [[String: Any]] = finishedTool
-      ? [["type":"text","text":"Saved café 🟩 on this device."]] : [call]
+      ? [["type":"text","text":"Saved café 🟩 on this device."]] : mode == .parallelCode ? [
+        ["type":"toolCall","id":"code-first","name":"codemode","arguments":["code":"await new Promise(r=>setTimeout(r,150)); store('first',true); await checkpoint();"]],
+        ["type":"toolCall","id":"code-second","name":"codemode","arguments":["code":"store('second',true); await checkpoint();"]]
+      ] : [call]
     let message: [String: Any] = ["role":"assistant","content":content,"api":"openai-responses","provider":"controlled","model":"test-model",
       "usage":["input":10,"output":8,"cacheRead":0,"cacheWrite":0,"totalTokens":18,"cost":["input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0]],
       "stopReason":finishedTool ? "stop" : "toolUse","timestamp":Date().timeIntervalSince1970 * 1000]
@@ -81,6 +86,26 @@ final class PiDurableRuntimeTests: XCTestCase {
     try PiDurableRuntime(storageDirectory: directory,
       configuration: .init(conversationID: "ios-conversation", modelJSON: testModel, toolsJSON: testTools, instructions: "Work on this device."),
       inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) }, onEvents: events)
+  }
+
+  func testThinkingLevelReachesInferenceAndCanChangeBetweenTurns() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost()
+    let descriptor = testModel.replacingOccurrences(of: "\"reasoning\":false", with: "\"reasoning\":true")
+    let runtime = try PiDurableRuntime(storageDirectory: path,
+      configuration: .init(conversationID: "thinking", modelJSON: descriptor, toolsJSON: testTools, thinkingLevel: "high"),
+      inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
+    _ = try await runtime.open()
+    let first = try object(await runtime.submit(text: "Think carefully", requestID: "thinking-high"))
+    _ = try await runtime.wait(submissionID: XCTUnwrap(first["id"] as? Int))
+    let firstRequests = await host.requests
+    XCTAssertTrue(try firstRequests.allSatisfy { try (object($0)["options"] as? [String: Any])?["reasoning"] as? String == "high" })
+    try await runtime.configure(modelJSON: descriptor, thinkingLevel: "low")
+    let second = try object(await runtime.submit(text: "Continue", requestID: "thinking-low"))
+    _ = try await runtime.wait(submissionID: XCTUnwrap(second["id"] as? Int))
+    let secondRequests = await host.requests
+    XCTAssertEqual(try (object(XCTUnwrap(secondRequests.last))["options"] as? [String: Any])?["reasoning"] as? String, "low")
+    try await runtime.close()
   }
 
   func testRealSDKRunsNativeToolAndReopensWithoutDuplicatingSubmission() async throws {
@@ -235,6 +260,18 @@ final class PiDurableRuntimeTests: XCTestCase {
     let scopes = try requests.map { try object($0)["scope"] as? [String:Any] }
     XCTAssertEqual(Set(scopes.compactMap { $0?["conversationID"] as? String }).count, 2)
     XCTAssertTrue(try requests.allSatisfy { (try object($0)["model"] as? [String:Any])?["id"] as? String == "test-model" })
+    let rootScope = scopes.first.flatMap { $0 }?["conversationID"] as? String
+    for request in requests {
+      let payload = try object(request)
+      let scope = payload["scope"] as? [String: Any]
+      let context = payload["context"] as? [String: Any]
+      var inventory = Set<String>()
+      for message in context?["messages"] as? [[String: Any]] ?? [] {
+        for tool in message["toolsRemoved"] as? [[String: Any]] ?? [] { if let name = tool["name"] as? String { inventory.remove(name) } }
+        for tool in message["toolsAdded"] as? [[String: Any]] ?? [] { if let name = tool["name"] as? String { inventory.insert(name) } }
+      }
+      XCTAssertEqual(inventory.contains("subagent"), scope?["conversationID"] as? String == rootScope, "Only the root can delegate")
+    }
     try await engine.close()
   }
 
@@ -255,6 +292,47 @@ final class PiDurableRuntimeTests: XCTestCase {
     let requests = await host.toolsSeen
     XCTAssertTrue(try object(XCTUnwrap(requests.first))["toolCallID"] as? String == "call-code/nested/1")
     try await engine.close()
+  }
+
+  func testConcurrentCodeProgramsPreserveBothCheckpointKeys() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost(); await host.mode(.parallelCode)
+    let engine = try runtime(path, host: host)
+    _ = try await engine.open()
+    let receipt = try object(await engine.submit(text: "Run both", requestID: "parallel-code"))
+    _ = try await engine.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
+    let page = try object(await engine.history())
+    let items = try XCTUnwrap(page["items"] as? [[String: Any]])
+    let stores = items.filter { $0["kind"] as? String == "woven.ios-codemode-store" }
+    XCTAssertTrue(stores.contains { item in
+      guard let data = item["data"] as? [String: Any] else { return false }
+      return data["first"] as? Bool == true && data["second"] as? Bool == true
+    }, String(describing: stores))
+    try await engine.close()
+  }
+
+  func testCodeCheckpointSurvivesInterruptedWorkerWithoutReplayingTool() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost(); await host.mode(.checkpointThenWait); await host.hold()
+    let first = try runtime(path, host: host)
+    _ = try await first.open()
+    let receipt = try object(await first.submit(text: "Checkpoint before waiting", requestID: "checkpoint-request"))
+    let id = try XCTUnwrap(receipt["id"] as? Int)
+    for _ in 0..<300 {
+      if await host.toolStarted { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let started = await host.toolStarted; XCTAssertTrue(started)
+    try await first.close()
+    let second = try runtime(path, host: host)
+    _ = try await second.open()
+    let recovered = try await second.history()
+    XCTAssertTrue(recovered.contains("woven.ios-codemode-store"), recovered)
+    XCTAssertTrue(recovered.contains("prepared"), recovered)
+    try await second.resume()
+    _ = try await second.wait(submissionID: id)
+    let toolCalls = await host.toolCalls; XCTAssertEqual(toolCalls, 1)
+    try await second.close()
   }
 
   func testCodeModeInterruptionDoesNotReplayNestedUnsafeEffect() async throws {
