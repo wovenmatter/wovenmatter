@@ -316,6 +316,7 @@ final class DashboardNoteEditorController {
         document = updated.normalized()
         onChange?(document)
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+        textView.needsDisplay = true
         if let cellID, let range = textView.textStorage?.range(ofNoteAttribute: .noteCellID, value: cellID) {
             textView.setSelectedRange(NSRange(location: range.location, length: 0))
         }
@@ -403,6 +404,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
             textView.undoManager?.setActionName("Agent Edit")
             let selection = textView.selectedRange()
             textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+            textView.needsDisplay = true
             textView.setSelectedRange(NSRange(
                 location: min(selection.location, textView.string.utf16.count),
                 length: 0
@@ -507,6 +509,11 @@ struct DashboardNoteEditor: NSViewRepresentable {
 }
 
 private final class NoteTextView: NSTextView {
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
+
     override func drawBackground(in rect: NSRect) {
         drawHighlights(in: rect)
         super.drawBackground(in: rect)
