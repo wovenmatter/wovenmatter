@@ -67,6 +67,23 @@ struct SecondaryMacReplicaToolTests {
         let read = await tools.handle(.init(arguments: ["library", "read", b.id]), callerID: caller)
         #expect(read.success && read.result?.objectValue?["downloaded"] == .bool(true))
     }
+    @Test func cachedLibraryKindsMatchPortableMIMEClassification() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let (replica, workspace, caller, phone) = try await setup(fixture)
+        defer { withExtendedLifetime(workspace) {} }
+        for (id, mediaType) in [("link", "text/uri-list"), ("link-charset", "TEXT/URI-LIST;charset=utf-8"),
+                                ("photo", "IMAGE/PNG"), ("file", "text/plain;charset=utf-8")] {
+            _ = try await replica.artifacts.save(data: Data(id.utf8), workspaceID: phone,
+                title: id, mediaType: mediaType, id: id)
+        }
+        let tools = try #require(fixture.model.agentTools)
+        for (kind, expected) in [("link", ["link", "link-charset"]), ("photo", ["photo"]), ("file", ["file"])] {
+            let response = await tools.handle(.init(arguments: ["library", "list", "--kind", kind]), callerID: caller)
+            #expect(response.success, "\(response.error ?? "")")
+            let ids = response.result?.objectValue?["items"]?.arrayValue?.compactMap { $0.objectValue?["id"]?.stringValue }
+            #expect(ids == expected)
+        }
+    }
     @Test func usagePaginationReadsCachedOtherDeviceSamplesWithoutProvider() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (replica, workspace, caller, phone) = try await setup(fixture)

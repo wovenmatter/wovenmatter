@@ -74,11 +74,13 @@ final class SecondaryMacReplicaTools {
         let workspaces = command.options["workspace"].map { Set($0.split(separator: ",").map(String.init)) }
         let kind = command.options["kind"]
         guard kind == nil || ["photo", "file", "link"].contains(kind!) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
-        let cached = manifests.filter {
-            $0.workspaceID != workspaceID &&
-            (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) &&
-            (workspaces == nil || workspaces!.contains($0.workspaceID)) &&
-            (kind == nil || (kind == "file" && !$0.mediaType.hasPrefix("image/")) || (kind == "photo" && $0.mediaType.hasPrefix("image/")))
+        let cached = manifests.filter { item in
+            let mediaType = item.mediaType.lowercased().split(separator: ";", maxSplits: 1).first.map(String.init) ?? ""
+            let itemKind = mediaType.hasPrefix("image/") ? "photo" : mediaType == "text/uri-list" ? "link" : "file"
+            return item.workspaceID != workspaceID &&
+            (search.isEmpty || item.title.localizedCaseInsensitiveContains(search)) &&
+            (workspaces == nil || workspaces!.contains(item.workspaceID)) &&
+            (kind == nil || kind == itemKind)
         }.sorted { $0.id < $1.id }
         let offset = try command.integer("offset", default: 0, range: 0...Int.max)
         let limit = try command.integer("limit", default: 100, range: 1...200)
