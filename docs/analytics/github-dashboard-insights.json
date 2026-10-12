@@ -64,7 +64,7 @@
     }
   },
   {
-    "name": "Release downloads — cumulative observations",
+    "name": "GitHub asset downloads — cumulative observations",
     "description": "Cumulative DMG and all release-asset counters by observation day. All assets include checksums and other files. Historical daily downloads are not inferred.",
     "query": {
       "kind": "DataVisualizationNode",

@@ -14,6 +14,8 @@ final class ProductAnalyticsModel {
   private(set) var log: [ProductAnalyticsLogEntry] = []
   var errorMessage: String?
   var disclosurePresented = false
+  private let defaults: UserDefaults
+  init(defaults: UserDefaults = .standard) { self.defaults = defaults }
   private var database: WorkspaceDatabase?
   private var rpc: BackendRPCClient?
   private var task: Task<Void, Never>?
@@ -30,9 +32,10 @@ final class ProductAnalyticsModel {
   }
   // The library acknowledgement does not replace this frontend’s disclosure.
   private var localDisclosureAcknowledged: Bool {
-    disclosureKey.map { UserDefaults.standard.bool(forKey: $0) } ?? false
+    disclosureKey.map { defaults.bool(forKey: $0) } ?? false
   }
   private var session = URLSession(configuration: .ephemeral)
+  static let updateReceiptKey = "wovenmatter.analytics.pending-update.v1"
   static let projectToken = "phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh"
   func configure(database: WorkspaceDatabase, publisher: Bool) {
     self.database = database
@@ -71,6 +74,7 @@ final class ProductAnalyticsModel {
         preference = try await database.productAnalyticsPreference()
         log = try await database.productAnalyticsLog()
       }
+      await confirmUpdateInstallation()
     } catch { errorMessage = "Analytics settings are temporarily unavailable." }
   }
   func setEnabled(_ enabled: Bool, disclose: Bool = false) async {
@@ -79,6 +83,7 @@ final class ProductAnalyticsModel {
     let epoch = generation
     locallyDisabled = !effectiveEnabled
     if !effectiveEnabled {
+      defaults.removeObject(forKey: Self.updateReceiptKey)
       task?.cancel()
       task = nil
       session.invalidateAndCancel()
@@ -101,7 +106,7 @@ final class ProductAnalyticsModel {
       }
       guard epoch == generation else { return }
       self.preference = updated
-      if disclose, let key = disclosureKey { UserDefaults.standard.set(true, forKey: key) }
+      if disclose, let key = disclosureKey { defaults.set(true, forKey: key) }
       disclosurePresented = false
       errorMessage = nil
       if effectiveEnabled, let database {
@@ -130,6 +135,11 @@ final class ProductAnalyticsModel {
     values["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
     let event = ProductAnalyticsEvent(
       preferenceRevision: preference.revision, name: name, properties: values)
+    _ = await enqueue(event)
+  }
+  /// Acknowledged UUIDs (including privacy rejections) consume a local receipt;
+  /// a transport failure retains it for retry without inventing another install.
+  private func enqueue(_ event: ProductAnalyticsEvent) async -> Bool {
     let epoch = generation
     do {
       if let rpc {
@@ -139,10 +149,65 @@ final class ProductAnalyticsModel {
             method: "analytics.events",
             payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event]))))
         if epoch == generation { self.preference = acknowledgement.preference }
+        return acknowledgement.acceptedEventIDs.contains(event.id)
+          || acknowledgement.discardedEventIDs.contains(event.id)
       } else if let database {
-        _ = try await database.enqueueProductAnalytics([event])
+        let acknowledgement = try await database.enqueueProductAnalytics([event])
+        return acknowledgement.acceptedEventIDs.contains(event.id)
+          || acknowledgement.discardedEventIDs.contains(event.id)
       }
-    } catch { /* Analytics must never interrupt a user action. */  }
+    } catch { /* Analytics must never interrupt a user action. */ }
+    return false
+  }
+  func prepareUpdateInstallation(_ manifest: WovenMatterReleaseManifest) -> UUID {
+    let installationID = UUID()
+    defaults.removeObject(forKey: Self.updateReceiptKey)
+    guard !locallyDisabled, localDisclosureAcknowledged, let preference,
+      preference.collects else { return installationID }
+    let receipt = ProductAnalyticsUpdateReceipt(
+      analyticsID: preference.analyticsID, version: manifest.version, build: manifest.build,
+      event: ProductAnalyticsEvent(id: installationID.uuidString.lowercased(),
+        preferenceRevision: preference.revision, name: .updateInstallCompleted,
+        properties: ["platform": "macos", "target_version": manifest.version]))
+    if let data = try? JSONEncoder().encode(receipt) {
+      defaults.set(data, forKey: Self.updateReceiptKey)
+    }
+    return installationID
+  }
+  func cancelUpdateInstallation() {
+    defaults.removeObject(forKey: Self.updateReceiptKey)
+  }
+  static func markUpdateLaunched(marker: URL, version: String, build: Int) {
+    let defaults = UserDefaults.standard
+    guard let data = defaults.data(forKey: updateReceiptKey),
+      var receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data),
+      receipt.confirmLaunch(marker: marker, version: version, build: build),
+      let updated = try? JSONEncoder().encode(receipt) else { return }
+    defaults.set(updated, forKey: updateReceiptKey)
+  }
+  func confirmUpdateInstallation(
+    version: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+    build: Int? = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")
+  ) async {
+    guard interface, let preference,
+      let data = defaults.data(forKey: Self.updateReceiptKey),
+      let receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data)
+    else { return }
+    // Opt-out, a new preference epoch, or a different library fences the receipt.
+    guard !locallyDisabled, preference.collects,
+      receipt.analyticsID == preference.analyticsID,
+      receipt.event.preferenceRevision == preference.revision else {
+      cancelUpdateInstallation()
+      return
+    }
+    guard localDisclosureAcknowledged, receipt.confirmed,
+      receipt.version == version, receipt.build == build
+    else { return }
+    guard receipt.event.validated(preference: preference) != nil else {
+      cancelUpdateInstallation()
+      return
+    }
+    if await enqueue(receipt.event) { cancelUpdateInstallation() }
   }
   private static func analyticsDate(_ value: String) -> Date? {
     let fractional = ISO8601DateFormatter()
@@ -221,5 +286,25 @@ final class ProductAnalyticsModel {
         try await database.markProductAnalyticsDelivered(events.map(\.id))
       } catch { /* Retain bounded events for retry with their original UUID/timestamp. */  }
     #endif
+  }
+}
+
+
+struct ProductAnalyticsUpdateReceipt: Codable, Equatable {
+  let analyticsID: String
+  let version: String
+  let build: Int
+  var event: ProductAnalyticsEvent
+  var confirmed = false
+
+  mutating func confirmLaunch(marker: URL, version: String, build: Int, now: Date = Date()) -> Bool {
+    guard !confirmed, self.version == version, self.build == build,
+      UUID(uuidString: event.id) != nil, marker.lastPathComponent == ".ready-" + event.id
+    else { return false }
+    confirmed = true
+    event.timestamp = now
+    event.properties["app_version"] = version
+    event.properties["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    return true
   }
 }

@@ -5,6 +5,28 @@ import WovenMatterCompanion
 @testable import CompanionClient
 
 @Suite("Client analytics privacy") struct ProductAnalyticsClientTests {
+  @Test("background refresh never counts an open; repeated interface calls count once")
+  @MainActor func openingRequiresInterface() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let store = try MobileProductAnalytics(file: file)
+    let preference = ProductAnalyticsPreference(analyticsID: UUID().uuidString,
+      disclosedAt: Date().addingTimeInterval(-60))
+    try await store.apply(preference)
+    try await store.disclose(enabled: true)
+    try await store.synchronize(using: AnalyticsFixture(preference: preference))
+    let model = MobileAnalyticsModel()
+    await model.configure(store)
+    await model.refresh()
+    #expect(await store.snapshot().events.isEmpty)
+    await model.openInterface()
+    await model.openInterface()
+    await model.refresh()
+    let events = await store.snapshot().events
+    #expect(events.count == 1 && events.first?.name == .appOpened)
+    #expect(events.first?.qualifying == false)
+  }
+
   @Test(
     "offline disabling stops local events and removes queued activity; enabling never backfills")
   func offline() async throws {

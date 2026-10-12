@@ -22,11 +22,29 @@ individual people. Opted-out usage is excluded.
 | `session_created` | Yes | Explicit session creation or locally journaled new-session request |
 | `message_submitted` | Yes | Explicit locally accepted/journaled message request, regardless of eventual provider outcome |
 | `agent_run_completed` | No | Live central-owner terminal notification, with coarse outcome and duration |
+| `update_check_clicked` | No | User clicks Check for updates |
+| `update_download_clicked` | No | User clicks Download update or retries it |
+| `update_download_completed` | No | A fresh in-app DMG transfer passes size/checksum verification and is saved; cache reuse is excluded |
+| `update_download_failed` | No | In-app download fails transfer or verification |
+| `update_install_clicked` | No | User clicks Install and restart |
+| `update_install_completed` | No | Replacement app launches through the matching updater transaction at the exact target version/build |
+| `update_install_failed` | No | Preparation fails or the user cancels before handoff; later helper crashes are not falsely reported as success |
 
 Browsing, opening Settings, autosync, agent content writes, scheduled tasks,
 history replay and background imports do not independently qualify. Consecutive
 note edits are coalesced to at most one edit event per 30 seconds per process.
 Command retries reuse existing journals and do not generate fresh activity.
+
+App opens mean the first interface opening per process, after disclosure, not
+page navigation, polling, or background service starts. Daily opens count these
+events by their original UTC day; daily opening libraries count distinct library
+IDs among them. Opens and updater actions never independently qualify for DAU.
+Update completion uses a local bounded receipt and stable event UUID. Retries do
+not create another installation; the original preference epoch/library must still
+allow collection. Opt-out invalidates it. A successful install here means the
+replacement version launched, not a guarantee of later application health.
+Mac clients without the Software updates controls and App Store updates are not
+measured by this in-app updater funnel.
 
 DAU is `COUNT(DISTINCT distinct_id)` for qualifying app events in the current UTC
 calendar day. WAU and MAU use distinct IDs over the entire rolling 7-day and
@@ -36,8 +54,9 @@ attributed to their original activity date.
 
 The configured [dashboard](https://us.posthog.com/project/659360/dashboard/2198735)
 contains DAU/WAU/MAU, daily activity, opens, feature usage, countries, website
-visits/conversions and aggregate GitHub traffic/downloads. All thirteen query
-definitions were executed successfully. GitHub data is loaded; app and website
+visits/conversions and aggregate GitHub traffic/downloads. App opens and the
+in-app update stages have separate reporting definitions, saved alongside DAU/WAU/MAU
+and website measurements in [product-dashboard-insights.json](product-dashboard-insights.json). GitHub data is loaded; app and website
 data appears after release/deployment. Do not interpret their initial empty state
 as an adoption measurement.
 
@@ -61,7 +80,7 @@ delivery. Changes to a library identity discard the old local queue.
 
 Metadata is a strict allowlist: app version, OS major version, platform, coarse
 item category/action, known harness/provider categories, bounded outcome, duration,
-token range and error category. Current hooks emit only available approved fields;
+token range, error category, and a validated semantic target app version. Current hooks emit only available approved fields;
 they do not infer provider or token data from strings. Custom model names and
 endpoints are omitted. Never add titles, text, content, paths, resource/run/command
 IDs, account identifiers, raw exceptions, hostnames or private model labels.
@@ -94,7 +113,14 @@ analytics module. It excludes query strings/fragments and sends only public rout
 referrer domain and named download/GitHub-link events. It respects DNT and GPC.
 Random browser/session IDs are separate from the app UUID. Development/preview
 hosts do not send analytics. Download click/redirect events measure intent,
-not installation. Release asset counters measure downloads, not unique users.
+not installation. Release asset counters measure downloads, not unique users. Website and direct
+GitHub downloads share the same counter, including repeat/internal downloads and
+the in-app updater's network transfers. These totals cannot be split by source or
+added to the updater count without double counting. Website clicks/redirects are
+intent, not confirmed file transfer; an in-app download completion is verified
+locally. All-asset totals also contain update manifests/checksums and remain a
+separate technical metric. Do not label any GitHub count as installs or in-app
+release downloads.
 
 `python3 scripts/collect-github-analytics.py --output PATH/history.json` preserves
 GitHub's daily views/clones and cumulative release asset counters. Existing rows

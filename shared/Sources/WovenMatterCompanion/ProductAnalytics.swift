@@ -33,6 +33,13 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
     case sessionCreated = "session_created"
     case messageSubmitted = "message_submitted"
     case agentRunCompleted = "agent_run_completed"
+    case updateCheckClicked = "update_check_clicked"
+    case updateDownloadClicked = "update_download_clicked"
+    case updateDownloadCompleted = "update_download_completed"
+    case updateDownloadFailed = "update_download_failed"
+    case updateInstallClicked = "update_install_clicked"
+    case updateInstallCompleted = "update_install_completed"
+    case updateInstallFailed = "update_install_failed"
   }
   public var id: String
   public var timestamp: Date
@@ -71,7 +78,7 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
     var result: [String: String] = [:]
     for (key, value) in values {
       if enums[key]?.contains(value) == true { result[key] = value }
-      if key == "app_version",
+      if key == "app_version" || key == "target_version",
         value.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
       {
         result[key] = value
@@ -154,7 +161,7 @@ public struct ProductAnalyticsLogEntry: Codable, Equatable, Identifiable, Sendab
 public enum ProductAnalyticsPolicy {
   public static let url = URL(string: "https://wovenmatter.com/privacy")!
   public static let disclosure =
-    "Woven Matter shares limited product analytics by default to help improve the app. We record app opens, actions such as creating or editing content and sending messages, coarse technical metadata, and approximate country. A random ID belongs to your central library and is shared across its connected devices. We do not collect your notes, messages, files, account identities, or precise location. You can turn analytics off for the whole library in General Settings and inspect the analytics log."
+    "Woven Matter shares limited product analytics by default to help improve the app. We record app opens, actions such as creating or editing content and sending messages, app update clicks and outcomes, coarse technical metadata, and approximate country. A random ID belongs to your central library and is shared across its connected devices. We do not collect your notes, messages, files, account identities, or precise location. You can turn analytics off for the whole library in General Settings and inspect the analytics log."
 }
 
 extension CompanionWorkspaceAction {

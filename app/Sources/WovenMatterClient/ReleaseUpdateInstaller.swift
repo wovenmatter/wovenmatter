@@ -88,7 +88,8 @@ public actor WovenMatterReleaseUpdateInstaller {
   }
 
   public func download(
-    _ manifest: WovenMatterReleaseManifest
+    _ manifest: WovenMatterReleaseManifest,
+    onDownloaded: (@Sendable () async -> Void)? = nil
   ) async throws -> WovenMatterDownloadedRelease {
     let validated = try manifest.validated()
     if let cached = try cachedRelease(for: validated) {
@@ -137,6 +138,9 @@ public actor WovenMatterReleaseUpdateInstaller {
 
     try? fileManager.removeItem(at: destination)
     try fileManager.moveItem(at: temporary, to: destination)
+    // Only a fresh, size- and checksum-verified transfer counts as a download.
+    // Returning an existing cached installer never invokes this callback.
+    await onDownloaded?()
     return WovenMatterDownloadedRelease(
       manifest: validated,
       fileURL: destination
@@ -146,7 +150,8 @@ public actor WovenMatterReleaseUpdateInstaller {
   public func beginInstallation(
     of release: WovenMatterDownloadedRelease,
     replacing currentApplicationURL: URL = Bundle.main.bundleURL,
-    currentProcessIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier
+    currentProcessIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
+    installationID: UUID = UUID()
   ) throws {
     let manifest = try release.manifest.validated()
     guard try verifiedChecksum(of: release.fileURL, for: manifest) else {
@@ -165,7 +170,7 @@ public actor WovenMatterReleaseUpdateInstaller {
     }
 
     try validateDiskImage(at: release.fileURL)
-    let token = UUID().uuidString
+    let token = installationID.uuidString.lowercased()
     let mountPoint = fileManager.temporaryDirectory.appending(
       path: "wovenmatter-update-mount-\(token)",
       directoryHint: .isDirectory

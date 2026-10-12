@@ -16,7 +16,10 @@ import SwiftUI
           await model.run()
         }
         .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) { MobileAnalyticsDisclosure(model:model) }
-        .onChange(of: scenePhase) { _, phase in model.sceneChanged(phase) }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+          model.sceneChanged(phase)
+          if phase == .active { Task { await model.analytics.openInterface() } }
+        }
         .onOpenURL { url in Task { await model.pair(url: url) } }
     }
   }

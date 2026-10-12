@@ -438,6 +438,11 @@ struct WovenMatterApp: App {
               marker.lastPathComponent.hasPrefix(".ready-") else {
             return
         }
+        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              let buildString = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+              let build = Int(buildString) else { return }
+        // A helper launch confirms replacement; clicking Install alone never does.
+        ProductAnalyticsModel.markUpdateLaunched(marker: marker, version: version, build: build)
         try? Data().write(to: marker, options: .atomic)
     }
 

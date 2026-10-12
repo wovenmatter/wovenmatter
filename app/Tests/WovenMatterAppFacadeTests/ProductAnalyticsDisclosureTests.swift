@@ -2,25 +2,121 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
+import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 struct ProductAnalyticsDisclosureTests {
+    @Test @MainActor func repeatedInterfaceOpensCountOnceAndUpdatesDoNotQualify() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let db = try await WorkspaceDatabase(url: directory.appending(path: "library.sqlite"))
+        let initial = try await db.productAnalyticsPreference()
+        let preference = try await db.setProductAnalyticsPreference(.init(enabled: true,
+            expectedRevision: initial.revision, acknowledgeDisclosure: true))
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        let key = "wovenmatter.analytics.disclosed." + preference.analyticsID
+        defaults.set(true, forKey: key)
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let model = ProductAnalyticsModel(defaults: defaults)
+        model.configure(database: db, publisher: false)
+        await model.openInterface()
+        await model.openInterface()
+        await model.record(.updateDownloadCompleted, properties: ["target_version": "1.2.3"])
+        let log = try await db.productAnalyticsLog()
+        #expect(log.filter { $0.event.name == .appOpened }.count == 1)
+        #expect(log.count == 2)
+        #expect(log.allSatisfy { !$0.event.qualifying })
+    }
+
+    @Test @MainActor func confirmedInstallRetriesOnceAndOptOutClearsTheReceipt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            defaults.removePersistentDomain(forName: domain)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let db = try await WorkspaceDatabase(url: directory.appending(path: "library.sqlite"))
+        let initial = try await db.productAnalyticsPreference()
+        let preference = try await db.setProductAnalyticsPreference(.init(enabled: true,
+            expectedRevision: initial.revision, acknowledgeDisclosure: true))
+        defaults.set(true, forKey: "wovenmatter.analytics.disclosed." + preference.analyticsID)
+        let model = ProductAnalyticsModel(defaults: defaults)
+        model.configure(database: db, publisher: false)
+        await model.openInterface()
+        let event = ProductAnalyticsEvent(preferenceRevision: preference.revision,
+            name: .updateInstallCompleted, properties: ["target_version": "1.2.3"])
+        var receipt = ProductAnalyticsUpdateReceipt(analyticsID: preference.analyticsID,
+            version: "1.2.3", build: 4, event: event)
+        #expect({ receipt.confirmLaunch(marker: URL(fileURLWithPath: "/tmp/.ready-" + event.id),
+            version: "1.2.3", build: 4) }())
+        let data = try JSONEncoder().encode(receipt)
+        defaults.set(data, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await model.confirmUpdateInstallation(version: "1.2.2", build: 4)
+        #expect(defaults.data(forKey: ProductAnalyticsModel.updateReceiptKey) != nil)
+        await model.confirmUpdateInstallation(version: "1.2.3", build: 4)
+        #expect(defaults.data(forKey: ProductAnalyticsModel.updateReceiptKey) == nil)
+        // Replaying the durable receipt after an interrupted acknowledgement
+        // still contributes one completion UUID to the central library log.
+        defaults.set(data, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await model.confirmUpdateInstallation(version: "1.2.3", build: 4)
+        #expect(try await db.productAnalyticsLog().filter { $0.event.name == .updateInstallCompleted }.count == 1)
+        defaults.set(data, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await model.setEnabled(false)
+        #expect(defaults.data(forKey: ProductAnalyticsModel.updateReceiptKey) == nil)
+        #expect(try await db.productAnalyticsLog().isEmpty)
+    }
+
+    @Test func installationRequiresMatchingReplacementLaunchAndKeepsOneEventIdentity() throws {
+        let now = Date()
+        let preference = ProductAnalyticsPreference(analyticsID: UUID().uuidString,
+            disclosedAt: now.addingTimeInterval(-1))
+        let event = ProductAnalyticsEvent(preferenceRevision: preference.revision,
+            name: .updateInstallCompleted, properties: ["target_version": "1.2.3"])
+        var receipt = ProductAnalyticsUpdateReceipt(analyticsID: preference.analyticsID,
+            version: "1.2.3", build: 4, event: event)
+        let marker = URL(fileURLWithPath: "/private/tmp/.ready-" + event.id)
+        #expect(!receipt.confirmed)
+        #expect({ !receipt.confirmLaunch(marker: marker, version: "1.2.2", build: 4) }())
+        #expect({ !receipt.confirmLaunch(marker: marker, version: "1.2.3", build: 3) }())
+        #expect({ !receipt.confirmLaunch(marker: marker.appendingPathExtension("wrong"),
+            version: "1.2.3", build: 4) }())
+        #expect({ receipt.confirmLaunch(marker: marker, version: "1.2.3", build: 4, now: now) }())
+        #expect(receipt.confirmed && receipt.event.timestamp == now)
+        #expect({ !receipt.confirmLaunch(marker: marker, version: "1.2.3", build: 4) }())
+        let restored = try JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self,
+            from: JSONEncoder().encode(receipt))
+        #expect(restored == receipt && restored.event.id == event.id)
+        #expect(restored.event.validated(preference: preference) != nil)
+        var changed = preference
+        changed.enabled = false
+        #expect(restored.event.validated(preference: changed) == nil)
+        changed.enabled = true; changed.revision += 1
+        #expect(restored.event.validated(preference: changed) == nil)
+        #expect(!restored.event.qualifying)
+        #expect(!restored.event.inspectionJSON(analyticsID: preference.analyticsID).contains("/private"))
+    }
+
     @Test @MainActor func pendingLogReadCannotCollectBeforeLocalDisclosure() async throws {
         let url = URL(
             fileURLWithPath: "/private/tmp/wm-disclosure-" + UUID().uuidString.prefix(8)
         ).appending(path: "control.sock")
         let preference = ProductAnalyticsPreference(
             analyticsID: UUID().uuidString.lowercased(), disclosedAt: Date())
-        let key = "wovenmatter.analytics.disclosed." + preference.analyticsID
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
         defer {
-            UserDefaults.standard.removeObject(forKey: key)
+            defaults.removePersistentDomain(forName: domain)
             try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
         }
         let fixture = AnalyticsDisclosureFixture(preference: preference)
         let server = BackendRPCServer(socketURL: url)
         try server.start { await fixture.handle($0) }
         defer { server.stop() }
-        let model = ProductAnalyticsModel()
+        let model = ProductAnalyticsModel(defaults: defaults)
         model.configure(rpc: BackendRPCClient(socketURL: url))
         let opening = Task { await model.openInterface() }
         await fixture.waitUntilLogRead()

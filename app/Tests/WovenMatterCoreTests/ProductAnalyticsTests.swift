@@ -75,6 +75,15 @@ struct ProductAnalyticsTests {
     #expect(!ProductAnalyticsEvent(preferenceRevision: 1, name: .appOpened).qualifying)
     #expect(!ProductAnalyticsEvent(preferenceRevision: 1, name: .agentRunCompleted).qualifying)
     #expect(ProductAnalyticsEvent(preferenceRevision: 1, name: .messageSubmitted).qualifying)
+    for name in [ProductAnalyticsEvent.Name.updateCheckClicked, .updateDownloadClicked,
+      .updateDownloadCompleted, .updateDownloadFailed, .updateInstallClicked,
+      .updateInstallCompleted, .updateInstallFailed] {
+      #expect(!ProductAnalyticsEvent(preferenceRevision: 1, name: name).qualifying)
+    }
+    #expect(ProductAnalyticsEvent.sanitize([
+      "target_version": "1.2.3", "update_path": "/private/file", "download_url": "https://private",
+    ]) == ["target_version": "1.2.3"])
+    #expect(ProductAnalyticsEvent.sanitize(["target_version": "private-release"]).isEmpty)
     #expect(
       ProductAnalyticsEvent(
         timestamp: Date().addingTimeInterval(-100), preferenceRevision: 1, name: .messageSubmitted

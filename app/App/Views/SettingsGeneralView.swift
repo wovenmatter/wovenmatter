@@ -275,6 +275,7 @@ struct SettingsGeneralView: View {
     private func checkForRelease() {
         releaseUpdateState = .checking
         Task {
+            await model.analytics.record(.updateCheckClicked)
             do {
                 switch try await WovenMatterReleaseUpdateClient().check(
                     currentVersion: currentVersion
@@ -299,11 +300,16 @@ struct SettingsGeneralView: View {
     private func downloadRelease(_ manifest: WovenMatterReleaseManifest) {
         releaseUpdateState = .downloading(manifest)
         Task {
+            let properties = ["target_version": manifest.version]
+            await model.analytics.record(.updateDownloadClicked, properties: properties)
             do {
                 releaseUpdateState = .ready(
-                    try await releaseUpdateInstaller.download(manifest)
+                    try await releaseUpdateInstaller.download(manifest, onDownloaded: {
+                        await model.analytics.record(.updateDownloadCompleted, properties: properties)
+                    })
                 )
             } catch {
+                await model.analytics.record(.updateDownloadFailed, properties: properties)
                 releaseUpdateState = .downloadFailed(
                     manifest,
                     error.localizedDescription
@@ -315,19 +321,27 @@ struct SettingsGeneralView: View {
     private func installRelease(_ release: WovenMatterDownloadedRelease) {
         releaseUpdateState = .installing(release)
         Task {
+            let properties = ["target_version": release.manifest.version]
+            await model.analytics.record(.updateInstallClicked, properties: properties)
             do {
                 guard await WorkspaceAssetSession.prepareForRestart() else {
+                    await model.analytics.record(.updateInstallFailed,
+                        properties: properties.merging(["outcome": "cancelled"]) { _, new in new })
                     releaseUpdateState = .ready(release)
                     return
                 }
+                let installationID = model.analytics.prepareUpdateInstallation(release.manifest)
                 try await model.prepareBackendForUpdate()
-                try await releaseUpdateInstaller.beginInstallation(of: release)
+                try await releaseUpdateInstaller.beginInstallation(of: release, installationID: installationID)
                 WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
             } catch {
+                model.analytics.cancelUpdateInstallation()
                 WorkspaceAssetSession.cancelPreparedRestart()
                 var message = error.localizedDescription
                 do { try await model.recoverBackendAfterFailedUpdate() }
                 catch { message += " " + error.localizedDescription }
+                await model.analytics.record(.updateInstallFailed,
+                    properties: properties.merging(["outcome": "failure"]) { _, new in new })
                 releaseUpdateState = .installFailed(release, message)
             }
         }

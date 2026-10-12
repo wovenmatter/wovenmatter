@@ -8,17 +8,22 @@ import WovenMatterCompanion
   public var errorMessage: String?
   private var store: MobileProductAnalytics?
   private var opened = false
+  private var interface = false
   public init() {}
   public var enabled: Bool { state.pendingEnabled ?? state.preference?.enabled ?? true }
   public func configure(_ store: MobileProductAnalytics) async {
     self.store = store
     await refresh()
   }
+  public func openInterface() async {
+    interface = true
+    await refresh()
+  }
   public func refresh() async {
     guard let store else { return }
     state = await store.snapshot()
     disclosurePresented = !state.disclosed
-    if state.disclosed, !opened, state.preference?.collects == true {
+    if interface, state.disclosed, !opened, state.pendingEnabled == nil, state.preference?.collects == true {
       opened = true
       await record(.appOpened)
     }
