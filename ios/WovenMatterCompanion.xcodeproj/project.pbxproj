@@ -505,11 +505,11 @@
 		};
 		8B34D8412EB141465EBBC070 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_B7075BA0-2D78-4E47-92B9-D3AF7AC3AC8C" /* WovenMatterCompanion */;
+			productRef = "TEMP_357CF0FF-8CA3-474B-906F-19BE3693300F" /* WovenMatterCompanion */;
 		};
 		970CA8BDC681306F33B0361C /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_B559D5C8-92E4-4623-B91A-97A7638E0037" /* CompanionClient */;
+			productRef = "TEMP_BE2BEAAD-CDBD-4C5E-ABC4-36F3E4F405BB" /* CompanionClient */;
 		};
 /* End PBXTargetDependency section */
 
@@ -520,7 +520,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 3M84Q9NAMN;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -623,7 +623,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = 3M84Q9NAMN;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -820,13 +820,13 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = EmbeddedExecution;
 		};
-		"TEMP_B559D5C8-92E4-4623-B91A-97A7638E0037" /* CompanionClient */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = CompanionClient;
-		};
-		"TEMP_B7075BA0-2D78-4E47-92B9-D3AF7AC3AC8C" /* WovenMatterCompanion */ = {
+		"TEMP_357CF0FF-8CA3-474B-906F-19BE3693300F" /* WovenMatterCompanion */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterCompanion;
+		};
+		"TEMP_BE2BEAAD-CDBD-4C5E-ABC4-36F3E4F405BB" /* CompanionClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CompanionClient;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

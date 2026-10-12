@@ -64,12 +64,44 @@ final class EmbeddedExecutionTests: XCTestCase {
 
   @MainActor
   func testBundledRuntimeResourcesAreAvailableWithoutNetwork() throws {
-    let resources = EmbeddedCommandExecutor().resourceURL
+    let resources = try EmbeddedCommandExecutor().resourceURL
     for name in ["worker.js","commands.py","python_stdlib.zip","pyodide.asm.wasm","pyodide-lock.json","provenance.json"] {
       XCTAssertTrue(FileManager.default.fileExists(atPath:resources.appendingPathComponent(name).path),name)
     }
     let lock = try JSONSerialization.jsonObject(with:Data(contentsOf:resources.appendingPathComponent("pyodide-lock.json"))) as! [String:Any]
     XCTAssertEqual((lock["packages"] as? [String:Any])?.count,0)
+  }
+
+  @MainActor
+  func testLocatesBothSwiftPMResourceLayouts() throws {
+    for nested in [false, true] {
+      let root = try directory()
+      let expected = nested ? root.appendingPathComponent("Resources", isDirectory: true) : root
+      try FileManager.default.createDirectory(at: expected, withIntermediateDirectories: true)
+      for name in EmbeddedCommandExecutor.requiredResources {
+        try Data("fixture".utf8).write(to: expected.appendingPathComponent(name))
+      }
+      XCTAssertEqual(try EmbeddedCommandExecutor.locateResources(in: root), expected)
+      XCTAssertEqual(try EmbeddedCommandExecutor(resourceURL: root).resourceURL, expected)
+    }
+  }
+
+  @MainActor
+  func testResourceLookupRejectsIncompleteOrMixedLayouts() throws {
+    let root = try directory(), nested = root.appendingPathComponent("Resources", isDirectory: true)
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    for (index, name) in EmbeddedCommandExecutor.requiredResources.enumerated() {
+      try Data("fixture".utf8).write(to: (index.isMultiple(of: 2) ? root : nested).appendingPathComponent(name))
+    }
+    XCTAssertThrowsError(try EmbeddedCommandExecutor.locateResources(in: root))
+    XCTAssertThrowsError(try EmbeddedCommandExecutor(resourceURL: root).resourceURL)
+    for name in EmbeddedCommandExecutor.requiredResources {
+      try Data("fixture".utf8).write(to: nested.appendingPathComponent(name))
+    }
+    // An incomplete direct directory must not hide a complete nested bundle.
+    XCTAssertEqual(try EmbeddedCommandExecutor.locateResources(in: root), nested)
+    try Data().write(to: nested.appendingPathComponent("pyodide.asm.wasm"))
+    XCTAssertThrowsError(try EmbeddedCommandExecutor.locateResources(in: root))
   }
 
   @MainActor

@@ -1,6 +1,7 @@
 #if DEBUG
 import Foundation
 import CompanionInference
+import EmbeddedExecution
 import PiDurableRuntime
 
 private struct SmokeCredentials: InferenceCredentialReading {
@@ -124,6 +125,16 @@ private actor SmokeNativeTools {
       try await restoredCode.close()
       result["codeModeOnIOS"] = true; result["codeModeStateReopened"] = true
       result.merge(try await DeviceBackgroundSmoke.run(root: root, descriptor: model)) { _, new in new }
+      // Exercise the app's packaged SwiftPM resources, without a test-only path override.
+      let pythonWorkspace = root.appendingPathComponent("bundled-python")
+      try FileManager.default.createDirectory(at: pythonWorkspace, withIntermediateDirectories: true)
+      let python = try await EmbeddedCommandExecutor().run(.init(id: UUID(), argv: [
+        "python", "-c", "import sqlite3; db=sqlite3.connect(':memory:'); print(db.execute('select 6*7').fetchone()[0])"
+      ]), workspaceURL: pythonWorkspace) { _, _ in throw CocoaError(.featureUnsupported) }
+      guard python.exitCode == 0, python.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "42" else {
+        throw DeviceExecutionError.unavailable("The bundled iOS Python and SQLite runtime failed: \(python.stderr)")
+      }
+      result["bundledPythonOnIOS"] = true
 
     } catch { result["passed"] = false; result["error"] = error.localizedDescription }
     do { try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: resultFile, options: .atomic) }

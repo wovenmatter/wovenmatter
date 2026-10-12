@@ -60,7 +60,8 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
   public typealias FileImports = @MainActor (_ arguments: [String], _ response: String) throws -> [String]
   public typealias Output = @MainActor (_ stream: String, _ text: String) -> Void
   private static var activeWorkspaces = Set<String>()
-  let resourceURL: URL
+  private let resourceLocation: Result<URL, any Error>
+  var resourceURL: URL { get throws { try resourceLocation.get() } }
   private let limits: EmbeddedExecutionLimits
   private var browser: WKWebView?
   private var continuation: CheckedContinuation<EmbeddedCommandResult, any Error>?
@@ -81,12 +82,30 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
 
   public init(resourceURL: URL? = nil, limits: EmbeddedExecutionLimits = .init()) {
     #if SWIFT_PACKAGE
-    self.resourceURL = resourceURL ?? Bundle.module.resourceURL!.appendingPathComponent("Resources")
+    let root = resourceURL ?? Bundle.module.resourceURL ?? Bundle.module.bundleURL
     #else
-    self.resourceURL = resourceURL ?? Bundle.main.bundleURL.appendingPathComponent("EmbeddedResources")
+    let root = resourceURL ?? Bundle.main.bundleURL.appendingPathComponent("EmbeddedResources")
     #endif
+    self.resourceLocation = Result { try Self.locateResources(in: root) }
     self.limits = limits
     super.init()
+  }
+
+  static let requiredResources = ["worker.js", "commands.py", "python_stdlib.zip", "pyodide.asm.wasm", "pyodide-lock.json", "provenance.json"]
+
+  static func locateResources(in root: URL) throws -> URL {
+    // SwiftPM versions differ: resourceURL may already be the copied Resources
+    // directory, or its parent. Require one complete local directory; never mix
+    // files from layouts or fall back to a runtime download.
+    for candidate in [root, root.appendingPathComponent("Resources", isDirectory: true)] {
+      let complete = requiredResources.allSatisfy { name in
+        let url = candidate.appendingPathComponent(name)
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) else { return false }
+        return values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? 0) > 0
+      }
+      if complete { return candidate }
+    }
+    throw EmbeddedExecutionError.unavailable("The bundled Python runtime is incomplete. Reinstall this app build; no runtime files will be downloaded.")
   }
 
   /// A fresh executor owns one command. Replaying the same ID returns its durable
@@ -125,6 +144,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
       guard saved.requestDigest == requestDigest else { throw EmbeddedExecutionError.unavailable("The command ID was already accepted with different arguments.") }
       throw EmbeddedExecutionError.unavailable("This command was previously accepted but has no completed receipt. Its native CLI calls may already have committed. Inspect .woven-execution/\(request.id.uuidString)/ before intentionally starting a new command; the script will not be replayed automatically.")
     }
+    _ = try resourceURL
     snapshot = try EmbeddedWorkspace.read(root, maxBytes: limits.workspaceBytes, maxFiles: limits.workspaceEntries)
     if !request.workingDirectory.isEmpty, snapshot?.directories.contains(request.workingDirectory) != true {
       throw EmbeddedExecutionError.unavailable("Working directory does not exist in this workspace.")
@@ -163,6 +183,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
   public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     guard !finished, let request, let snapshot else { return }
     do {
+      let resourceURL = try self.resourceURL
       let worker = try String(contentsOf: resourceURL.appendingPathComponent("worker.js"), encoding: .utf8)
       let commands = try String(contentsOf: resourceURL.appendingPathComponent("commands.py"), encoding: .utf8)
       let lockfile = try String(contentsOf: resourceURL.appendingPathComponent("pyodide-lock.json"), encoding: .utf8)
