@@ -71,6 +71,24 @@ final class DashboardNoteEditorController {
             if let blockID { storage.addAttribute(.noteBlockID, value: blockID, range: range) }
             storage.addAttribute(.noteBlockStyle, value: style.rawValue, range: range)
             storage.addAttribute(.paragraphStyle, value: paragraph, range: range)
+            if style.isList {
+                // A converted paragraph can bridge two previously separate lists.
+                // Share one native list across the entire contiguous style run so
+                // numbering matches the saved document before it is reopened.
+                var listRange = range
+                _ = storage.attribute(
+                    .noteBlockStyle, at: range.location,
+                    longestEffectiveRange: &listRange,
+                    in: NSRange(location: 0, length: storage.length)
+                )
+                storage.enumerateAttribute(.paragraphStyle, in: listRange) { value, subrange, _ in
+                    guard let existing = value as? NSParagraphStyle,
+                          existing.textLists.first !== paragraph.textLists.first,
+                          let joined = existing.mutableCopy() as? NSMutableParagraphStyle else { return }
+                    joined.textLists = paragraph.textLists
+                    storage.addAttribute(.paragraphStyle, value: joined, range: subrange)
+                }
+            }
             if let headingSize = style.headingSize {
                 storage.enumerateAttribute(.font, in: range) { value, subrange, _ in
                     let font = (value as? NSFont) ?? NSFont.systemFont(ofSize: 14)
