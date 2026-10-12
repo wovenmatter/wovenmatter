@@ -35,6 +35,8 @@ struct DashboardNoteEditorTests {
 
     static func main() throws {
         try verifyDocumentBindingCache()
+        try verifyTextStatistics()
+        try verifyNativeEditingControls()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("wovenmatter-note-regression-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -111,6 +113,153 @@ struct DashboardNoteEditorTests {
             }
         }
         print("PASS: \(cases) actual AppKit edit/parse/save/reopen and clear/reopen cases preserve document metadata and table links")
+    }
+
+    static func verifyTextStatistics() throws {
+        func counts(_ text: String) -> DashboardNoteTextStatistics {
+            DashboardNoteTextStatistics(document: NoteDocument(blocks: [.richText(NoteRichTextBlock(text: text))]))
+        }
+        try require(counts("").words == 0 && counts("").characters == 0, "Empty note counts must be zero")
+        try require(counts("Hello, world! Don't stop.").words == 4,
+                    "Words must follow native boundaries, including apostrophes and punctuation")
+        try require(counts("... 🐈").words == 0, "Punctuation and emoji are not words")
+        let unicode = counts("café 👨‍👩‍👧‍👦 e\u{301}")
+        try require(unicode.words == 2 && unicode.characters == 8,
+                    "Characters must count visible Unicode characters, including joined emoji and combining marks")
+        let whitespace = counts("one  two\nthree")
+        try require(whitespace.words == 3 && whitespace.characters == 14,
+                    "Counts must include spaces and line breaks in characters, not words")
+        var table = NoteTableBlock(rows: 2, columns: 2)
+        table.rows[0].cells[0].runs = [NoteTextRun(text: "Apple pie")]
+        table.rows[1].cells[0].runs = [NoteTextRun(text: "Second cell")]
+        let document = NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "One two")), .table(table)])
+        let statistics = DashboardNoteTextStatistics(document: document)
+        try require(statistics.words == 6 && statistics.characters == 31,
+                    "The entire note must count table cells and block/cell separators, without generated list markers")
+        print("PASS: note counts handle empty content, word boundaries, Unicode, whitespace, and table content")
+    }
+
+    static func verifyNativeEditingControls() throws {
+        _ = NSApplication.shared
+        var saved = NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Original text"))])
+        let controller = DashboardNoteEditorController()
+        let editor = DashboardNoteEditor(document: Binding(get: { saved }, set: { saved = $0 }), controller: controller)
+        let host = NSHostingView(rootView: editor)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        defer { window.close() }
+        guard let textView = controller.textView, let manager = textView.undoManager else {
+            throw Failure(description: "Native editor did not bind its text view and undo manager")
+        }
+        try require(textView.isContinuousSpellCheckingEnabled, "Spell checking must be on when the note opens")
+        try require(!textView.isAutomaticSpellingCorrectionEnabled, "Spell checking must not silently replace words")
+        try require(manager !== window.undoManager, "Note actions must not use the window's shared edit history")
+        try require(!controller.canUndo && !controller.canRedo, "Opening a note must start with disabled undo/redo")
+        window.makeFirstResponder(textView)
+        manager.groupsByEvent = false
+
+        func type(_ text: String, replacing range: NSRange) {
+            manager.beginUndoGrouping()
+            textView.insertText(text, replacementRange: range)
+            manager.endUndoGrouping()
+            textView.breakUndoCoalescing()
+        }
+        type("Edited text", replacing: NSRange(location: 0, length: 13))
+        try require(saved.blocks.first?.plainText == "Edited text", "Native typing did not update the note document")
+        try require(controller.canUndo && !controller.canRedo, "Typing must enable Undo and disable Redo")
+        controller.undo()
+        try require(saved.blocks.first?.plainText == "Original text", "Toolbar Undo did not restore typed content")
+        try require(!controller.canUndo && controller.canRedo, "Undo must update both button states")
+        controller.redo()
+        try require(saved.blocks.first?.plainText == "Edited text", "Toolbar Redo did not reapply typed content")
+        try require(controller.canUndo && !controller.canRedo, "Redo must update both button states")
+
+        // Native Edit-menu / keyboard undo uses this same manager. Its
+        // notifications must update the toolbar even without calling our action.
+        manager.undo()
+        try require(controller.canRedo && !controller.canUndo, "Native Undo left stale toolbar states")
+        type("Fresh text", replacing: NSRange(location: 0, length: 13))
+        try require(!controller.canRedo, "Typing after undo must discard the old redo branch")
+        try require(DashboardNoteTextStatistics(document: saved).words == 2, "Live counts did not follow native edits")
+
+        manager.removeAllActions()
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+        manager.beginUndoGrouping()
+        controller.toggleBold()
+        manager.endUndoGrouping()
+        try require(controller.canUndo, "Formatting must enable Undo")
+        controller.undo()
+        guard case .richText(let block) = saved.blocks.first else { throw Failure(description: "Formatted block missing") }
+        try require(block.runs.allSatisfy { !$0.bold }, "Undo did not restore the prior font formatting")
+        controller.redo()
+        guard case .richText(let boldBlock) = saved.blocks.first else { throw Failure(description: "Formatted block missing") }
+        try require(boldBlock.runs.first?.bold == true, "Redo did not restore bold formatting")
+
+        manager.removeAllActions()
+        manager.beginUndoGrouping()
+        controller.insertTable(rows: 1, columns: 1)
+        manager.endUndoGrouping()
+        try require(saved.blocks.contains { if case .table = $0 { return true }; return false }, "Insert table failed")
+        controller.undo()
+        try require(!saved.blocks.contains { if case .table = $0 { return true }; return false }, "Undo did not remove inserted table")
+        controller.redo()
+        try require(saved.blocks.contains { if case .table = $0 { return true }; return false }, "Redo did not restore inserted table")
+
+        manager.removeAllActions()
+        let dictation = DictationEditor()
+        dictation.bind(textView, identity: "note-test")
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let beforeDictation = saved
+        try require(dictation.ticket()?.insert("Spoken words ") == true, "Dictation fixture could not insert text")
+        try require(controller.canUndo, "Dictation must enable Undo")
+        controller.undo()
+        try require(saved == beforeDictation, "Undo did not restore the note before dictation")
+        controller.redo()
+        try require(saved.plainText.hasPrefix("Spoken words "), "Redo did not reapply dictated content")
+
+        manager.removeAllActions()
+        guard let coordinator = textView.delegate as? DashboardNoteEditor.Coordinator else {
+            throw Failure(description: "Real editor coordinator missing")
+        }
+        let beforeAgentEdit = saved
+        let agentEdit = NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "An external revision"))])
+        manager.beginUndoGrouping()
+        coordinator.apply(agentEdit, to: textView)
+        // apply is the renderer side of a document binding update.
+        saved = agentEdit
+        manager.endUndoGrouping()
+        controller.undo()
+        try require(saved == beforeAgentEdit, "Undo did not restore an external document edit")
+        controller.redo()
+        try require(saved == agentEdit, "Redo did not reapply an external document edit")
+
+        let otherController = DashboardNoteEditorController()
+        let otherHost = NSHostingView(rootView: DashboardNoteEditor(document: .constant(NoteDocument()), controller: otherController))
+        let otherWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 240),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        otherWindow.isReleasedWhenClosed = false
+        otherWindow.contentView = otherHost
+        otherHost.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        defer { otherWindow.close() }
+        try require(otherController.textView?.undoManager !== manager,
+                    "Different notes must not share their undo managers")
+        try require(!otherController.canUndo && !otherController.canRedo,
+                    "Opening another note must not inherit undo/redo availability")
+
+        textView.isEditable = false
+        controller.refreshUndoState()
+        let locked = saved
+        controller.undo()
+        try require(!controller.canUndo && !controller.canRedo && saved == locked,
+                    "Read-only notes must disable and reject editing actions")
+        controller.unbind(textView)
+        try require(!controller.canUndo && !controller.canRedo, "Detached editor must clear toolbar availability")
+        print("PASS: actual hosted Notes editor enables spelling and isolates native undo/redo for typing, formatting, tables, dictation, external edits, separate notes, keyboard actions, and read-only states")
     }
 
     static func verifyDocumentBindingCache() throws {

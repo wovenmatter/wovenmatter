@@ -14,6 +14,7 @@ struct DashboardNotePane: View {
     @State private var documentCache = DashboardNoteDocumentCache()
     @State private var showsFormatting = false
     @State private var showsVersionHistory = false
+    @State private var showsCharacterCount = false
     @State private var linkedDataJSON: String?
     @State private var linkedDataError: String?
     @State private var isRefreshingLinkedData = false
@@ -84,7 +85,25 @@ struct DashboardNotePane: View {
                     .accessibilityLabel("Note title")
                     .layoutPriority(1)
                 Spacer()
-                if currentDocument.kind == .note { DictationMicrophone(editor: dictationEditor) }
+                if currentDocument.kind == .note {
+                    Button { editorController.undo() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 14)).frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(DashboardIconButtonStyle())
+                    .disabled(!editorController.canUndo)
+                    .help("Undo (⌘Z)").accessibilityLabel("Undo")
+                    Button { editorController.redo() } label: {
+                        Image(systemName: "arrow.uturn.forward")
+                            .font(.system(size: 14)).frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(DashboardIconButtonStyle())
+                    .disabled(!editorController.canRedo)
+                    .help("Redo (⇧⌘Z)").accessibilityLabel("Redo")
+                }
+                Button { showsVersionHistory = true } label: {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
+                }.buttonStyle(DashboardIconButtonStyle()).help("Version history").accessibilityLabel("Version history")
                 DashboardDatabaseLinkControl(
                     document: document,
                     snapshot: model.databasesSnapshot
@@ -104,10 +123,8 @@ struct DashboardNotePane: View {
                     .help("Refresh linked data")
                     .disabled(isRefreshingLinkedData)
                 }
-                Button { showsVersionHistory = true } label: {
-                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
-                }.buttonStyle(DashboardIconButtonStyle()).help("Version history").accessibilityLabel("Version history")
                 if currentDocument.kind == .note {
+                    DictationMicrophone(editor: dictationEditor, usesNoteToolbarStyle: true)
                     Button {
                         showsFormatting.toggle()
                     } label: {
@@ -180,7 +197,26 @@ struct DashboardNotePane: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, 32)
-            .padding(.bottom, 24)
+            .padding(.bottom, currentDocument.kind == .note ? 8 : 24)
+
+            if currentDocument.kind == .note {
+                let statistics = DashboardNoteTextStatistics(document: currentDocument)
+                Button { showsCharacterCount.toggle() } label: {
+                    Text(showsCharacterCount
+                         ? "\(statistics.characters.formatted()) \(statistics.characters == 1 ? "character" : "characters")"
+                         : "\(statistics.words.formatted()) \(statistics.words == 1 ? "word" : "words")")
+                        .font(.system(size: 11)).monospacedDigit()
+                        .padding(.horizontal, 8).padding(.vertical, 6)
+                }
+                .buttonStyle(DashboardIconButtonStyle())
+                .help(showsCharacterCount ? "Click to show words. Characters include spaces and line breaks."
+                                          : "Click to show characters")
+                .accessibilityLabel(showsCharacterCount ? "Note character count" : "Note word count")
+                .accessibilityValue(showsCharacterCount ? "\(statistics.characters)" : "\(statistics.words)")
+                .accessibilityHint(showsCharacterCount ? "Show word count" : "Show character count")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24).padding(.bottom, 12)
+            }
         }
         .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)

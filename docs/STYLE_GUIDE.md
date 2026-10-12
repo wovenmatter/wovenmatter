@@ -64,6 +64,11 @@ when an intentional design change is accepted.
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
+- **Notes:** keep the header controls in this order from left to right: Undo,
+  Redo, Version history, Database, Microphone, Format note. Use the same compact
+  icon button style and frames for the microphone and adjacent controls, without
+  a divider. The note-body count sits at the bottom, starts with words, and
+  switches between words and characters when clicked.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
