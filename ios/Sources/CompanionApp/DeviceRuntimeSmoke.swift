@@ -123,6 +123,7 @@ private actor SmokeNativeTools {
             !stateSnapshot.contains("isError\":true"), await codeTransport.calls == 4 else { throw DeviceExecutionError.unavailable("iOS code-mode JavaScript state did not survive reopening.") }
       try await restoredCode.close()
       result["codeModeOnIOS"] = true; result["codeModeStateReopened"] = true
+      result.merge(try await DeviceBackgroundSmoke.run(root: root, descriptor: model)) { _, new in new }
 
     } catch { result["passed"] = false; result["error"] = error.localizedDescription }
     do { try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: resultFile, options: .atomic) }

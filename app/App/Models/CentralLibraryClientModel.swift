@@ -74,6 +74,7 @@ final class CentralLibraryClientModel {
     private(set) var preparingTransition = false
     private(set) var localSharingBusy = false
     private var sessionProviders: [String: CompanionProvider] = [:]
+    var calendarRevision = 0
     private let store: MobileStore?
     private var engine: MobileSyncEngine?
     private var transport: HTTPSCompanionTransport?
@@ -117,6 +118,8 @@ final class CentralLibraryClientModel {
         return providers.first { $0.id == (selectedConversation?.providerID ?? selectedProviderID) }
     }
     var currentPending: [CompanionPendingInteraction] { pending.filter { $0.conversationID == selectedConversationID } }
+    var calendarCentralProviders: [CompanionProvider] { centralProviders }
+    var calendarLocalProviders: [CompanionProvider] { localExecution.flatMap { directProviders[$0.descriptor.id] } ?? [] }
     var executionWorkspaces: [CompanionExecutionWorkspace] { journal.workspaces.values.filter { !$0.deleted }.sorted { $0.name < $1.name } }
     var canControl: Bool { canControl(workspaceID: selectedExecutionWorkspaceID) }
     func canControl(workspaceID: String?) -> Bool {
@@ -199,6 +202,7 @@ final class CentralLibraryClientModel {
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
     }
     func reload() async {
+        calendarRevision &+= 1
         if let store { state = await store.snapshot(); journal = await store.journal.snapshot(); artifacts = await store.artifacts.manifests().filter { !$0.deleted } }
     }
     func attachExecutionWorkspace(_ workspace: CompanionExecutionWorkspace, transport: any ExecutionWorkspaceTransport) async throws {
@@ -550,7 +554,28 @@ final class CentralLibraryClientModel {
         await retryCommand(.init(deviceID: state.deviceID, kind: .respond, conversationID: interaction.conversationID,
             runID: interaction.runID, interactionID: interaction.id, response: response))
     }
+    func calendarConflicts() async -> [String: MobileCalendarConflict] { await store?.calendar.conflicts() ?? [:] }
+    func resolveCalendarConflict(_ id: String, keepLocal: Bool) async {
+        guard let calendar = store?.calendar else { return }
+        do {
+            if keepLocal, let conflict = await calendar.conflicts()[id], conflict.remote?.deleted == true {
+                let copyID = UUID().uuidString.lowercased()
+                _ = try await calendar.save(id: copyID, expectedRevision: nil, draft: conflict.local.event.draft,
+                    ownerDeviceID: conflict.local.ownerDeviceID, requestID: copyID)
+                try await calendar.resolveConflict(id: id, keepLocal: false)
+            } else { try await calendar.resolveConflict(id: id, keepLocal: keepLocal) }
+            await projectLocalCalendar()
+            await reload(); if online { Task { await self.refresh() } }
+        } catch { errorMessage = error.localizedDescription }
+    }
     func workspace(_ read: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+        if let store {
+            switch read {
+            case .calendar(let from, let to): return .calendar(try await store.calendar.events(from: from, to: to))
+            case .scheduledTasks: return .scheduledTasks(await store.calendar.scheduledTasks())
+            default: break
+            }
+        }
         let conversationID: String?
         switch read {
         case .session(let id), .exportConversation(let id, _): conversationID = id
@@ -563,7 +588,29 @@ final class CentralLibraryClientModel {
         guard let engine else { throw MobileConnectionError.offline }
         return try await engine.readWorkspace(read)
     }
+    private func projectLocalCalendar() async {
+        do { try await localExecution?.reconcileCalendar() }
+        catch { errorMessage = "The calendar change was saved locally. " + error.localizedDescription }
+    }
     @discardableResult func perform(_ action: CompanionWorkspaceAction) async -> Bool {
+        if let store {
+            do {
+                switch action {
+                case .saveCalendar(let id, let revision, let draft):
+                    let previous = await store.calendar.record(id: id)
+                    let owner = previous?.event.draft.task != nil ? previous?.ownerDeviceID :
+                        (draft.task?.workspaceID == localExecution?.descriptor.id && localExecution != nil ? state.deviceID : nil)
+                    _ = try await store.calendar.save(id: id, expectedRevision: revision, draft: draft, ownerDeviceID: owner)
+                    await projectLocalCalendar()
+                    await reload(); if online { Task { await self.refresh() } }; return true
+                case .deleteCalendar(let id, let revision, let occurrence):
+                    try await store.calendar.delete(id: id, expectedRevision: revision, occurrence: occurrence)
+                    await projectLocalCalendar()
+                    await reload(); if online { Task { await self.refresh() } }; return true
+                default: break
+                }
+            } catch { errorMessage = error.localizedDescription; return false }
+        }
         let conversationID: String?
         switch action {
         case .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id

@@ -19,7 +19,7 @@ private actor ControlledHost {
   var toolCalls = 0
   var toolsSeen: [String] = []
   var requests: [String] = []
-  enum Mode: Sendable { case normal, subagent, code }
+  enum Mode: Sendable { case normal, subagent, code, checkpointThenWait, parallelCode }
   var mode: Mode = .normal
   func mode(_ value: Mode) { mode = value }
   var holdTool = false
@@ -35,13 +35,18 @@ private actor ControlledHost {
     let call: [String: Any]
     if mode == .subagent && !isChild {
       call = ["type":"toolCall","id":"call-child","name":"subagent","arguments":["task":"delegated task","name":"Researcher"]]
+    } else if mode == .checkpointThenWait {
+      call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"store('phase', 'prepared'); await checkpoint(); await tools.save_note({text:'checkpointed'});"]]
     } else if mode == .code {
       call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"const result = await tools.save_note({text:'café 🟩'}); text(result); store('saved', true);"]]
     } else {
       call = ["type":"toolCall","id":"call-native-note","name":"save_note","arguments":["text":"café 🟩"]]
     }
     let content: [[String: Any]] = finishedTool
-      ? [["type":"text","text":"Saved café 🟩 on this device."]] : [call]
+      ? [["type":"text","text":"Saved café 🟩 on this device."]] : mode == .parallelCode ? [
+        ["type":"toolCall","id":"code-first","name":"codemode","arguments":["code":"await new Promise(r=>setTimeout(r,150)); store('first',true); await checkpoint();"]],
+        ["type":"toolCall","id":"code-second","name":"codemode","arguments":["code":"store('second',true); await checkpoint();"]]
+      ] : [call]
     let message: [String: Any] = ["role":"assistant","content":content,"api":"openai-responses","provider":"controlled","model":"test-model",
       "usage":["input":10,"output":8,"cacheRead":0,"cacheWrite":0,"totalTokens":18,"cost":["input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0]],
       "stopReason":finishedTool ? "stop" : "toolUse","timestamp":Date().timeIntervalSince1970 * 1000]
@@ -275,6 +280,47 @@ final class PiDurableRuntimeTests: XCTestCase {
     let requests = await host.toolsSeen
     XCTAssertTrue(try object(XCTUnwrap(requests.first))["toolCallID"] as? String == "call-code/nested/1")
     try await engine.close()
+  }
+
+  func testConcurrentCodeProgramsPreserveBothCheckpointKeys() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost(); await host.mode(.parallelCode)
+    let engine = try runtime(path, host: host)
+    _ = try await engine.open()
+    let receipt = try object(await engine.submit(text: "Run both", requestID: "parallel-code"))
+    _ = try await engine.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
+    let page = try object(await engine.history())
+    let items = try XCTUnwrap(page["items"] as? [[String: Any]])
+    let stores = items.filter { $0["kind"] as? String == "woven.ios-codemode-store" }
+    XCTAssertTrue(stores.contains { item in
+      guard let data = item["data"] as? [String: Any] else { return false }
+      return data["first"] as? Bool == true && data["second"] as? Bool == true
+    }, String(describing: stores))
+    try await engine.close()
+  }
+
+  func testCodeCheckpointSurvivesInterruptedWorkerWithoutReplayingTool() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost(); await host.mode(.checkpointThenWait); await host.hold()
+    let first = try runtime(path, host: host)
+    _ = try await first.open()
+    let receipt = try object(await first.submit(text: "Checkpoint before waiting", requestID: "checkpoint-request"))
+    let id = try XCTUnwrap(receipt["id"] as? Int)
+    for _ in 0..<300 {
+      if await host.toolStarted { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let started = await host.toolStarted; XCTAssertTrue(started)
+    try await first.close()
+    let second = try runtime(path, host: host)
+    _ = try await second.open()
+    let recovered = try await second.history()
+    XCTAssertTrue(recovered.contains("woven.ios-codemode-store"), recovered)
+    XCTAssertTrue(recovered.contains("prepared"), recovered)
+    try await second.resume()
+    _ = try await second.wait(submissionID: id)
+    let toolCalls = await host.toolCalls; XCTAssertEqual(toolCalls, 1)
+    try await second.close()
   }
 
   func testCodeModeInterruptionDoesNotReplayNestedUnsafeEffect() async throws {

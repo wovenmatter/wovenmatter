@@ -187,7 +187,7 @@ extension WorkspaceDatabaseConnection {
       let older = messageStart > 0 || activityStart > 0
         ? try JSONEncoder().encode(FederationTranscriptCursor(messages: messageStart, activities: activityStart)).base64EncodedString() : nil
       return CompanionTranscript(conversationID: conversationID, messages: Array(stored.messages[messageStart..<end.messages]),
-        activities: Array(stored.activities[activityStart..<end.activities]), activeRunID: stored.activeRunID, olderCursor: older)
+        activities: Array(stored.activities[activityStart..<end.activities]), activeRunID: stored.activeRunID, olderCursor: older, runs: stored.runs)
     }
   }
   func federationConversationUnlocked(_ id: String) throws -> CompanionConversation? {

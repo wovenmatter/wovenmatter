@@ -1,4 +1,16 @@
+#if os(macOS)
 import AppKit
+private typealias ResponseFont = NSFont
+private typealias ResponseColor = NSColor
+private let responseAbsolute = NSTextBlock.ValueType.absoluteValueType
+private let responsePercentage = NSTextBlock.ValueType.percentageValueType
+#else
+import UIKit
+private typealias ResponseFont = UIFont
+private typealias ResponseColor = UIColor
+private let responseAbsolute = NSTextBlock.ValueType.absolute
+private let responsePercentage = NSTextBlock.ValueType.percentage
+#endif
 import SwiftUI
 
 /// One selectable text surface and one copy action for the complete response.
@@ -19,12 +31,17 @@ struct ConversationResponse: View {
 
             if showsCopyButton {
                 Button {
+                    #if os(macOS)
                     NSPasteboard.general.clearContents()
                     copied = NSPasteboard.general.setString(content, forType: .string)
+                    #else
+                    UIPasteboard.general.string = content
+                    copied = true
+                    #endif
                 } label: {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11.5, weight: .medium))
-                        .frame(width: 28, height: 28)
+                        .frame(width: copyTargetSize, height: copyTargetSize)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(DashboardIconButtonStyle())
@@ -41,14 +58,26 @@ struct ConversationResponse: View {
             Button("Cancel", role: .cancel) { pendingExternalURL = nil }
             Button("Open") {
                 pendingExternalURL = nil
+                #if os(macOS)
                 NSWorkspace.shared.open(url)
+                #else
+                UIApplication.shared.open(url)
+                #endif
             }
         } message: { url in
             Text(url.absoluteString)
         }
     }
+    private var copyTargetSize: CGFloat {
+        #if os(macOS)
+        28
+        #else
+        44
+        #endif
+    }
 }
 
+#if os(macOS)
 private struct ConversationResponseText: NSViewRepresentable {
     let content: String
     let document: ConversationMarkdownDocument?
@@ -243,6 +272,119 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     }
 }
 
+#else
+/// UIKit uses the same parser and attributed block renderer as the Mac. One
+/// selectable surface spans the whole response, without a nested scrolling area.
+private struct ConversationResponseText: UIViewRepresentable {
+    let content: String
+    let document: ConversationMarkdownDocument?
+    let isStreaming: Bool
+    let onOpenLink: (URL) -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func makeUIView(context: Context) -> ConversationResponseNativeTextView {
+        ConversationResponseNativeTextView()
+    }
+    func updateUIView(_ view: ConversationResponseNativeTextView, context: Context) {
+        view.onOpenLink = onOpenLink
+        view.apply(content: content, document: document, isStreaming: isStreaming,
+                   typeSize: String(describing: dynamicTypeSize))
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationResponseNativeTextView,
+                     context: Context) -> CGSize? {
+        uiView.fittingSize(width: proposal.width ?? 680)
+    }
+}
+
+final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
+    var onOpenLink: ((URL) -> Void)?
+    private var appliedContent: String?
+    private var appliedStreaming: Bool?
+    private var appliedTypeSize: String?
+
+    init() {
+        let storage = NSTextStorage()
+        let manager = ConversationResponseLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 680, height: CGFloat.greatestFiniteMagnitude))
+        storage.addLayoutManager(manager)
+        manager.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+        isEditable = false
+        isSelectable = true
+        isScrollEnabled = false
+        backgroundColor = .clear
+        textContainerInset = .zero
+        textContainer.lineFragmentPadding = 0
+        textContainer.widthTracksTextView = false
+        showsVerticalScrollIndicator = false
+        showsHorizontalScrollIndicator = false
+        contentInset = .zero
+        delegate = self
+        linkTextAttributes = [.foregroundColor: UIColor(DashboardPalette.success), .underlineStyle: 0]
+        accessibilityLabel = "Agent response"
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool, typeSize: String) {
+        guard appliedContent != content || appliedStreaming != isStreaming || appliedTypeSize != typeSize else { return }
+        let selection = selectedRange
+        let previous = textStorage.string as NSString
+        let rendered = ConversationResponseAttributedText.render(document ?? ConversationMarkdownDocument(content), isStreaming: isStreaming)
+        textStorage.setAttributedString(rendered)
+        let end = NSMaxRange(selection)
+        let unchanged = selection.length > 0 && end <= previous.length && end <= rendered.length
+            && previous.substring(to: end) == (rendered.string as NSString).substring(to: end)
+        selectedRange = unchanged ? selection : NSRange(location: 0, length: 0)
+        appliedContent = content; appliedStreaming = isStreaming; appliedTypeSize = typeSize
+        invalidateIntrinsicContentSize()
+    }
+    func fittingSize(width: CGFloat) -> CGSize {
+        let width = max(1, width)
+        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: textContainer)
+        var height = max(layoutManager.usedRect(for: textContainer).maxY, layoutManager.extraLineFragmentRect.maxY)
+        if textStorage.length > 0, textStorage.attribute(.responseCode, at: textStorage.length - 1, effectiveRange: nil) != nil { height += 6 }
+        return CGSize(width: width, height: max(1, ceil(height)))
+    }
+    func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange,
+                  interaction: UITextItemInteraction) -> Bool {
+        if ConversationMarkdownDocument.isSafeExternalLink(URL) { onOpenLink?(URL) }
+        return false
+    }
+}
+
+private final class ConversationResponseLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        guard let storage = textStorage, let container = textContainers.first else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider] {
+            storage.enumerateAttribute(key, in: characters) { value, range, _ in
+                guard value != nil else { return }
+                var full = NSRange()
+                _ = storage.attribute(key, at: range.location, longestEffectiveRange: &full,
+                                      in: NSRange(location: 0, length: storage.length))
+                let glyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
+                let rect = self.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
+                if key == .responseCode {
+                    UIColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()
+                    UIBezierPath(roundedRect: CGRect(x: origin.x, y: rect.minY - 6,
+                        width: container.size.width, height: rect.height + 12), cornerRadius: 12).fill()
+                } else {
+                    UIColor(DashboardPalette.foreground).withAlphaComponent(0.16).setFill()
+                    let mark = key == .responseQuote
+                        ? CGRect(x: max(origin.x, rect.minX - 14), y: rect.minY, width: 2, height: rect.height)
+                        : CGRect(x: origin.x, y: rect.midY, width: container.size.width, height: 1)
+                    UIBezierPath(rect: mark).fill()
+                }
+            }
+        }
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+}
+
+#endif
+
 private extension NSAttributedString.Key {
     static let responseCode = Self("WovenMatterResponseCode")
     static let responseQuote = Self("WovenMatterResponseQuote")
@@ -253,8 +395,8 @@ private extension NSAttributedString.Key {
 @MainActor
 private enum ConversationResponseAttributedText {
     static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool) -> NSAttributedString {
-        let output = NSMutableAttributedString()
-        let foreground = NSColor(DashboardPalette.foreground).withAlphaComponent(isStreaming ? 0.76 : 1)
+        let output = NSMutableAttributedString(string: "")
+        let foreground = ResponseColor(DashboardPalette.foreground).withAlphaComponent(isStreaming ? 0.76 : 1)
 
         func paragraphStyle(indent: CGFloat = 0) -> NSMutableParagraphStyle {
             let style = NSMutableParagraphStyle()
@@ -265,15 +407,24 @@ private enum ConversationResponseAttributedText {
             return style
         }
 
-        func inline(_ text: ConversationMarkdownDocument.InlineText, font: NSFont) -> NSMutableAttributedString {
-            let result = NSMutableAttributedString()
+        func inline(_ text: ConversationMarkdownDocument.InlineText, font: ResponseFont) -> NSMutableAttributedString {
+            let result = NSMutableAttributedString(string: "")
             for run in text.rendered.runs {
                 let intent = run.inlinePresentationIntent ?? []
-                var runFont = intent.contains(.code) ? NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular) : font
+                var runFont = intent.contains(.code) ? ResponseFont.monospacedSystemFont(ofSize: 13.5, weight: .regular) : font
+                #if os(macOS)
                 if intent.contains(.stronglyEmphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .boldFontMask) }
                 if intent.contains(.emphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .italicFontMask) }
+                #else
+                var traits = runFont.fontDescriptor.symbolicTraits
+                if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
+                if intent.contains(.emphasized) { traits.insert(.traitItalic) }
+                if let descriptor = runFont.fontDescriptor.withSymbolicTraits(traits) {
+                    runFont = UIFont(descriptor: descriptor, size: runFont.pointSize)
+                }
+                #endif
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
-                if intent.contains(.code) { attributes[.backgroundColor] = NSColor(DashboardPalette.primary).withAlphaComponent(0.075) }
+                if intent.contains(.code) { attributes[.backgroundColor] = ResponseColor(DashboardPalette.primary).withAlphaComponent(0.075) }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
                 if let link = run.link, ConversationMarkdownDocument.isSafeExternalLink(link) { attributes[.link] = link }
                 result.append(NSAttributedString(string: String(text.rendered[run.range].characters), attributes: attributes))
@@ -283,7 +434,7 @@ private enum ConversationResponseAttributedText {
 
         func append(_ text: NSAttributedString, style: NSParagraphStyle) {
             let paragraph = NSMutableAttributedString(attributedString: text)
-            paragraph.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 15), .foregroundColor: foreground]))
+            paragraph.append(NSAttributedString(string: "\n", attributes: [.font: ResponseFont.systemFont(ofSize: 15), .foregroundColor: foreground]))
             let range = NSRange(location: 0, length: paragraph.length)
             paragraph.addAttribute(.paragraphStyle, value: style, range: range)
             if text.string.contains("\n"), style.paragraphSpacing > 0 {
@@ -304,7 +455,7 @@ private enum ConversationResponseAttributedText {
                     style.headIndent = indent + 31
                     style.tabStops = [NSTextTab(textAlignment: .left, location: indent + 31)]
                 }
-                func appendInline(_ content: ConversationMarkdownDocument.InlineText, font: NSFont) {
+                func appendInline(_ content: ConversationMarkdownDocument.InlineText, font: ResponseFont) {
                     let text = NSMutableAttributedString(string: prefix, attributes: [.font: font, .foregroundColor: foreground])
                     text.append(inline(content, font: font))
                     append(text, style: style)
@@ -334,12 +485,12 @@ private enum ConversationResponseAttributedText {
                     style.paragraphSpacingBefore = 6
                     if let language, !language.isEmpty {
                         style.paragraphSpacing = 6
-                        append(NSAttributedString(string: language, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: foreground]), style: style)
+                        append(NSAttributedString(string: language, attributes: [.font: ResponseFont.systemFont(ofSize: 11.5), .foregroundColor: foreground]), style: style)
                     }
                     style.paragraphSpacingBefore = language?.isEmpty == false ? 0 : 6
                     style.paragraphSpacing = 0
                     style.lineSpacing = 3
-                    append(NSAttributedString(string: content, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: foreground]), style: style)
+                    append(NSAttributedString(string: content, attributes: [.font: ResponseFont.monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: foreground]), style: style)
                     let lastParagraph = (output.string as NSString).paragraphRange(for: NSRange(location: max(start, output.length - 1), length: 0))
                     let lastStyle = style.mutableCopy() as! NSMutableParagraphStyle
                     lastStyle.paragraphSpacing = 20
@@ -351,16 +502,22 @@ private enum ConversationResponseAttributedText {
                     let nativeTable = NSTextTable()
                     nativeTable.numberOfColumns = table.header.count
                     nativeTable.collapsesBorders = true
-                    nativeTable.setWidth(14, type: .absoluteValueType, for: .margin, edge: .maxY)
-                    nativeTable.setValue(100, type: .percentageValueType, for: .width)
+                    #if os(macOS)
+                    nativeTable.setWidth(14, type: responseAbsolute, for: .margin, edge: .maxY)
+                    #else
+                    if #available(iOS 27, *) {
+                        nativeTable.setWidth(14, type: responseAbsolute, for: .margin, rectEdge: .maxYEdge)
+                    }
+                    #endif
+                    nativeTable.setValue(100, type: responsePercentage, for: .width)
                     for (rowIndex, cells) in ([table.header] + table.rows).enumerated() {
                         for column in table.header.indices {
                             let cell = NSTextTableBlock(table: nativeTable, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
-                            cell.setValue(100 / CGFloat(table.header.count), type: .percentageValueType, for: .width)
-                            cell.setWidth(9, type: .absoluteValueType, for: .padding)
-                            cell.setWidth(0.5, type: .absoluteValueType, for: .border)
+                            cell.setValue(100 / CGFloat(table.header.count), type: responsePercentage, for: .width)
+                            cell.setWidth(9, type: responseAbsolute, for: .padding)
+                            cell.setWidth(0.5, type: responseAbsolute, for: .border)
                             cell.setBorderColor(foreground.withAlphaComponent(0.09))
-                            cell.backgroundColor = NSColor(DashboardPalette.primary).withAlphaComponent(0.032)
+                            cell.backgroundColor = ResponseColor(DashboardPalette.primary).withAlphaComponent(0.032)
                             let cellStyle = paragraphStyle()
                             cellStyle.paragraphSpacing = 0
                             cellStyle.textBlocks = [cell]
@@ -371,11 +528,18 @@ private enum ConversationResponseAttributedText {
                         }
                     }
                 case .divider:
-                    append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 15), .responseDivider: true]), style: style)
+                    append(NSAttributedString(string: " ", attributes: [.font: ResponseFont.systemFont(ofSize: 15), .responseDivider: true]), style: style)
                 }
             }
         }
         blocks(document.blocks)
+        #if os(iOS)
+        output.enumerateAttribute(.font, in: NSRange(location: 0, length: output.length)) { value, range, _ in
+            if let font = value as? UIFont {
+                output.addAttribute(.font, value: UIFontMetrics.default.scaledFont(for: font), range: range)
+            }
+        }
+        #endif
         // A terminal newline creates an extra empty line between text and Copy.
         // Native tables retain their cell-ending paragraph delimiter.
         if output.length > 0, case .table = document.blocks.last {
@@ -383,5 +547,50 @@ private enum ConversationResponseAttributedText {
         }
         if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
         return output
+    }
+}
+
+/// The same user-message bubble on desktop and mobile; callers supply their
+/// platform's persisted attachment/reference chips inside the shared layout.
+struct ConversationUserBubble<Attachments: View>: View {
+    let content: String
+    var hasAttachments = false
+    @ViewBuilder var attachments: () -> Attachments
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            if !content.isEmpty {
+                Text(content)
+                    .font(.system(size: 15))
+                    .lineSpacing(4)
+                    .lineLimit(isLong && !expanded ? 6 : nil)
+                    .foregroundStyle(DashboardPalette.foreground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            attachments()
+            if isLong {
+                Button(expanded ? "Show less" : "Show full message") {
+                    withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+        }
+        .frame(maxWidth: preferredContentWidth, alignment: .trailing)
+        .padding(.horizontal, 17)
+        .padding(.vertical, 13)
+        .background(DashboardPalette.primary.opacity(0.13))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+    private var isLong: Bool { content.count > 420 || content.filter { $0 == "\n" }.count > 5 }
+    private var preferredContentWidth: CGFloat {
+        if hasAttachments { return 420 }
+        let font = ResponseFont.systemFont(ofSize: 15)
+        let longestLine = content.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return min(586, max(isLong ? 118 : 1, ceil(longestLine)))
     }
 }

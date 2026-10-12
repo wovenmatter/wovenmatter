@@ -76,6 +76,7 @@ run_default_agent_tests() {
   npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
   npm test --prefix default-agent
   node scripts/build-ios-pi-runtime.mjs --check
+  node scripts/build-ios-embedded-runtime.mjs --check
 }
 
 run_remote_tests() {

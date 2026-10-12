@@ -2,6 +2,7 @@ import SwiftUI
 import CompanionInference
 import CompanionClient
 import WovenMatterCompanion
+import PiDurableRuntime
 
 struct ExecutionSettingsPane: View {
   @Bindable var model: CompanionModel
@@ -51,6 +52,12 @@ struct DeviceAgentSettingsPane: View {
   @State private var catalogTask: Task<Void, Never>?
   @State private var saveTask: Task<Void, Never>?
   @State private var generation = UUID()
+  private var policy: PiExecutionPolicy { defaults.executionPolicy ?? .init() }
+  private func policyBinding<Value>(_ path: WritableKeyPath<PiExecutionPolicy, Value>) -> Binding<Value> {
+    Binding(get: { policy[keyPath: path] }, set: { value in
+      var updated = policy; updated[keyPath: path] = value; defaults.executionPolicy = updated
+    })
+  }
   private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
   private var toolDefinitions: [(id: String, name: String)] {
     CompanionModel.deviceToolDefinitions.compactMap { definition in
@@ -74,6 +81,13 @@ struct DeviceAgentSettingsPane: View {
         NavigationLink(model.deviceConnectionsTitle) { ExecutionSettingsPane(model: model) }
       }
       Section("Instructions") { TextEditor(text: $defaults.instructions).frame(minHeight: 130).accessibilityLabel("Pi Durable instructions") }
+      Section("Execution") {
+        Stepper("Concurrent subagents: \(policy.concurrentSubagents)", value: policyBinding(\.concurrentSubagents), in: 1...16)
+        Stepper("Delegation depth: \(policy.subagentDepth)", value: policyBinding(\.subagentDepth), in: 1...4)
+        Stepper("Concurrent tools: \(policy.concurrentTools)", value: policyBinding(\.concurrentTools), in: 1...64)
+        Stepper("Uninterrupted code: \(Int(policy.unresponsiveCodeSeconds)) seconds", value: policyBinding(\.unresponsiveCodeSeconds), in: 5...300, step: 5)
+      }
+
       Section("Tool access") {
         ForEach(toolDefinitions, id: \.id) { tool in
           Toggle(tool.name, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in

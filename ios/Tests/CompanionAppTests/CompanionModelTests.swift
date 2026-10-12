@@ -4,7 +4,24 @@ import CompanionClient
 import WovenMatterCompanion
 @testable import WovenMatterMobileApp
 
-private actor ModelMac: CompanionTransport {
+private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
+  var calendarRecords: [String: CompanionCalendarRecord] = [:]
+  var calendarReceipts: [String: CompanionCalendarReceipt] = [:]
+  var calendarRequests: [CompanionCalendarMutation] = []
+  var dropNextCalendarReply = false
+  func loseNextCalendarReply() { dropNextCalendarReply = true }
+  func calendarSnapshot() async throws -> CompanionCalendarSnapshot { .init(workspaceID: "workspace", records: Array(calendarRecords.values)) }
+  func calendarPublishRuns(_ runs: [CompanionCalendarRun]) async throws -> [String] { runs.map(\.id) }
+  func calendarMutate(_ mutation: CompanionCalendarMutation) async throws -> CompanionCalendarReceipt {
+    calendarRequests.append(mutation)
+    if let receipt = calendarReceipts[mutation.id] { return receipt }
+    var record = mutation.record; record.event.revision = mutation.expectedRevision.map { $0 + 1 } ?? 0
+    calendarRecords[record.id] = record
+    let receipt = CompanionCalendarReceipt(mutationID: mutation.id, status: .accepted, record: record)
+    calendarReceipts[mutation.id] = receipt
+    if dropNextCalendarReply { dropNextCalendarReply = false; throw MobileConnectionError.offline }
+    return receipt
+  }
   var commands: [CompanionCommand] = []
   var gate: CheckedContinuation<Void, Never>?
   var shouldGate = true
@@ -74,14 +91,39 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertEqual(drafts["A"]?.text, "")
     XCTAssertEqual(drafts["B"]?.text, "Draft for B")
   }
+  @MainActor func testCalendarSavesOfflineAndSynchronizesOnceAfterLostReceipt() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let store = try MobileStore(file: file)
+    let mac = ModelMac(); await mac.release()
+    let model = CompanionModel(store: store, transport: mac)
+    model.online = false; await model.reload()
+    let id = UUID().uuidString.lowercased(), start = Date(timeIntervalSince1970: 1_792_000_000)
+    let saved = await model.perform(.saveCalendar(id: id, revision: nil, draft: .init(title: "Offline event", startsAt: start)))
+    XCTAssertTrue(saved)
+    guard case .calendar(let events) = try await model.workspace(.calendar(from: start.addingTimeInterval(-1), to: start.addingTimeInterval(1))) else { return XCTFail("Calendar was not local") }
+    XCTAssertEqual(events.map(\.id), [id])
+    let noRequests = await mac.calendarRequests; XCTAssertTrue(noRequests.isEmpty)
+    let reopened = try MobileStore(file: file)
+    let persisted = await reopened.calendar.records(); XCTAssertEqual(persisted.map(\.id), [id])
+    await mac.loseNextCalendarReply()
+    let engine = MobileSyncEngine(store: reopened, transport: mac)
+    do { try await engine.synchronize(); XCTFail("Expected lost acknowledgement") } catch { }
+    try await engine.synchronize()
+    let requests = await mac.calendarRequests
+    XCTAssertEqual(requests.count, 2); XCTAssertEqual(requests.first, requests.last)
+    let remote = await mac.calendarRecords; XCTAssertEqual(remote.count, 1)
+    let pending = await reopened.calendar.pendingCount(); XCTAssertEqual(pending, 0)
+    let commands = await mac.commands; XCTAssertTrue(commands.isEmpty)
+  }
+
   @MainActor func testWorkspaceRetryRetainsCommandIdentityAfterLostAcknowledgement() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
     let store = try MobileStore(file: file)
     try await store.apply(CompanionSnapshot(workspaceID: "workspace", cursor: 1))
     let mac = ModelMac(); await mac.release(); await mac.loseNextReply()
     let model = CompanionModel(store: store, transport: mac)
-    let action = CompanionWorkspaceAction.saveCalendar(id: UUID().uuidString.lowercased(), revision: nil,
-      draft: .init(title: "One event", startsAt: Date().addingTimeInterval(3600)))
+    let action = CompanionWorkspaceAction.retryLibrary(id: "retained-file")
     let first = await model.perform(action); XCTAssertFalse(first)
     let different = await model.perform(.retryLibrary(id: "unrelated")); XCTAssertFalse(different)
     let second = await model.perform(action); XCTAssertTrue(second)

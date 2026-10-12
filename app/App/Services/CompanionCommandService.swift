@@ -27,8 +27,19 @@ final class CompanionCommandService: CompanionCommandServing {
     private struct HistoryCursor: Codable { let createdAt: String; let messageID: String }
     unowned let model: ApplicationModel
     private var commandDispatcher: CompanionCommandDispatcher?
+    private var toolDispatcher: CompanionToolDispatcher?
 
     init(model: ApplicationModel) { self.model = model }
+
+    func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
+        guard let database = model.dashboardStore?.database, let tools = model.agentTools else {
+            throw CommandError.unavailable
+        }
+        if toolDispatcher == nil { toolDispatcher = CompanionToolDispatcher(database: database) }
+        return try await toolDispatcher!.execute(request, deviceID: deviceID) { request, callerID in
+            await tools.handle(request, callerID: callerID)
+        }
+    }
 
     func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace {
         try await model.companionHost.registerExecutionManagement(grant, device: device)

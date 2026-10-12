@@ -132,6 +132,8 @@
 		15A73AF75EB1926573CED4FF /* LibraryClientInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA136600A92E0CDFD01D70B1 /* LibraryClientInteraction.swift */; };
 		1865697E240F2F2763E855ED /* CompanionClient in Frameworks */ = {isa = PBXBuildFile; productRef = C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */; };
 		763F07E058D62A4D0C5FE5D1 /* SecondaryMacExecutionWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */; };
+		CE85B7A43F451486736ABB12 /* SecondaryMacCalendarProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEA1BB3B12D315E777F3BDA /* SecondaryMacCalendarProjection.swift */; };
+		687F19B2DDDE4D2CAE81A146 /* SecondaryMacReplicaTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA98C90FF31046DFAE827B4E /* SecondaryMacReplicaTools.swift */; };
 		178C7E2397EDD9D8A1ECB4FC /* SecondaryMacExecutionHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */; };
 		97AD203F32768DAAE8E74B8A /* CompanionInferenceHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */; };
 		6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */; };
@@ -267,6 +269,8 @@
 		6C42B9DC026E313A10DFD666 /* LibraryClientCalendarPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryClientCalendarPane.swift; sourceTree = "<group>"; };
 		FA136600A92E0CDFD01D70B1 /* LibraryClientInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryClientInteraction.swift; sourceTree = "<group>"; };
 		A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryMacExecutionWorkspace.swift; sourceTree = "<group>"; };
+		EEEA1BB3B12D315E777F3BDA /* SecondaryMacCalendarProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryMacCalendarProjection.swift; sourceTree = "<group>"; };
+		CA98C90FF31046DFAE827B4E /* SecondaryMacReplicaTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryMacReplicaTools.swift; sourceTree = "<group>"; };
 		39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryMacExecutionHost.swift; sourceTree = "<group>"; };
 		DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionInferenceHost.swift; sourceTree = "<group>"; };
 		8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsModel.swift; sourceTree = "<group>"; };
@@ -468,6 +472,8 @@
 				DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */,
 				39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */,
 				A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */,
+				EEEA1BB3B12D315E777F3BDA /* SecondaryMacCalendarProjection.swift */,
+				CA98C90FF31046DFAE827B4E /* SecondaryMacReplicaTools.swift */,
 				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
@@ -615,6 +621,8 @@
 				97AD203F32768DAAE8E74B8A /* CompanionInferenceHost.swift in Sources */,
 				178C7E2397EDD9D8A1ECB4FC /* SecondaryMacExecutionHost.swift in Sources */,
 				763F07E058D62A4D0C5FE5D1 /* SecondaryMacExecutionWorkspace.swift in Sources */,
+				CE85B7A43F451486736ABB12 /* SecondaryMacCalendarProjection.swift in Sources */,
+				687F19B2DDDE4D2CAE81A146 /* SecondaryMacReplicaTools.swift in Sources */,
 				15A73AF75EB1926573CED4FF /* LibraryClientInteraction.swift in Sources */,
 				6B9C39486293F27D58B07C38 /* LibraryClientCalendarPane.swift in Sources */,
 				52556EB4DECB821D2350C11D /* LibraryClientWorkspacePanes.swift in Sources */,

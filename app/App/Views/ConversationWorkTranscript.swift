@@ -1,7 +1,25 @@
-import AppKit
 import SwiftUI
+#if os(macOS)
+import AppKit
 import WovenMatterCore
 import WovenMatterDashboardStore
+#else
+import WovenMatterCompanion
+#endif
+
+/// Display-only run values shared by the desktop and the device-owned runtime.
+struct ConversationWorkRun {
+    let id: String
+    let conversationID: String
+    let status: String
+    var error: String? = nil
+}
+
+struct ConversationWorkPresentation {
+    let startedAt: Date?
+    let completedDuration: String?
+}
+
 
 private struct ConversationTranscriptInteractionKey: EnvironmentKey {
     static let defaultValue: @MainActor () -> Void = {}
@@ -30,8 +48,8 @@ extension EnvironmentValues {
 /// work folds behind "Worked for" when a final reply follows. Failures stay
 /// visible in either state.
 struct ConversationWorkTranscript: View {
-    let run: WorkspaceRunRecord
-    let presentation: DashboardRunPresentation?
+    let run: ConversationWorkRun
+    let presentation: ConversationWorkPresentation?
     let records: [WorkspaceRunActivityRecord]
     let commentaryIDs: Set<String>
     let hasFinalReply: Bool
@@ -44,8 +62,8 @@ struct ConversationWorkTranscript: View {
     @State private var localExpansion: Bool?
 
     init(
-        run: WorkspaceRunRecord,
-        presentation: DashboardRunPresentation?,
+        run: ConversationWorkRun,
+        presentation: ConversationWorkPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
         hasFinalReply: Bool = false,
@@ -58,6 +76,22 @@ struct ConversationWorkTranscript: View {
         self.hasFinalReply = hasFinalReply
         self.timeline = timeline
     }
+
+    #if os(macOS)
+    init(
+        run: WorkspaceRunRecord,
+        presentation: DashboardRunPresentation?,
+        records: [WorkspaceRunActivityRecord],
+        commentaryIDs: Set<String> = [],
+        hasFinalReply: Bool = false,
+        timeline: ConversationWorkTimeline? = nil
+    ) {
+        self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
+                  presentation: presentation.map { ConversationWorkPresentation(startedAt: $0.startedAt, completedDuration: $0.completedDuration) },
+                  records: records, commentaryIDs: commentaryIDs, hasFinalReply: hasFinalReply, timeline: timeline)
+    }
+
+    #endif
 
     var body: some View {
         let timeline = self.timeline ?? ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs)
@@ -208,6 +242,7 @@ struct ConversationWorkTranscript: View {
         interval < 60 ? "\(max(0, Int(interval)))s" : dashboardRunDuration(interval)
     }
 
+    #if os(macOS)
     static func hasVisibleContent(run: WorkspaceRunRecord, in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> Bool {
         hasVisibleContent(run: run, timeline: ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs))
     }
@@ -219,6 +254,7 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         ).isVisible
     }
+    #endif
 }
 
 private struct ConversationElapsedButtonStyle: ButtonStyle {
@@ -825,7 +861,11 @@ private struct ConversationProposedPlan: View {
                     .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
             }
             if let content = activity.content?.nonempty {
+                #if os(macOS)
                 ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
+                #else
+                ConversationResponse(content: content, isStreaming: false, showsCopyButton: false)
+                #endif
             } else {
                 ForEach(activity.planEntries.indices, id: \.self) { index in
                     Text("• \(activity.planEntries[index].content)")
@@ -1119,7 +1159,11 @@ private struct ConversationDiffSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 780, idealWidth: 1040, minHeight: 520, idealHeight: 700)
+        #else
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #endif
         .task(id: loadKey) { await load(loadKey) }
         .onDisappear {
             loadToken = nil
@@ -1219,4 +1263,23 @@ private extension String {
         let value = trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : self
     }
+}
+
+func dashboardRunDuration(_ interval: TimeInterval) -> String {
+    let milliseconds = max(0, interval * 1_000)
+    if milliseconds < 1_000 {
+        return "\(max(1, Int(milliseconds.rounded())))ms"
+    }
+    if milliseconds < 10_000 {
+        let tenths = (milliseconds / 100).rounded() / 10
+        return tenths >= 10 ? "10s" : String(format: "%.1fs", tenths)
+    }
+    if milliseconds < 60_000 {
+        return "\(Int((milliseconds / 1_000).rounded()))s"
+    }
+    let minutes = Int(milliseconds / 60_000)
+    let seconds = Int(((milliseconds.truncatingRemainder(dividingBy: 60_000)) / 1_000).rounded())
+    if seconds == 0 { return "\(minutes)m" }
+    if seconds == 60 { return "\(minutes + 1)m" }
+    return "\(minutes)m \(seconds)s"
 }

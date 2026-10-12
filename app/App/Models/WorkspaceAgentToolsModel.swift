@@ -46,6 +46,8 @@ final class WorkspaceAgentToolsModel {
     private var committedSettings: WorkspaceToolSettings
     private var mutationTask: Task<Void, Never>?
     let calendarTaskHandler: CalendarTaskHandler?
+    var calendarProjection: (@MainActor () async throws -> Void)?
+    var replicaReadHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
@@ -419,7 +421,8 @@ final class WorkspaceAgentToolsModel {
             // checks. All other commands require the group's current capability.
             if group != .history { try await database.requireTool(group, sessionID: callerID) }
             let result: WovenMatterToolResponse
-            switch group {
+            if let replica = try await replicaReadHandler?(request, command, callerID) { result = replica }
+            else { switch group {
             case .history:
                 result = .init(result: try await database.queryAgentHistory(historyQuery(command), callerID: callerID,
                     allWorkspace: command.options["all-workspace"] != nil))
@@ -446,12 +449,16 @@ final class WorkspaceAgentToolsModel {
                         limit: command.integer("limit", default: 100, range: 1...200)))
                 } else { result = try await sessionHandler(callerID, command, request) }
             case .timers: result = try await timer(command, callerID: callerID, requestID: request.requestID)
-            case .calendar: result = try await calendar(command, callerID: callerID, requestID: request.requestID)
+            case .calendar:
+                try await calendarProjection?()
+                result = try await calendar(command, callerID: callerID, requestID: request.requestID)
+                if command.isMutation, result.success { try await calendarProjection?() }
             case .usage: result = try await usageHandler(command)
             case .library: result = try await library(command, callerID: callerID)
             case .executor:
                 guard let executorHandler else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
                 result = try await executorHandler(callerID, command, request)
+            }
             }
             if command.isMutation {
                 try await recordCLIMutation(command: command, callerID: callerID, requestID: request.requestID,
@@ -638,7 +645,7 @@ final class WorkspaceAgentToolsModel {
         return .init(result: .object(["id": .string(id), "status": .string(command.action)]))
     }
 
-    private func library(_ command: WovenMatterToolCommand, callerID: String) async throws -> WovenMatterToolResponse {
+    func library(_ command: WovenMatterToolCommand, callerID: String) async throws -> WovenMatterToolResponse {
         var query = LibraryQuery()
         query.search = command.options["search"] ?? ""
         if let workspace = command.options["workspace"] {

@@ -87,8 +87,8 @@ const methods = {
       },toolContext.abortSignal),
     }));
     registry.install(defineExtension({name:'wovenmatter-ios',tools}));
-    registry.install(createSubagents(() => root.id));
-    codemode = createCodeMode({hostCall,getHarness:()=>harness});
+    registry.install(createSubagents(() => root.id, config.executionPolicy));
+    codemode = createCodeMode({hostCall,getHarness:()=>harness,policy:config.executionPolicy});
     registry.install(codemode.extension);
     const storage = await JsonlStorage.open('/',filesystem(),context,{fsync:true});
     harness = await Harness.open(storage,{models,registry,
@@ -108,6 +108,7 @@ const methods = {
     return submission.status(context);
   },
   async nestedTool(request) { return codemode.nestedTool(request); },
+  async checkpointCode(request) { return codemode.checkpoint(request); },
   async submission({requestID}) {
     return root.commit(tx => tx.submissionByRequest(root.id,requestID),context);
   },

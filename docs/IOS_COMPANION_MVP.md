@@ -29,6 +29,34 @@ The iPhone and iPad share one central Mac's library while execution belongs to a
   Native OpenCode does not expose steering; its pending approvals are available on
   the phone. Its richer forms, and Hermes secret entry, direct the user to the Mac;
   secret values are not accepted into the phone command journal.
+- Calendar events and scheduled-task definitions are local, revisioned records with
+  a durable sync outbox. The Calendar page and native CLI work without pairing.
+  Conflicting offline edits retain both versions for explicit resolution. Task
+  claims and results sync centrally without transferring execution ownership.
+- On-device tools share the desktop CLI grammar for notes, history, sessions,
+  timers, calendar, library, usage and Executor. `target=local` inspects this
+  device; explicit `target=central` uses the paired Mac's authenticated tool
+  service and its existing permission policy. Local session operations never
+  route to another device. Databases and ordinary workspace files stay in their
+  owning workspace; this does not add a separate database CLI.
+- `execute_command` provides bundled offline CPython, SQLite and file utilities
+  in a conversation workspace. Python can call the same native CLI. Full output
+  is saved as workspace files. There is no command elapsed-time cutoff; Stop can
+  terminate the worker. It does not provide POSIX processes or package installs.
+  See [embedded execution](IOS_EMBEDDED_EXECUTION.md) for the supported commands
+  and resource boundaries.
+- Code mode has no blanket two-minute limit. Tool waits can continue, concurrent
+  calls queue, and explicit checkpoints persist state. Long uninterrupted JS
+  computations must yield to remain responsive. Pi Durable settings configure
+  responsiveness, concurrent tools, and child-agent capacity/depth. Code programs
+  in one conversation serialize their state updates.
+- Conversation messages compile the desktop block parser, attributed Markdown
+  renderer and collapsible work components directly. Full activity details remain
+  in the durable journal while cached previews stay bounded; tool JSON no longer
+  becomes standalone flattened chat messages.
+- User-started runs request continued background processing where iOS supports
+  it. Admission and available time belong to iOS. Expiration saves the exact
+  attempt for explicit Resume. See [continued execution](IOS_CONTINUED_EXECUTION.md).
 - Recent transcript bodies are cached within 20 conversations/16 MiB. Clean note
   bodies use a 64 MiB budget; metadata remains discoverable and online opens fetch
   full bodies. Linked spreadsheet and HTML previews use the same registered data
@@ -38,7 +66,7 @@ The iPhone and iPad share one central Mac's library while execution belongs to a
 
 SQLite work uses the current async worker facade. Mac autosave, agent note edits and mobile writes retain one revision model, with pinning treated as presentation. Recovery copies route through the execution owner, and completion readers preserve newer local writing.
 
-The background service owns the HTTP listener, pairing store, Tailscale child and run control. Desktop Settings reads and controls that owner over local RPC. Standalone mode uses the same host controller in the application process. Library, Calendar/recurring scheduled tasks, session settings/tool policy, note/conversation management and native file/export previews are available on both phone and tablet. iPad uses an adaptive sidebar and supports every orientation. Calendar edits carry the series revision and original start; deleting an occurrence does not delete its series. Local and remote scheduled tasks inherit the Mac's saved configuration. Workspace retries retain their original command identity after a lost reply. Mobile Stop invalidates earlier preparation and joins the same native cancellation barrier as desktop Stop, while rejecting stale run identities.
+The background service owns the HTTP listener, pairing store, Tailscale child and run control. Desktop Settings reads and controls that owner over local RPC. Standalone mode uses the same host controller in the application process. Library, Calendar/recurring scheduled tasks, session settings/tool policy, note/conversation management and native file/export previews are available on both phone and tablet. iPad uses an adaptive sidebar and supports every orientation. Calendar edits carry the series revision and original start; deleting an occurrence does not delete its series. Scheduled tasks retain their assigned execution device. Phone-owned tasks use the phone's provider connection and run locally when iOS permits; missed recurring occurrences combine into one catch-up run. Central and remote tasks retain their existing Mac-managed routing. Workspace retries retain their original command identity after a lost reply. Mobile Stop invalidates earlier preparation and joins the same native cancellation barrier as desktop Stop, while rejecting stale run identities.
 
 Main’s structured CLI context and native OpenCode allow/ask/deny policies remain authoritative. Mobile Executor changes use the same broker acknowledgement and cancellation path as the Mac, retaining selected profiles. Main’s advisory program-status persistence and settlement fencing remain on the Mac; mobile run commands still target canonical run IDs. The phone UI uses the shared desktop styling with Dynamic Type, touch targets, dark-mode contrast and keyboard dismissal; iPad uses the corresponding sidebar and bounded content layout.
 
@@ -81,7 +109,8 @@ Routes are relative to the paired HTTPS endpoint:
 
 - `POST /v1/pair`
 - `GET /v1/hello`, `/v1/snapshot`, `/v1/changes?after=...&limit=...&wait=...`
-- `POST /v1/mutations`, `/v1/commands`, `/v1/workspace-read`
+- `POST /v1/mutations`, `/v1/commands`, `/v1/workspace-read`, `/v1/tools`
+- `GET /v1/calendar`, `POST /v1/calendar/mutations`, `/v1/calendar/runs`
 - `GET /v1/command-receipts/{id}`, `/v1/providers`, `/v1/pending`
 - `GET /v1/sessions/{id}/transcript?before=...`, `/v1/sessions/{id}/capabilities`
 - `GET /v1/notes/{id}`, `/v1/assets/{id}`

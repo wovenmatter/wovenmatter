@@ -43,6 +43,13 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var centralDeletedConversationIDs: Set<String>?
   public var centralConversationIDs: Set<String>?
   public var pendingNoteDeletions: [String: CompanionNote]?
+  public var toolInvocations: [String: [String]]?
+  public var localToolCoordinations: [String: MobileLocalSessionCoordination]?
+  public var toolSubmissions: [String: MobileToolSubmission]?
+  public var toolExecutorJobs: [String: MobileExecutorJob]?
+  public var toolReceipts: [String: MobileToolReceipt]?
+  public var toolNoteVersions: [MobileToolNoteVersion]?
+  public var toolTimers: [String: MobileToolTimer]?
   public var pendingFolderDeletions: [String: CompanionFolder]?
   public init() {}
   public func isDirty(_ id: String) -> Bool { outbox.contains { $0.mutation.resourceID == id } || conflicts[id] != nil }
@@ -71,11 +78,12 @@ public actor MobileStore {
       }
     }
   }
+  public nonisolated let calendar: MobileCalendarStore
   public nonisolated let journal: WorkspaceJournal
   public nonisolated let artifacts: SavedArtifactStore
   private let file: URL
   private let budget: Budget
-  private var state: MobileStoreState
+  var state: MobileStoreState
   private var protectedNoteID: String?
   private var writeCount = 0
   private var lastWriteBytes = 0
@@ -90,6 +98,7 @@ public actor MobileStore {
       state = MobileStoreState()
       _ = try MobileStorePersistence.persist(state, at: file)
     }
+    calendar = try MobileCalendarStore(file: file.appendingPathExtension("calendar"), deviceID: state.deviceID)
   }
   public func snapshot() -> MobileStoreState { state }
   public func protectOpenNote(_ id: String?) { protectedNoteID = id }
@@ -396,9 +405,19 @@ public actor MobileStore {
     guard state.transcripts[transcript.conversationID] != transcript else { return }
     try transaction { next in
       var bounded = transcript
-      // Individual transcripts are truncated from the oldest end before eviction.
-      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.messages.isEmpty { bounded.messages.removeFirst() }
-      if try JSONEncoder().encode(bounded).count > budget.transcriptBytes { bounded.activities = [] }
+      // Tool output must not evict the surrounding conversation. Detailed
+      // projections are durable in the workspace journal and loaded on demand.
+      bounded.activities = bounded.activities.map { CompanionTranscriptCompaction.activity($0) }
+      // Evict old turns coherently only after compacting tool details.
+      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.messages.isEmpty {
+        let removed = bounded.messages.removeFirst()
+        if let runID = removed.runID, !bounded.messages.contains(where: { $0.runID == runID }) {
+          bounded.activities.removeAll { $0.runID == runID }
+          bounded.runs?.removeAll { $0.id == runID }
+        }
+      }
+      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.activities.isEmpty { bounded.activities.removeFirst() }
+      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && bounded.runs?.isEmpty == false { bounded.runs?.removeFirst() }
       next.transcripts[transcript.conversationID] = bounded
       next.transcriptRecency.removeAll { $0 == transcript.conversationID }
       next.transcriptRecency.insert(transcript.conversationID, at: 0)
@@ -472,7 +491,7 @@ public actor MobileStore {
     return note
   }
   private static var now: String { ISO8601DateFormatter().string(from: Date()) }
-  private static func mutation(for note: CompanionNote, kind: CompanionMutation.Kind, deviceID: String) -> CompanionMutation {
+  static func mutation(for note: CompanionNote, kind: CompanionMutation.Kind, deviceID: String) -> CompanionMutation {
     .init(deviceID: deviceID, kind: kind, resourceID: note.id, expectedRevision: kind == .createNote ? nil : note.revision,
           folderID: note.folderID, title: note.title, content: note.content)
   }
@@ -513,7 +532,7 @@ public actor MobileStore {
       state.outbox.removeAll { $0.mutation.resourceID == id }
     } else { state.notes.removeValue(forKey: id) }
   }
-  private func enforceNoteBudget(_ next: inout MobileStoreState, protecting: String? = nil) throws {
+  func enforceNoteBudget(_ next: inout MobileStoreState, protecting: String? = nil) throws {
     func bytes(_ state: MobileStoreState) -> Int {
       let documents = state.notes.values.reduce(0) { $0 + $1.content.utf8.count }
         + state.bases.values.reduce(0) { $0 + $1.content.utf8.count }
@@ -534,7 +553,7 @@ public actor MobileStore {
     guard total <= budget.noteBytes else { throw Failure.storageBudget }
   }
 
-  private func transaction(_ operation: (inout MobileStoreState) throws -> Void) throws {
+  func transaction(_ operation: (inout MobileStoreState) throws -> Void) throws {
     var next = state
     try operation(&next)
     guard next != state else { return }

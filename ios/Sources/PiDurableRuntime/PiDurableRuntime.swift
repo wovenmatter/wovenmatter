@@ -9,13 +9,15 @@ public struct PiDurableConfiguration: Codable, Sendable {
   public var toolsJSON: String
   public var instructions: String
   public var thinkingLevel: String
+  public var executionPolicy: PiExecutionPolicy
 
-  public init(conversationID: String, modelJSON: String, toolsJSON: String = "[]", instructions: String = "", thinkingLevel: String = "off") {
+  public init(conversationID: String, modelJSON: String, toolsJSON: String = "[]", instructions: String = "", thinkingLevel: String = "off", executionPolicy: PiExecutionPolicy = .init()) {
     self.conversationID = conversationID
     self.modelJSON = modelJSON
     self.toolsJSON = toolsJSON
     self.instructions = instructions
     self.thinkingLevel = thinkingLevel
+    self.executionPolicy = executionPolicy
   }
 }
 
@@ -60,6 +62,7 @@ public final class PiDurableRuntime {
   public init(storageDirectory: URL, configuration: PiDurableConfiguration,
               inference: @escaping Inference, tool: @escaping Tool,
               onEvents: @escaping Events = { _ in }) throws {
+    _ = try configuration.executionPolicy.validated()
     self.configuration = configuration
     self.filesystem = try DurableFileSystem(directory: storageDirectory)
     self.inference = inference
@@ -263,7 +266,11 @@ public final class PiDurableRuntime {
                 let invocationID = request["invocationID"] as? String else {
             throw PiDurableRuntimeError.unavailable("Invalid code invocation")
           }
-          let result = try await executor.run(requestJSON: json) { [weak self] name, arguments in
+          let result = try await executor.run(requestJSON: json, policy: self.configuration.executionPolicy, checkpoint: { [weak self] json in
+            guard let self else { throw CancellationError() }
+            let state = try JSONSerialization.jsonObject(with: Data(json.utf8))
+            _ = try await self.invoke("checkpointCode", value: ["invocationID": invocationID, "state": state])
+          }) { [weak self] name, arguments in
             guard let self else { throw CancellationError() }
             let args = try JSONSerialization.jsonObject(with: Data(arguments.utf8))
             return try await self.invoke("nestedTool", value: ["invocationID":invocationID,"name":name,"arguments":args])

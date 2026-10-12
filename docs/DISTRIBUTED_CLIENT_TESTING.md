@@ -131,6 +131,53 @@ checkpoint reopening, duplicate submission recovery, and isolated WebKit code
 execution with persisted code state. It writes `Documents/runtime-smoke.json`
 and uses neither network nor Keychain. Relaunch without that variable afterward.
 
+## Expanded on-device tools and calendar
+
+Use disposable test content and an already configured phone inference connection.
+The first checks work without pairing; keep the central Mac unavailable.
+
+1. Ask Pi Durable to list local notes and sessions through the Woven Matter CLI,
+   create a calendar event, and read it back. Open Calendar directly, edit the
+   same event, relaunch, and verify the agent reads the saved edit. Check note
+   revision conflicts rather than allowing an older agent edit to overwrite UI
+   writing.
+2. Create a one-time phone task, leave the app unavailable past its due time,
+   then reopen. It should run once on this phone. Repeat with a recurring task
+   across several missed occurrences: one catch-up run, not a burst. Editing or
+   removing an unstarted task must invalidate its older claimed prompt.
+3. Use `execute_command` to run `python -c` with a calculation, write a CSV,
+   create a SQLite database, and read that database in a second command. Use
+   `await wovenmatter([...])` from Python to inspect the same local calendar.
+   Check the output paths when the inline preview is abbreviated. Stop an
+   infinite program and verify the UI remains usable; its uncommitted file
+   changes must not replace workspace files.
+4. In code mode, await a native tool, save state with `store`, and use
+   `await checkpoint()`. Interrupt, reopen, and inspect the saved state. Unsafe
+   tool effects and accepted Python commands must never automatically replay.
+5. Check child agents and Executor jobs. A managed session's completion should
+   reach its managing session once, including after restart. Disabled tools
+   must remain disabled inside code, Python CLI calls, scheduled tasks, and
+   child sessions.
+6. With both apps updated, reconnect. The phone-created event and task history
+   should appear on the central Mac. Make conflicting offline edits and resolve
+   them in Calendar. A task assigned to the phone must not run on the Mac.
+7. Ask the phone agent to inspect central data using explicit `target=central`.
+   Its first call should synchronize the bound phone conversation before the
+   Mac authorizes it. Revoking the device or disabling the central tool group
+   must reject the request without falling back to a different target.
+8. Open an older chat such as a pre-upgrade tool conversation. Check headings,
+   lists, tables, code blocks, links, selection/copy, chronological commentary,
+   collapsed tool arguments/results and nested child work. Expanding a large
+   result offline should load its retained full detail, without duplicate
+   legacy tool messages.
+
+The embedded runtime has a separate offline simulator smoke harness:
+`scripts/test-ios-embedded-runtime.sh <booted-test-simulator-uuid>`.
+It uses a distinct test app and fake CLI, with no provider or user-library access.
+Background continuation still needs physical-device checks: admission, lock,
+expiration, Stop and explicit Resume. It cannot promise execution at an exact
+scheduled time while iOS has suspended the app.
+
 ## Secondary Mac
 
 Pair from **Settings → Devices → Use another Mac’s central library**, then choose
@@ -138,6 +185,17 @@ Pair from **Settings → Devices → Use another Mac’s central library**, then
 views, and direct execution. Optionally enable **Execution on this Mac** in client
 Settings and configure its agents and connections. Sharing this execution
 workspace is a separate explicit action.
+
+With the central Mac unavailable, create and edit calendar events from both the
+client Calendar page and this Mac's local agent CLI. Each should see the other's
+saved edits. Reconnect and verify synchronization, including an explicit conflict
+when both sides changed the same event. A task assigned to another device must
+not execute here; an unresolved calendar conflict must not execute either prompt.
+
+Ask the local agent to discover cached conversations and history from another
+device, read a retained artifact, and inspect cached usage. These reads must not
+import foreign sessions as locally controllable agents. Lifecycle commands,
+timers and Executor jobs remain owned by their execution workspace.
 
 Try returning to this Mac’s previous library and quitting with active work.
 Unsafe transitions must be refused; failed transitions must restore access.

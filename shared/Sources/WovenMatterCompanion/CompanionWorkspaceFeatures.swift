@@ -112,12 +112,13 @@ public struct CompanionScheduledTask: Codable, Equatable, Sendable {
   public var permission: String?
   public var folderID: String?
   public var newSessionEachTime: Bool
+  public var enabledTools: [String]?
   public init(prompt: String = "", runtime: String = "default_agent", workspaceID: String? = nil,
               model: String? = nil, thinking: String? = nil, permission: String? = nil,
-              folderID: String? = nil, newSessionEachTime: Bool = false) {
+              folderID: String? = nil, newSessionEachTime: Bool = false, enabledTools: [String]? = nil) {
     self.prompt = prompt; self.runtime = runtime; self.workspaceID = workspaceID
     self.model = model; self.thinking = thinking; self.permission = permission
-    self.folderID = folderID; self.newSessionEachTime = newSessionEachTime
+    self.folderID = folderID; self.newSessionEachTime = newSessionEachTime; self.enabledTools = enabledTools
   }
 }
 

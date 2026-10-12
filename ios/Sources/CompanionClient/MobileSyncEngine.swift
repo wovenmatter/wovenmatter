@@ -5,16 +5,26 @@ public actor MobileSyncEngine {
   public let store: MobileStore
   private let transport: any CompanionTransport
   private var syncTask: Task<Void, Error>?
+  private var syncGeneration: UInt64 = 0
   var launchTasks: [String: Task<MobileLaunchRecord, Error>] = [:]
   private var dirtyTranscripts: Set<String> = []
   public init(store: MobileStore, transport: any CompanionTransport) { self.store = store; self.transport = transport }
   /// Only one flush owns the outbox at a time. Acknowledgements and newer edits
   /// meet inside the store actor, so editing while a request is in flight is safe.
   public func synchronize() async throws {
-    if let syncTask { return try await syncTask.value }
-    let task = Task { try await self.performSynchronization() }
-    syncTask = task
-    defer { syncTask = nil }
+    let task: Task<Void, Error>
+    let generation: UInt64
+    if let existing = syncTask {
+      task = existing; generation = syncGeneration
+    } else {
+      syncGeneration &+= 1; generation = syncGeneration
+      task = Task { try await self.performSynchronization() }
+      syncTask = task
+    }
+    // Every waiter releases the completed generation. A waiter may resume before
+    // its creator; it must not accidentally rejoin an already-finished flush or
+    // clear a newer flush started by another caller.
+    defer { if syncGeneration == generation { syncTask = nil } }
     try await task.value
   }
   private func performSynchronization() async throws {
@@ -57,7 +67,30 @@ public actor MobileSyncEngine {
     let recent = current.conversations.values.sorted { $0.updatedAt > $1.updatedAt }.prefix(20)
     let missing = recent.filter { current.transcripts[$0.id] == nil }
     for conversation in missing.prefix(2) where current.executionConversationIDs?.contains(conversation.id) != true { try await refreshTranscript(conversation.id) }
+    if let calendar = transport as? any CompanionCalendarTransport {
+      do {
+        // A full series snapshot includes tombstones. Old hosts without this
+        // endpoint leave the calendar safely local until both apps are updated.
+        let snapshot = try await calendar.calendarSnapshot()
+        guard snapshot.workspaceID == (await store.snapshot()).workspaceID else { throw CompanionCalendarError.wrongWorkspace }
+        try await store.calendar.apply(snapshot)
+        var count = 0
+        while let mutation = try await store.calendar.nextMutation(), count < 200 {
+          try await store.calendar.acknowledge(calendar.calendarMutate(mutation)); count += 1
+        }
+        let runs = Array(await store.calendar.pendingRuns().prefix(200))
+        if !runs.isEmpty {
+          let accepted = try await calendar.calendarPublishRuns(runs)
+          guard Set(accepted) == Set(runs.map(\.id)) else { throw CompanionCalendarError.invalidReceipt }
+          try await store.calendar.acknowledgeRuns(runs)
+        }
+        let updated = try await calendar.calendarSnapshot()
+        guard updated.workspaceID == snapshot.workspaceID else { throw CompanionCalendarError.wrongWorkspace }
+        try await store.calendar.apply(updated)
+      } catch MobileConnectionError.http(404, _) { }
+    }
     if let federation = transport as? any FederationTransport { try await synchronizeFederation(using: federation) }
+
   }
   public func submit(_ command: CompanionCommand) async throws -> CompanionCommandReceipt {
     guard command.workspaceID == nil else { throw MobileStore.Failure.wrongWorkspace }
@@ -104,6 +137,9 @@ public actor MobileSyncEngine {
   public func providers() async throws -> [CompanionProvider] { try await transport.providers() }
   public func pending() async throws -> [CompanionPendingInteraction] { try await transport.pending() }
   public func earlierTranscript(_ id: String, before: String) async throws -> CompanionTranscript { try await transport.transcript(id, before: before) }
+  public func transcriptActivityDetail(_ id: String, activityID: String) async throws -> CompanionActivity? {
+    try await transport.transcript(id).activities.first { $0.id == activityID }
+  }
   public func refreshTranscriptIfNeeded(_ id: String) async throws {
     let cached = await store.snapshot().transcripts[id]
     if dirtyTranscripts.contains(id) || cached == nil { try await refreshTranscript(id) }

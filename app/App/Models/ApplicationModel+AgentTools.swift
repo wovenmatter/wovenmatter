@@ -398,8 +398,14 @@ extension ApplicationModel {
             workspaceID = id
         }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let sourceSession = try await store.database.localACPSession(conversationID: source.id)
-        let sameWorkspace = workspaceID == source.remoteWorkspaceID && sourceSession.buzzWorkspaceLinkID == nil
+        let federatedSource = try await store.database.companionExecutionOwner(conversationID: source.id) != nil
+        if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {
+            throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when creating a central session from another device.")
+        }
+        // A phone-owned caller has no local ACP session or host filesystem
+        // location to inherit. Resolving it must not start or contact a provider.
+        let sourceSession = federatedSource ? nil : try await store.database.localACPSession(conversationID: source.id)
+        let sameWorkspace = !federatedSource && workspaceID == source.remoteWorkspaceID && sourceSession?.buzzWorkspaceLinkID == nil
         var nativeLocation: OpenCodeValue?
         var inheritedDirectory: String?
         // An explicit destination does not need to query the source provider.
@@ -416,7 +422,7 @@ extension ApplicationModel {
                 inheritedDirectory = snapshot.info["location"]["directory"].string
             } else if let sourceRuntime = source.localRuntimeKind {
                 let context = try await directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime,
-                    isBuzzWorkspaceSession: sourceSession.buzzWorkspaceLinkID != nil)
+                    isBuzzWorkspaceSession: sourceSession?.buzzWorkspaceLinkID != nil)
                 let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
                     launch: context?.launch, workspace: context?.workspace)
                 inheritedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path

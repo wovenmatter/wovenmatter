@@ -58,6 +58,24 @@ public actor WorkspaceJournal {
     if state.conversationOwners == nil { state.conversationOwners = state.conversationWorkspaceIDs }
   }
   public func snapshot() -> WorkspaceJournalState { state }
+  /// Full activity data is read only when expanded or explicitly queried.
+  public func activityDetails(conversationID: String, activityID: String) throws -> CompanionActivity? {
+    guard var activity = state.transcripts[conversationID]?.activities.first(where: { $0.id == activityID }) else { return nil }
+    guard let recordID = activity.detailsRecordID else { return activity }
+    let parts = state.entries.values.filter { $0.conversationID == conversationID && $0.nativeRecord?.recordID == recordID }
+      .compactMap(\.nativeRecord).sorted { $0.partIndex < $1.partIndex }
+    guard let first = parts.first, parts.count == first.partCount,
+          parts.enumerated().allSatisfy({ $0.offset == $0.element.partIndex && $0.element.sha256 == first.sha256 }) else {
+      throw Failure.replayGap
+    }
+    let data = parts.reduce(into: Data()) { $0.append($1.data) }
+    guard data.count == first.byteCount,
+          SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == first.sha256,
+          let text = String(data: data, encoding: .utf8) else { throw Failure.reusedIdentity }
+    activity.projectionJSON = text
+    return activity
+  }
+
   public func bind(libraryID: String) throws {
     try transaction { next in
       guard next.libraryID == nil || next.libraryID == libraryID else { throw Failure.wrongLibrary }
@@ -88,14 +106,48 @@ public actor WorkspaceJournal {
     var conversation = conversation
     let preview = String((conversation?.preview ?? "").unicodeScalars.prefix(512))
     conversation?.preview = preview
-    var transcript = transcript.map { Self.boundedRows($0, previous: state.transcripts[$0.conversationID]) }
+    // The conversation identity must precede every native detail in an origin's
+    // sequence, including importing a pre-existing conversation in one call.
+    if let conversation, state.conversations[conversation.id] == nil,
+       transcript?.activities.contains(where: { ($0.projectionJSON?.utf8.count ?? 0) > 32 * 1_024 }) == true {
+      recorded += try append(workspaceID: workspaceID, conversation: conversation)
+    }
+    var prepared = transcript
+    if let preparedTranscript = prepared {
+      let activities = preparedTranscript.activities
+      for (index, row) in activities.enumerated() {
+        guard row.isTransient != true, let projection = row.projectionJSON, projection.utf8.count > 32 * 1_024 else { continue }
+        let data = Data(projection.utf8)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let recordID = "activity-\(row.id)-\(digest)"
+        // Large details use the existing chunked native-record transport. The
+        // transcript remains small enough for sync and a collapsed UI preview.
+        if !state.entries.values.contains(where: { $0.workspaceID == workspaceID && $0.nativeRecord?.recordID == recordID }) {
+          recorded += try appendNativeRecord(workspaceID: workspaceID, conversationID: preparedTranscript.conversationID,
+            runID: row.runID, recordID: recordID, format: "wovenmatter.activity.v1", data: data)
+        }
+        var compact = CompanionTranscriptCompaction.activity(row)
+        compact.detailsRecordID = recordID
+        prepared?.activities[index] = compact
+      }
+    }
+    var transcript = prepared.map { Self.boundedRows($0, previous: state.transcripts[$0.conversationID]) }
     // Streaming UI rows are transient. The runtime emits their durable final
     // messages with stable native IDs; retaining both would duplicate output.
     transcript?.messages.removeAll { $0.status == "streaming" }
+    transcript?.activities.removeAll { $0.isTransient == true }
     if var delta = transcript, let previous = state.transcripts[delta.conversationID] {
       delta.messages = delta.messages.filter { message in !previous.messages.contains(message) }
       delta.activities = delta.activities.filter { activity in !previous.activities.contains(activity) }
-      if delta.messages.isEmpty && delta.activities.isEmpty && delta.activeRunID == previous.activeRunID && delta.olderCursor == previous.olderCursor { transcript = nil }
+      delta.removedMessageIDs = delta.removedMessageIDs.map { ids in
+        Array(Set(ids.flatMap { id in
+          let chunkPrefix = "chunk-" + SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined() + "-"
+          return previous.messages.filter { row in
+            row.role != "user" && (row.id == id || (row.id.hasPrefix(chunkPrefix) && Int(row.id.dropFirst(chunkPrefix.count)).map { $0 > 0 } == true))
+          }.map(\.id)
+        })).sorted()
+      }
+      if delta.messages.isEmpty && delta.activities.isEmpty && delta.activeRunID == previous.activeRunID && delta.olderCursor == previous.olderCursor && delta.runs == previous.runs && delta.removedMessageIDs?.isEmpty != false { transcript = nil }
       else { transcript = delta }
     }
     try transaction { next in
@@ -161,20 +213,31 @@ public actor WorkspaceJournal {
   }
   private static func transcriptPages(_ delta: CompanionTranscript) throws -> [CompanionTranscript] {
     var pages: [CompanionTranscript] = [], page = delta
-    page.messages = []; page.activities = []
-    var bytes = 0
+    page.messages = []; page.activities = []; page.runs = nil; page.removedMessageIDs = nil
+    var bytes = try JSONEncoder().encode(page).count
     let budget = CompanionFederationProtocol.maximumEntryBytes / 2
-    for row in delta.messages {
-      let size = try JSONEncoder().encode(row).count
+    func reserve(_ size: Int) throws {
       guard size < budget else { throw Failure.recordTooLarge }
-      if bytes + size > budget { pages.append(page); page.messages = []; page.activities = []; bytes = 0 }
-      page.messages.append(row); bytes += size
+      if bytes + size > budget {
+        pages.append(page)
+        page.messages = []; page.activities = []; page.runs = nil; page.removedMessageIDs = nil
+        bytes = try JSONEncoder().encode(page).count
+      }
+      bytes += size
+    }
+    for run in delta.runs ?? [] {
+      try reserve(JSONEncoder().encode(run).count + 8)
+      if page.runs == nil { page.runs = [] }; page.runs?.append(run)
+    }
+    for id in delta.removedMessageIDs ?? [] {
+      try reserve(JSONEncoder().encode(id).count + 24)
+      if page.removedMessageIDs == nil { page.removedMessageIDs = [] }; page.removedMessageIDs?.append(id)
+    }
+    for row in delta.messages {
+      try reserve(JSONEncoder().encode(row).count + 1); page.messages.append(row)
     }
     for row in delta.activities {
-      let size = try JSONEncoder().encode(row).count
-      guard size < budget else { throw Failure.recordTooLarge }
-      if bytes + size > budget { pages.append(page); page.messages = []; page.activities = []; bytes = 0 }
-      page.activities.append(row); bytes += size
+      try reserve(JSONEncoder().encode(row).count + 1); page.activities.append(row)
     }
     pages.append(page)
     return pages
@@ -299,13 +362,29 @@ public actor WorkspaceJournal {
   }
   private static func mergeTranscript(_ value: CompanionTranscript, into prior: CompanionTranscript?) -> CompanionTranscript {
     var merged = prior ?? .init(conversationID: value.conversationID)
-    for message in value.messages {
+    let userIDs = Set((merged.messages + value.messages).filter { $0.role == "user" }.map(\.id))
+    let removed = Set((merged.removedMessageIDs ?? []) + (value.removedMessageIDs ?? [])).subtracting(userIDs)
+    merged.removedMessageIDs = removed.isEmpty ? nil : removed.sorted()
+    merged.messages.removeAll { removed.contains($0.id) && $0.role != "user" }
+    for message in value.messages where !removed.contains(message.id) || message.role == "user" {
       if let index = merged.messages.firstIndex(where: { $0.id == message.id }) { merged.messages[index] = message }
       else { merged.messages.append(message) }
     }
     for activity in value.activities {
       if let index = merged.activities.firstIndex(where: { $0.id == activity.id }) { merged.activities[index] = activity }
       else { merged.activities.append(activity) }
+    }
+    merged.messages = merged.messages.enumerated().sorted {
+      let left = $0.element.sequence ?? Int64.max, right = $1.element.sequence ?? Int64.max
+      return left == right ? $0.offset < $1.offset : left < right
+    }.map(\.element)
+    if let runs = value.runs {
+      var mergedRuns = merged.runs ?? []
+      for run in runs {
+        if let index = mergedRuns.firstIndex(where: { $0.id == run.id }) { mergedRuns[index] = run }
+        else { mergedRuns.append(run) }
+      }
+      merged.runs = mergedRuns
     }
     merged.activeRunID = value.activeRunID; merged.olderCursor = value.olderCursor
     return merged

@@ -52,20 +52,20 @@ struct ScheduledTasksPane: View {
     .toolbar {
       ToolbarItemGroup(placement: .topBarTrailing) {
         Button { Task { await load() } } label: { DashboardLucideIcon(glyph: .rotate, size: 20) }
-          .disabled(!model.online || loading).accessibilityLabel("Refresh scheduled tasks")
+          .disabled(loading).accessibilityLabel("Refresh scheduled tasks")
         NavigationLink { CalendarEventSheet(model: model, event: nil, newTask: true) } label: {
           DashboardLucideIcon(glyph: .plus, size: 20)
-        }.disabled(!model.online).accessibilityLabel("New scheduled task")
+        }.accessibilityLabel("New scheduled task")
       }
     }
     .refreshable { await load() }
+    .onChange(of: model.calendarRevision) { Task { await load() } }
     .task(id: scope) { generation += 1; loading = false; items = []; loaded = false; failure = nil; await load() }
   }
   private func recurrence(_ unit: String, interval: Int) -> String {
     interval == 1 ? "Every \(unit)" : "Every \(interval) \(unit)s"
   }
   private func load() async {
-    guard model.online else { return }
     generation += 1; let requestGeneration = generation
     let expected = scope; loading = true; failure = nil
     defer { if requestGeneration == generation { loading = false } }

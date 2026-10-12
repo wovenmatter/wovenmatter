@@ -69,7 +69,9 @@ public struct CompanionMessage: Codable, Equatable, Identifiable, Sendable {
   public var content: String
   public var status: String?
   public var createdAt: String
-  public init(id: String, conversationID: String, runID: String? = nil, role: String, content: String, status: String? = nil, createdAt: String = "") {
+  public var sequence: Int64?
+  public init(id: String, conversationID: String, runID: String? = nil, role: String, content: String, status: String? = nil, createdAt: String = "", sequence: Int64? = nil) {
+    self.sequence = sequence
     self.id = id; self.conversationID = conversationID; self.runID = runID; self.role = role
     self.content = content; self.status = status; self.createdAt = createdAt
   }
@@ -81,8 +83,28 @@ public struct CompanionActivity: Codable, Equatable, Identifiable, Sendable {
   public var title: String
   public var detail: String?
   public var status: String
-  public init(id: String, runID: String, title: String, detail: String? = nil, status: String) {
+  /// Canonical AgentRunActivity projection; native records remain in the execution journal.
+  public var projectionJSON: String?
+  public var detailsRecordID: String?
+  public var isTransient: Bool?
+  public var sequence: Int64?
+  public var createdAt: String?
+  public var completedAt: String?
+  public init(id: String, runID: String, title: String, detail: String? = nil, status: String,
+              projectionJSON: String? = nil, detailsRecordID: String? = nil, isTransient: Bool? = nil, sequence: Int64? = nil, createdAt: String? = nil, completedAt: String? = nil) {
+    self.projectionJSON = projectionJSON; self.detailsRecordID = detailsRecordID; self.isTransient = isTransient; self.sequence = sequence
+    self.createdAt = createdAt; self.completedAt = completedAt
     self.id = id; self.runID = runID; self.title = title; self.detail = detail; self.status = status
+  }
+}
+
+public struct CompanionTranscriptRun: Codable, Equatable, Identifiable, Sendable {
+  public var id: String
+  public var status: String
+  public var startedAt: String?
+  public var completedAt: String?
+  public init(id: String, status: String, startedAt: String? = nil, completedAt: String? = nil) {
+    self.id = id; self.status = status; self.startedAt = startedAt; self.completedAt = completedAt
   }
 }
 
@@ -93,7 +115,11 @@ public struct CompanionTranscript: Codable, Equatable, Sendable {
   public var activeRunID: String?
   /// Opaque pagination cursor. Send it back as `before`; never interpret on the client.
   public var olderCursor: String?
-  public init(conversationID: String, messages: [CompanionMessage] = [], activities: [CompanionActivity] = [], activeRunID: String? = nil, olderCursor: String? = nil) {
+  public var runs: [CompanionTranscriptRun]?
+  /// Exact legacy tool-message IDs superseded by structured activities. Never user messages.
+  public var removedMessageIDs: [String]?
+  public init(conversationID: String, messages: [CompanionMessage] = [], activities: [CompanionActivity] = [], activeRunID: String? = nil, olderCursor: String? = nil, runs: [CompanionTranscriptRun]? = nil, removedMessageIDs: [String]? = nil) {
+    self.runs = runs; self.removedMessageIDs = removedMessageIDs
     self.conversationID = conversationID; self.messages = messages; self.activities = activities
     self.activeRunID = activeRunID; self.olderCursor = olderCursor
   }

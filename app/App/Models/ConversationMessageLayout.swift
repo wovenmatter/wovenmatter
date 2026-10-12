@@ -68,3 +68,63 @@ struct ConversationWorkTranscriptPresentation {
         isVisible = runStatus == "running" || hasVisibleActivities || failureMessage != nil
     }
 }
+
+// Shared desktop/mobile transcript scroll policy.
+enum DashboardConversationScrollAction: Equatable {
+    case none
+    case jumpToBottom
+    case followBottom
+}
+
+struct DashboardConversationGeometry: Equatable {
+    let contentHeight: CGFloat
+    let isNearBottom: Bool
+    var viewportHeight: CGFloat? = nil
+}
+
+struct DashboardConversationScrollState: Equatable {
+    private(set) var positionedConversationID: String?
+    private(set) var isNearBottom = true
+
+    mutating func conversationChanged(to conversationID: String?) {
+        guard positionedConversationID != conversationID else { return }
+        positionedConversationID = nil
+        isNearBottom = true
+    }
+
+    mutating func contentChanged(
+        conversationID: String?,
+        hasMessages: Bool,
+        isPrependingHistory: Bool
+    ) -> DashboardConversationScrollAction {
+        guard let conversationID, hasMessages else { return .none }
+        if positionedConversationID != conversationID {
+            positionedConversationID = conversationID
+            isNearBottom = true
+            return .jumpToBottom
+        }
+        guard !isPrependingHistory, isNearBottom else { return .none }
+        return .followBottom
+    }
+
+    mutating func setNearBottom(_ isNearBottom: Bool) {
+        self.isNearBottom = isNearBottom
+    }
+
+    /// Content-only tool updates and keyboard resizing follow the same bottom
+    /// policy as message growth. Opening work or reading history owns the view.
+    mutating func geometryChanged(from previous: DashboardConversationGeometry,
+                                  to current: DashboardConversationGeometry,
+                                  isUserScrolling: Bool, transcriptOwnsScroll: Bool,
+                                  isPrependingHistory: Bool) -> Bool {
+        let resized = previous.contentHeight != current.contentHeight || previous.viewportHeight != current.viewportHeight
+        let follow = resized && isNearBottom && !isUserScrolling && !transcriptOwnsScroll && !isPrependingHistory
+        setNearBottom(current.isNearBottom && !transcriptOwnsScroll)
+        return follow
+    }
+
+    mutating func sourceMessagePositioned(in conversationID: String) {
+        positionedConversationID = conversationID
+        isNearBottom = false
+    }
+}

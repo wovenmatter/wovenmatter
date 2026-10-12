@@ -13,6 +13,7 @@ struct DeviceConversationRecord: Codable, Equatable {
   var isTrashed: Bool?
   var enabledTools: [String]?
   var thinkingLevel: String?
+  var executionPolicy: PiExecutionPolicy?
   var additionalInstructions: String?
   var connectionID: String
   var connection: InferenceConnection?
@@ -27,6 +28,7 @@ struct DeviceConversationRecord: Codable, Equatable {
 }
 
 struct DeviceAgentDefaults: Codable, Equatable {
+  var executionPolicy: PiExecutionPolicy?
   var instructions = ""
   var enabledTools: [String]?
 }
@@ -173,7 +175,7 @@ extension CompanionModel {
     deviceAgentDefaults = defaults; inferenceConnectionID = connectionID
   }
   static func instructions(for record: DeviceConversationRecord) -> String {
-    let base = "You are Pi Durable running on an iOS Woven Matter workspace. Use provided native tools for notes and workspace files. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Never claim shell, process, or unrestricted filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."
+    let base = "You are Pi Durable running on an iOS Woven Matter workspace. Use the shared Woven Matter CLI tools for local notes, history, sessions, timers, calendar, library, usage and Executor. Select the central target explicitly for the paired Mac. Use execute_command for bundled Python, SQLite and file commands in this conversation workspace. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Python includes its standard library and an awaited Woven Matter CLI bridge; it does not provide OS subprocesses, package downloads, sockets or unrestricted host filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."
     let additional = record.additionalInstructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return additional.isEmpty ? base : base + "\n\nUser instructions for this conversation:\n" + additional
   }
@@ -243,7 +245,7 @@ extension CompanionModel {
   }
   var canResumeLocalRun: Bool {
     guard let id = selectedConversationID else { return false }
-    return executionRecords[id]?.status == "interrupted" && localRunTasks[id] == nil && !localStopping.contains(id)
+    return executionRecords[id]?.status == "interrupted" && localRunTasks[id] == nil && !localStopping.contains(id) && !localInterrupting.contains(id)
   }
 
   func loadExecutionConfiguration() async throws {
@@ -310,7 +312,7 @@ extension CompanionModel {
     do { try persistExecutionConfiguration() } catch { errorMessage = error.localizedDescription }
   }
 
-  func sendOnDevice() async {
+  func sendOnDevice(userInitiated: Bool = true) async {
     guard !sending, !startingChat, selectedConversationID.map({ !configuringDeviceSessions.contains($0) }) ?? true, executionOnline, activeRunID == nil, !canResumeLocalRun,
           !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     guard let connection = selectedInferenceConnection else { executionSettingsPresented = true; return }
@@ -319,15 +321,17 @@ extension CompanionModel {
     let chatSettings = draftDeviceSettings
     let selection = selectedConversationID
     let id = selection ?? UUID().uuidString.lowercased()
-    guard localRunTokens[id] == nil, !localStopping.contains(id), executionRecords[id]?.status != "stopping" else { return }
-    sending = true; defer { sending = false }
+    guard localRunTokens[id] == nil, !localStopping.contains(id), !localInterrupting.contains(id), executionRecords[id]?.status != "stopping" else { return }
+    sending = true; configuringDeviceSessions.insert(id)
+    defer { sending = false; configuringDeviceSessions.remove(id) }
+    var attemptID: String?
     await flushLocalWrites()
     do {
       if executionRecords[id] == nil {
         let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel, additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
       }
       if executionRecords[id]?.title == "New chat", state.transcripts[id]?.messages.isEmpty != false {
@@ -346,6 +350,7 @@ extension CompanionModel {
       executionRecords[id]?.updatedAt = Self.executionTimestamp()
       try persistExecutionConfiguration()
       if selectedConversationID == selection { selectedConversationID = id }
+      attemptID = beginDeviceExecutionAttempt(id, runID: requestID, runtime: runtime, userInitiated: userInitiated)
       let receipt = try await runtime.submit(text: prompt, requestID: requestID)
       guard executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" else { return }
       let object = try Self.executionObject(receipt)
@@ -361,13 +366,19 @@ extension CompanionModel {
       guard executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" else { return }
       observeDeviceRun(id, submissionID: submissionID, runtime: runtime)
     } catch {
-      if executionRecords[id]?.status != "stopped" && executionRecords[id]?.status != "stopping" { executionRecords[id]?.status = executionRecords[id]?.runID == nil ? "failed" : "interrupted" }
-      try? persistExecutionConfiguration()
+      if localInterrupting.contains(id) || attemptID.map({ localExecutionAttempts[id] != $0 }) == true { return }
+      if let runID = executionRecords[id]?.runID, let runtime = localRuntimes[id], let attemptID {
+        await interruptDeviceExecution(id, runID: runID, attemptID: attemptID, runtime: runtime)
+      } else if executionRecords[id]?.status != "stopped" && executionRecords[id]?.status != "stopping" {
+        executionRecords[id]?.status = executionRecords[id]?.runID == nil ? "failed" : "interrupted"
+        try? persistExecutionConfiguration()
+      }
       inferenceProblem = error.localizedDescription; errorMessage = error.localizedDescription
       await refreshDeviceTranscript(id)
     }
   }
   func deviceRuntime(_ id: String) async throws -> PiDurableRuntime {
+    guard !localInterrupting.contains(id) else { throw DeviceExecutionError.unavailable("This agent is saving its progress. Try again when it finishes.") }
     if let existing = localRuntimes[id] { try await finishDeviceCancellation(id, runtime: existing); return existing }
     guard let record = executionRecords[id], let root = executionDirectory,
           let connection = record.connection ?? inferenceConnections.first(where: { $0.id == record.connectionID }) else { throw InferenceError.missingCredential }
@@ -375,34 +386,47 @@ extension CompanionModel {
     let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned)
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
       configuration: .init(conversationID: id, modelJSON: record.modelJSON, toolsJSON: try toolsJSON(for: record),
-        instructions: Self.instructions(for: record), thinkingLevel: record.thinkingLevel ?? "off"),
+        instructions: Self.instructions(for: record), thinkingLevel: record.thinkingLevel ?? "off", executionPolicy: record.executionPolicy ?? deviceAgentDefaults.executionPolicy ?? .init()),
       inference: { request, emit in try await service.stream(requestJSON: request, emit: emit) },
       tool: { [weak self] request in
         guard let self else { throw CancellationError() }
         return try await self.performDeviceTool(request)
       },
-      onEvents: { [weak self] _ in self?.scheduleDeviceTranscriptRefresh(id) })
+      onEvents: { [weak self] events in
+        self?.recordDeviceExecutionProgress(id, events: events)
+        self?.scheduleDeviceTranscriptRefresh(id)
+      })
     localRuntimes[id] = runtime
     do { try await runtime.open(); try await finishDeviceCancellation(id, runtime: runtime) }
     catch { localRuntimes.removeValue(forKey: id); throw error }
     return runtime
   }
   func openDeviceConversation(_ id: String) async {
-    guard !fixture else { return }
+    guard !fixture, !localInterrupting.contains(id) else { return }
     do { _ = try await deviceRuntime(id); await refreshDeviceTranscript(id); await exportDeviceNativeHistory(id) }
     catch { errorMessage = error.localizedDescription }
   }
   func observeDeviceRun(_ id: String, submissionID: Int, runtime: PiDurableRuntime) {
+    guard !localInterrupting.contains(id), localRunTokens[id] == nil, let runID = executionRecords[id]?.runID else { return }
+    // Tool/scheduled submissions attach observers without requesting user-started OS grants.
+    let attemptID = localExecutionAttempts[id] ?? beginDeviceExecutionAttempt(id, runID: runID, runtime: runtime, userInitiated: false)
     let token = UUID().uuidString
     localRunTokens[id] = token
     localRunTasks[id] = Task { [weak self] in
       do {
         let receipt = try Self.executionObject(await runtime.wait(submissionID: submissionID))
-        guard let self, self.localRunTokens[id] == token else { return }
+        guard let self, self.localRunTokens[id] == token, self.localExecutionAttempts[id] == attemptID else { return }
         if self.executionRecords[id]?.status != "stopped" && self.executionRecords[id]?.status != "stopping" {
-          self.executionRecords[id]?.status = receipt["status"] as? String == "done" ? "completed" : "failed"
+          let status = receipt["status"] as? String == "done" ? "completed" : "failed"
+          // The SDK result is durable; keep our run recoverable until the inbox receipt is too.
+          // A persistence error closes this attempt as interrupted rather than losing its ID.
+          try await self.completeDeviceToolSubmission(requestID: runID, status: status, error: receipt["reason"] as? String)
+          guard self.localRunTokens[id] == token, self.localExecutionAttempts[id] == attemptID else { return }
+          self.executionRecords[id]?.status = status
           if let reason = receipt["reason"] as? String { self.inferenceProblem = reason; self.errorMessage = reason }
         }
+        self.finishDeviceExecutionAttempt(id, runID: runID, attemptID: attemptID,
+          success: self.executionRecords[id]?.status == "completed")
         if self.executionRecords[id]?.status != "stopping" {
           self.executionRecords[id]?.runID = nil; self.executionRecords[id]?.submissionID = nil
         }
@@ -410,9 +434,11 @@ extension CompanionModel {
       } catch {
         guard let self, self.localRunTokens[id] == token else { return }
         if self.executionRecords[id]?.status == "running" {
-          self.executionRecords[id]?.status = "interrupted"
+          await self.interruptDeviceExecution(id, runID: runID, attemptID: attemptID, runtime: runtime)
           self.errorMessage = error.localizedDescription
+          return
         }
+        self.finishDeviceExecutionAttempt(id, runID: runID, attemptID: attemptID, success: false)
         try? self.persistExecutionConfiguration()
       }
       guard let self, self.localRunTokens[id] == token else { return }
@@ -420,18 +446,23 @@ extension CompanionModel {
       self.localRunTasks.removeValue(forKey: id)
       await self.refreshDeviceTranscript(id)
       await self.exportDeviceNativeHistory(id)
-      if self.localRunTasks.isEmpty { self.endExecutionBackgroundTask() }
+      self.endIdleExecutionBackgroundTask()
+      await self.refreshDeviceToolSubmissions()
+      if UIApplication.shared.applicationState == .active { await self.processDeviceToolSubmissions() }
     }
   }
-  func resumeDeviceRun() async {
-    guard let id = selectedConversationID, canResumeLocalRun, !sending,
+  func resumeDeviceRun(userInitiated: Bool = true) async {
+    guard let id = selectedConversationID, canResumeLocalRun, !sending, !configuringDeviceSessions.contains(id),
           let requestID = executionRecords[id]?.runID else { return }
-    sending = true; defer { sending = false }
+    sending = true; configuringDeviceSessions.insert(id)
+    defer { sending = false; configuringDeviceSessions.remove(id) }
+    var attemptID: String?
     do {
       executionRecords[id]?.status = "running"
       try persistExecutionConfiguration()
       let runtime = try await deviceRuntime(id)
       guard executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" else { return }
+      attemptID = beginDeviceExecutionAttempt(id, runID: requestID, runtime: runtime, userInitiated: userInitiated)
       if let pendingInput = executionRecords[id]?.pendingInput {
         let receipt = try Self.executionObject(await runtime.submit(text: pendingInput, requestID: requestID))
         guard executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" else { return }
@@ -446,8 +477,13 @@ extension CompanionModel {
       observeDeviceRun(id, submissionID: submissionID, runtime: runtime)
       await refreshDeviceTranscript(id)
     } catch {
-      if executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" { executionRecords[id]?.status = "interrupted" }
-      try? persistExecutionConfiguration()
+      if localInterrupting.contains(id) || attemptID.map({ localExecutionAttempts[id] != $0 }) == true { return }
+      if let runtime = localRuntimes[id], let attemptID {
+        await interruptDeviceExecution(id, runID: requestID, attemptID: attemptID, runtime: runtime)
+      } else if executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" {
+        executionRecords[id]?.status = "interrupted"
+        try? persistExecutionConfiguration()
+      }
       errorMessage = error.localizedDescription
     }
   }
@@ -456,7 +492,7 @@ extension CompanionModel {
     if (draftBuffer[key] ?? state.chatDrafts[key]) == draft { updateChatDraft(key: key, draft: .init(text: "")) }
   }
   func stopOnDevice() async {
-    guard let id = selectedConversationID, !localStopping.contains(id) else { return }
+    guard let id = selectedConversationID, !localStopping.contains(id), !localInterrupting.contains(id) else { return }
     localStopping.insert(id); defer { localStopping.remove(id) }
     do {
       // Commit cancellation intent before touching the SDK. Reopening must finish this abort before any new input.
@@ -465,14 +501,31 @@ extension CompanionModel {
       let runtime = try await deviceRuntime(id)
       try await finishDeviceCancellation(id, runtime: runtime)
       await refreshDeviceTranscript(id)
-    } catch { errorMessage = error.localizedDescription }
+    } catch {
+      if let runID = executionRecords[id]?.runID {
+        finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)
+      }
+      if let runtime = localRuntimes[id] {
+        try? await runtime.close()
+        if localRuntimes[id] === runtime { localRuntimes.removeValue(forKey: id) }
+      }
+      errorMessage = error.localizedDescription
+    }
+    await refreshDeviceToolSubmissions()
   }
   func finishDeviceCancellation(_ id: String, runtime: PiDurableRuntime) async throws {
     guard let record = executionRecords[id], record.status == "stopping" || record.status == "stopped" && record.runID != nil else { return }
+    localRunTokens.removeValue(forKey: id)
+    localRunTasks.removeValue(forKey: id)?.cancel()
     try await runtime.abort()
+    if let runID = record.runID {
+      try await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
+      finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)
+    }
     executionRecords[id]?.status = "stopped"
     executionRecords[id]?.runID = nil; executionRecords[id]?.submissionID = nil; executionRecords[id]?.pendingInput = nil
     try persistExecutionConfiguration()
+    endIdleExecutionBackgroundTask()
   }
   func scheduleDeviceTranscriptRefresh(_ id: String) {
     guard executionRefreshTasks[id] == nil else { return }
@@ -488,28 +541,15 @@ extension CompanionModel {
     do {
       let object = try Self.executionObject(await runtime.snapshot())
       guard let record = executionRecords[id] else { return }
-      let entries = object["entries"] as? [[String: Any]] ?? []
-      var messages: [CompanionMessage] = []
-      for (index, entry) in entries.enumerated() {
-        let models = entry["model"] as? [[String: Any]] ?? []
-        for (messageIndex, message) in models.enumerated() {
-          guard let role = message["role"] as? String else { continue }
-          let content = Self.messageText(message["content"])
-          guard !content.isEmpty else { continue }
-          messages.append(.init(id: "\(id)-\(entry["id"] as? Int ?? index)-\(messageIndex)", conversationID: id,
-            role: role == "toolResult" ? "tool" : role, content: content,
-            status: role == "assistant" ? (message["stopReason"] as? String ?? "completed") : nil))
-        }
-      }
-      if let generation = object["generation"] as? [String: Any], let partial = generation["message"] as? [String: Any] {
-        let text = Self.messageText(partial["content"])
-        if !text.isEmpty { messages.append(.init(id: id + "-streaming", conversationID: id, runID: record.runID, role: "assistant", content: text, status: "streaming")) }
-      }
-      let activeRun = record.status == "running" ? record.runID : nil
-      let transcript = CompanionTranscript(conversationID: id, messages: messages, activities: [], activeRunID: activeRun)
+      let transcript = CompanionDeviceTranscript.project(snapshot: object, conversationID: id,
+        activeRunID: record.status == "running" ? record.runID : nil,
+        runStatus: record.status == "idle" ? "completed" : record.status)
       try await adoptDeviceConversation(record, transcript: transcript)
       await reload()
-    } catch { errorMessage = "Couldn’t save execution history: " + error.localizedDescription }
+    } catch {
+      guard !localInterrupting.contains(id), localRuntimes[id] === runtime else { return }
+      errorMessage = "Couldn’t save execution history: " + error.localizedDescription
+    }
   }
   func adoptDeviceConversation(_ record: DeviceConversationRecord, transcript: CompanionTranscript?) async throws {
     guard record.isTrashed != true else { return }
@@ -555,31 +595,22 @@ extension CompanionModel {
           cursor = try page["next"].flatMap { $0 is NSNull ? nil : String(decoding: try JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed, .sortedKeys]), as: UTF8.self) }
         } while cursor != nil
       }
-    } catch { errorMessage = "Native history is saved in this workspace but could not be queued for central sync: " + error.localizedDescription }
-  }
-  func sceneChanged(_ phase: ScenePhase) {
-    if phase == .active { endExecutionBackgroundTask() }
-    guard phase == .background, !localRunTasks.isEmpty, backgroundTaskID == .invalid else { return }
-    backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "Save Pi Durable progress") { [weak self] in
-      Task { @MainActor in
-        guard let self else { return }
-        for id in Array(self.localRunTasks.keys) {
-          if self.executionRecords[id]?.status == "running" { self.executionRecords[id]?.status = "interrupted" }
-          try? self.persistExecutionConfiguration()
-          self.cancelDeviceApprovals(id)
-          await self.refreshDeviceTranscript(id)
-          await self.exportDeviceNativeHistory(id)
-          if let runtime = self.localRuntimes[id] {
-            try? await self.finishDeviceCancellation(id, runtime: runtime)
-            try? await runtime.close()
-          }
-          self.localRuntimes.removeValue(forKey: id)
-        }
-        self.endExecutionBackgroundTask()
-      }
+    } catch {
+      guard !localInterrupting.contains(id), localRuntimes[id] === runtime else { return }
+      errorMessage = "Native history is saved in this workspace but could not be queued for central sync: " + error.localizedDescription
     }
   }
-  func endExecutionBackgroundTask() {
-    if backgroundTaskID != .invalid { UIApplication.shared.endBackgroundTask(backgroundTaskID); backgroundTaskID = .invalid }
+  func sceneChanged(_ phase: ScenePhase) {
+    switch phase {
+    case .active:
+      endExecutionBackgroundTask()
+      if !fixture && !isolatedTestHost { startDeviceScheduler() }
+    case .inactive:
+      stopDeviceScheduler()
+    case .background:
+      stopDeviceScheduler()
+      beginFallbackExecutionBackgroundTask()
+    @unknown default: break
+    }
   }
 }

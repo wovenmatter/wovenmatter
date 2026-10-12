@@ -12,6 +12,10 @@ struct ChatPane: View {
   @State private var settingsPresented = false
   @State private var pendingPresented = false
   @FocusState private var composerFocused: Bool
+  @State private var scrollState = DashboardConversationScrollState()
+  @State private var isUserScrolling = false
+  @State private var transcriptOwnsScroll = false
+  @State private var scrollInteractionRevision = 0
   var body: some View {
     VStack(spacing: 0) {
       HStack {
@@ -34,24 +38,21 @@ struct ChatPane: View {
       }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 22) {
+          LazyVStack(alignment: .leading, spacing: 32) {
             if let id = model.selectedConversationID, model.historyPages[id] != nil {
-              Button("Return to latest messages", systemImage: "arrow.down") { model.showLatestMessages() }.font(.caption)
+              Button("Return to latest messages", systemImage: "arrow.down") { showLatest(using: proxy) }.font(.caption)
             }
             if model.transcript?.olderCursor != nil {
-              Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.executionOnline || model.loadingHistory)
+              Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { takeScrollOwnership(); Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.executionOnline || model.loadingHistory)
             }
             if model.selectedConversationID != nil && model.transcript == nil {
               Button("Load conversation") { Task { await model.refreshConversation() } }.buttonStyle(DashboardQuietButtonStyle())
                 .disabled(!model.executionOnline)
             }
-            ForEach(model.transcript?.messages ?? []) { message in MessageView(message: message) }
-            ForEach(model.transcript?.activities ?? []) { activity in
-              DisclosureGroup {
-                Text(activity.detail ?? activity.status).font(.caption).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-              } label: {
-                Label(activity.title, systemImage: activity.status == "completed" ? "checkmark.circle.fill" : "circle.dotted").font(.subheadline.weight(.medium))
-              }.padding(14).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            if let transcript = model.transcript {
+              MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID)) { activityID in
+                try await model.conversationActivityDetail(conversationID: transcript.conversationID, activityID: activityID)
+              }
             }
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
@@ -62,9 +63,40 @@ struct ChatPane: View {
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
         }.scrollDismissesKeyboard(.interactively)
-        .onChange(of: model.transcript?.messages.last?.content) { _, _ in
-          if UIAccessibility.isReduceMotionEnabled { proxy.scrollTo("latest", anchor: .bottom) }
-          else { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("latest", anchor: .bottom) } }
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.top, for: .sizeChanges)
+        .environment(\.conversationTranscriptInteraction, takeScrollOwnership)
+        .onScrollPhaseChange { _, phase in
+          isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
+          if isUserScrolling {
+            transcriptOwnsScroll = false
+            scrollInteractionRevision += 1
+          }
+        }
+        .onScrollGeometryChange(for: DashboardConversationGeometry.self) { geometry in
+          DashboardConversationGeometry(contentHeight: geometry.contentSize.height,
+            isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 80,
+            viewportHeight: geometry.visibleRect.height)
+        } action: { old, new in
+          if scrollState.geometryChanged(from: old, to: new, isUserScrolling: isUserScrolling,
+              transcriptOwnsScroll: transcriptOwnsScroll, isPrependingHistory: isViewingHistory || model.loadingHistory) {
+            followBottom(using: proxy)
+          }
+        }
+        .onChange(of: model.selectedConversationID, initial: true) { _, id in
+          scrollInteractionRevision += 1
+          isUserScrolling = false
+          transcriptOwnsScroll = isViewingHistory
+          scrollState.conversationChanged(to: id)
+          if isViewingHistory, let id { scrollState.sourceMessagePositioned(in: id) }
+          else { contentChanged(using: proxy) }
+        }
+        .onChange(of: model.transcript?.messages.last?.id) { _, _ in contentChanged(using: proxy) }
+        .overlay(alignment: .bottomTrailing) {
+          if !scrollState.isNearBottom, model.selectedConversationID != nil, !isViewingHistory {
+            Button("Latest reply", systemImage: "arrow.down") { showLatest(using: proxy) }
+              .buttonStyle(DashboardQuietButtonStyle()).padding(16)
+          }
         }
       }
       if model.canResumeLocalRun {
@@ -107,6 +139,41 @@ struct ChatPane: View {
       }
     }
   }
+  private var isViewingHistory: Bool {
+    model.selectedConversationID.flatMap { model.historyPages[$0] } != nil
+  }
+  private func takeScrollOwnership() {
+    transcriptOwnsScroll = true
+    scrollInteractionRevision += 1
+    scrollState.setNearBottom(false)
+  }
+  private func contentChanged(using proxy: ScrollViewProxy) {
+    guard !isViewingHistory, !isUserScrolling else { return }
+    let action = scrollState.contentChanged(conversationID: model.selectedConversationID,
+      hasMessages: model.transcript?.messages.isEmpty == false || model.transcript?.activities.isEmpty == false,
+      isPrependingHistory: model.loadingHistory)
+    if action != .none { followBottom(using: proxy) }
+  }
+  private func showLatest(using proxy: ScrollViewProxy) {
+    model.showLatestMessages()
+    transcriptOwnsScroll = false
+    scrollInteractionRevision += 1
+    scrollState.setNearBottom(true)
+    followBottom(using: proxy)
+  }
+  private func followBottom(using proxy: ScrollViewProxy) {
+    let revision = scrollInteractionRevision
+    let conversationID = model.selectedConversationID
+    Task { @MainActor in
+      await Task.yield()
+      guard revision == scrollInteractionRevision, conversationID == model.selectedConversationID,
+            !isUserScrolling, !isViewingHistory, !model.loadingHistory else { return }
+      scrollState.setNearBottom(true)
+      var transaction = Transaction(animation: nil)
+      transaction.disablesAnimations = true
+      withTransaction(transaction) { proxy.scrollTo("latest", anchor: .bottom) }
+    }
+  }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 9) {
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
@@ -142,19 +209,6 @@ struct ChatPane: View {
   }
 }
 
-private struct MessageView: View {
-  @Environment(\.dashboardTheme) private var theme
-  let message: CompanionMessage
-  var body: some View {
-    VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 8) {
-      Text(message.role == "user" ? "You" : message.role == "assistant" ? "Assistant" : message.role.capitalized)
-        .font(.caption.weight(.semibold)).foregroundStyle(DashboardPalette.mutedForeground)
-      Text(.init(message.content)).tint(DashboardPalette.success).font(.body).lineSpacing(4).textSelection(.enabled)
-        .padding(message.role == "user" ? 14 : 0)
-        .background(message.role == "user" ? theme.palette.themeWhisper : .clear, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
-    }.frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
-  }
-}
 
 struct PendingInteractionView: View {
   @Environment(\.dashboardTheme) private var theme

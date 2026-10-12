@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import PDFKit
 import UIKit
 import ImageIO
@@ -12,13 +13,13 @@ private final class DeviceToolNetworkDelegate: NSObject, URLSessionTaskDelegate,
 }
 
 extension CompanionModel {
-  static let deviceToolsJSON = #"""
+  private static let deviceFileToolsJSON = #"""
   [
     {"name":"list_notes","description":"List notes available on this device, optionally filtering titles and content. Returns note IDs and revisions.","parameters":{"type":"object","properties":{"query":{"type":"string"}}},"replay":"safe"},
     {"name":"read_note","description":"Read a locally available Woven Matter note by ID.","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},"replay":"safe"},
     {"name":"save_note","description":"Create a note or update an existing note. Updates require id and the localVersion returned by read_note. Content is plain text. Asks the user for approval and queues central synchronization.","parameters":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer"},"localVersion":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"folderID":{"type":"string"}},"required":["title","content"]}},
     {"name":"list_files","description":"List files inside this conversation's device workspace. Paths are relative; no unrestricted filesystem access.","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"replay":"safe"},
-    {"name":"read_file","description":"Read a UTF-8 file in this conversation's device workspace, up to 1 MiB.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},"replay":"safe"},
+    {"name":"read_file","description":"Read a workspace UTF-8 file. Small files return text; large files or explicit byte offset/limit return a bounded window with nextOffset, fileSize, eof and truncated. Default large-file window is 65536 bytes; maximum limit is 1048576. When UTF-8 is split or invalid, lossyUTF8 and bytesBase64 preserve the exact bytes.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":1048576}},"required":["path"]},"replay":"safe"},
     {"name":"read_document","description":"Extract text from an imported PDF or UTF-8 document in this workspace, up to 20 MiB. Scanned PDFs may have no text.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},"replay":"safe"},
     {"name":"read_image","description":"Read an imported image from this workspace for the model. Requires permission before sending the image to the inference provider.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
     {"name":"write_file","description":"Write a UTF-8 file in this conversation's device workspace. Requires user approval. Workspace files remain on this device unless saved to the library.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}},
@@ -26,6 +27,11 @@ extension CompanionModel {
     {"name":"ask_user","description":"Ask the user a question before continuing.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}
   ]
   """#
+
+  static var deviceToolsJSON: String {
+    let fileTools = (try? JSONSerialization.jsonObject(with: Data(deviceFileToolsJSON.utf8)) as? [[String: Any]]) ?? []
+    return (try? toolJSON(fileTools + deviceCLITools + deviceEmbeddedTools)) ?? "[]"
+  }
 
   func performDeviceTool(_ request: String) async throws -> String {
     let object = try Self.executionObject(request)
@@ -39,6 +45,13 @@ extension CompanionModel {
     }
     let nativeCallID = object["toolCallID"] as? String ?? UUID().uuidString.lowercased()
     let toolCallID = conversationID + ":" + String(describing: object["taskID"] ?? "root") + ":" + nativeCallID
+    if name.hasPrefix("wovenmatter_"), let group = WorkspaceToolGroup(rawValue: String(name.dropFirst("wovenmatter_".count))) {
+      guard let argv = arguments["arguments"] as? [String] else { throw DeviceExecutionError.unavailable("Pass CLI arguments as an array of strings.") }
+      let output = try await performDeviceCLI(arguments: [group.rawValue] + argv, conversationID: conversationID,
+        requestID: toolCallID, target: arguments["target"] as? String ?? "local")
+      return try Self.toolJSON(["content": [["type": "text", "text": output]]])
+    }
+    if name == "execute_command" { return try await performEmbeddedDeviceCommand(arguments: arguments, conversationID: conversationID, toolCallID: toolCallID) }
     var output: String
     switch name {
     case "list_notes":
@@ -78,9 +91,16 @@ extension CompanionModel {
       output = try Self.toolJSON(files.prefix(200).map { url in ["name": url.lastPathComponent, "directory": (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false] as [String: Any] })
     case "read_file":
       let url = try deviceWorkspaceURL(conversationID: conversationID, path: string("path"))
-      let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-      guard size <= 1_024 * 1_024 else { throw DeviceExecutionError.unavailable("This file exceeds the 1 MiB text-read limit.") }
-      output = try String(contentsOf: url, encoding: .utf8)
+      func integer(_ key: String) throws -> Int? {
+        guard let raw = arguments[key] else { return nil }
+        guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let value = raw as? Int else { throw DeviceExecutionError.unavailable("The byte " + key + " must be an integer.") }
+        return value
+      }
+      let offset = try integer("offset"), limit = try integer("limit")
+      let window = try WorkspaceTextFile.read(url, offset: offset, limit: limit)
+      if offset == nil, limit == nil, !window.truncated, !window.lossyUTF8 { output = window.content }
+      else { output = String(decoding: try JSONEncoder().encode(window), as: UTF8.self) }
     case "read_document":
       let url = try deviceWorkspaceURL(conversationID: conversationID, path: string("path"))
       guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 20 * 1_024 * 1_024 else { throw DeviceExecutionError.unavailable("This document exceeds the 20 MiB extraction limit.") }
@@ -99,6 +119,7 @@ extension CompanionModel {
       return try Self.toolJSON(["content": [["type": "image", "data": data.base64EncodedString(), "mimeType": "image/jpeg"]]])
     case "write_file":
       let path = try string("path"), content = try string("content")
+      guard path.split(separator: "/").first(where: { $0 != "." })?.lowercased() != ".woven-execution" else { throw DeviceExecutionError.unavailable("Execution receipts and metadata are reserved. Write your files elsewhere in this workspace.") }
       guard content.utf8.count <= 4 * 1_024 * 1_024 else { throw DeviceExecutionError.unavailable("This file exceeds the 4 MiB write limit.") }
       try await requireDeviceApproval(id: toolCallID, conversationID: conversationID, title: "Write workspace file", detail: "\(path)\n\n\(String(content.prefix(2000)))")
       let url = try deviceWorkspaceURL(conversationID: conversationID, path: path)
