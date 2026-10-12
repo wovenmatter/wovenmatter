@@ -339,13 +339,6 @@ struct DashboardNoteEditor: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         let textView = NoteTextView(usingTextLayoutManager: true)
-        if let layoutManager = textView.textLayoutManager {
-            let native = layoutManager.textSelectionNavigation
-            let navigation = NoteListSelectionNavigation(dataSource: layoutManager)
-            navigation.allowsNonContiguousRanges = native.allowsNonContiguousRanges
-            navigation.rotatesCoordinateSystemForLayoutOrientation = native.rotatesCoordinateSystemForLayoutOrientation
-            layoutManager.textSelectionNavigation = navigation
-        }
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = true
@@ -514,72 +507,40 @@ struct DashboardNoteEditor: NSViewRepresentable {
 }
 
 private final class NoteTextView: NSTextView {
-    override func characterIndexForInsertion(at point: NSPoint) -> Int {
-        if let navigation = textLayoutManager?.textSelectionNavigation as? NoteListSelectionNavigation,
-           let start = textLayoutManager?.textContentManager?.documentRange.location {
-            let origin = textContainerOrigin
-            let containerPoint = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
-            if let boundary = navigation.listBodyBoundary(containerPoint, inContainerAt: start) {
-                return boundary.index
-            }
-        }
-        return super.characterIndexForInsertion(at: point)
+    override func drawBackground(in rect: NSRect) {
+        drawHighlights(in: rect)
+        super.drawBackground(in: rect)
     }
-}
 
-private final class NoteListSelectionNavigation: NSTextSelectionNavigation {
-    override func textSelections(
-        interactingAt point: CGPoint,
-        inContainerAt containerLocation: any NSTextLocation,
-        anchors: [NSTextSelection],
-        modifiers: NSTextSelectionNavigation.Modifier,
-        selecting: Bool,
-        bounds: CGRect
-    ) -> [NSTextSelection] {
-        super.textSelections(
-            interactingAt: listBodyBoundary(point, inContainerAt: containerLocation)?.point ?? point,
-            inContainerAt: containerLocation,
-            anchors: anchors,
-            modifiers: modifiers,
-            selecting: selecting,
-            bounds: bounds
+    private func drawHighlights(in rect: NSRect) {
+        guard let manager = textLayoutManager,
+              let content = manager.textContentManager,
+              let storage = textStorage else { return }
+        let viewport = manager.textViewportLayoutController.viewportRange ?? content.documentRange
+        manager.ensureLayout(for: viewport)
+        let start = content.documentRange.location
+        let visibleRange = NSRange(
+            location: content.offset(from: start, to: viewport.location),
+            length: content.offset(from: viewport.location, to: viewport.endLocation)
         )
-    }
-
-    // TextKit synthesizes list markers outside the document string. Its native
-    // hit testing can map the marker/gap to the position after the first letter.
-    // Snap that gap to the body's leading edge, leaving all other navigation native.
-    fileprivate func listBodyBoundary(
-        _ point: CGPoint,
-        inContainerAt containerLocation: any NSTextLocation
-    ) -> (point: CGPoint, index: Int)? {
-        guard let layoutManager = textSelectionDataSource as? NSTextLayoutManager,
-              let content = layoutManager.textContentManager as? NSTextContentStorage,
-              let storage = content.textStorage,
-              let line = layoutManager.lineFragmentRange(for: point, inContainerAt: containerLocation) else { return nil }
-        let index = content.offset(from: content.documentRange.location, to: line.location)
-        guard index >= 0, index < storage.length else { return nil }
-        let string = storage.string as NSString
-        let paragraph = string.paragraphRange(for: NSRange(location: index, length: 0))
-        let attributes = storage.attributes(at: index, effectiveRange: nil)
-        guard index == paragraph.location,
-              attributes[.noteTableID] == nil,
-              (attributes[.paragraphStyle] as? NSParagraphStyle)?.textLists.isEmpty == false,
-              let start = content.location(content.documentRange.location, offsetBy: index),
-              let end = content.location(start, offsetBy: string.rangeOfComposedCharacterSequence(at: index).length),
-              let range = NSTextRange(location: start, end: end) else { return nil }
-
-        var result = point
-        let rightToLeft = layoutManager.baseWritingDirection(at: start) == .rightToLeft
-        layoutManager.enumerateTextSegments(in: range, type: .selection, options: []) { _, rect, _, _ in
-            if point.y >= rect.minY, point.y < rect.maxY {
-                let inset = min(1, rect.width / 2)
-                if rightToLeft, point.x >= rect.maxX { result.x = rect.maxX - inset }
-                else if !rightToLeft, point.x <= rect.minX { result.x = rect.minX + inset }
+        guard visibleRange.location >= 0, NSMaxRange(visibleRange) <= storage.length else { return }
+        let origin = textContainerOrigin
+        storage.enumerateAttribute(.backgroundColor, in: visibleRange) { value, range, _ in
+            guard let color = value as? NSColor,
+                  let lower = content.location(start, offsetBy: range.location),
+                  let upper = content.location(lower, offsetBy: range.length),
+                  let textRange = NSTextRange(location: lower, end: upper) else { return }
+            // Native list markers inherit the first character's background and
+            // paint it over the selection. Draw highlights behind native selection
+            // instead, keeping the document attributes for saving and copying.
+            manager.addRenderingAttribute(.backgroundColor, value: NSNull(), for: textRange)
+            color.setFill()
+            manager.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+                let background = frame.offsetBy(dx: origin.x, dy: origin.y)
+                if background.intersects(rect) { background.fill() }
+                return true
             }
-            return false
         }
-        return result == point ? nil : (result, index)
     }
 }
 
