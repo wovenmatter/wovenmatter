@@ -647,6 +647,26 @@ private final class NoteTextView: NSTextView {
     private let noteUndoManager = UndoManager()
     override var undoManager: UndoManager? { noteUndoManager }
 
+    @objc func undo(_ sender: Any?) {
+        guard isEditable, noteUndoManager.canUndo else { return }
+        breakUndoCoalescing()
+        noteUndoManager.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard isEditable, noteUndoManager.canRedo else { return }
+        breakUndoCoalescing()
+        noteUndoManager.redo()
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)): return isEditable && noteUndoManager.canUndo
+        case #selector(redo(_:)): return isEditable && noteUndoManager.canRedo
+        default: return super.validateUserInterfaceItem(item)
+        }
+    }
+
     override func didChangeText() {
         super.didChangeText()
         needsDisplay = true

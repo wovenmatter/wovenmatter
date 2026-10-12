@@ -178,9 +178,15 @@ struct DashboardNoteEditorTests {
         try require(saved.blocks.first?.plainText == "Edited text", "Toolbar Redo did not reapply typed content")
         try require(controller.canUndo && !controller.canRedo, "Redo must update both button states")
 
-        // Native Edit-menu / keyboard undo uses this same manager. Its
-        // notifications must update the toolbar even without calling our action.
-        manager.undo()
+        // Menu validation and responder-chain actions must find the note's
+        // history rather than the window's manager.
+        let undoItem = NSMenuItem(title: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Redo", action: NSSelectorFromString("redo:"), keyEquivalent: "Z")
+        try require(textView.validateUserInterfaceItem(undoItem), "Edit-menu Undo must be enabled for the note")
+        try require(!textView.validateUserInterfaceItem(redoItem), "Edit-menu Redo must reflect current history")
+        try require(textView.tryToPerform(undoItem.action!, with: nil), "Responder chain did not handle Undo")
+        try require(saved.blocks.first?.plainText == "Original text", "Menu Undo did not update the stored note")
+        try require(textView.validateUserInterfaceItem(redoItem), "Edit-menu Redo must enable after Undo")
         try require(controller.canRedo && !controller.canUndo, "Native Undo left stale toolbar states")
         type("Fresh text", replacing: NSRange(location: 0, length: 13))
         try require(!controller.canRedo, "Typing after undo must discard the old redo branch")
@@ -255,6 +261,8 @@ struct DashboardNoteEditorTests {
         controller.refreshUndoState()
         let locked = saved
         controller.undo()
+        try require(!textView.validateUserInterfaceItem(undoItem) && !textView.validateUserInterfaceItem(redoItem),
+                    "Read-only notes must reject Edit-menu Undo/Redo")
         try require(!controller.canUndo && !controller.canRedo && saved == locked,
                     "Read-only notes must disable and reject editing actions")
         controller.unbind(textView)
