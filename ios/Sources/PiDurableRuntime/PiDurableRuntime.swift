@@ -8,12 +8,14 @@ public struct PiDurableConfiguration: Codable, Sendable {
   public var modelJSON: String
   public var toolsJSON: String
   public var instructions: String
+  public var thinkingLevel: String
 
-  public init(conversationID: String, modelJSON: String, toolsJSON: String = "[]", instructions: String = "") {
+  public init(conversationID: String, modelJSON: String, toolsJSON: String = "[]", instructions: String = "", thinkingLevel: String = "off") {
     self.conversationID = conversationID
     self.modelJSON = modelJSON
     self.toolsJSON = toolsJSON
     self.instructions = instructions
+    self.thinkingLevel = thinkingLevel
   }
 }
 
@@ -112,9 +114,10 @@ public final class PiDurableRuntime {
   public func resume() async throws { _ = try await invoke("resume") }
   public func abort() async throws { _ = try await invoke("abort") }
   public func compact(instructions: String = "") async throws { _ = try await invoke("compact", value: ["instructions": instructions]) }
-  public func configure(modelJSON: String, instructions: String? = nil) async throws {
+  public func configure(modelJSON: String, instructions: String? = nil, thinkingLevel: String? = nil) async throws {
     var value = ["modelJSON": modelJSON]
     if let instructions { value["instructions"] = instructions }
+    if let thinkingLevel { value["thinkingLevel"] = thinkingLevel }
     _ = try await invoke("configure", value: value)
   }
 

@@ -29,10 +29,18 @@ Use another simulator without these variables for connected acceptance.
 - Create and edit a note, dismiss its keyboard, change tabs, and reopen it.
   Check rich text, existing tables, linked documents, conflict recovery, and
   export. Unsupported document structures must retain their original data.
-- Check chat scrolling, drafts, note references, execution workspace selection,
-  pending approvals/questions, session settings, and Stop.
+- Use New Chat on Home and Folders: each opens the agent/workspace popup; cancelling
+  retains the current chat and draft. Selecting an agent binds the new session to
+  that workspace. The header pencil starts another chat with the same agent.
+- Tap the message field to open the keyboard, then tap outside to dismiss it.
+  Confirm there is no Done strip, Refresh action, workspace selector, agent
+  selector, or Add Connection button in the composer.
+- Check chat scrolling, drafts, note references, model/thinking/tool popovers,
+  pending approvals/questions, and Stop. Available choices must belong to the
+  selected workspace; device changes must not alter another chat or agent defaults.
+  Long-press the chat title for details/export and advanced session settings.
 - Home lists on-device Pi Durable and agents from reachable workspaces, followed
-  by Library, Calendar, Scheduled tasks, Databases, and Usage. Open these pages
+  by Calendar, Scheduled tasks, Library, Databases, and Usage. Open these pages
   and Settings details; each uses full-page navigation with Back. Home has no
   setup or connection-status cards.
 - Check **Settings → Pi Durable** defaults for connection, model, instructions,

@@ -529,24 +529,3 @@ private struct InferenceConnectionEditor: View {
     }
   }
 }
-
-struct ExecutionWorkspaceMenu: View {
-  @Bindable var model: CompanionModel
-  var body: some View {
-    Menu {
-      Button(model.deviceWorkspaceName) { model.selectExecutionWorkspace("local") }
-      if model.credential != nil || model.fixture { Button("Central Mac") { model.selectExecutionWorkspace("central") } }
-      ForEach(model.executionWorkspaces) { workspace in
-        Button(workspace.name) { model.selectExecutionWorkspace(workspace.id) }
-      }
-      Divider()
-      NavigationLink("Manage workspaces") { WorkspacesSettingsPane(model: model) }
-    } label: {
-      HStack(spacing: 6) {
-        Image(systemName: model.selectedExecutionWorkspaceID == "local" ? "iphone.gen3" : "server.rack")
-        Text(model.executionName)
-        DashboardLucideIcon(glyph: .chevronDown, size: 12)
-      }.font(.caption).frame(minHeight: 44)
-    }.disabled(model.selectedConversationID != nil).accessibilityLabel("Execution workspace: " + model.executionName)
-  }
-}

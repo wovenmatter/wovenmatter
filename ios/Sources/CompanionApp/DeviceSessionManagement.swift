@@ -28,8 +28,8 @@ extension CompanionModel {
         guard let name = definition["name"] as? String else { return nil }
         return .init(id: name, label: name.replacingOccurrences(of: "_", with: " ").capitalized)
       }
-      return .session(.init(conversationID: id, model: record.connectionID, thinking: nil, permission: nil,
-        models: inferenceConnections.map { .init(id: $0.id, label: $0.name + " · " + $0.modelID) }, thinkingLevels: [], permissions: [],
+      return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: nil,
+        models: inferenceConnections.map { .init(id: $0.id, label: $0.name + " · " + $0.modelID) }, thinkingLevels: ((try? JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8)))?.supportedThinkingLevels ?? []).map { .init(id: $0, label: $0.capitalized) }, permissions: [],
         availableTools: tools, enabledTools: record.enabledTools ?? tools.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted"))
     case .exportConversation(let id, let format):
       guard executionRecords[id] != nil else { throw DeviceExecutionError.unavailable("This device conversation is unavailable.") }
@@ -70,22 +70,16 @@ extension CompanionModel {
         }
         record.updatedAt = Self.executionTimestamp(); executionRecords[id] = record
         try persistExecutionConfiguration(); try await adoptDeviceConversation(record, transcript: nil); await reload()
-      case .configureSession(let id, let connectionID, _, _):
-        guard var record = executionRecords[id], !sending, localRunTokens[id] == nil, record.status != "running", record.status != "stopping", record.status != "interrupted" else { throw DeviceExecutionError.unavailable("Finish or stop the saved run before changing its model.") }
+      case .configureSession(let id, let connectionID, let thinking, _):
+        guard let record = executionRecords[id] else { throw InferenceError.invalidConfiguration }
+        let connection: InferenceConnection?
         if let connectionID {
-          guard let connection = inferenceConnections.first(where: { $0.id == connectionID }) else { throw InferenceError.invalidConfiguration }
-          let model = try await CompanionInferenceService(connection: connection, credentials: executionCredentialStore).model()
-          record.connectionID = connection.id; record.connection = connection; record.modelJSON = try model.descriptorJSON()
-          try await localRuntimes[id]?.close(); localRuntimes.removeValue(forKey: id)
-          executionRecords[id] = record; try persistExecutionConfiguration()
-          let runtime = try await deviceRuntime(id); try await runtime.configure(modelJSON: record.modelJSON)
-        }
+          connection = connectionID == record.connectionID ? record.connection ?? inferenceConnections.first { $0.id == connectionID } : inferenceConnections.first { $0.id == connectionID }
+          guard connection != nil else { throw InferenceError.invalidConfiguration }
+        } else { connection = nil }
+        try await configureDeviceChat(connection: connection, thinking: thinking, conversationID: id)
       case .sessionTools(let id, let enabled, _):
-        guard var record = executionRecords[id], !sending, localRunTokens[id] == nil, record.status != "running", record.status != "stopping", record.status != "interrupted" else { throw DeviceExecutionError.unavailable("Finish or stop the saved run before changing tool access.") }
-        let available = Set(Self.deviceToolDefinitions.compactMap { $0["name"] as? String })
-        guard Set(enabled).isSubset(of: available) else { throw DeviceExecutionError.unavailable("An unknown device tool was selected.") }
-        try await localRuntimes[id]?.close(); localRuntimes.removeValue(forKey: id)
-        record.enabledTools = enabled; executionRecords[id] = record; try persistExecutionConfiguration()
+        try await configureDeviceChat(tools: enabled, conversationID: id)
       default: throw DeviceExecutionError.unavailable("This action belongs to the central library.")
       }
       return true

@@ -83,6 +83,26 @@ final class PiDurableRuntimeTests: XCTestCase {
       inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) }, onEvents: events)
   }
 
+  func testThinkingLevelReachesInferenceAndCanChangeBetweenTurns() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost()
+    let descriptor = testModel.replacingOccurrences(of: "\"reasoning\":false", with: "\"reasoning\":true")
+    let runtime = try PiDurableRuntime(storageDirectory: path,
+      configuration: .init(conversationID: "thinking", modelJSON: descriptor, toolsJSON: testTools, thinkingLevel: "high"),
+      inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
+    _ = try await runtime.open()
+    let first = try object(await runtime.submit(text: "Think carefully", requestID: "thinking-high"))
+    _ = try await runtime.wait(submissionID: XCTUnwrap(first["id"] as? Int))
+    let firstRequests = await host.requests
+    XCTAssertTrue(try firstRequests.allSatisfy { try (object($0)["options"] as? [String: Any])?["reasoning"] as? String == "high" })
+    try await runtime.configure(modelJSON: descriptor, thinkingLevel: "low")
+    let second = try object(await runtime.submit(text: "Continue", requestID: "thinking-low"))
+    _ = try await runtime.wait(submissionID: XCTUnwrap(second["id"] as? Int))
+    let secondRequests = await host.requests
+    XCTAssertEqual(try (object(XCTUnwrap(secondRequests.last))["options"] as? [String: Any])?["reasoning"] as? String, "low")
+    try await runtime.close()
+  }
+
   func testRealSDKRunsNativeToolAndReopensWithoutDuplicatingSubmission() async throws {
     let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
     let host = ControlledHost()

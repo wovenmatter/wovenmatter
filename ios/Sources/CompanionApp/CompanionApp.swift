@@ -65,14 +65,6 @@ struct CompanionShell: View {
           .frame(maxWidth: 960, maxHeight: .infinity)
           .background(theme.palette.workspace).clipped()
           .frame(maxWidth: .infinity)
-        if keyboardVisible {
-          HStack {
-            Spacer()
-            Button("Done") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
-              .font(.subheadline.weight(.semibold)).frame(minWidth: 60, minHeight: 44)
-              .accessibilityIdentifier("dismiss-keyboard")
-          }.padding(.horizontal, 16).background(theme.palette.themeWhisper)
-        }
         if sizeClass != .regular && !keyboardVisible {
           HStack(spacing: 0) {
             ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in
@@ -91,6 +83,8 @@ struct CompanionShell: View {
         }
       }
     }
+    .background(MobileKeyboardDismissal())
+    .sheet(isPresented: $model.chatChooserPresented, onDismiss: { model.newChatNoteID = nil }) { NewChatChooser(model: model).environment(\.dashboardTheme, theme) }
     .scrollIndicators(.never)
     .foregroundStyle(DashboardPalette.foreground).tint(theme.palette.themeAccent)
     .background(theme.palette.workspace)
@@ -100,6 +94,7 @@ struct CompanionShell: View {
     .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
   }
   private func selectTab(_ tab: CompanionModel.Tab) {
+    guard !model.startingChat else { return }
     model.executionSettingsPresented = false; model.pairingPresented = false
     // Reselecting a tab returns to its root, as with a native tab bar.
     if model.tab == tab { navigationReset = UUID() }

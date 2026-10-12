@@ -97,7 +97,7 @@ const methods = {
     },context);
     root = await harness.root(context,{agent:{model:{provider:model.provider,modelId:model.id},instructions:config.instructions}});
     // Configure before resuming saved tasks: account selection is device local.
-    await root.configure({model:{provider:model.provider,modelId:model.id},instructions:config.instructions},context);
+    await root.configure({model:{provider:model.provider,modelId:model.id},instructions:config.instructions,thinkingLevel:config.thinkingLevel??'off'},context);
     watch = await watchEvents(harness,root.id,context);
     globalThis.__wmEvents(JSON.stringify({conversationID:config.conversationID,events:[watch.snapshot]}));
     watch.start(async events => globalThis.__wmEvents(JSON.stringify({conversationID:config.conversationID,events})));
@@ -126,9 +126,9 @@ const methods = {
     const temporaryWatch = await watchEvents(harness,root.id,context);
     const snapshot = temporaryWatch.snapshot; await temporaryWatch.stop(); return snapshot;
   },
-  async configure({modelJSON,instructions}) {
+  async configure({modelJSON,instructions,thinkingLevel}) {
     const model = JSON.parse(modelJSON); installModel(model);
-    await root.configure({model:{provider:model.provider,modelId:model.id},...(instructions===undefined?{}:{instructions})},context);
+    await root.configure({model:{provider:model.provider,modelId:model.id},...(instructions===undefined?{}:{instructions}),...(thinkingLevel===undefined?{}:{thinkingLevel})},context);
   },
   async resume() { harness.resume(); },
   async abort() { await root.abort(context,{background:true}); },

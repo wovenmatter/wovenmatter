@@ -31,6 +31,14 @@ private actor FixtureTransport: InferenceHTTPTransport {
 final class InferenceTests: XCTestCase {
   let connection = InferenceConnection(id: "phone-key", name: "API", provider: "openai", route: .direct, modelID: "gpt-4")
   let model = InferenceModel(id: "gpt-4", name: "GPT", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
+  func testThinkingChoicesFollowSelectedModelCapabilities() {
+    var model = InferenceModel(id: "test", name: "Test", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
+    XCTAssertEqual(model.supportedThinkingLevels, [])
+    model.reasoning = true
+    model.thinkingLevelMap = ["low": "low", "high": "high", "xhigh": nil]
+    XCTAssertEqual(model.supportedThinkingLevels, ["off", "low", "high"])
+  }
+
   func testConnectionPersistsSelectedDescriptorWithoutCredentials() throws {
     var selected = connection; selected.selectedModel = model
     let encoded = try JSONEncoder().encode(selected)

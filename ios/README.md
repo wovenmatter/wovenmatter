@@ -103,11 +103,21 @@ on the Mac; provider-free facade tests compile against its production Objective-
 interface with an unavailable browser implementation, while the Xcode build and
 browser lifecycle suite validate the actual bridge.
 
+Home and Folders open New Chat as a dismissible agent/workspace chooser. Selecting
+an available remote agent creates an idle session with a durable command before
+loading its negotiated options; it sends no prompt. The chat header's pencil
+starts another session with that same agent/workspace. Long-press the chat title
+for details/export, advanced session settings, and pending requests.
+The composer is text above **+ → Model → Thinking Level → Tools → Send/Stop**.
+Model attribution lives in the model popover. Device model/thinking/tool changes
+are saved per conversation; changing a conversation never rewrites account or
+agent defaults. Provider setup remains in Settings.
+
 The first UI pass focuses on phone navigation, Home actions, chat controls, and
 note editing. Tablets retain a separate sidebar, visible selection, and bounded
 content width; compact windows use phone navigation. Persistence labels refer to
-this device on both iPhone and iPad. The keyboard's Done button returns to navigation
-without losing writing. Preview mode uses sample content and never sends agent work.
+this device on both iPhone and iPad. Tapping an editor opens the keyboard; tapping outside dismisses it without
+losing writing. There is no keyboard Done strip. Preview mode uses sample content and never sends agent work.
 
 For visual iteration, build with `scripts/build-ios.sh`, then install its
 `WovenMatterCompanion.app` in a dedicated simulator. Launch with

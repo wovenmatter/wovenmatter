@@ -145,6 +145,12 @@ public struct InferenceModel: Codable, Sendable, Identifiable, Equatable {
     if let full = metadata["cost"] { try box.encode(full, forKey: Field("cost")) }
     else { try box.encode(cost, forKey: Field("cost")) }
   }
+  public var supportedThinkingLevels: [String] {
+    guard reasoning else { return [] }
+    let levels = ["off", "minimal", "low", "medium", "high", "xhigh"]
+    guard let thinkingLevelMap else { return levels.filter { $0 != "xhigh" } }
+    return levels.filter { $0 == "off" || (thinkingLevelMap[$0] ?? nil) != nil }
+  }
   public func descriptorJSON() throws -> String { String(decoding: try JSONEncoder().encode(self), as: UTF8.self) }
 }
 

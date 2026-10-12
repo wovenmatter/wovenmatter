@@ -71,6 +71,14 @@ import CompanionInference
   var initialized = false
   var executionWorkspaceID = "local"
   var executionSettingsPresented = false
+  var chatChooserPresented = false
+  var startingChat = false
+  var chatSettingsBusy = false
+  var chatSetupProblem: String?
+  var pendingChatCreation: CompanionCommand?
+  var newChatNoteID: String?
+  var draftDeviceSettings = DeviceChatSettings()
+  var configuringDeviceSessions: Set<String> = []
   var deviceAgentDefaults = DeviceAgentDefaults()
   var inferenceConnections: [InferenceConnection] = []
   var inferenceConnectionID = ""
@@ -292,7 +300,9 @@ import CompanionInference
     catch { errorMessage = error.localizedDescription }
   }
   func showLatestMessages() { if let selectedConversationID { historyPages.removeValue(forKey: selectedConversationID) } }
-  func newChat() { selectedConversationID = nil; tab = .chat }
+  func newChat(referencing noteID: String? = nil) {
+    newChatNoteID = noteID; chatSetupProblem = nil; chatChooserPresented = true
+  }
   func saveNote(id: String, title: String, content: String, base: CompanionNote) {
     guard let store else { return }
     draftTitles[id] = title; draftContents[id] = content
@@ -339,6 +349,7 @@ import CompanionInference
     }
   }
   func send() async {
+    guard !chatSettingsBusy, !startingChat else { return }
     if selectedExecutionWorkspaceID == "local" { await sendOnDevice(); return }
     if selectedExecutionWorkspaceID != "central" { await sendToExecutionWorkspace(); return }
     guard online, let engine, !sending, !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }

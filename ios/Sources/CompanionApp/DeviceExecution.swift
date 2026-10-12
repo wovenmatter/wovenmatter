@@ -12,6 +12,7 @@ struct DeviceConversationRecord: Codable, Equatable {
   var isPinned: Bool?
   var isTrashed: Bool?
   var enabledTools: [String]?
+  var thinkingLevel: String?
   var additionalInstructions: String?
   var connectionID: String
   var connection: InferenceConnection?
@@ -30,12 +31,19 @@ struct DeviceAgentDefaults: Codable, Equatable {
   var enabledTools: [String]?
 }
 
+struct DeviceChatSettings: Codable, Equatable {
+  var connection: InferenceConnection?
+  var thinkingLevel: String = "off"
+  var enabledTools: [String]?
+}
+
 struct DeviceExecutionPreferences: Codable {
   var connections: [InferenceConnection] = []
   var selectedConnectionID = ""
   var workspaceID = "local"
   var conversations: [String: DeviceConversationRecord] = [:]
   var agentDefaults: DeviceAgentDefaults?
+  var chatSettings: DeviceChatSettings?
 }
 
 struct InferenceSetupCredential: InferenceCredentialReading {
@@ -129,7 +137,7 @@ extension CompanionModel {
     if let latest = current.latestConversation(in: conversations, owner: { executionOwner(of: $0) }) {
       await selectConversation(latest.id)
     } else {
-      newChat(); selectExecutionWorkspace(current.workspaceID); providerID = current.providerID
+      await startNewChat(with: current)
     }
   }
   func rememberAgentCatalog() {
@@ -159,7 +167,7 @@ extension CompanionModel {
     let available = Set(Self.deviceToolDefinitions.compactMap { $0["name"] as? String })
     guard defaults.enabledTools.map({ Set($0).isSubset(of: available) }) ?? true else { throw DeviceExecutionError.unavailable("An unknown device tool was selected.") }
     let preferences = DeviceExecutionPreferences(connections: inferenceConnections, selectedConnectionID: connectionID,
-      workspaceID: executionWorkspaceID, conversations: executionRecords, agentDefaults: defaults)
+      workspaceID: executionWorkspaceID, conversations: executionRecords, agentDefaults: defaults, chatSettings: draftDeviceSettings)
     try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
     try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     deviceAgentDefaults = defaults; inferenceConnectionID = connectionID
@@ -198,6 +206,7 @@ extension CompanionModel {
   }
   var selectedInferenceConnection: InferenceConnection? {
     if let id = selectedConversationID, let connection = executionRecords[id]?.connection { return connection }
+    if selectedConversationID == nil, let connection = draftDeviceSettings.connection { return connection }
     let id = selectedConversationID.flatMap { executionRecords[$0]?.connectionID } ?? inferenceConnectionID
     return inferenceConnections.first { $0.id == id }
   }
@@ -246,6 +255,7 @@ extension CompanionModel {
       inferenceConnections = saved.connections; inferenceConnectionID = saved.selectedConnectionID
       executionWorkspaceID = saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
+      draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
       }
@@ -259,7 +269,7 @@ extension CompanionModel {
   func persistExecutionConfiguration() throws {
     guard let executionDirectory else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
     let saved = DeviceExecutionPreferences(connections: inferenceConnections, selectedConnectionID: inferenceConnectionID,
-                                           workspaceID: executionWorkspaceID, conversations: executionRecords, agentDefaults: deviceAgentDefaults)
+                                           workspaceID: executionWorkspaceID, conversations: executionRecords, agentDefaults: deviceAgentDefaults, chatSettings: draftDeviceSettings)
     try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
     try JSONEncoder().encode(saved).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
   }
@@ -278,7 +288,7 @@ extension CompanionModel {
       }
       let workspaceID = credential == nil && selectedConversationID == nil ? "local" : executionWorkspaceID
       let preferences = DeviceExecutionPreferences(connections: connections, selectedConnectionID: saved.id,
-        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults)
+        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults, chatSettings: draftDeviceSettings)
       try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
       try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       executionRecords = records
@@ -301,11 +311,12 @@ extension CompanionModel {
   }
 
   func sendOnDevice() async {
-    guard !sending, executionOnline, activeRunID == nil, !canResumeLocalRun,
+    guard !sending, !startingChat, selectedConversationID.map({ !configuringDeviceSessions.contains($0) }) ?? true, executionOnline, activeRunID == nil, !canResumeLocalRun,
           !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     guard let connection = selectedInferenceConnection else { executionSettingsPresented = true; return }
     let sourceKey = draftKey, text = composer, draft = currentDraft, noteID = referencedNoteID
     let defaults = deviceAgentDefaults
+    let chatSettings = draftDeviceSettings
     let selection = selectedConversationID
     let id = selection ?? UUID().uuidString.lowercased()
     guard localRunTokens[id] == nil, !localStopping.contains(id), executionRecords[id]?.status != "stopping" else { return }
@@ -316,7 +327,11 @@ extension CompanionModel {
         let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          enabledTools: defaults.enabledTools, additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel, additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+        try persistExecutionConfiguration()
+      }
+      if executionRecords[id]?.title == "New chat", state.transcripts[id]?.messages.isEmpty != false {
+        executionRecords[id]?.title = String(text.prefix(80))
         try persistExecutionConfiguration()
       }
       let runtime = try await deviceRuntime(id)
@@ -360,7 +375,7 @@ extension CompanionModel {
     let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned)
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
       configuration: .init(conversationID: id, modelJSON: record.modelJSON, toolsJSON: try toolsJSON(for: record),
-        instructions: Self.instructions(for: record)),
+        instructions: Self.instructions(for: record), thinkingLevel: record.thinkingLevel ?? "off"),
       inference: { request, emit in try await service.stream(requestJSON: request, emit: emit) },
       tool: { [weak self] request in
         guard let self else { throw CancellationError() }

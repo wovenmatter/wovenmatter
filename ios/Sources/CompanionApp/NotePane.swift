@@ -54,7 +54,7 @@ struct NotePane: View {
         } label: { Image(systemName: "textformat").font(.title3.weight(.medium)).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).disabled(!editable).accessibilityLabel("Note formatting")
         Menu {
           Button("Details, move and export") { detailsPresented = true }.disabled(!model.online)
-          Button("Reference in new chat", glyph: .messageSquare) { model.newChat(); model.referencedNoteID = note.id }.disabled(!editable)
+          Button("Reference in new chat", glyph: .messageSquare) { model.newChat(referencing: note.id) }.disabled(!editable)
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Note actions")

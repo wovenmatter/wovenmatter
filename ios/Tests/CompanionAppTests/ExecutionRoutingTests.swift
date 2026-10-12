@@ -22,14 +22,18 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
   var commands: [CompanionCommand] = []
   var receipts: [String: CompanionCommandReceipt] = [:]
   var dropSendAcknowledgement = true
+  var dropCreateAcknowledgement = false
+  func dropNextCreateAcknowledgement() { dropCreateAcknowledgement = true }
   init(_ workspace: CompanionExecutionWorkspace) { self.workspace = workspace }
   func identity() async throws -> CompanionExecutionWorkspace { workspace }
   func providers() async throws -> [CompanionProvider] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [CompanionPendingInteraction] { [] }
+  func capabilities(_ id: String) async throws -> CompanionProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
   func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt {
     commands.append(command)
     let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
     receipts[command.commandID] = receipt
+    if command.kind == .createSession && dropCreateAcknowledgement { dropCreateAcknowledgement = false; throw MobileConnectionError.offline }
     if command.kind == .send && dropSendAcknowledgement { dropSendAcknowledgement = false; throw MobileConnectionError.offline }
     return receipt
   }
@@ -51,6 +55,7 @@ final class ExecutionRoutingTests: XCTestCase {
     model.workspaceReachable = [connected.id: true, disconnected.id: false]
     let agent = CompanionProvider(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
     model.workspaceProviders = [connected.id: [agent], disconnected.id: [agent]]
+    model.workspaceClients[connected.id] = WorkspaceClient(store: try XCTUnwrap(model.store), workspaceID: connected.id, transport: ExecutionTestWorkspace(connected))
     model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"
     let launchers = model.launcherAgents
     XCTAssertEqual(launchers.map(\.workspaceID), ["local", "central", connected.id, disconnected.id])
@@ -59,7 +64,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.selectedConversationID, "existing-chat")
     await model.launchAgent(try XCTUnwrap(launchers.first { $0.workspaceID == connected.id }))
     XCTAssertEqual(model.tab, .chat)
-    XCTAssertNil(model.selectedConversationID)
+    XCTAssertNotNil(model.selectedConversationID)
     XCTAssertEqual(model.selectedExecutionWorkspaceID, connected.id)
     XCTAssertEqual(model.providerID, agent.id)
     await model.launchAgent(try XCTUnwrap(launchers.first))
@@ -69,6 +74,84 @@ final class ExecutionRoutingTests: XCTestCase {
     model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "pi", displayName: "Pi Durable", routeName: connected.name, available: true)]
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "central" }.map(\.providerID), [agent.id])
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
+  }
+
+  @MainActor func testNewChatChooserPreservesCurrentConversationUntilAgentSelection() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.selectedConversationID = "current"
+    model.composer = "Unsent work"
+    model.newChat(referencing: "reference-note")
+    XCTAssertTrue(model.chatChooserPresented)
+    XCTAssertEqual(model.selectedConversationID, "current")
+    XCTAssertEqual(model.composer, "Unsent work")
+    XCTAssertNil(model.referencedNoteID)
+    XCTAssertEqual(model.newChatNoteID, "reference-note")
+  }
+
+  @MainActor func testChooserRecoversCreationWithoutSendingOrDuplicatingSession() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let workspace = CompanionExecutionWorkspace(id: "direct", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Linux")
+    let endpoint = ExecutionTestWorkspace(workspace)
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    model.executionWorkspaces = [workspace]; model.workspaceReachable[workspace.id] = true
+    model.workspaceProviders[workspace.id] = try await endpoint.providers()
+    model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: endpoint)
+    model.newChat()
+    await endpoint.dropNextCreateAcknowledgement()
+    let agent = try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == workspace.id })
+    await model.startNewChat(with: agent)
+    XCTAssertTrue(model.chatChooserPresented)
+    XCTAssertNotNil(model.chatSetupProblem)
+    // Background polling may discover the receipt before the user retries the chooser.
+    try await model.workspaceClients[workspace.id]?.refresh()
+    await model.startNewChat(with: agent)
+    XCTAssertFalse(model.chatChooserPresented)
+    XCTAssertNotNil(model.selectedConversationID)
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, workspace.id)
+    let commands = await endpoint.commands
+    XCTAssertEqual(commands.count, 1)
+    XCTAssertEqual(commands.first?.kind, .createSession)
+    XCTAssertEqual(commands.first?.workspaceID, workspace.id)
+    await model.refreshExecutionWorkspaces()
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, workspace.id, "Ownership survives polling before history arrives")
+    await model.newChatWithCurrentAgent()
+    let nextCommands = await endpoint.commands
+    XCTAssertEqual(nextCommands.count, 2)
+    XCTAssertNotEqual(nextCommands.first?.conversationID, nextCommands.last?.conversationID)
+    XCTAssertEqual(nextCommands.last?.providerID, agent.providerID)
+  }
+
+  @MainActor func testComposerConfigurationStaysWithItsConversationAndRejectsBusyChanges() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let descriptor = InferenceModel(id: "gpt-test", name: "Test model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
+    let connection = InferenceConnection(id: "account", name: "Saved account", provider: "openai", route: .direct, modelID: descriptor.id, selectedModel: descriptor)
+    model.inferenceConnections = [connection]; model.inferenceConnectionID = connection.id
+    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first))
+    let created = try XCTUnwrap(model.selectedConversationID)
+    XCTAssertEqual(model.executionRecords[created]?.status, "ready")
+    XCTAssertTrue(model.localRuntimes.isEmpty, "Choosing an agent must not start inference")
+    XCTAssertEqual(model.state.transcripts[created]?.messages, [])
+    let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
+    var other = record; other.id = "second"
+    model.executionRecords = [record.id: record, other.id: other]; model.selectedConversationID = record.id
+    try await model.configureDeviceChat(thinking: "high", tools: ["read_note"])
+    XCTAssertEqual(model.executionRecords[record.id]?.thinkingLevel, "high")
+    XCTAssertEqual(model.executionRecords[record.id]?.enabledTools, ["read_note"])
+    XCTAssertEqual(model.executionRecords[other.id], other)
+    XCTAssertEqual(model.inferenceConnections, [connection])
+    let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: root.appendingPathComponent("execution/preferences.json")))
+    XCTAssertEqual(saved.conversations[record.id]?.thinkingLevel, "high")
+    model.executionRecords[record.id]?.status = "running"
+    do { try await model.configureDeviceChat(thinking: "low"); XCTFail("An active run must retain its configuration") }
+    catch { XCTAssertEqual(model.executionRecords[record.id]?.thinkingLevel, "high") }
   }
 
   @MainActor func testDeviceDefaultsPersistWithoutChangingExistingConversation() async throws {

@@ -1,4 +1,5 @@
 import SwiftUI
+import CompanionInference
 import CompanionClient
 import WovenMatterCompanion
 
@@ -6,31 +7,30 @@ struct ChatPane: View {
   @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   @State private var referencesPresented = false
+  @State private var filesPresented = false
   @State private var detailsPresented = false
   @State private var settingsPresented = false
-  @State private var filesPresented = false
   @State private var pendingPresented = false
+  @FocusState private var composerFocused: Bool
   var body: some View {
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
           Text(model.selectedConversation?.title ?? "New chat").font(.headline).lineLimit(1)
           Text(model.executionName).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+        }.contextMenu {
+          if model.selectedConversationID != nil {
+            Button("Details and export") { detailsPresented = true }
+            Button("Session settings") { settingsPresented = true }.disabled(!model.executionOnline)
+          }
+          if !model.allPending.isEmpty { Button("Pending requests") { pendingPresented = true } }
         }
         Spacer()
-        Menu {
-          if model.selectedConversationID != nil {
-            if model.selectedExecutionWorkspaceID == "local" {
-              Button("Workspace files") { filesPresented = true }
-            }
-            Button("Details and export") { detailsPresented = true }
-            Button("Session settings and tools") { settingsPresented = true }.disabled(!model.executionOnline)
-          }
-          if !model.allPending.isEmpty { Button("Pending requests (\(model.allPending.count))") { pendingPresented = true } }
-          Button("New chat", glyph: .squarePen) { model.newChat() }
-          if model.activeRunID != nil { Button("Stop this run", systemImage: "stop.fill", role: .destructive) { Task { await model.stop() } }.disabled(!model.executionOnline || model.activeProvider?.canStop != true) }
-          Button("Refresh", glyph: .rotate) { Task { await model.refreshConversation() } }
-        } label: { Image(systemName: "ellipsis").font(.title2).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Conversation actions")
+        Button { composerFocused = false; Task { await model.newChatWithCurrentAgent() } } label: {
+          if model.startingChat { ProgressView().frame(width: 44, height: 44) }
+          else { DashboardLucideIcon(glyph: .squarePen, size: 22).frame(width: 44, height: 44) }
+        }.buttonStyle(DashboardIconButtonStyle()).disabled(model.startingChat || model.sending || model.chatSettingsBusy)
+          .accessibilityLabel("New chat with this agent").accessibilityIdentifier("chat-new-session")
       }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
       ScrollViewReader { proxy in
         ScrollView {
@@ -112,64 +112,32 @@ struct ChatPane: View {
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
         HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
-      TextField(model.activeRunID == nil ? "Message…" : "Steer this run…", text: $model.composer, axis: .vertical)
-        .lineLimit(2...6).accessibilityIdentifier("chat-composer")
-      HStack {
-        ExecutionWorkspaceMenu(model: model)
-        Spacer()
-        if model.selectedExecutionWorkspaceID == "local" {
-          Menu {
-            ForEach(model.inferenceConnections) { connection in
-              Button(connection.name + " · " + connection.modelID) { model.selectInferenceConnection(connection.id) }
-            }
-            Button(model.deviceConnectionsTitle) { model.executionSettingsPresented = true }
-          } label: { Text(model.selectedInferenceConnection?.modelID ?? "Choose model").font(.caption).lineLimit(1).frame(minHeight: 44) }
-            .disabled(model.selectedConversationID != nil)
-        }
-      }
-      HStack(spacing: 14) {
-        Button { referencesPresented = true } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Reference a note")
-        if model.selectedConversationID == nil {
-          Menu {
-            ForEach(model.availableExecutionProviders) { provider in
-              Button { model.providerID = provider.id } label: {
-                Label {
-                  Text(provider.displayName + " · " + provider.routeName + (provider.available ? "" : " · unavailable"))
-                } icon: {
-                  if model.providerID == provider.id { Image(DashboardLucideGlyph.check.rawValue) }
-                  else { MobileAgentIcon(runtimeKind: provider.runtimeKind, size: 20) }
-                }
-              }.disabled(!provider.available || !provider.canStart)
-            }
-          } label: {
-            HStack(spacing: 6) {
-              MobileAgentIcon(runtimeKind: model.activeProvider?.runtimeKind, size: 20)
-              Text(model.activeProvider?.displayName ?? "Agent").lineLimit(1)
-              DashboardLucideIcon(glyph: .chevronDown, size: 14)
-            }.font(.subheadline.weight(.medium)).frame(minHeight: 44)
-          }.disabled(!model.executionOnline || model.availableExecutionProviders.isEmpty)
-        } else {
-          HStack(spacing: 6) {
-            MobileAgentIcon(runtimeKind: model.activeProvider?.runtimeKind ?? model.selectedConversation?.runtimeKind, size: 20)
-            Text(model.activeProvider?.displayName ?? model.selectedConversation?.runtimeKind ?? "Agent").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+      TextField(model.activeRunID == nil ? "Chat…" : "Steer this run…", text: $model.composer, axis: .vertical)
+        .lineLimit(2...6).focused($composerFocused).accessibilityIdentifier("chat-composer")
+      HStack(spacing: 4) {
+        Menu {
+          Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
+          if model.selectedExecutionWorkspaceID == "local", model.selectedConversationID != nil {
+            Button("Workspace files", glyph: .folder) { composerFocused = false; filesPresented = true }
           }
-        }
-        Spacer()
+        } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
+          .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Add to chat")
+        ChatComposerSettings(model: model)
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
-          Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)
+          Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
+            .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)
         }
-        Button { Task { await model.send() } } label: {
-          Group { if model.sending { ProgressView().tint(.white) } else { DashboardLucideIcon(glyph: .arrowUp, size: 20) } }
-            .frame(width: 44, height: 44).foregroundStyle(.white).background(canSend ? DashboardPalette.primary : Color.gray.opacity(0.35), in: Circle())
-        }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
-      }
-      if model.selectedExecutionWorkspaceID == "local" && model.selectedInferenceConnection == nil {
-        Button("Add connection") { model.executionSettingsPresented = true }.buttonStyle(DashboardQuietButtonStyle())
+        if model.activeRunID == nil || model.activeProvider?.canSteer == true {
+          Button { Task { await model.send() } } label: {
+            Group { if model.sending { ProgressView().tint(.white) } else { DashboardLucideIcon(glyph: .arrowUp, size: 20) } }
+              .frame(width: 44, height: 44).foregroundStyle(.white).background(canSend ? DashboardPalette.primary : Color.gray.opacity(0.35), in: Circle())
+          }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
+        }
       }
     }.padding(15).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)).padding(.horizontal, 18).padding(.vertical, 12)
   }
   private var canSend: Bool {
-    model.executionOnline && model.activeProvider?.available == true && !model.canResumeLocalRun && !model.sending && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+    model.executionOnline && model.activeProvider?.available == true && !model.canResumeLocalRun && !model.sending && !model.startingChat && !model.chatSettingsBusy && model.configuringDeviceSessions.isEmpty && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
       (model.activeRunID == nil || model.activeProvider?.canSteer == true)
   }
 }

@@ -20901,7 +20901,7 @@ ${SUMMARIZATION_PROMPT}${focus}`;
         onReport: (error) => globalThis.__wmEvents(JSON.stringify({ conversationID: config.conversationID, events: [{ type: "runtime_error", message: String(error?.message ?? error) }] }))
       }, BACKGROUND_CONTEXT);
       root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: { provider: model.provider, modelId: model.id }, instructions: config.instructions } });
-      await root.configure({ model: { provider: model.provider, modelId: model.id }, instructions: config.instructions }, BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: model.provider, modelId: model.id }, instructions: config.instructions, thinkingLevel: config.thinkingLevel ?? "off" }, BACKGROUND_CONTEXT);
       watch = await watchEvents(harness, root.id, BACKGROUND_CONTEXT);
       globalThis.__wmEvents(JSON.stringify({ conversationID: config.conversationID, events: [watch.snapshot] }));
       watch.start(async (events) => globalThis.__wmEvents(JSON.stringify({ conversationID: config.conversationID, events })));
@@ -20934,10 +20934,10 @@ ${SUMMARIZATION_PROMPT}${focus}`;
       await temporaryWatch.stop();
       return snapshot;
     },
-    async configure({ modelJSON, instructions }) {
+    async configure({ modelJSON, instructions, thinkingLevel }) {
       const model = JSON.parse(modelJSON);
       installModel(model);
-      await root.configure({ model: { provider: model.provider, modelId: model.id }, ...instructions === void 0 ? {} : { instructions } }, BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: model.provider, modelId: model.id }, ...instructions === void 0 ? {} : { instructions }, ...thinkingLevel === void 0 ? {} : { thinkingLevel } }, BACKGROUND_CONTEXT);
     },
     async resume() {
       harness.resume();
