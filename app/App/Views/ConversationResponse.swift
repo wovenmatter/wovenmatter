@@ -6,10 +6,9 @@ private let responseAbsolute = NSTextBlock.ValueType.absoluteValueType
 private let responsePercentage = NSTextBlock.ValueType.percentageValueType
 #else
 import UIKit
+import CoreText
 private typealias ResponseFont = UIFont
 private typealias ResponseColor = UIColor
-private let responseAbsolute = NSTextBlock.ValueType.absolute
-private let responsePercentage = NSTextBlock.ValueType.percentage
 #endif
 import SwiftUI
 
@@ -288,7 +287,7 @@ private struct ConversationResponseText: UIViewRepresentable {
     func updateUIView(_ view: ConversationResponseNativeTextView, context: Context) {
         view.onOpenLink = onOpenLink
         view.apply(content: content, document: document, isStreaming: isStreaming,
-                   typeSize: String(describing: dynamicTypeSize))
+                   typeSize: dynamicTypeSize)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationResponseNativeTextView,
                      context: Context) -> CGSize? {
@@ -300,7 +299,9 @@ final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
     var onOpenLink: ((URL) -> Void)?
     private var appliedContent: String?
     private var appliedStreaming: Bool?
-    private var appliedTypeSize: String?
+    private var appliedTypeSize: DynamicTypeSize?
+    private var appliedDocument: ConversationMarkdownDocument?
+    private var renderedWidth: CGFloat = 680
 
     init() {
         let storage = NSTextStorage()
@@ -326,21 +327,51 @@ final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool, typeSize: String) {
+    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool, typeSize: DynamicTypeSize) {
         guard appliedContent != content || appliedStreaming != isStreaming || appliedTypeSize != typeSize else { return }
+        appliedContent = content; appliedStreaming = isStreaming; appliedTypeSize = typeSize
+        appliedDocument = document ?? ConversationMarkdownDocument(content)
+        renderAtCurrentWidth()
+    }
+    private func renderAtCurrentWidth() {
+        guard let document = appliedDocument else { return }
         let selection = selectedRange
         let previous = textStorage.string as NSString
-        let rendered = ConversationResponseAttributedText.render(document ?? ConversationMarkdownDocument(content), isStreaming: isStreaming)
+        let traits = UITraitCollection(preferredContentSizeCategory: contentSizeCategory)
+        let rendered = ConversationResponseAttributedText.render(document, isStreaming: appliedStreaming ?? false,
+            width: renderedWidth, scaleFont: { UIFontMetrics.default.scaledFont(for: $0, compatibleWith: traits) })
         textStorage.setAttributedString(rendered)
         let end = NSMaxRange(selection)
         let unchanged = selection.length > 0 && end <= previous.length && end <= rendered.length
             && previous.substring(to: end) == (rendered.string as NSString).substring(to: end)
         selectedRange = unchanged ? selection : NSRange(location: 0, length: 0)
-        appliedContent = content; appliedStreaming = isStreaming; appliedTypeSize = typeSize
         invalidateIntrinsicContentSize()
+    }
+    /// Use the actual SwiftUI size environment, including per-view overrides;
+    /// UIKit's global preferred category need not match this response's size.
+    private var contentSizeCategory: UIContentSizeCategory {
+        switch appliedTypeSize ?? .large {
+        case .xSmall: .extraSmall
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .xLarge: .extraLarge
+        case .xxLarge: .extraExtraLarge
+        case .xxxLarge: .extraExtraExtraLarge
+        case .accessibility1: .accessibilityMedium
+        case .accessibility2: .accessibilityLarge
+        case .accessibility3: .accessibilityExtraLarge
+        case .accessibility4: .accessibilityExtraExtraLarge
+        case .accessibility5: .accessibilityExtraExtraExtraLarge
+        @unknown default: .large
+        }
     }
     func fittingSize(width: CGFloat) -> CGSize {
         let width = max(1, width)
+        if renderedWidth != width {
+            renderedWidth = width
+            renderAtCurrentWidth()
+        }
         textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         var height = max(layoutManager.usedRect(for: textContainer).maxY, layoutManager.extraLineFragmentRect.maxY)
@@ -379,7 +410,105 @@ private final class ConversationResponseLayoutManager: NSLayoutManager {
                 }
             }
         }
+        storage.enumerateAttribute(.responseTableRow, in: characters) { value, range, _ in
+            guard let row = value as? [String: Any], let columns = row["columns"] as? Int, columns > 0 else { return }
+            var full = NSRange()
+            _ = storage.attribute(.responseTableRow, at: range.location, longestEffectiveRange: &full,
+                                  in: NSRange(location: 0, length: storage.length))
+            let rowGlyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
+            let used = self.boundingRect(forGlyphRange: rowGlyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
+            let rect = CGRect(x: origin.x, y: used.minY - 9, width: container.size.width, height: used.height + 18)
+            UIColor(DashboardPalette.primary).withAlphaComponent(0.032).setFill()
+            UIBezierPath(rect: rect).fill()
+            UIColor(DashboardPalette.foreground).withAlphaComponent(0.09).setStroke()
+            let border = UIBezierPath(rect: rect)
+            for column in 1..<columns {
+                let x = rect.minX + rect.width * CGFloat(column) / CGFloat(columns)
+                border.move(to: CGPoint(x: x, y: rect.minY))
+                border.addLine(to: CGPoint(x: x, y: rect.maxY))
+            }
+            border.lineWidth = 0.5
+            border.stroke()
+        }
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+}
+
+/// UIKit SDKs before 27 do not expose NSTextTable or paragraph textBlocks.
+/// Keep table text in the same selectable surface, wrapping each real attributed
+/// cell to its column width and drawing the grid behind those native glyphs.
+@MainActor
+private enum ConversationResponseTableFallback {
+    static func render(_ table: ConversationMarkdownDocument.Table, width: CGFloat,
+                       foreground: UIColor, scaleFont: (UIFont) -> UIFont,
+                       inline: (ConversationMarkdownDocument.InlineText, UIFont) -> NSMutableAttributedString) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
+        let columns = table.header.count
+        guard columns > 0 else { return result }
+        let cellWidth = max(1, width / CGFloat(columns))
+        let padding = min(9, cellWidth / 4)
+        let textWidth = max(1, cellWidth - padding * 2)
+        let font = scaleFont(.systemFont(ofSize: 13))
+        let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground, .responseScaledFont: true]
+        for (rowIndex, cells) in ([table.header] + table.rows).enumerated() {
+            let start = result.length
+            let wrapped = table.header.indices.map { column -> [NSAttributedString] in
+                let source = cells.indices.contains(column) ? cells[column] : .init("")
+                let text = inline(source, .systemFont(ofSize: 13, weight: rowIndex == 0 ? .semibold : .regular))
+                text.enumerateAttribute(.font, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                    if let font = value as? UIFont { text.addAttribute(.font, value: scaleFont(font), range: range) }
+                }
+                text.addAttribute(.responseScaledFont, value: true, range: NSRange(location: 0, length: text.length))
+                return lines(text, width: textWidth)
+            }
+            let count = max(1, wrapped.map(\.count).max() ?? 1)
+            for line in 0..<count {
+                let paragraph = NSMutableAttributedString(string: "", attributes: base)
+                let style = NSMutableParagraphStyle()
+                style.lineSpacing = 5
+                style.paragraphSpacingBefore = line == 0 ? 9 : 0
+                style.paragraphSpacing = line == count - 1 ? (rowIndex == table.rows.count ? 23 : 9) : 0
+                style.defaultTabInterval = max(width + 1, 1)
+                style.tabStops = table.header.indices.map { column in
+                    let alignment = table.alignments.indices.contains(column) ? table.alignments[column] : .leading
+                    let left = CGFloat(column) * cellWidth
+                    switch alignment {
+                    case .leading: return NSTextTab(textAlignment: .left, location: left + padding)
+                    case .center: return NSTextTab(textAlignment: .center, location: left + cellWidth / 2)
+                    case .trailing: return NSTextTab(textAlignment: .right, location: left + cellWidth - padding)
+                    }
+                }
+                for column in table.header.indices {
+                    paragraph.append(NSAttributedString(string: "\t", attributes: base))
+                    if wrapped[column].indices.contains(line) { paragraph.append(wrapped[column][line]) }
+                }
+                paragraph.append(NSAttributedString(string: "\n", attributes: base))
+                paragraph.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: paragraph.length))
+                result.append(paragraph)
+            }
+            result.addAttribute(.responseTableRow, value: ["id": UUID().uuidString, "columns": columns],
+                range: NSRange(location: start, length: result.length - start))
+        }
+        return result
+    }
+
+    private static func lines(_ text: NSAttributedString, width: CGFloat) -> [NSAttributedString] {
+        guard text.length > 0 else { return [text] }
+        let typesetter = CTTypesetterCreateWithAttributedString(text)
+        let source = text.string as NSString
+        var offset = 0
+        var result: [NSAttributedString] = []
+        while offset < text.length {
+            let suggested = CTTypesetterSuggestLineBreak(typesetter, offset, Double(width))
+            // A single wide grapheme must still make progress without splitting
+            // an emoji/surrogate pair. No cell text is truncated or discarded.
+            let length = suggested > 0 ? suggested : source.rangeOfComposedCharacterSequence(at: offset).length
+            var range = NSRange(location: offset, length: min(length, text.length - offset))
+            if range.length > 0, source.substring(with: NSRange(location: NSMaxRange(range) - 1, length: 1)) == "\n" { range.length -= 1 }
+            result.append(text.attributedSubstring(from: range))
+            offset += length
+        }
+        return result
     }
 }
 
@@ -389,12 +518,15 @@ private extension NSAttributedString.Key {
     static let responseCode = Self("WovenMatterResponseCode")
     static let responseQuote = Self("WovenMatterResponseQuote")
     static let responseDivider = Self("WovenMatterResponseDivider")
+    static let responseTableRow = Self("WovenMatterResponseTableRow")
+    static let responseScaledFont = Self("WovenMatterResponseScaledFont")
 }
 
 /// Reuses the prepared Markdown parser; only the response's presentation changes.
 @MainActor
 private enum ConversationResponseAttributedText {
-    static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool) -> NSAttributedString {
+    static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool, width: CGFloat = 680,
+                       scaleFont: (ResponseFont) -> ResponseFont = { $0 }) -> NSAttributedString {
         let output = NSMutableAttributedString(string: "")
         let foreground = ResponseColor(DashboardPalette.foreground).withAlphaComponent(isStreaming ? 0.76 : 1)
 
@@ -499,16 +631,11 @@ private enum ConversationResponseAttributedText {
                         range: NSRange(location: start, length: output.length - start))
                 case .table(let table):
                     guard !table.header.isEmpty else { continue }
+                    #if os(macOS)
                     let nativeTable = NSTextTable()
                     nativeTable.numberOfColumns = table.header.count
                     nativeTable.collapsesBorders = true
-                    #if os(macOS)
                     nativeTable.setWidth(14, type: responseAbsolute, for: .margin, edge: .maxY)
-                    #else
-                    if #available(iOS 27, *) {
-                        nativeTable.setWidth(14, type: responseAbsolute, for: .margin, rectEdge: .maxYEdge)
-                    }
-                    #endif
                     nativeTable.setValue(100, type: responsePercentage, for: .width)
                     for (rowIndex, cells) in ([table.header] + table.rows).enumerated() {
                         for column in table.header.indices {
@@ -527,6 +654,9 @@ private enum ConversationResponseAttributedText {
                             append(inline(cells.indices.contains(column) ? cells[column] : .init(""), font: .systemFont(ofSize: 13, weight: rowIndex == 0 ? .semibold : .regular)), style: cellStyle)
                         }
                     }
+                    #else
+                    output.append(ConversationResponseTableFallback.render(table, width: width, foreground: foreground, scaleFont: scaleFont, inline: inline))
+                    #endif
                 case .divider:
                     append(NSAttributedString(string: " ", attributes: [.font: ResponseFont.systemFont(ofSize: 15), .responseDivider: true]), style: style)
                 }
@@ -535,8 +665,8 @@ private enum ConversationResponseAttributedText {
         blocks(document.blocks)
         #if os(iOS)
         output.enumerateAttribute(.font, in: NSRange(location: 0, length: output.length)) { value, range, _ in
-            if let font = value as? UIFont {
-                output.addAttribute(.font, value: UIFontMetrics.default.scaledFont(for: font), range: range)
+            if let font = value as? UIFont, output.attribute(.responseScaledFont, at: range.location, effectiveRange: nil) == nil {
+                output.addAttribute(.font, value: scaleFont(font), range: range)
             }
         }
         #endif
