@@ -12,25 +12,129 @@ private extension NSAttributedString.Key {
     static let noteCellID = Self("wovenmatter.note.cell-id")
 }
 
+struct DashboardNoteTextStatistics: Equatable {
+    let words: Int
+    let characters: Int
+
+    init(document: NoteDocument) {
+        let text = document.plainText
+        var words = 0
+        text.enumerateSubstrings(in: text.startIndex..<text.endIndex,
+                                 options: [.byWords, .substringNotRequired]) { _, _, _, _ in
+            words += 1
+        }
+        self.words = words
+        characters = text.count
+    }
+}
+
 @MainActor
 @Observable
 final class DashboardNoteEditorController {
     @ObservationIgnored weak var textView: NSTextView?
     @ObservationIgnored private var document = NoteDocument()
     @ObservationIgnored private var onChange: ((NoteDocument) -> Void)?
+    @ObservationIgnored private var documentText: NSAttributedString?
+    @ObservationIgnored private var undoObservers: [NSObjectProtocol] = []
+    private(set) var canUndo = false
+    private(set) var canRedo = false
+
+    isolated deinit {
+        for observer in undoObservers { NotificationCenter.default.removeObserver(observer) }
+    }
 
     func bind(
         textView: NSTextView,
         document: NoteDocument,
         onChange: @escaping (NoteDocument) -> Void
     ) {
-        self.textView = textView
+        if self.textView !== textView {
+            removeUndoObservers()
+            self.textView = textView
+            if let manager = textView.undoManager {
+                for name in [Notification.Name.NSUndoManagerDidCloseUndoGroup,
+                             Notification.Name.NSUndoManagerDidUndoChange,
+                             Notification.Name.NSUndoManagerDidRedoChange,
+                             Notification.Name.NSUndoManagerCheckpoint] {
+                    undoObservers.append(NotificationCenter.default.addObserver(
+                        forName: name, object: manager, queue: .main
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            if name == .NSUndoManagerDidUndoChange || name == .NSUndoManagerDidRedoChange {
+                                self?.didUndoOrRedo()
+                            } else {
+                                self?.refreshUndoState()
+                            }
+                        }
+                    })
+                }
+            }
+        }
         self.document = document
+        documentText = NSAttributedString(attributedString: textView.attributedString())
         self.onChange = onChange
+        refreshUndoState()
+    }
+
+    func unbind(_ textView: NSTextView) {
+        guard self.textView === textView else { return }
+        removeUndoObservers()
+        textView.undoManager?.removeAllActions()
+        self.textView = nil
+        documentText = nil
+        onChange = nil
+        refreshUndoState()
+    }
+
+    private func removeUndoObservers() {
+        for observer in undoObservers { NotificationCenter.default.removeObserver(observer) }
+        undoObservers.removeAll()
+    }
+
+    func refreshUndoState() {
+        canUndo = textView?.isEditable == true && textView?.undoManager?.canUndo == true
+        canRedo = textView?.isEditable == true && textView?.undoManager?.canRedo == true
+    }
+
+    private func didUndoOrRedo() {
+        // Native undo can restore text storage before its text-change delegate
+        // notification arrives. Publish the restored content for saving/counts,
+        // including undo invoked through the standard Edit menu or keyboard.
+        // Compare with the actual synchronized storage. Rendering a fresh copy
+        // creates different native list objects, even for an unchanged snapshot.
+        if let textView,
+           documentText.map({ !textView.attributedString().isEqual(to: $0) }) ?? true {
+            let updated = NoteAttributedDocument.parse(textView.attributedString(), basedOn: document)
+            if updated != document {
+                document = updated
+                onChange?(updated)
+            }
+        }
+        refreshUndoState()
+    }
+
+    func undo() {
+        guard let textView, textView.isEditable, let manager = textView.undoManager,
+              manager.canUndo else { return }
+        textView.window?.makeFirstResponder(textView)
+        textView.breakUndoCoalescing()
+        manager.undo()
+        refreshUndoState()
+    }
+
+    func redo() {
+        guard let textView, textView.isEditable, let manager = textView.undoManager,
+              manager.canRedo else { return }
+        textView.window?.makeFirstResponder(textView)
+        textView.breakUndoCoalescing()
+        manager.redo()
+        refreshUndoState()
     }
 
     func adopt(_ document: NoteDocument) {
         self.document = document
+        documentText = textView.map { NSAttributedString(attributedString: $0.attributedString()) }
+        refreshUndoState()
     }
 
     func toggleBold() { toggleFontTrait(.boldFontMask) }
@@ -141,6 +245,7 @@ final class DashboardNoteEditorController {
             }
         }
         undo?.setActionName(action)
+        refreshUndoState()
     }
 
     func toggleHighlight(_ color: NSColor) {
@@ -332,9 +437,13 @@ final class DashboardNoteEditorController {
         }
         textView.undoManager?.setActionName(action)
         document = updated.normalized()
-        onChange?(document)
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+        documentText = NSAttributedString(attributedString: textView.attributedString())
+        onChange?(document)
         textView.needsDisplay = true
+        textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
+                           types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
+        refreshUndoState()
         if let cellID, let range = textView.textStorage?.range(ofNoteAttribute: .noteCellID, value: cellID) {
             textView.setSelectedRange(NSRange(location: range.location, length: 0))
         }
@@ -364,6 +473,8 @@ struct DashboardNoteEditor: NSViewRepresentable {
         textView.isEditable = isEnabled
         textView.importsGraphics = false
         textView.allowsUndo = true
+        textView.isContinuousSpellCheckingEnabled = true
+        textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isVerticallyResizable = true
@@ -379,6 +490,8 @@ struct DashboardNoteEditor: NSViewRepresentable {
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
         scrollView.documentView = textView
         context.coordinator.bind(textView)
+        textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
+                           types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
         dictationEditor?.bind(textView, identity: dictationIdentity)
         return scrollView
     }
@@ -393,6 +506,13 @@ struct DashboardNoteEditor: NSViewRepresentable {
         }
         guard document != context.coordinator.lastDocument else { return }
         context.coordinator.apply(document, to: textView)
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        if let textView = scrollView.documentView as? NSTextView {
+            coordinator.parent.controller.unbind(textView)
+            textView.delegate = nil
+        }
     }
 
     @MainActor
@@ -430,6 +550,8 @@ struct DashboardNoteEditor: NSViewRepresentable {
             restoreTypingAttributes(in: textView)
             lastDocument = document
             parent.controller.adopt(document)
+            textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
+                               types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
             applying = false
         }
 
@@ -527,6 +649,31 @@ struct DashboardNoteEditor: NSViewRepresentable {
 }
 
 private final class NoteTextView: NSTextView {
+    // Each note owns its editing history; the window's title fields and other
+    // editors must not become targets of these toolbar actions.
+    private let noteUndoManager = UndoManager()
+    override var undoManager: UndoManager? { noteUndoManager }
+
+    @objc func undo(_ sender: Any?) {
+        guard isEditable, noteUndoManager.canUndo else { return }
+        breakUndoCoalescing()
+        noteUndoManager.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard isEditable, noteUndoManager.canRedo else { return }
+        breakUndoCoalescing()
+        noteUndoManager.redo()
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)): return isEditable && noteUndoManager.canUndo
+        case #selector(redo(_:)): return isEditable && noteUndoManager.canRedo
+        default: return super.validateUserInterfaceItem(item)
+        }
+    }
+
     override func didChangeText() {
         super.didChangeText()
         needsDisplay = true
@@ -580,10 +727,14 @@ private enum NoteAttributedDocument {
         let result = NSMutableAttributedString()
         var previousStyle: NoteParagraphStyle?
         var list: NSTextList?
+        var nativeLists: [NoteTextList: NSTextList] = [:]
         for block in document.normalized().blocks {
             switch block {
             case .richText(let richText):
-                let paragraph = paragraphStyle(for: richText.style, list: previousStyle == richText.style ? list : nil)
+                var paragraph = paragraphStyle(for: richText.style, list: previousStyle == richText.style ? list : nil)
+                if let formatting = richText.list {
+                    paragraph = restoreList(formatting, to: paragraph, lists: &nativeLists)
+                }
                 append(richText, paragraph: paragraph, to: result)
                 previousStyle = richText.style
                 list = paragraph.textLists.first
@@ -603,6 +754,11 @@ private enum NoteAttributedDocument {
             return (table.id, table)
           }
         )
+        let sourceLists = source.blocks.reduce(into: [String: NoteListFormatting]()) { result, block in
+            if case .richText(let text) = block, let list = text.list { result[text.id] = list }
+        }
+        var nativeLists: [ObjectIdentifier: NoteTextList] = [:]
+        var usedListIDs: Set<String> = []
         var tables = sourceTables
         var emittedTables: Set<String> = []
         var seenBlockIDs: Set<String> = []
@@ -643,7 +799,10 @@ private enum NoteAttributedDocument {
                 blocks.append(.richText(NoteRichTextBlock(
                     id: blockID,
                     style: style,
-                    runs: runs(in: attributed, range: contentRange)
+                    runs: runs(in: attributed, range: contentRange),
+                    list: captureList(attributes[.paragraphStyle] as? NSParagraphStyle,
+                                      previous: proposedID.flatMap { sourceLists[$0] },
+                                      lists: &nativeLists, usedIDs: &usedListIDs)
                 )))
             }
             guard paragraphRange.length > 0 else { break }
@@ -657,6 +816,58 @@ private enum NoteAttributedDocument {
         var document = source
         document.blocks = blocks
         return document.normalized()
+    }
+
+    private static func captureList(
+        _ paragraph: NSParagraphStyle?, previous: NoteListFormatting?,
+        lists: inout [ObjectIdentifier: NoteTextList], usedIDs: inout Set<String>
+    ) -> NoteListFormatting? {
+        guard let paragraph, !paragraph.textLists.isEmpty else { return nil }
+        let levels = paragraph.textLists.enumerated().map { depth, native in
+            let identity = ObjectIdentifier(native)
+            if let existing = lists[identity] { return existing }
+            var level = NoteTextList(markerFormat: native.markerFormat.rawValue,
+                                     options: native.listOptions.rawValue,
+                                     startingItemNumber: native.startingItemNumber)
+            if let previous, previous.levels.indices.contains(depth) {
+                let old = previous.levels[depth]
+                if old.markerFormat == level.markerFormat, old.options == level.options,
+                   old.startingItemNumber == level.startingItemNumber, !usedIDs.contains(old.id) {
+                    level.id = old.id
+                }
+            }
+            lists[identity] = level
+            usedIDs.insert(level.id)
+            return level
+        }
+        return NoteListFormatting(levels: levels, headIndent: paragraph.headIndent,
+                                  firstLineHeadIndent: paragraph.firstLineHeadIndent,
+                                  tabStops: paragraph.tabStops.map {
+                                      NoteListTabStop(alignment: $0.alignment.rawValue, location: $0.location)
+                                  }, defaultTabInterval: paragraph.defaultTabInterval)
+    }
+
+    private static func restoreList(
+        _ formatting: NoteListFormatting, to paragraph: NSParagraphStyle,
+        lists: inout [NoteTextList: NSTextList]
+    ) -> NSParagraphStyle {
+        guard let paragraph = paragraph.mutableCopy() as? NSMutableParagraphStyle else { return paragraph }
+        paragraph.textLists = formatting.levels.map { level in
+            if let existing = lists[level] { return existing }
+            let native = NSTextList(markerFormat: .init(rawValue: level.markerFormat),
+                                    options: .init(rawValue: level.options),
+                                    startingItemNumber: level.startingItemNumber)
+            lists[level] = native
+            return native
+        }
+        paragraph.headIndent = formatting.headIndent
+        paragraph.firstLineHeadIndent = formatting.firstLineHeadIndent
+        paragraph.tabStops = formatting.tabStops.map {
+            NSTextTab(textAlignment: NSTextAlignment(rawValue: $0.alignment) ?? .natural,
+                      location: $0.location)
+        }
+        paragraph.defaultTabInterval = formatting.defaultTabInterval
+        return paragraph
     }
 
     private static func append(_ block: NoteRichTextBlock, paragraph: NSParagraphStyle, to result: NSMutableAttributedString) {

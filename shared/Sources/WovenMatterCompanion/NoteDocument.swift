@@ -173,23 +173,27 @@ public struct NoteRichTextBlock: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var style: NoteParagraphStyle
   public var runs: [NoteTextRun]
+  public var list: NoteListFormatting?
 
   public init(
     id: String = UUID().uuidString.lowercased(),
     style: NoteParagraphStyle = .paragraph,
-    runs: [NoteTextRun] = []
+    runs: [NoteTextRun] = [],
+    list: NoteListFormatting? = nil
   ) {
     self.id = id
     self.style = style
     self.runs = runs
+    self.list = list
   }
 
   public init(
     id: String = UUID().uuidString.lowercased(),
     style: NoteParagraphStyle = .paragraph,
-    text: String
+    text: String,
+    list: NoteListFormatting? = nil
   ) {
-    self.init(id: id, style: style, runs: text.isEmpty ? [] : [NoteTextRun(text: text)])
+    self.init(id: id, style: style, runs: text.isEmpty ? [] : [NoteTextRun(text: text)], list: list)
   }
 
   public var plainText: String { runs.map(\.text).joined() }
@@ -197,7 +201,52 @@ public struct NoteRichTextBlock: Codable, Equatable, Identifiable, Sendable {
   public func normalized() -> NoteRichTextBlock {
     var copy = self
     copy.runs = NoteTextRun.mergingAdjacent(runs.filter { !$0.text.isEmpty })
+    if style != .numberedList && style != .bulletedList { copy.list = nil }
     return copy
+  }
+}
+
+/// Native list structure is optional so earlier documents retain their flat-list rendering.
+public struct NoteListFormatting: Codable, Equatable, Sendable {
+  public var levels: [NoteTextList]
+  public var headIndent: Double
+  public var firstLineHeadIndent: Double
+  public var tabStops: [NoteListTabStop]
+  public var defaultTabInterval: Double
+
+  public init(levels: [NoteTextList], headIndent: Double, firstLineHeadIndent: Double,
+              tabStops: [NoteListTabStop] = [], defaultTabInterval: Double = 0) {
+    self.levels = levels
+    self.headIndent = headIndent
+    self.firstLineHeadIndent = firstLineHeadIndent
+    self.tabStops = tabStops
+    self.defaultTabInterval = defaultTabInterval
+  }
+}
+
+public struct NoteTextList: Codable, Equatable, Hashable, Sendable {
+  /// Paragraphs sharing a native list keep its identity, including across child lists.
+  public var id: String
+  public var markerFormat: String
+  public var options: UInt
+  public var startingItemNumber: Int
+
+  public init(id: String = UUID().uuidString.lowercased(), markerFormat: String,
+              options: UInt = 0, startingItemNumber: Int = 1) {
+    self.id = id
+    self.markerFormat = markerFormat
+    self.options = options
+    self.startingItemNumber = startingItemNumber
+  }
+}
+
+public struct NoteListTabStop: Codable, Equatable, Sendable {
+  public var alignment: Int
+  public var location: Double
+
+  public init(alignment: Int, location: Double) {
+    self.alignment = alignment
+    self.location = location
   }
 }
 
