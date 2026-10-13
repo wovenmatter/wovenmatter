@@ -1,6 +1,8 @@
 # Distributed client testing
 
-Use the Mac and mobile builds from the same PR revision. Start with the iPhone
+Use the Mac, mobile and Linux workspace service builds from the same PR revision.
+Existing Linux services need this revision before they can publish their own
+history; rebuilding the phone does not update a remote service. Start with the iPhone
 simulator, then iPad layout, then physical devices and network transitions.
 Keep UI fixtures separate from the devices used for real pairing.
 
@@ -11,6 +13,16 @@ scripts/build-companion-desktop.sh build
 scripts/build-ios.sh
 scripts/build-ios.sh --device-compile
 ```
+
+For the standard development launcher with an isolated database, use:
+
+```sh
+WOVENMATTER_DEV_VARIANT=Companion WOVENMATTER_DEV_CACHE_DIR=/private/tmp/wm-pr37-desktop scripts/build_and_run.sh
+```
+
+That variant is **Woven Matter Companion Dev.app**, with its own development
+library. Do not use the plain Dev variant for isolated library testing because
+its default workspace path is shared with the regular desktop app.
 
 The desktop helper builds a distinct signed **Woven Matter Companion Test.app**.
 Its `run` mode opens a separate test workspace and leaves production data alone.
@@ -76,9 +88,12 @@ and inference acceptance remain a human test for each provider.
 
 ## Central library and direct execution
 
-1. In the isolated central Mac app, open **Settings → Devices**, start sharing,
-   and create a pairing link. Pair each test client with its own fresh link
-   while all devices are on the same Tailscale network.
+1. In the isolated central Mac app, open **Settings → Device Connections**, start sharing,
+   and create a pairing QR code/link. Pair iPhone/iPad through **Settings → Pair
+   to Mac**. On a second Mac, test discovery and approval in both directions,
+   then the link fallback. All devices must be on the same Tailscale network.
+   Mere discovery must never authorize library reads. Verify device type and
+   each device’s own last contact; activity on one device must not update another.
 2. Synchronize a note in both directions. Disconnect, edit on both sides, reopen
    the client, and reconnect. Resolve the visible conflict; no writing should
    disappear. Delete a central note that has unsynced client writing and verify
@@ -86,10 +101,17 @@ and inference acceptance remain a human test for each provider.
 3. Authorize a Linux or secondary Mac workspace while the central Mac is online.
    Start and control a test conversation directly. Stop central sharing and
    continue controlling that workspace. Reconnect and compare the resulting
-   transcript and activity from a second client.
+   transcript and activity from a second client. Close all viewing clients
+   before reconnecting the Linux workspace to central: its own publisher must
+   consolidate the complete run without a phone acting as a relay. Repeat after
+   restarting the workspace service and after losing an upload acknowledgement.
+   A client attempting to publish another workspace’s journal must be rejected.
 4. Interrupt the response to a send, then reopen. Recover its existing receipt;
    do not create a second send to guess whether the first was accepted. Test
-   Stop and approvals after switching the selected conversation.
+   Stop and approvals after switching the selected conversation. Delay owner
+   publication while keeping direct control reachable: the central Mac must
+   still recognize the live run, reject a second idle-only send, steer that run,
+   and stop it. Its observer cache must not advance the central history cursor.
 5. Open an idle pre-existing remote conversation on the central Mac. Its native
    session is adopted by the direct workspace service. Existing active native
    work must finish before ownership transfers; a failed transfer stays fenced
@@ -234,3 +256,29 @@ refresh metadata during an active run and confirm its original route is retained
 Live subscription discovery can fail independently of its last saved inventory.
 No fixture test establishes live account access, provider inference, physical
 suspension behavior, or Tailscale availability.
+
+## Connection and offline-sync acceptance
+
+- Each secondary Mac has a local agent workspace without enabling a separate
+  execution mode. Its local runs sync directly under that Mac’s own identity.
+  Linux provisioning controls remain on the central Mac.
+- Pairing a client retrieves the enabled workspace directory and direct access;
+  no per-workspace pairing ceremony is required. Test the first connection with
+  one workspace temporarily unavailable, then let it return and acquire access.
+- Save notes and calendar events, terminate/reopen offline, and reconnect. The
+  pending count must clear only after durable central acceptance. A conflict in
+  one folder or a failed artifact transfer must not block unrelated calendar or
+  execution history synchronization.
+- Keep an older chat and a saved artifact offline, complete their download, then
+  disconnect and reopen them. Verify pinned content survives ordinary cache
+  cleanup. Never show a partial download as complete.
+- Disconnect and re-pair with the same central library without discarding local
+  writing or device credentials for inference. A different library must not
+  receive the old library’s pending writes.
+- Leave central offline while two clients edit different notes: they converge
+  through central after reconnection. Edit the same note on both: both versions
+  remain recoverable. Deletion plus an offline edit must preserve recovery
+  without restoring the deleted canonical identity.
+- Verify status distinguishes central reachability, local pending writing and
+  completed synchronization. Ordinary disconnects remain quiet outside Settings
+  and the affected item. Test iPhone, iPad portrait/landscape, and secondary Mac.

@@ -57,6 +57,20 @@ import CompanionInference
   var errorMessage: String?
   var pairingPresented = false
   var pairingText = ""
+  var pairingError: String?
+  var pairingInProgress = false
+  var synchronizationStatus = MobileSynchronizationStatus()
+  var connectionGeneration = UUID()
+  var connectionForeground = true
+  var automaticSynchronization = true
+  var centralRetryCount = 0
+  var centralRefreshAfter = Date.distantPast
+  var connectionRefreshTask: Task<Void, Never>?
+  @ObservationIgnored var networkMonitor: MobileNetworkMonitor?
+  var workspaceRefreshAfter: [String: Date] = [:]
+  var workspaceRetryCount: [String: Int] = [:]
+  var offlineOperationIDs: Set<String> = []
+  var offlineProblems: [String: String] = [:]
   var saveStates: [String: String] = [:]
   var draftTitles: [String: String] = [:]
   var draftContents: [String: String] = [:]
@@ -152,7 +166,7 @@ import CompanionInference
     } catch { errorMessage = "The local library could not open: " + error.localizedDescription }
   }
   init(store: MobileStore, transport: any CompanionTransport) {
-    fixture = false; isolatedTestHost = false; self.store = store
+    fixture = false; isolatedTestHost = false; automaticSynchronization = false; self.store = store
     executionWorkspaceID = "central"
     engine = MobileSyncEngine(store: store, transport: transport)
     online = true
@@ -188,76 +202,77 @@ import CompanionInference
       }
     }
     if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
-    await withTaskGroup(of: Void.self) { group in
-      group.addTask { [weak self] in
-        while !Task.isCancelled {
-          guard let self else { return }
-          if !self.fixture { await self.refresh() }
-          do { try await Task.sleep(for: .seconds(5)) } catch { return }
-        }
-      }
-      group.addTask { [weak self] in
-        while !Task.isCancelled {
-          guard let self else { return }
-          if !self.fixture { await self.refreshExecutionWorkspaces() }
-          do { try await Task.sleep(for: .seconds(1)) } catch { return }
-        }
-      }
-      await group.waitForAll()
-    }
+    await maintainConnections()
   }
   func reload() async {
-    if let store { let next = await store.snapshot(); if next != state { state = next } }
+    if let store {
+      let next = await store.snapshot()
+      let changedOutbox = next.outbox != state.outbox
+      if next != state { state = next }
+      if changedOutbox && !next.outbox.isEmpty { requestSynchronization() }
+    }
     calendarRevision &+= 1
+    await refreshSynchronizationStatus()
   }
   private func configureTransport() throws {
     guard let credential, let store else { connectionLabel = "Saved on this device"; return }
     guard credential.deviceID == state.deviceID else { throw CompanionAPIError(code: "device_identity_changed", message: "Pair this local library with your Mac again. The saved credential belongs to a previous app installation; your local notes are safe.") }
-    let client = try HTTPSCompanionTransport(credential: credential)
+    let client = try HTTPSCompanionTransport(credential: credential, metadata: deviceMetadata)
     transport = client; engine = MobileSyncEngine(store: store, transport: client)
   }
   func pair(url: URL) async {
-    guard !isolatedTestHost, !fixture else { return }
-    guard let store else { return }
-    connecting = true
-    defer { connecting = false }
+    guard !isolatedTestHost, !fixture, let store, !pairingInProgress else { return }
+    pairingInProgress = true; pairingError = nil
+    defer { pairingInProgress = false }
     do {
       let payload = try CompanionPairingPayload.parseURL(url)
       let current = await store.snapshot()
-      let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID, deviceName: UIDevice.current.name)
-      try await store.verifyWorkspace(paired.workspaceID)
-      await reload()
-      try MobileCredentialVault.save(paired)
-      credential = paired
-      try configureTransport()
-      try await ensureDeviceWorkspace()
-      pairingPresented = false; pairingText = ""
+      let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
+        deviceName: UIDevice.current.name, metadata: deviceMetadata)
+      try await acceptPairing(paired) { try MobileCredentialVault.save($0) }
+      pairingText = ""
       await refresh()
-    } catch { errorMessage = error.localizedDescription }
+      await refreshExecutionWorkspaces(force: true)
+    } catch { pairingError = error.localizedDescription }
   }
   func refresh() async {
     guard let engine, !refreshInProgress else { return }
-    refreshInProgress = true; connecting = !online
+    refreshInProgress = true; connecting = true
+    let generation = connectionGeneration
+    let activeTransport = transport
     defer { refreshInProgress = false; connecting = false }
     let targetConversationID = selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil
     do {
       try await engine.synchronize()
-      if frame % 5 == 0 || providers.isEmpty { providers = try await engine.providers() }
-      pending = try await engine.pending()
+      guard generation == connectionGeneration, !Task.isCancelled else { return }
+      let refreshedProviders = frame % 5 == 0 || providers.isEmpty ? try await engine.providers() : providers
+      let refreshedPending = try await engine.pending()
+      var capability: CompanionProvider?
       if let targetConversationID {
         try await engine.refreshTranscriptIfNeeded(targetConversationID)
-        if let transport { sessionCapabilities[targetConversationID] = try await transport.capabilities(targetConversationID) }
+        if let activeTransport { capability = try await activeTransport.capabilities(targetConversationID) }
       }
       if frame % 5 == 0 { try await engine.recoverCommandReceipts() }
+      let status = await engine.synchronizationStatus()
+      guard generation == connectionGeneration, !Task.isCancelled else { return }
+      providers = refreshedProviders; pending = refreshedPending
+      if let capability, let targetConversationID { sessionCapabilities[targetConversationID] = capability }
+      synchronizationStatus = status
       frame += 1
-      await reload()
-      rememberAgentCatalog()
-      online = true; connectionLabel = "Library synchronized"
+      online = true; connectionLabel = "Connected"
+      centralRetryCount = 0
+      centralRefreshAfter = Date().addingTimeInterval(tab == .chat && selectedExecutionWorkspaceID == "central" && activeRunID != nil ? 2 : 15)
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
+      await reload(); rememberAgentCatalog()
     } catch {
-      online = false
-      connectionLabel = (error as? MobileConnectionError).map { _ in error.localizedDescription } ?? "Mac unavailable"
-      if error is MobileStore.Failure { errorMessage = error.localizedDescription }
+      guard generation == connectionGeneration, !Task.isCancelled else { return }
+      let status = await engine.synchronizationStatus()
+      guard generation == connectionGeneration else { return }
+      synchronizationStatus = status
+      online = status.centralReachable == true
+      connectionLabel = online ? "Connected" : "Disconnected"
+      centralRetryCount += 1
+      centralRefreshAfter = Date().addingTimeInterval(Self.connectionRetryDelay(centralRetryCount))
       await reload()
     }
   }
@@ -289,7 +304,7 @@ import CompanionInference
     selectedConversationID = id; tab = .chat
     if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
     else if selectedExecutionWorkspaceID == "central" { await refresh() }
-    else { await refreshExecutionWorkspaces() }
+    else { await refreshExecutionWorkspaces(force: true) }
   }
   func refreshConversation() async {
     let owner = selectedExecutionWorkspaceID
@@ -337,7 +352,9 @@ import CompanionInference
   func saveLabel(_ id: String) -> String {
     if let value = saveStates[id], value != "Saved on this device" { return value }
     if state.conflicts[id] != nil { return "Saved on this device · conflict needs attention" }
-    return state.isDirty(id) ? "Saved on this device · waiting to sync" : "Saved · synced with Mac"
+    guard state.workspaceID != nil else { return "Saved on this device" }
+    if state.isDirty(id) { return "Saved on this device · waiting to sync" }
+    return "Saved · synced with Mac"
   }
   func linkedData(note: CompanionNote, tableID: String? = nil) async throws -> CompanionLinkedData {
     guard online, let engine else { throw MobileConnectionError.offline }
@@ -391,7 +408,7 @@ import CompanionInference
         let launch: MobileLaunchRecord
         if let pendingLaunch {
           guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Workspaces → Pending changes before starting another."; return
+            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Pair to Mac → Pending changes before starting another."; return
           }
           launch = pendingLaunch
         } else {
@@ -404,7 +421,7 @@ import CompanionInference
             updateChatDraft(key: conversationID, draft: .init(text: text, noteID: noteID))
             selectedConversationID = conversationID
           }
-          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Workspaces → Pending changes when the Mac is available."; return
+          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Pair to Mac → Pending changes when the Mac is available."; return
         }
         receipt = accepted
         if selectedConversationID == target { selectedConversationID = receipt.conversationID ?? conversationID }
@@ -413,7 +430,7 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Workspaces → Pending changes before sending different input."; return
+            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Pair to Mac → Pending changes before sending different input."; return
           }
           command = unresolved.command
         } else {
@@ -515,7 +532,7 @@ import CompanionInference
     await reload()
     let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Workspaces → Pending changes before making another change."
+      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Pair to Mac → Pending changes before making another change."
       return false
     }
     errorMessage = nil

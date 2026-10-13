@@ -1095,6 +1095,13 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return try await request(path: "v1/execution/devices", method: "POST", body: JSONEncoder().encode(payload))
     }
 
+    public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/publisher", method: "GET", body: nil)
+    }
+    public func configureExecutionPublisher(_ grant: CompanionWorkspacePublisherGrant) async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
+    }
+
     public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
         try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
     }

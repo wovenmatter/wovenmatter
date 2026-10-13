@@ -297,4 +297,41 @@ final class WorkspaceJournalTests: XCTestCase {
     let store = try MobileStore(file: file); let state = await store.snapshot()
     XCTAssertEqual(state.deviceID, "existing-phone"); XCTAssertEqual(state.notes["note"]?.content, "keep")
   }
+  func testLegacyObserverRelayFlagsRemovedWithoutLosingHistory() async throws {
+    let file = path(), journal = try WorkspaceJournal(file: file)
+    try await journal.bind(libraryID: "library")
+    try await journal.upsertWorkspace(.init(id: "local", libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "This device"))
+    try await journal.upsertWorkspace(.init(id: "remote", libraryID: "library", ownerDeviceID: "mac", kind: .mac, name: "Other Mac"))
+    // Linux is owned for management by phone, but only its own publisher executes.
+    try await journal.upsertWorkspace(.init(id: "linux", libraryID: "library", ownerDeviceID: "phone", kind: .linux, name: "Server", executionDeviceID: "server"))
+    for workspace in ["local", "remote", "linux"] { try await journal.record(entry(1, workspace: workspace, id: workspace)) }
+    let restarted = try WorkspaceJournal(file: file)
+    try await restarted.prepareOwnerPublication(deviceID: "phone")
+    let migrated = try WorkspaceJournal(file: file), state = await migrated.snapshot()
+    XCTAssertEqual(state.pendingEntries.map(\.workspaceID), ["local"])
+    XCTAssertEqual(state.pendingRegistrations, ["local"])
+    XCTAssertEqual(state.entries.count, 3); XCTAssertEqual(state.conversations.count, 3)
+    XCTAssertEqual(state.centralCursor, 0)
+    let direct = entry(2, workspace: "remote", id: "remote")
+    // A separate fresh direct cursor begins at the owner's first event.
+    try await migrated.receiveWorkspace(.init(libraryID: "library", cursor: 2, entries: [entry(1, workspace: "remote", id: "remote"), direct]), workspaceID: "remote")
+    let observed = await migrated.snapshot()
+    XCTAssertEqual(observed.pendingEntries.map(\.workspaceID), ["local"])
+    XCTAssertEqual(observed.conversations["remote"]?.title, "Version 2")
+  }
+
+  func testSecondaryMacOwnExecutionReplayQueuesOnlyItsOwnOrigin() async throws {
+    let journal = try WorkspaceJournal(file: path())
+    try await journal.bind(libraryID: "library")
+    try await journal.upsertWorkspace(.init(id: "own-mac", libraryID: "library", ownerDeviceID: "mac-device", kind: .mac, name: "This Mac", executionDeviceID: "mac-device"))
+    try await journal.upsertWorkspace(.init(id: "other-mac", libraryID: "library", ownerDeviceID: "other-device", kind: .mac, name: "Other Mac", executionDeviceID: "other-device"), pending: false)
+    for workspace in ["own-mac", "other-mac"] {
+      let value = entry(1, workspace: workspace, id: workspace)
+      try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 1, entries: [value]), workspaceID: workspace, localDeviceID: "mac-device")
+    }
+    let state = await journal.snapshot()
+    XCTAssertEqual(state.pendingEntries.map(\.workspaceID), ["own-mac"])
+    XCTAssertEqual(state.conversations.count, 2)
+  }
+
 }

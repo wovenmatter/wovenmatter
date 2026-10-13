@@ -62,7 +62,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  private func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> CompanionTranscript {
+  func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> CompanionTranscript {
     let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)

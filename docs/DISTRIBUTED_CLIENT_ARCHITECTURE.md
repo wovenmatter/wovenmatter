@@ -14,9 +14,51 @@ Tailscale carries inter-device connections. Woven Matter additionally authentica
 
 The central library consolidates notes, folders, conversations, complete exposed execution history, shared settings, and saved artifacts. Workspace files remain in their workspace: repositories, dependencies, build outputs, caches, and native runtime checkpoints are not mirrored wholesale. Saving an output to the library creates an explicitly synchronized artifact.
 
-A client replica is separate from native runtime persistence. Cache eviction must never remove unsynchronized changes, active runtime state, or the only copy of locally originated history. Execution records retain origin identity and ordering even when multiple clients relay the same records centrally.
+A client replica is separate from native runtime persistence. Cache eviction must never remove unsynchronized changes, active runtime state, or the only copy of locally originated history. Each execution workspace retains its own durable execution records and publishes them directly to the central library. An observing client may cache a foreign workspace journal for display, but must never publish that history or its artifacts. Linux workspace publication continues independently of any viewing client, including after the workspace service restarts. Each workspace uses its own publication identity scoped to that library and workspace; provisioning ownership does not confer execution ownership.
 
 Library changes use conditional revisions and retained deletion/conflict state. Commands use stable IDs, immutable request identity and durable receipts. Replay imports observations; it never executes commands. Interrupted transfers resume by validated offsets and content digests. Acknowledgement is emitted only after durable acceptance. Histories exceeding a network page are paged or chunked without truncation.
+
+## Device connections and synchronization
+
+The central Mac manages membership and access in Settings → Device Connections.
+Macs discover compatible Woven Matter services among peers visible through their
+existing Tailscale client. Initial pairing requires approval; discovery alone
+never grants library access. A one-time pairing link remains available. iPhone
+and iPad use Settings → Pair to Mac with QR scanning or a pasted pairing link.
+Workspaces lists available execution locations rather than housing library pairing.
+
+A paired client receives the registry and access to enabled execution workspaces
+from the central Mac. Previously authorized direct connections do not depend on
+the central Mac being reachable. Per-device presence describes contact by that
+device, not requests from another client. Connectivity and synchronization are
+separate states: a reachable central Mac does not mean every pending change has
+been accepted. Revocation takes effect centrally immediately and propagates to
+unreachable workspaces when they reconnect.
+
+Notes, folders and calendar edits commit locally with durable pending operations.
+Synchronization runs after edits and on foreground/reconnect opportunities, with
+retry backoff and periodic reconciliation. Independent resource streams must make
+progress even when another stream has a conflict or interrupted artifact transfer.
+Sync acknowledgements advance only the exact submitted operation; edits made
+while a request is in flight remain queued. Conflicting edits retain both versions;
+deletions retain tombstones and never resurrect an old identity during replay.
+
+Notes, calendar and the library index are available offline after download.
+Recent central transcripts are cached automatically; older transcript pages and
+large saved artifacts are downloaded on demand and can be kept offline. The
+immutable federation journal currently retains downloaded origin events in full;
+it is not pruned or skipped to simulate lazy transcript transfer. Cache cleanup never
+removes pending edits, conflicts, pinned content, or the only copy of locally
+originated execution data. Unsynchronized data remains until acknowledged by the
+central library. Provider credentials, runtime checkpoints and ordinary workspace
+files are outside this library-content synchronization boundary.
+
+When the central Mac is offline, ordinary library edits on one client remain local
+until central synchronization resumes. Direct workspace commands and history reads
+continue against reachable owners. No client becomes a replacement central library,
+and no viewing client acts as a synchronization intermediary for another workspace.
+Sync status and conflicts belong in connection settings or the affected item;
+ordinary disconnection must not create intrusive banners or dialogs.
 
 ## Pi Durable on iOS and iPadOS
 
@@ -30,7 +72,7 @@ Accepted work and tool intent are persisted before display/dispatch. iOS backgro
 
 ## Client roles and compatibility
 
-A secondary Mac can switch explicitly to client mode after pairing. The transition flushes local writing, checks active work, and restarts with a separate ownership role. Its prior library is preserved. Optional local execution is a distinct workspace origin, not a second authority for the paired library.
+A secondary Mac can switch explicitly to client mode after pairing. The transition flushes local writing, checks active work, and restarts with a separate ownership role. Its prior library is preserved. Every Mac retains its own local execution workspace. Its execution origin is distinct from the authority for the paired library. Creating or provisioning additional Linux workspaces remains a central-Mac operation.
 
 The existing companion protocol remains compatible while new federation capabilities are negotiated explicitly. Persistent identities, pairing and unsynchronized writing survive migration. Older servers/clients receive explicit unavailable or version responses for unsupported capabilities.
 

@@ -68,18 +68,19 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
 public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Sendable {
   let credential: MobileCredential
   private let session: URLSession
-  public init(credential: MobileCredential) throws {
+  private let deviceMetadata: CompanionDeviceMetadata?
+  public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil) throws {
     guard Self.validEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
-    self.credential = credential
+    self.credential = credential; self.deviceMetadata = metadata
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 45
     session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
   }
-  public static func pair(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String) async throws -> MobileCredential {
+  public static func pair(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String, metadata: CompanionDeviceMetadata? = nil) async throws -> MobileCredential {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
-    let transport = try HTTPSCompanionTransport(credential: provisional)
-    let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion)
+    let transport = try HTTPSCompanionTransport(credential: provisional, metadata: metadata)
+    let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata)
     let result: CompanionPairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
     guard result.protocolVersion == CompanionProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID, token: result.credential)
@@ -106,6 +107,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     do { return try await request("v1/command-receipts/\(try Self.safeID(id))") }
     catch MobileConnectionError.http(404, _) { return nil }
   }
+  public func deviceConnections() async throws -> [CompanionDeviceConnection] { try await request("v1/devices") }
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> CompanionNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
@@ -120,6 +122,11 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     request.httpMethod = method; request.httpBody = body
     request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    if let deviceMetadata {
+      request.setValue(deviceMetadata.kind.rawValue, forHTTPHeaderField: "X-Woven-Device-Kind")
+      if let value = deviceMetadata.osVersion { request.setValue(value, forHTTPHeaderField: "X-Woven-OS-Version") }
+      if let value = deviceMetadata.appVersion { request.setValue(value, forHTTPHeaderField: "X-Woven-App-Version") }
+    }
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     if !credential.token.isEmpty {
       request.setValue("Bearer " + credential.token, forHTTPHeaderField: "Authorization")
@@ -171,6 +178,17 @@ public enum MobileCredentialVault {
     return try JSONDecoder().decode(MobileCredential.self, from: data)
     #else
     return nil
+    #endif
+  }
+  /// Disconnect the central library only. Provider and direct-workspace grants
+  /// use different services and remain available on this device.
+  public static func clear() throws {
+    #if canImport(Security)
+    let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
+      kSecAttrAccount: "paired-mac"] as CFDictionary)
+    guard status == errSecSuccess || status == errSecItemNotFound else {
+      throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+    }
     #endif
   }
   public static func save(_ credential: MobileCredential) throws {

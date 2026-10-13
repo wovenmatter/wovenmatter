@@ -98,7 +98,11 @@
 		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
 		E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */; };
 		B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */; };
+		301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */; };
+		88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */; };
 		3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */; };
+		7B7EB5C6F87BEB57A87978A2 /* SettingsDeviceWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2733F2AC346189BE8356C281 /* SettingsDeviceWorkspacesView.swift */; };
+		F2B1E2E7B8F7CB91795BE7E8 /* DeviceConnectionsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */; };
 		D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */; };
 		77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */; };
 		A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */; };
@@ -236,7 +240,11 @@
 		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
 		FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCommandService.swift; sourceTree = "<group>"; };
 		0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionHostController.swift; sourceTree = "<group>"; };
+		0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CompanionHostController+Publishing.swift"; sourceTree = "<group>"; };
+		92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionMacPairingController.swift; sourceTree = "<group>"; };
 		8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCompanionView.swift; sourceTree = "<group>"; };
+		2733F2AC346189BE8356C281 /* SettingsDeviceWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDeviceWorkspacesView.swift; sourceTree = "<group>"; };
+		ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceConnectionsComponents.swift; sourceTree = "<group>"; };
 		A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNativeInteractions.swift; sourceTree = "<group>"; };
 		853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionWorkspaceFeatures.swift; sourceTree = "<group>"; };
 		B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Calendar.swift"; sourceTree = "<group>"; };
@@ -403,6 +411,8 @@
 				E45100000000000000000002 /* DashboardHermesCron.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */,
+				2733F2AC346189BE8356C281 /* SettingsDeviceWorkspacesView.swift */,
+				ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */,
 				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
 				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
@@ -475,6 +485,8 @@
 				EEEA1BB3B12D315E777F3BDA /* SecondaryMacCalendarProjection.swift */,
 				CA98C90FF31046DFAE827B4E /* SecondaryMacReplicaTools.swift */,
 				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
+				0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */,
+				92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */,
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
@@ -651,7 +663,11 @@
 				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */,
+				7B7EB5C6F87BEB57A87978A2 /* SettingsDeviceWorkspacesView.swift in Sources */,
+				F2B1E2E7B8F7CB91795BE7E8 /* DeviceConnectionsComponents.swift in Sources */,
 				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
+				301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */,
+				88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */,
 				D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */,
 				77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */,
 				E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */,

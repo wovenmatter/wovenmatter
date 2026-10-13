@@ -176,6 +176,12 @@ struct CentralLibraryClientView: View {
                 Spacer(); if conversation.activeRunID != nil { ProgressView().controlSize(.mini) }
             }.padding(.vertical, 5)
         }.buttonStyle(.plain)
+        .contextMenu {
+            Button("Keep offline") { Task {
+                do { try await model.keepConversationOffline(conversation.id) }
+                catch { model.errorMessage = error.localizedDescription }
+            } }
+        }
     }
 }
 

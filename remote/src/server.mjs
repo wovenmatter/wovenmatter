@@ -6,6 +6,7 @@ import { databaseOperation } from './database-catalog.mjs'
 import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createClientExecution } from './client-execution.mjs'
+import { createRetainedExecutionCapture } from './client-retained-history.mjs'
 import { createClientExecutionRuntime } from './client-execution-runtime.mjs'
 import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
@@ -99,9 +100,16 @@ const taskGateway = runningAsService ? createTaskGateway({
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
+  publisherKey: apiToken,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,hermes,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
+}) : null
+
+const retainedExecution = runningAsService ? createRetainedExecutionCapture({
+  directory:resolve(workspaceRoot,'.wovenmatter/retained-execution'),
+  defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,defaultAgent,execution:clientExecution,
+  resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
 const server = createServer(async (request, response) => {
@@ -119,6 +127,16 @@ const server = createServer(async (request, response) => {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,201,clientExecution.provision(await readJSON(request)))
     }
+    if (url.pathname === '/v1/execution/publisher') {
+      if (!administrator) return json(response,403,{error:'administrator_required'})
+      if (request.method === 'GET') return json(response,200,clientExecution.publisherStatus())
+      if (request.method === 'POST') return json(response,200,clientExecution.configurePublisher(await readJSON(request)))
+    }
+    if (url.pathname === '/v1/execution/artifacts' && request.method === 'POST') {
+      const body=await readJSON(request,8*1024*1024)
+      if(typeof body.data!=='string')return json(response,400,{error:'artifact_data_required'})
+      return json(response,200,clientExecution.saveArtifact({...body,data:Buffer.from(body.data,'base64')}))
+    }
     if (url.pathname === '/v1/execution/adopt' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,await clientExecution.adopt(await readJSON(request,8*1024*1024)))
@@ -127,6 +145,10 @@ const server = createServer(async (request, response) => {
     if (revokeDevice && request.method === 'DELETE') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       clientExecution.revoke(revokeDevice[1]); return json(response,200,{revoked:true})
+    }
+    if (url.pathname === '/v1/execution/retained-history' && request.method === 'GET') {
+      if (!administrator) return json(response,403,{error:'scope_not_granted'})
+      return json(response,200,retainedExecution.status())
     }
     if (url.pathname === '/v1/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
     if (url.pathname === '/v1/execution/commands' && request.method === 'POST') {
@@ -191,8 +213,9 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
     if (url.pathname === '/v1/default-agent/rpc' && request.method === 'POST') {
-      const message = await readJSON(request)
+      const message = retainedExecution.prepareRPC(await readJSON(request))
       const result = await defaultAgent.invoke(message)
+      retainedExecution.acceptedRPC(message,result)
       if (message.method === 'session/prompt' && result.operationID && !taskGateway.enabled()) {
         foregroundDefaultRuns.set(result.operationID, { sessionID:message.params?.sessionId, lastSeen:Date.now() })
       }
@@ -375,6 +398,7 @@ if (runningAsService) {
     if (error.code !== 'ENOENT') gateway.lastError = 'openclaw_desired_state_unavailable'
   }
   taskGateway.start()
+  retainedExecution.start()
   setInterval(() => {
     for (const [id, lease] of foregroundDefaultRuns) {
       if (taskGateway.enabled()) { foregroundDefaultRuns.delete(id); continue }
@@ -400,7 +424,7 @@ if (runningAsService) {
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await taskGateway.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); await stopGateway(); releaseTaskOwner?.(); process.exit(0) }
+    try { await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); await stopGateway(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
 }

@@ -1364,6 +1364,24 @@ final class RemoteWorkspacesModel {
         return credential
     }
 
+    func executionPublisherStatus(configuration: RemoteWorkspaceConfiguration) async throws -> CompanionWorkspacePublisherStatus {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.executionPublisherStatus()
+        try requireCurrent(identity)
+        return value
+    }
+    func configureExecutionPublisher(configuration: RemoteWorkspaceConfiguration, grant: CompanionWorkspacePublisherGrant) async throws {
+        let identity = try requestIdentity(configuration)
+        guard grant.workspaceID == configuration.id.uuidString.lowercased() else { throw RemoteWorkspaceClientError.invalidResponse("The publisher belongs to another execution workspace.") }
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.configureExecutionPublisher(grant)
+        try requireCurrent(identity)
+        guard value.configured, value.grantID == grant.grantID else { throw RemoteWorkspaceClientError.invalidResponse("The execution owner did not save its publisher grant.") }
+    }
+
     func adoptExecutionConversation(configuration: RemoteWorkspaceConfiguration, adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
         let identity = try requestIdentity(configuration)
         guard adoption.workspaceID == configuration.id.uuidString.lowercased() else {

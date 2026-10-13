@@ -41,7 +41,7 @@ extension CompanionModel {
     try await ensureDeviceWorkspace()
     try await store.journal.append(workspaceID: deviceWorkspaceID, conversation: conversation, transcript: transcript)
   }
-  func refreshExecutionWorkspaces() async {
+  func refreshExecutionWorkspaces(force: Bool = false) async {
     guard !fixture, let store, !executionWorkspaceRefreshInProgress else { return }
     executionWorkspaceRefreshInProgress = true; defer { executionWorkspaceRefreshInProgress = false }
     do {
@@ -58,12 +58,20 @@ extension CompanionModel {
         if let workspaceID = launch.create.workspaceID, let id = launch.create.conversationID { conversationWorkspaceIDs[id] = workspaceID }
       }
       executionWorkspaces = journal.workspaces.values.filter { !$0.deleted && $0.id != deviceWorkspaceID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+      let availableIDs = Set(executionWorkspaces.map(\.id))
+      for id in Array(workspaceClients.keys) where !availableIDs.contains(id) {
+        workspacePollTasks.removeValue(forKey: id)?.cancel()
+        workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
+        workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)
+      }
       for workspace in executionWorkspaces {
         guard workspace.endpoint != nil else { continue }
+        if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
         if workspaceClients[workspace.id] == nil {
           var saved = try WorkspaceCredentialVault.load(workspaceID: workspace.id)
+          if saved?.deviceID != state.deviceID || saved?.libraryID != state.workspaceID { saved = nil }
           if saved == nil, online, let transport {
-            if let retry = workspaceAuthorizationRetryAt[workspace.id], retry > Date() { continue }
+            if !force, let retry = workspaceAuthorizationRetryAt[workspace.id], retry > Date() { continue }
             do {
               saved = try await transport.executionCredential(workspaceID: workspace.id)
               if let saved { try WorkspaceCredentialVault.save(saved) }
@@ -86,13 +94,16 @@ extension CompanionModel {
       }
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
-    } catch { errorMessage = error.localizedDescription }
+    } catch { pairingError = error.localizedDescription }
   }
-  func refreshDirectWorkspace(_ workspaceID: String) async {
+  func refreshDirectWorkspace(_ workspaceID: String,
+                              clearCredential: (String) throws -> Void = WorkspaceCredentialVault.clear) async {
     guard let client = workspaceClients[workspaceID] else { return }
     do {
       try await client.refresh()
-      workspaceProviders[workspaceID] = try await client.providers()
+      let discoveredProviders = try await client.providers()
+      guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
+      workspaceProviders[workspaceID] = discoveredProviders
       if selectedExecutionWorkspaceID == workspaceID {
         let target = selectedConversationID
         remotePending[workspaceID] = try await client.pending()
@@ -101,11 +112,33 @@ extension CompanionModel {
           sessionCapabilities[id] = try await client.capabilities(id)
         }
       }
+      guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
+      workspaceReachable[workspaceID] = true
+      for id in state.pinnedTranscriptIDs ?? [] where executionOwner(of: id) == workspaceID && (state.transcripts[id] == nil || state.transcripts[id]?.olderCursor != nil) {
+        do { try await downloadOfflineConversation(id) }
+        catch { offlineProblems["chat:" + id] = error.localizedDescription }
+      }
       rememberAgentCatalog()
       workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID)
+      workspaceRetryCount[workspaceID] = 0
+      let active = selectedExecutionWorkspaceID == workspaceID && tab == .chat && activeRunID != nil
+      workspaceRefreshAfter[workspaceID] = Date().addingTimeInterval(active ? 2 : 30)
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
-    } catch { workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription }
+    } catch {
+      guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
+      workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription
+      if case MobileConnectionError.revoked = error {
+        // Workspace access is independent of central pairing. A disabled or
+        // revoked execution grant must not disconnect the library replica.
+        workspaceClients.removeValue(forKey: workspaceID)
+        do { try clearCredential(workspaceID) }
+        catch { workspaceProblems[workspaceID] = error.localizedDescription }
+      }
+      let failures = (workspaceRetryCount[workspaceID] ?? 0) + 1
+      workspaceRetryCount[workspaceID] = failures
+      workspaceRefreshAfter[workspaceID] = Date().addingTimeInterval(Self.connectionRetryDelay(failures))
+    }
   }
   func sendToExecutionWorkspace() async {
     let workspaceID = selectedExecutionWorkspaceID
@@ -126,7 +159,7 @@ extension CompanionModel {
         let pending = state.launches.first { $0.create.workspaceID == workspaceID && !$0.accepted && !$0.terminalFailure }
         if let pending {
           guard pending.initialSend.text == prompt, pending.create.providerID == route else {
-            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request in Settings → Workspaces → Pending changes before sending different input.")
+            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request in Settings → Pair to Mac → Pending changes before sending different input.")
           }
         }
         conversationID = pending?.create.conversationID ?? UUID().uuidString.lowercased()
@@ -136,7 +169,7 @@ extension CompanionModel {
         create.workspaceID = workspaceID; send.workspaceID = workspaceID
         let launch = try await client.startConversation(pending ?? .init(create: create, initialSend: send))
         guard launch.accepted, let receipt = launch.sendReceipt else {
-          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it in Settings → Workspaces → Pending changes when the workspace is available.")
+          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it in Settings → Pair to Mac → Pending changes when the workspace is available.")
         }
         result = receipt
       } else {

@@ -183,6 +183,114 @@ struct CompanionHostLifecycleTests {
         #expect(try await fixture.executionStatus(replacement) == 200)
     }
 
+    @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let target = try #require(fixture.children.last?.target)
+        let base = try #require(URL(string: target))
+        func post(_ path: String, _ body: Data) async throws -> (Data, Int) {
+            var request = URLRequest(url: base.appending(path: path))
+            request.httpMethod = "POST"; request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return (data, try #require((response as? HTTPURLResponse)?.statusCode))
+        }
+        let (advertised, _) = try await URLSession.shared.data(from: base.appending(path: "v1/discovery"))
+        let advertisement = try JSONDecoder().decode(CompanionDiscoveryAdvertisement.self, from: advertised)
+        #expect(advertisement.role == .central && advertisement.identity.metadata.kind == .mac)
+        #expect(!String(decoding: advertised, as: UTF8.self).contains("credential"))
+        let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: UUID().uuidString + UUID().uuidString,
+            identity: .init(deviceID: UUID().uuidString.lowercased(), deviceName: "Peer Mac", metadata: .init(kind: .mac, osVersion: "fixtureOS", appVersion: "fixtureApp")))
+        let (pendingData, pendingStatus) = try await post("v1/pairing/request", JSONEncoder().encode(request))
+        let pending = try JSONDecoder().decode(CompanionPairingApprovalResult.self, from: pendingData)
+        #expect(pendingStatus == 200 && pending.state == .pending && pending.pairing == nil)
+        await fixture.host.refreshStatus()
+        #expect(fixture.host.pendingPairingRequests.first?.identity == request.identity)
+        #expect(fixture.host.pairedDevices.isEmpty)
+        let (_, forbidden) = try await post("v1/pairing/approve", Data("{}".utf8))
+        #expect(forbidden != 200)
+        await fixture.host.approvePairing(id: request.requestID)
+        let (approvedData, status) = try await post("v1/pairing/result", JSONEncoder().encode(CompanionPairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
+        let approved = try JSONDecoder().decode(CompanionPairingApprovalResult.self, from: approvedData)
+        #expect(status == 200 && approved.pairing?.deviceID == request.identity.deviceID)
+        #expect(fixture.host.pairedDevices.first?.metadata == request.identity.metadata)
+        #expect(fixture.host.pairedDevices.first?.lastSeenAt == nil)
+        let principal = try #require(fixture.host.pairedDevices.first)
+        let workspace = try #require(fixture.host.executionWorkspaces.first { $0.kind == .mac })
+        let direct = try await fixture.host.provisionExecutionWorkspace(id: workspace.id, device: principal)
+        #expect(try await fixture.executionStatus(direct) == 200)
+        let (_, cancelled) = try await post("v1/pairing/cancel", JSONEncoder().encode(CompanionPairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
+        #expect(cancelled == 200)
+        #expect(try await fixture.executionStatus(direct) == 401)
+        #expect(fixture.host.pairedDevices.isEmpty)
+    }
+
+    @Test func disablingExecutionDuringEnrollmentLeavesLibraryPairingAndDeniesOldAndNewGrants() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let old = try await fixture.pairAndProvision(name: "Fixture Mac")
+        let device = try #require(fixture.host.pairedDevices.first { $0.id == old.deviceID })
+        let provisioning = Task { try? await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device) }
+        await fixture.host.setExecutionAccess(deviceID: old.deviceID, workspaceID: old.workspace.id, enabled: false)
+        let concurrent = await provisioning.value
+        #expect(try await fixture.executionStatus(old) != 200)
+        if let concurrent { #expect(try await fixture.executionStatus(concurrent) != 200) }
+        #expect(fixture.host.pairedDevices.contains { $0.id == old.deviceID })
+        #expect(fixture.host.workspaceAccessPolicies.contains { $0.deviceID == old.deviceID && $0.workspaceID == old.workspace.id && !$0.enabled })
+        await #expect(throws: CompanionAPIError.self) {
+            try await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device)
+        }
+        await fixture.host.setExecutionAccess(deviceID: old.deviceID, workspaceID: old.workspace.id, enabled: true)
+        let fresh = try await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device)
+        #expect(try await fixture.executionStatus(fresh) == 200)
+        #expect(try await fixture.executionStatus(old) != 200)
+    }
+
+    @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {
+        let identity = CompanionPairingDeviceIdentity(deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture Mac", metadata: .init(kind: .mac))
+        let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: String(repeating: "s", count: 43), identity: identity)
+        let cancelled = CompanionStoredPairingClaim(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!,
+            request: request, expiresAt: Date().addingTimeInterval(600), cancelled: true)
+        var stored: Data? = try JSONEncoder().encode(cancelled)
+        var attempts = 0, paired = false
+        let controller = CompanionMacPairingController(identity: { identity }, onPaired: { _, _ in paired = true },
+            loadClaim: { _ in try stored.map { try JSONDecoder().decode(CompanionStoredPairingClaim.self, from: $0) } },
+            saveClaim: { claim, _ in stored = try claim.map { try JSONEncoder().encode($0) } },
+            cancelClaim: { endpoint, poll in
+                #expect(endpoint == cancelled.endpoint && poll.requestID == cancelled.poll.requestID && poll.requestSecret == cancelled.poll.requestSecret)
+                attempts += 1
+                if attempts == 1 { throw URLError(.notConnectedToInternet) }
+            })
+        await controller.restorePendingRequest()
+        try await waitUntil { attempts == 1 }
+        #expect(stored != nil && controller.isRequestPending && !paired)
+        try await waitUntil { attempts == 2 && !controller.isRequestPending }
+        #expect(stored == nil && !paired)
+    }
+
+    @Test func executionAccessSettingsRejectDeviceOwnedAndNonExecutableWorkspaces() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let grant = try await fixture.pairAndProvision(name: "Fixture Mac")
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let identity = try await database.companionLibraryIdentity()
+        let candidates: [CompanionExecutionWorkspace] = [
+            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: grant.deviceID,
+                  kind: .mac, name: "Own Mac", endpoint: grant.workspace.endpoint, executionDeviceID: grant.deviceID),
+            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+                  kind: .ios, name: "Phone"),
+            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+                  kind: .mac, name: "No execution listener")
+        ]
+        for candidate in candidates {
+            let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: candidate), deviceID: identity.hostDeviceID)
+            await fixture.host.setExecutionAccess(deviceID: grant.deviceID, workspaceID: workspace.id, enabled: false)
+            #expect(fixture.host.errorMessage != nil)
+            #expect(try await database.companionWorkspaceAccessAllowed(deviceID: grant.deviceID, workspaceID: workspace.id))
+        }
+        #expect(try await fixture.executionStatus(grant) == 200)
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<300 {
             if condition() { return }

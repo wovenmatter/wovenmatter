@@ -6,7 +6,7 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-/// Optional execution owned by this Mac. The SQLite store here contains native
+/// Execution owned by this Mac. The SQLite store here contains native
 /// runtime state and a tool-facing projection; the client's replica remains the
 /// source for shared notes and the central Mac remains library authority.
 @MainActor
@@ -48,7 +48,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         let model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false, ownsExecutionOverride: true)
         try await model.configureClientExecutionWorkspace(directory: directory)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
-            kind: .mac, name: Host.current().localizedName ?? "This Mac", capabilities: ["execution.v1", "inference.v1", "execution.local"], journalDeviceIDs: [state.deviceID])
+            kind: .mac, name: Host.current().localizedName ?? "This Mac", capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])
         return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
     }
     init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {

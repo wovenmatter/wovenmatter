@@ -16,6 +16,28 @@ struct CalendarReplicaTests {
       draft: .init(title: "From iPhone", startsAt: Date(timeIntervalSince1970: 100), timeZoneID: "UTC",
         task: owner ? .init(prompt: "Run here") : nil)), ownerDeviceID: owner ? device : nil))
   }
+  @Test func executionDenialBlocksScheduledWorkButPreservesEventsAndDeviceTasks() async throws {
+    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let identity = try await database.companionLibraryIdentity()
+    let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
+      ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Central Mac", executionDeviceID: identity.hostDeviceID)
+    _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
+    try await database.setCompanionWorkspaceAccess(deviceID: device, workspaceID: workspace.id, enabled: false, authorizedBy: identity.hostDeviceID)
+    let event = mutation()
+    let saved = try await database.companionCalendarMutate(event, deviceID: device)
+    #expect(saved.status == .accepted)
+    var central = mutation(); central.record.event.draft.task = .init(prompt: "Run on central")
+    await #expect(throws: CompanionAPIError.self) { try await database.companionCalendarMutate(central, deviceID: device) }
+    var converted = try #require(saved.record); converted.event.draft.task = .init(prompt: "Convert event to central task")
+    await #expect(throws: CompanionAPIError.self) {
+      try await database.companionCalendarMutate(.init(deviceID: device, expectedRevision: converted.event.revision, record: converted), deviceID: device)
+    }
+    #expect(try await database.companionCalendarMutate(event, deviceID: device) == saved)
+    #expect(try await database.companionCalendarMutate(mutation(owner: true), deviceID: device).status == .accepted)
+    #expect(try await database.companionCalendarSnapshot().records.count == 2)
+    #expect(try await database.dueCalendarRuns().isEmpty)
+  }
+
   @Test func lostReceiptAndRestartCreateExactlyOneEvent() async throws {
     let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let request = mutation()

@@ -70,6 +70,9 @@ extension WorkspaceDatabaseConnection {
         }
         value.revision += 1
       } else {
+        guard value.kind != .linux || deviceID == identity.hostDeviceID else {
+          throw federationError("wrong_owner", "Only the central Mac can provision a Linux execution workspace.")
+        }
         guard request.expectedRevision == nil, !value.deleted else {
           throw federationError("revision_conflict", "A new workspace cannot replace or resurrect an existing identity.")
         }
@@ -84,9 +87,9 @@ extension WorkspaceDatabaseConnection {
     }
   }
   func federationAuthorizedWorkspaceUnlocked(_ id: String, deviceID: String) throws -> CompanionExecutionWorkspace {
-    let hostDeviceID = try companionLibraryIdentityUnlocked().hostDeviceID
     guard let workspace = try federationWorkspaceUnlocked(id), !workspace.deleted,
-          workspace.ownerDeviceID == deviceID || workspace.journalDeviceIDs.contains(deviceID) || deviceID == hostDeviceID else {
+          workspace.kind == .linux ? workspace.executionDeviceID == deviceID
+            : workspace.ownerDeviceID == deviceID && (workspace.executionDeviceID == nil || workspace.executionDeviceID == deviceID) else {
       throw federationError("wrong_owner", "This device is not authorized to publish this workspace's history or saved artifacts.")
     }
     return workspace

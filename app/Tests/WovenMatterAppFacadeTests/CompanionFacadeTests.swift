@@ -8,6 +8,33 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CompanionFacadeTests {
+    @Test(arguments: ["local", "remote", "gateway"])
+    func executionPolicyCoversCentralCommandRoutesAndKeepsLibraryActionsShared(route: String) async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let identity = try await fixture.database.companionLibraryIdentity()
+        let localID = UUID().uuidString.lowercased()
+        for (id, kind) in [(localID, CompanionExecutionWorkspace.Kind.mac), (fixture.remote.id.uuidString.lowercased(), .linux)] {
+            _ = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: id, libraryID: identity.libraryID,
+                ownerDeviceID: identity.hostDeviceID, kind: kind, name: "Policy target", executionDeviceID: kind == .mac ? identity.hostDeviceID : nil)), deviceID: identity.hostDeviceID)
+        }
+        let target = route == "remote" ? fixture.remote.id.uuidString.lowercased() : localID
+        try await fixture.database.setCompanionWorkspaceAccess(deviceID: fixture.device, workspaceID: target, enabled: false, authorizedBy: identity.hostDeviceID)
+        let create = CompanionCommand(deviceID: fixture.device, kind: .createSession,
+            conversationID: UUID().uuidString.lowercased(), providerID: fixture.providerID(route))
+        do {
+            _ = try await fixture.model.companionCommands.execute(create, deviceID: fixture.device)
+            Issue.record("Execution was accepted despite device policy")
+        } catch let error as CompanionAPIError { #expect(error.code == "execution_disabled") }
+        #expect(await fixture.recorder.deliveries.isEmpty)
+        let noteID = try await fixture.database.createNote(folderID: nil, title: "Shared", content: "Retained")
+        let note = try #require(try await fixture.database.companionNote(id: noteID))
+        let edit = CompanionCommand(deviceID: fixture.device, kind: .workspace,
+            workspaceAction: .note(id: noteID, action: "rename", revision: String(note.revision), title: "Shared rename", folderID: nil))
+        let receipt = try await fixture.model.companionCommands.execute(edit, deviceID: fixture.device)
+        #expect(receipt.status == .completed)
+        #expect(try await fixture.database.companionNote(id: noteID)?.title == "Shared rename")
+    }
+
     // OpenCode uses its native coordinator, covered by OpenCodeCoordinatorTests.
     // Every remaining runtime still traverses the real facade and launch routing.
     @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode }, [false, true])

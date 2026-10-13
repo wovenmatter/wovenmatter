@@ -44,7 +44,7 @@ extension CompanionModel {
           let launches = await store.snapshot().launches
           guard pending.command.providerID == agentID, pending.command.folderID == folder,
                 !launches.contains(where: { $0.create.commandID == pending.id }) else {
-            throw DeviceExecutionError.unavailable("A previous chat is awaiting acknowledgement. Resolve it in Settings → Workspaces → Pending changes.")
+            throw DeviceExecutionError.unavailable("A previous chat is awaiting acknowledgement. Resolve it in Settings → Pair to Mac → Pending changes.")
           }
         }
         var command = pending?.command ?? CompanionCommand(deviceID: state.deviceID, kind: .createSession,

@@ -1473,6 +1473,9 @@ public actor LocalACPClient {
             if runtimeKind == .defaultAgent || durableRemoteACP {
                 metadata["wovenRunID"] = .string(promptRunID)
                 metadata["wovenInputID"] = .string(UUID().uuidString.lowercased())
+                if let conversationID = input.cliContext?.sessionID {
+                    metadata["wovenConversationID"] = .string(conversationID)
+                }
             }
             if let context = input.cliContext {
                 metadata["wovenTools"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))

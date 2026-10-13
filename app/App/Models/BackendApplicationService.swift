@@ -193,7 +193,13 @@ final class BackendApplicationService {
         case .companion(let action):
             let host = model.companionHost
             switch action {
-            case .status: break
+            case .status: await host.refreshStatus()
+            case .discover: await host.refreshDiscovery()
+            case .approvePairing(let id): await host.approvePairing(id: id)
+            case .denyPairing(let id): await host.denyPairing(id: id)
+            case .invitePairing(let peer): await host.invitePairing(peer: peer)
+            case let .setExecutionAccess(deviceID, workspaceID, enabled):
+                await host.setExecutionAccess(deviceID: deviceID, workspaceID: workspaceID, enabled: enabled)
             case .start: await host.start()
             case .stop: host.stopSharing()
             case .createCode: await host.createPairingCode()

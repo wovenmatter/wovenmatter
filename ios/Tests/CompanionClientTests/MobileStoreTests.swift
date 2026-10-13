@@ -184,4 +184,39 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertTrue(html.contains("form-action 'none'"))
   }
 
+  func testOfflinePinsPreserveHistoryBeyondCacheBudgetAndRestart() async throws {
+    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
+    let store = try MobileStore(file: location, budget: .init(transcriptCount: 1, transcriptBytes: 512))
+    try await store.setTranscriptPinned("pinned", true)
+    let text = String(repeating: "all history ", count: 200)
+    try await store.cache(.init(conversationID: "pinned", messages: [.init(id: "older", conversationID: "pinned", role: "assistant", content: text)]))
+    try await store.cache(.init(conversationID: "other", messages: [.init(id: "other", conversationID: "other", role: "user", content: "recent")]))
+    let restarted = try MobileStore(file: location, budget: .init(transcriptCount: 1, transcriptBytes: 512))
+    let state = await restarted.snapshot()
+    XCTAssertEqual(state.pinnedTranscriptIDs, ["pinned"])
+    XCTAssertEqual(state.transcripts["pinned"]?.messages.first?.content, text)
+  }
+  func testPairingIdentityPersistsBeforeFirstSnapshot() async throws {
+    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
+    let store = try MobileStore(file: location)
+    try await store.bindWorkspace("library-a")
+    let restarted = try MobileStore(file: location)
+    do { try await restarted.bindWorkspace("library-b"); XCTFail("Changed central identity before initial snapshot") }
+    catch MobileStore.Failure.wrongWorkspace { }
+    let state = await restarted.snapshot(); XCTAssertEqual(state.workspaceID, "library-a")
+  }
+
+  func testTranscriptInvalidationCommitsWithCursorAndSurvivesRestart() async throws {
+    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
+    let store = try MobileStore(file: location)
+    let transcript = CompanionTranscript(conversationID: "chat", messages: [.init(id: "old", conversationID: "chat", role: "user", content: "existing")])
+    try await store.apply(.init(workspaceID: "library", cursor: 1, conversations: [.init(id: "chat", title: "Chat")]))
+    try await store.cache(transcript)
+    try await store.apply(.init(workspaceID: "library", cursor: 2, changes: [.init(cursor: 2, resourceKind: .transcript, resourceID: "chat", operation: .upsert, revision: 2)]))
+    let restarted = try MobileStore(file: location), state = await restarted.snapshot()
+    XCTAssertEqual(state.cursor, 2); XCTAssertEqual(state.dirtyTranscriptIDs, ["chat"])
+    try await restarted.cache(transcript)
+    let refreshed = await restarted.snapshot(); XCTAssertEqual(refreshed.dirtyTranscriptIDs, [])
+  }
+
 }

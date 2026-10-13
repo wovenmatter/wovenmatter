@@ -1,132 +1,232 @@
 import AppKit
-import CoreImage.CIFilterBuiltins
+import CompanionClient
 import SwiftUI
+import WovenMatterCompanion
 
 struct SettingsCompanionView: View {
     @Bindable var model: ApplicationModel
     @Bindable var host: CompanionHostController
     @State private var recoveryError: String?
+    @State private var switching = false
+    @State private var updatingAccess: Set<String> = []
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    private var client: CentralLibraryClientModel { model.libraryClient }
 
     var body: some View {
-        SettingsPage(title: "Devices",
-            detail: "Capture ideas anywhere. Work with the same folders, notes, and agents on your Mac.",
-            reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            CentralLibraryPairingCard(client: model.libraryClient, application: model)
-            SettingsCard(title: "Share this central library", detail: "Connect this Mac and your iPhone or iPad to the same Tailscale network.") {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label(host.status, systemImage: host.endpoint == nil ? "iphone.slash" : "iphone.radiowaves.left.and.right")
-                            .font(.system(size: 13, weight: .medium))
-                        Text("Sharing prevents idle sleep. Keep this Mac powered on and awake. Closing its window keeps access available; sharing continues while the background service runs. Stopping sharing or the background service ends access.")
-                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let endpoint = host.endpoint {
-                            Text(endpoint.absoluteString).font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
-                        }
+        SettingsPage(title: "Device Connections", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            CentralLibraryPairingCard(client: client, application: model)
+            if model.isLibraryClient {
+                SettingsCard(title: "This Mac") {
+                    HStack {
+                        DeviceConnectionIcon(kind: .mac)
+                        Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Toggle("Available to paired devices", isOn: Binding(get: { client.sharingLocalExecution }, set: { enabled in
+                            Task { if enabled { await client.startLocalSharing() } else { await client.stopLocalSharing() } }
+                        })).toggleStyle(DashboardSwitchToggleStyle()).disabled(client.localSharingBusy || client.localExecution == nil)
                     }
-                    Spacer(minLength: 12)
-                    Button(host.endpoint == nil ? "Start sharing" : "Stop sharing") {
-                        if host.endpoint == nil { Task { await host.start() } }
-                        else { host.stopSharing() }
-                    }
-                    .buttonStyle(SettingsQuietButtonStyle()).disabled(host.isStarting)
-                    .accessibilityIdentifier("companion.sharing")
+                    if let error = client.deviceConnectionsError { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
                 }
-            }
-            if !model.companionRecoveredNoteDrafts.isEmpty {
-                SettingsCard(title: "Recovered writing", detail: "These drafts are preserved locally after a conflict or deletion. Save a copy to keep them as separate notes.") {
-                    ForEach(model.companionRecoveredNoteDrafts) { draft in
-                        HStack(alignment: .top, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(draft.title.isEmpty ? "Untitled note" : draft.title).font(.system(size: 13, weight: .medium))
-                                Text(draft.error).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                            }
-                            Spacer()
-                            Button("Save a copy") {
-                                Task {
-                                    do { _ = try await model.preserveRecoveredNoteAsCopy(id: draft.id); recoveryError = nil }
-                                    catch { recoveryError = error.localizedDescription }
-                                }
-                            }.buttonStyle(SettingsQuietButtonStyle())
+                synchronization
+                if !client.connectedDevices.isEmpty { clientDeviceRoster }
+            } else {
+                SettingsCard(title: "This central library") {
+                    HStack(spacing: 12) {
+                        DeviceConnectionIcon(kind: .mac)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                            Text(host.endpoint == nil ? "Sharing is off" : "Available to paired devices")
+                                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
+                        Spacer()
+                        Button(host.endpoint == nil ? "Start sharing" : "Stop sharing") {
+                            if host.endpoint == nil { Task { await host.start() } } else { host.stopSharing() }
+                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(host.isStarting).accessibilityIdentifier("companion.sharing")
                     }
-                    if let recoveryError { Text(recoveryError).font(.system(size: 12)).foregroundStyle(.red) }
                 }
+                if !host.pendingPairingRequests.isEmpty { pairingRequests }
+                if !host.pairedDevices.isEmpty { pairedDevices }
+                if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
-            if let message = host.errorMessage {
-                Text(message).font(.system(size: 12)).foregroundStyle(.red)
+            DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: client.credential == nil)
+            if !model.isLibraryClient, host.endpoint != nil { DevicePairingCodeCard(host: host) }
+            if !model.isLibraryClient, let message = host.errorMessage {
+                Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                     .textSelection(.enabled).accessibilityIdentifier("companion.error")
             }
-            if !host.pairedDevices.isEmpty {
-                SettingsCard(title: "Paired devices", detail: "Revoking access keeps that device's locally saved writing on that device.") {
-                    ForEach(host.pairedDevices) { device in
-                        HStack(spacing: 12) {
-                            Image(systemName: "iphone").font(.system(size: 22))
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(device.name).font(.system(size: 13, weight: .medium))
-                                if let seen = host.lastSeenAt {
-                                    Text("Last connected \(seen.formatted(date: .omitted, time: .shortened))")
-                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                                } else {
-                                    Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .omitted))")
-                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                                }
-                            }
-                            Spacer()
-                            Button("Revoke access", role: .destructive) { Task { await host.revoke(device.id) } }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                                .accessibilityIdentifier("companion.revoke")
+            if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
+            if model.isLibraryClient {
+                SettingsCard(title: "This Mac’s previous library", detail: "Switching keeps this client’s saved data and pending changes on this Mac.") {
+                    Button("Return to this Mac’s library and restart") {
+                        switching = true
+                        Task {
+                            defer { switching = false }
+                            do { try await model.returnToCentralLibraryMode() }
+                            catch { client.deviceConnectionsError = error.localizedDescription }
                         }
-                    }
-                }
-            }
-            if host.endpoint != nil {
-                SettingsCard(title: "Pair another device", detail: "Open Woven Matter on your iPhone, iPad, or another Mac. Scan this code or paste its pairing link. It expires in five minutes and can be used once.") {
-                    if let payload = host.pairingPayload {
-                        HStack(alignment: .center, spacing: 24) {
-                            if let qr = qrImage(payload.encodedURL.absoluteString) {
-                                Image(nsImage: qr).interpolation(.none).resizable().frame(width: 200, height: 200)
-                                    .padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 8))
-                                    .accessibilityLabel("One-time device pairing QR code")
-                            }
-                            VStack(alignment: .leading, spacing: 12) {
-                                if let expiry = host.pairingExpiresAt {
-                                    Text("Expires at \(expiry.formatted(date: .omitted, time: .shortened))")
-                                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                                }
-                                Button("Copy pairing link") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(payload.encodedURL.absoluteString, forType: .string)
-                                }.buttonStyle(SettingsQuietButtonStyle())
-                                Button("New code") { Task { await host.createPairingCode() } }
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                            }
-                        }.accessibilityIdentifier("companion.pairing-code")
-                    } else {
-                        Button("Create pairing code") { Task { await host.createPairingCode() } }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                            .accessibilityIdentifier("companion.create-code")
-                    }
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
                 }
             }
         }
         .task {
+            await client.initialize()
+            await client.devicePairing.restorePendingRequest()
             while !Task.isCancelled {
-                await host.refreshStatus()
-                try? await Task.sleep(for: .seconds(2))
+                if !model.isLibraryClient { await host.refreshStatus() }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+        .onDisappear { client.devicePairing.stopPairingMode() }
+    }
+    private var synchronization: some View {
+        SettingsCard(title: "Synchronization") {
+            HStack {
+                Text(client.status).font(.system(size: 13, weight: .medium))
+                Spacer()
+                Button("Sync now") { Task { await client.refresh() } }.buttonStyle(SettingsQuietButtonStyle()).disabled(client.refreshing || client.credential == nil)
+            }
+            ForEach(MobileSyncLane.allCases, id: \.self) { lane in
+                let value = client.synchronization.lanes[lane] ?? .init()
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(laneLabel(lane)).font(.system(size: 12))
+                        Spacer()
+                        Text(laneSummary(value)).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                        if value.conflictCount > 0 {
+                            Button("Review") { client.section = lane == .calendar ? .calendar : .home }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                        }
+                    }
+                    if let error = value.lastError {
+                        Text(error).font(.system(size: 11)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled)
+                    }
+                }
             }
         }
     }
-
-    private func qrImage(_ value: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(value.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 6, y: 6)),
-              let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    private func laneLabel(_ lane: MobileSyncLane) -> String {
+        switch lane { case .library: "Library"; case .calendar: "Calendar and scheduled tasks"; case .journal: "Agent history"; case .artifacts: "Saved artifacts"; case .offlineCache: "Offline copies" }
+    }
+    private func laneSummary(_ value: MobileSyncLaneStatus) -> String {
+        if value.conflictCount > 0 { return "\(value.conflictCount) conflicts" }
+        if value.phase == .syncing { return "Syncing…" }
+        if value.phase == .unsupported { return "Unavailable on this central Mac" }
+        if value.pendingCount > 0 { return "\(value.pendingCount) pending" }
+        if value.hasMoreRemoteChanges { return "Downloading…" }
+        if value.lastError != nil { return "Retry needed" }
+        if let date = value.lastSuccessfulSync { return "Synced " + date.formatted(date: .omitted, time: .shortened) }
+        return "Saved on this Mac"
+    }
+    private var clientDeviceRoster: some View {
+        SettingsCard(title: "Paired devices") {
+            ForEach(client.connectedDevices) { device in
+                HStack(spacing: 12) {
+                    DeviceConnectionIcon(kind: device.metadata.kind)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(device.name).font(.system(size: 13, weight: .medium))
+                        Text(DeviceConnectionIcon.label(device.metadata.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        if let seen = device.lastSeenAt {
+                            Text("Last seen \(seen.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    private var pairingRequests: some View {
+        SettingsCard(title: "Pairing requests") {
+            ForEach(host.pendingPairingRequests) { request in
+                HStack(spacing: 12) {
+                    DeviceConnectionIcon(kind: request.identity.metadata.kind)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(request.identity.deviceName).font(.system(size: 13, weight: .medium))
+                        Text(DeviceConnectionIcon.label(request.identity.metadata.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    Spacer()
+                    Button("Decline") { Task { await host.denyPairing(id: request.id) } }.buttonStyle(SettingsQuietButtonStyle())
+                    Button("Pair") { Task { await host.approvePairing(id: request.id) } }.buttonStyle(SettingsQuietButtonStyle())
+                }
+            }
+        }
+    }
+    private var pairedDevices: some View {
+        SettingsCard(title: "Paired devices") {
+            ForEach(host.pairedDevices) { device in
+                DisclosureGroup {
+                    ForEach(host.executionWorkspaces.filter { !$0.deleted && $0.kind != .ios && $0.executionDeviceID != device.id }) { workspace in
+                        let key = device.id + ":" + workspace.id
+                        Toggle(isOn: Binding(get: {
+                            host.workspaceAccessPolicies.first { $0.deviceID == device.id && $0.workspaceID == workspace.id }?.enabled ?? true
+                        }, set: { enabled in
+                            updatingAccess.insert(key)
+                            Task {
+                                await host.setExecutionAccess(deviceID: device.id, workspaceID: workspace.id, enabled: enabled)
+                                updatingAccess.remove(key)
+                            }
+                        })) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(workspace.name).font(.system(size: 12))
+                                if host.pendingDeviceRevocations[device.id]?.contains(workspace.id) == true {
+                                    Text("Revocation waiting for this workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                            }
+                        }.toggleStyle(DashboardSwitchToggleStyle()).disabled(updatingAccess.contains(key))
+                    }
+                    Text("Workspace access controls agent execution. The shared library remains available.")
+                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Button("Revoke device access", role: .destructive) { Task { await host.revoke(device.id) } }
+                        .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("companion.revoke")
+                } label: {
+                    HStack(spacing: 12) {
+                        DeviceConnectionIcon(kind: device.kind)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(device.name).font(.system(size: 13, weight: .medium))
+                            Text(DeviceConnectionIcon.label(device.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            if let seen = device.lastSeenAt {
+                                Text("Last seen \(seen.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            } else {
+                                Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            }
+                        }
+                    }
+                }.disclosureGroupStyle(SettingsDisclosureGroupStyle())
+            }
+        }
+    }
+    private var pendingRevocations: some View {
+        SettingsCard(title: "Pending revocations") {
+            ForEach(host.pendingDeviceRevocations.keys.sorted(), id: \.self) { id in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(host.pairedDevices.first { $0.id == id }?.name ?? "Disconnected device")
+                        .font(.system(size: 13, weight: .medium))
+                    let names = (host.pendingDeviceRevocations[id] ?? []).map { workspaceID in
+                        host.executionWorkspaces.first { $0.id == workspaceID }?.name ?? "Unavailable workspace"
+                    }
+                    Text("Waiting for " + names.joined(separator: ", "))
+                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
+            }
+        }
+    }
+    private var recoveredDrafts: some View {
+        SettingsCard(title: "Recovered writing") {
+            ForEach(model.companionRecoveredNoteDrafts) { draft in
+                HStack(alignment: .top, spacing: 12) {
+                    Text(draft.title.isEmpty ? "Untitled note" : draft.title).font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Button("Save a copy") {
+                        Task {
+                            do { _ = try await model.preserveRecoveredNoteAsCopy(id: draft.id); recoveryError = nil }
+                            catch { recoveryError = error.localizedDescription }
+                        }
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                }
+            }
+            if let recoveryError { Text(recoveryError).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
+        }
     }
 }

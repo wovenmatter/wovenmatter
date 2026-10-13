@@ -609,11 +609,14 @@ extension CompanionModel {
   func sceneChanged(_ phase: ScenePhase) {
     switch phase {
     case .active:
+      connectionDidBecomeActive()
       endExecutionBackgroundTask()
       if !fixture && !isolatedTestHost { startDeviceScheduler() }
     case .inactive:
+      connectionForeground = false
       stopDeviceScheduler()
     case .background:
+      connectionForeground = false
       stopDeviceScheduler()
       beginFallbackExecutionBackgroundTask()
     @unknown default: break

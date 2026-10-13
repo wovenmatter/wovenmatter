@@ -130,7 +130,8 @@ extension ApplicationModel {
         let client = try centralExecutionClient()
         try await client.refresh(conversationID: conversationID)
         try dispatchFence.check()
-        let active = try await database.companionFederatedTranscript(conversationID: conversationID)?.activeRunID
+        // The owner's live state can be newer than its central publication.
+        let active = client.transcripts[conversationID]?.activeRunID
         if requiresIdle && active != nil { throw LocalACPSessionDatabaseError.runAlreadyActive }
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }
         var prompt = input.text

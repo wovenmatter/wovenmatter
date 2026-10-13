@@ -56,10 +56,11 @@ public struct CompanionPairRequest: Codable, Equatable, Sendable {
   public let token: String
   public let deviceID: String
   public let deviceName: String
+  public let metadata: CompanionDeviceMetadata?
   public let protocolVersion: Int
-  public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version) {
+  public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version, metadata: CompanionDeviceMetadata? = nil) {
     self.token = token; self.deviceID = deviceID; self.deviceName = deviceName
-    self.protocolVersion = protocolVersion
+    self.protocolVersion = protocolVersion; self.metadata = metadata
   }
 }
 

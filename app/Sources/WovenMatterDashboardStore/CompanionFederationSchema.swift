@@ -12,11 +12,21 @@ extension WorkspaceDatabaseConnection {
         id TEXT PRIMARY KEY, owner_device_id TEXT NOT NULL, revision INTEGER NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0, payload BLOB NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS companion_workspace_access (
+        device_id TEXT NOT NULL, workspace_id TEXT NOT NULL, enabled INTEGER NOT NULL,
+        PRIMARY KEY(device_id, workspace_id)
+      );
+      CREATE TABLE IF NOT EXISTS companion_workspace_publishers (
+        workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS companion_execution_journal (
         cursor INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE,
         workspace_id TEXT NOT NULL, origin_sequence INTEGER NOT NULL,
         fingerprint BLOB NOT NULL, payload BLOB NOT NULL,
         UNIQUE(workspace_id, origin_sequence)
+      );
+      CREATE TABLE IF NOT EXISTS companion_retained_settlements (
+        event_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, fingerprint BLOB NOT NULL
       );
       CREATE TABLE IF NOT EXISTS companion_execution_conversations (
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,

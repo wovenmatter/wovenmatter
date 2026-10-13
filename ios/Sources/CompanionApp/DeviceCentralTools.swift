@@ -11,7 +11,7 @@ extension CompanionModel {
       throw MobileConnectionError.offline
     }
     await flushLocalWrites()
-    try await engine.synchronize()
+    try await engine.synchronizeRequiredLanes([.journal])
     await reload()
     guard let record = executionRecords[conversationID], record.isTrashed != true else {
       throw DeviceExecutionError.unavailable("This device conversation is no longer available.")
@@ -26,7 +26,7 @@ extension CompanionModel {
     var unchangedPasses = 0
     while registration || !outstanding.isEmpty {
       try Task.checkCancellation()
-      try await engine.synchronize()
+      try await engine.synchronizeRequiredLanes([.journal])
       let current = await store.journal.snapshot()
       let remaining = required.intersection(current.pendingEntries.map(\.eventID))
       let pendingRegistration = current.pendingRegistrations.contains(deviceWorkspaceID)

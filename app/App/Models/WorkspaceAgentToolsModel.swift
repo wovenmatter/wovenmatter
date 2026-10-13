@@ -385,7 +385,7 @@ final class WorkspaceAgentToolsModel {
             }
             cliPath = resource.path
         }
-        return AgentCLIContext(executablePath: cliPath, socketPath: remote == nil ? path : nil, captureID: captureID)
+        return AgentCLIContext(executablePath: cliPath, socketPath: remote == nil ? path : nil, captureID: captureID, sessionID: sessionID)
     }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {

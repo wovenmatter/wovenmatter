@@ -21,6 +21,9 @@ struct ExecutionSettingsPane: View {
           NavigationLink(provider.name) { InferenceConnectionEditor(model: model, connection: nil, provider: provider.id) }
         }
       }
+      Section {
+        NavigationLink("Tailscale inference") { HostedInferenceSettingsPane(model: model) }
+      }
     }.listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never).mobileNavigationPage(model.deviceConnectionsTitle)
   }
 }

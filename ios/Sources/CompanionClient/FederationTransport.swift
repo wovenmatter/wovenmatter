@@ -60,14 +60,14 @@ extension MobileSyncEngine {
     guard identity.protocolVersion == CompanionFederationProtocol.version else { throw MobileConnectionError.versionMismatch }
     try await store.verifyWorkspace(identity.libraryID)
     try await store.journal.bind(libraryID: identity.libraryID)
+    let deviceID = await store.snapshot().deviceID
+    try await store.journal.prepareOwnerPublication(deviceID: deviceID)
     let local = await store.journal.snapshot()
     let registered = try await transport.executionWorkspaces()
-    let deviceID = await store.snapshot().deviceID
     for id in local.pendingRegistrations.sorted() {
       guard let workspace = local.workspaces[id] else { continue }
-      if workspace.ownerDeviceID != deviceID {
-        // An observing client forwards owner records, never re-registers the
-        // remote workspace as its own. Provisioning already registered it.
+      if !WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID) {
+        // Observers cache owner records and never publish or re-register them.
         if let canonical = registered.first(where: { $0.id == id }) {
           try await store.journal.upsertWorkspace(canonical, pending: false)
         }
@@ -79,8 +79,10 @@ extension MobileSyncEngine {
       try await store.journal.upsertWorkspace(canonical, pending: false)
     }
     try await store.journal.mergeRegistry(registered)
+    try await store.journal.prepareOwnerPublication(deviceID: deviceID)
     for _ in 0..<100 {
-      let pending = await store.journal.snapshot().pendingEntries
+      try Task.checkCancellation()
+      let pending = await store.journal.pendingOwnerEntries(deviceID: deviceID)
       var entries: [CompanionJournalEntry] = [], bytes = 0
       for entry in pending.prefix(CompanionFederationProtocol.maximumBatchEntries) {
         let size = try JSONEncoder().encode(entry).count
@@ -93,11 +95,13 @@ extension MobileSyncEngine {
       try await store.journal.acknowledge(receipt, submitted: entries)
     }
     for _ in 0..<100 {
+      try Task.checkCancellation()
       let page = try await transport.journal(after: store.journal.snapshot().centralCursor)
+      setLaneHasMore(.journal, page.hasMore)
       try await store.journal.receiveCentral(page)
       try await store.restoreExecutionProjection()
       if !page.hasMore { break }
     }
-    try await store.artifacts.synchronize(using: transport)
+
   }
 }

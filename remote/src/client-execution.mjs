@@ -1,3 +1,4 @@
+import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -27,7 +28,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace' }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -134,7 +135,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       const device = { id: body.deviceID, name: String(body.name ?? 'Client').slice(0,256), scopes: [...new Set(body.scopes)], createdAt: date(), ...(unlockEnvelope ? {unlockEnvelope} : {}) }
       db.prepare('INSERT OR REPLACE INTO devices VALUES (?,?,?)').run(device.id, digest(token), JSON.stringify(device))
-      if (!nextIdentity.journalDeviceIDs.includes(device.id)) nextIdentity.journalDeviceIDs.push(device.id)
+      // Observing devices may control/read this workspace but never publish its origin history.
+      nextIdentity.journalDeviceIDs = []
       nextIdentity.revision++
       db.prepare('INSERT OR REPLACE INTO identity VALUES (1,?)').run(JSON.stringify(nextIdentity))
     })
@@ -254,6 +256,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return transaction(() => { publish(record); return receipt(command, 'completed') })
     }
     const record = getRecord(command.conversationID)
+    if(record.native.needsAdopt) {
+      const native=await runtime.adopt({native:record.native,runtimeKind:record.conversation.runtimeKind})
+      record.native={...native};delete record.native.needsAdopt;save(record)
+    }
     if (command.kind === 'workspace') {
       if (record.conversation.activeRunID) throw fail(409,'Wait for this run to finish before changing its settings.')
       if (command.workspaceAction?.configureSession) {
@@ -402,7 +408,48 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     return { libraryID: identity.libraryID, cursor: page.at(-1)?.sequence ?? cursor, entries: page.map(row => JSON.parse(row.body)), hasMore: rows.length > page.length }
   }
-  return { descriptor, provision, principal, revoke, adopt,
+  function importRetainedEvents(entries) {
+    assertIdentity()
+    if (!Array.isArray(entries) || entries.length > 200 || Buffer.byteLength(JSON.stringify(entries)) > 8*1024*1024) throw fail(400,'Import retained history in bounded batches.')
+    transaction(() => {
+      for (const input of entries) {
+        if (!identifier(input.eventID) || !identifier(input.conversationID) || (input.workspaceID != null && input.workspaceID !== identity.id)
+          || input.originSequence != null || !['conversation','transcript','nativeRecord','receipt','deletedConversation','restoredConversation'].includes(input.kind)
+          || (input.runID != null && !identifier(input.runID)) || Buffer.byteLength(JSON.stringify(input)) > 1024*1024-1024) throw fail(400,'Invalid retained owner history.')
+        const entry = {...copy(input),workspaceID:identity.id}
+        const old = db.prepare("SELECT body FROM events WHERE json_extract(body,'$.eventID')=?").get(entry.eventID)
+        if (old) { const prior=JSON.parse(old.body);delete prior.originSequence;if(JSON.stringify(ordered(prior))!==JSON.stringify(ordered(entry)))throw fail(409,'Retained event identity was reused.');continue }
+        const inserted=db.prepare('INSERT INTO events(body) VALUES (?)').run('{}');entry.originSequence=Number(inserted.lastInsertRowid)
+        db.prepare('UPDATE events SET body=? WHERE sequence=?').run(JSON.stringify(entry),entry.originSequence)
+        if(entry.kind==='conversation' && entry.retainedExecution) {
+          const proof=entry.retainedExecution, previous=db.prepare('SELECT body FROM conversations WHERE id=?').get(entry.conversationID)
+          if(previous) {
+            const record=JSON.parse(previous.body)
+            if(record.native.sessionID!==proof.nativeSessionID || record.conversation.runtimeKind!==proof.runtimeKind)throw fail(409,'Retained history cannot replace an existing native execution identity.')
+          }
+          if(!previous)save({conversation:{...entry.conversation,workspaceID:identity.id,routeID:identity.id},pending:[],
+            native:{sessionID:proof.nativeSessionID,channelID:entry.conversationID,workspaceID:identity.id,needsAdopt:true},
+            transcript:{conversationID:entry.conversationID,messages:[],activities:[]}})
+        }
+        if(entry.kind==='transcript') {
+          const previous=db.prepare('SELECT body FROM conversations WHERE id=?').get(entry.conversationID)
+          if(previous){const record=JSON.parse(previous.body)
+            for(const field of ['messages','activities','runs'])for(const item of entry.transcript?.[field]??[]) {
+              record.transcript[field]??=[];const index=record.transcript[field].findIndex(old=>old.id===item.id)
+              if(index<0)record.transcript[field].push(item);else record.transcript[field][index]=item
+            }
+            save(record)
+          }
+          for(const run of entry.transcript?.runs??[])if(['completed','failed','cancelled','interrupted'].includes(run.status))db.prepare('INSERT OR IGNORE INTO runs(id,commandID) VALUES (?,?)').run(run.id,'retained')
+        }
+      }
+    })
+  }
+  const publisher = createClientExecutionPublisher({db,identity:descriptor,secret:publisherKey,events,
+    flush:()=>{for(const id of dirty.keys())flush(id)},fetchImpl:publisherFetch,intervalMilliseconds:publisherIntervalMilliseconds})
+  return { descriptor, provision, principal, revoke, adopt, importRetainedEvents,
+    configurePublisher:publisher.configure, publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, saveArtifact:publisher.saveArtifact,
+    resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
     async cancelActive(){await runtime.cancelActive?.();await Promise.allSettled([...jobs.values()].map(job=>job.completion))},
     rememberUnlockMaterial, unlockMaterial: clientUnlockMaterial, command, receipt: getReceipt, events,
@@ -439,6 +486,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
-    async close() { clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); closed = true; unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); db.close() },
+    async close() { await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); closed = true; unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); db.close() },
   }
 }

@@ -48,6 +48,22 @@ final class CompanionUITests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
+  @MainActor func testPairingLivesInSettingsOutsideExecutionWorkspaces() {
+    let app = launch(tab: "Settings")
+    app.buttons["Workspaces"].tap()
+    XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Pair with Mac"].exists)
+    XCTAssertFalse(app.buttons["Mac pairing"].exists)
+    XCTAssertFalse(app.buttons["Tailscale inference"].exists)
+    app.navigationBars["Workspaces"].buttons.firstMatch.tap()
+    app.buttons["Pair to Mac"].tap()
+    XCTAssertTrue(app.navigationBars["Pair to Mac"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["pairing-scan"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["pairing-link"].exists)
+    XCTAssertTrue(app.buttons["pairing-connect"].exists)
+    XCTAssertFalse(app.buttons["Done"].exists)
+  }
+
   @MainActor func testNewChatChooserAndKeyboardDismissal() {
     let app = launch(tab: "Home")
     app.buttons["action-new-chat"].tap()

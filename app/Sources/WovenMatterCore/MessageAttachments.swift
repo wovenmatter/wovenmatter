@@ -116,11 +116,14 @@ public struct AgentCLIContext: Codable, Equatable, Sendable {
   public let executablePath: String
   public let socketPath: String?
   public let captureID: String
+  /// Stable app conversation identity; no tool capability or credential.
+  public let sessionID: String?
 
-  public init(executablePath: String, socketPath: String?, captureID: String) {
+  public init(executablePath: String, socketPath: String?, captureID: String, sessionID: String? = nil) {
     self.executablePath = executablePath
     self.socketPath = socketPath
     self.captureID = captureID
+    self.sessionID = sessionID
   }
 }
 

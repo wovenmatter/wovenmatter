@@ -23,6 +23,7 @@ private enum SettingsSection: Equatable {
     case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case companion
+    case workspaces
     case openClaw
     case openCode
     case hermes
@@ -42,6 +43,8 @@ struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var executionOnly = false
+    var clientContext: CentralLibraryClientModel?
+    var applicationContext: ApplicationModel?
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openClaw
@@ -59,14 +62,19 @@ struct SettingsView: View {
             case .landing:
                 landing
             case .companion:
-                SettingsCompanionView(model: model, host: model.companionHost,
+                SettingsCompanionView(model: applicationContext ?? model, host: (applicationContext ?? model).companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
+            case .workspaces:
+                SettingsDeviceWorkspacesView(application: applicationContext ?? model, client: clientContext,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing },
+                    onLocalSettings: { section = .localWorkspace }, onRemoteSettings: { section = .remoteWorkspaces })
             case .defaultAgent(let scope, let origin):
                 SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
                 SettingsGeneralView(
-                    model: model,
+                    model: applicationContext ?? model,
+                    showsBackgroundExecution: clientContext == nil,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
@@ -220,9 +228,9 @@ struct SettingsView: View {
                 }
                 if !executionOnly {
                 SettingsDestinationRow(
-                    title: "Devices",
+                    title: "Device Connections",
                     detail: "Connect Macs, iPhones, and iPads to one central library over Tailscale.",
-                    icon: { Image(systemName: "iphone").font(.system(size: 15)) },
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
                     action: { section = .companion }
                 )
                 }
@@ -248,6 +256,10 @@ struct SettingsView: View {
                     action: { section = .localWorkspace }
                 )
                 if !executionOnly {
+                SettingsDestinationRow(title: "Workspaces", detail: "Local, Mac, and Linux agent workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .panelsTopLeft, size: 15) }, action: { section = .workspaces })
+                }
+                if !executionOnly && clientContext == nil {
                 SettingsDestinationRow(
                     title: "Remote agent workspaces",
                     detail: "Agents and files on remote Linux machines.",
@@ -303,7 +315,7 @@ struct SettingsView: View {
                     icon: { DashboardHarnessLogoIcon(logo: .pi, size: 15) },
                     action: { section = .harness(.pi, nil, .landing) }
                 )
-                if !executionOnly {
+                if !executionOnly && clientContext == nil {
                 SettingsDestinationRow(
                     title: "Buzz agent workspaces",
                     detail: "Connect agents from local Buzz workspaces.",

@@ -33,6 +33,8 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let brain = Self("brain")
     static let search = Self("search")
     static let monitor = Self("monitor")
+    static let smartphone = Self("smartphone")
+    static let tablet = Self("tablet")
     static let circleUser = Self("circle-user")
     static let userRound = Self("user-round")
     static let bot = Self("bot")

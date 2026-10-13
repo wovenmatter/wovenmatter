@@ -32,7 +32,12 @@ struct LibraryClientLibraryPane: View {
               Button(artifact.title) { Task {
                 do { preview = try await model.artifactURL(artifact) }
                 catch { failure = error.localizedDescription }
-              } }
+              } }.contextMenu {
+                Button("Keep offline") { Task {
+                  do { try await model.keepArtifactOffline(artifact.id) }
+                  catch { failure = error.localizedDescription }
+                } }
+              }
             }
           }
         }

@@ -2448,8 +2448,10 @@ final class ApplicationModel {
     private func stopBackendAgentDispatch(conversationID: String) async throws {
         guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
         if (try await dashboardStore?.database.companionExecutionOwner(conversationID: conversationID)) != nil {
-            guard let runID = try await dashboardStore?.database.companionFederatedTranscript(conversationID: conversationID)?.activeRunID else { return }
-            _ = try await centralExecutionClient().stop(conversationID: conversationID, runID: runID)
+            let client = try centralExecutionClient()
+            try await client.refresh(conversationID: conversationID)
+            guard let runID = client.transcripts[conversationID]?.activeRunID else { return }
+            _ = try await client.stop(conversationID: conversationID, runID: runID)
             return
         }
         // Do not sweep app fences here: a new input may already be waiting for
@@ -4191,7 +4193,15 @@ final class ApplicationModel {
     }
 
     func canonicalActiveRunID(conversationID: String) async -> String? {
-        try? await dashboardStore?.database.activeRunID(conversationID: conversationID)
+        guard let database = dashboardStore?.database else { return nil }
+        do {
+            if try await database.companionExecutionOwner(conversationID: conversationID) != nil {
+                let client = try centralExecutionClient()
+                try await client.refresh(conversationID: conversationID)
+                return client.transcripts[conversationID]?.activeRunID
+            }
+            return try await database.activeRunID(conversationID: conversationID)
+        } catch { return nil }
     }
 
     func cancelCanonicalRun(conversationID: String, runID: String) async throws {
