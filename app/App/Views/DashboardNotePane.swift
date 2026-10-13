@@ -218,7 +218,7 @@ struct DashboardNotePane: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 // One bottom gutter keeps the count clear of the scrolling
                 // editor without stacking extra space beneath its viewport.
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
             }
         }
         .disabled(model.noteActionIDs.contains(note.id))

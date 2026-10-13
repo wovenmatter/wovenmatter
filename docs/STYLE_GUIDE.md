@@ -70,7 +70,8 @@ when an intentional design change is accepted.
   a divider. The note-body count sits at the bottom right, starts with words, and
   switches between words and characters when clicked. Keep it in one compact
   24-point bottom gutter outside the scrolling text, without stacking additional
-  editor or footer padding beneath the note.
+  editor or footer padding beneath the note. Align the count button's right
+  edge with the header controls using the same 12-point side inset.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
