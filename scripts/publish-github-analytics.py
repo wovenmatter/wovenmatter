@@ -72,16 +72,13 @@ def pending_snapshots(history):
     known_assets = {}
     for day, observation in sorted(history.get("download_observations", {}).items()):
         for asset in observation["assets"]:
+            if not str(asset.get("name", "")).lower().endswith(".dmg"):
+                continue
             asset_id = counter(asset["asset_id"])
-            known_assets[asset_id] = {
-                "count": counter(asset["download_count"]),
-                "dmg": asset.get("name", "").lower().endswith(".dmg"),
-            }
+            known_assets[asset_id] = counter(asset["download_count"])
         event = snapshot(repository, "github_download_snapshot", day, observation["observed_at"], {
-            "cumulative_release_asset_downloads": sum(a["count"] for a in known_assets.values()),
-            "cumulative_dmg_downloads": sum(a["count"] for a in known_assets.values() if a["dmg"]),
-            "known_release_assets": len(known_assets),
-            "known_dmg_assets": sum(a["dmg"] for a in known_assets.values()),
+            "cumulative_dmg_downloads": sum(known_assets.values()),
+            "known_dmg_assets": len(known_assets),
         })
         add("downloads:" + day, event)
     return pending

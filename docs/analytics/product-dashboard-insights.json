@@ -1,20 +1,20 @@
 [
   {
     "short_id": "tTQt82KB",
-    "name": "DAU — active libraries today (UTC)",
-    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
+    "name": "DAU \u2014 qualified active libraries, rolling 24 hours",
+    "description": "Distinct central-library IDs with a qualifying human action during the last 24 hours, up to now. This is the headline daily active metric; opens and updates do not qualify. Opted-out activity is excluded.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= toStartOfDay(now()) AND timestamp < now()"
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 24 HOUR AND timestamp < now()"
       },
       "display": "BoldNumber"
     }
   },
   {
     "short_id": "TFtQSjU3",
-    "name": "WAU — active libraries, rolling 7 days",
+    "name": "WAU \u2014 active libraries, rolling 7 days",
     "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -27,7 +27,7 @@
   },
   {
     "short_id": "b1lYwhWw",
-    "name": "MAU — active libraries, rolling 30 days",
+    "name": "MAU \u2014 active libraries, rolling 30 days",
     "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -40,8 +40,8 @@
   },
   {
     "short_id": "z2fDY4L3",
-    "name": "Daily active libraries — 30 day trend",
-    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
+    "name": "Qualified libraries by UTC date \u2014 30 day trend",
+    "description": "Supplemental historical chart grouped by UTC calendar date. Headline DAU, WAU and MAU use whole rolling 24-hour, 7-day and 30-day windows; daily unique counts are never summed.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -63,34 +63,20 @@
   },
   {
     "short_id": "1rpLMpaC",
-    "name": "App opens and opening libraries — daily",
-    "description": "First interface opening per process after disclosure, grouped by UTC day. Reopening pages and background services do not add opens. Opening libraries are distinct shared library IDs, separate from qualified actives.",
+    "name": "App opens \u2014 rolling 24 hours, 7 days, 30 days",
+    "description": "First interface opening per app process after disclosure. Each whole rolling window reports total opens and distinct opening libraries. Opens are separate from qualifying active users; background refresh and navigation do not add opens.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT toDate(timestamp) AS day, count(DISTINCT uuid) AS opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now() GROUP BY day ORDER BY day"
+        "query": "SELECT period, app_opens, opening_libraries FROM (\nSELECT 1 AS period_order, '24 hours' AS period, count(DISTINCT uuid) AS app_opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 24 HOUR AND timestamp < now()\nUNION ALL\nSELECT 2 AS period_order, '7 days' AS period, count(DISTINCT uuid) AS app_opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 7 DAY AND timestamp < now()\nUNION ALL\nSELECT 3 AS period_order, '30 days' AS period, count(DISTINCT uuid) AS app_opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now()\n) ORDER BY period_order"
       },
-      "display": "ActionsLineGraph",
-      "chartSettings": {
-        "xAxis": {
-          "column": "day"
-        },
-        "yAxis": [
-          {
-            "column": "opens"
-          },
-          {
-            "column": "opening_libraries"
-          }
-        ],
-        "showLegend": true
-      }
+      "display": "ActionsTable"
     }
   },
   {
     "short_id": "M2PnDLkA",
-    "name": "Qualified activity by feature — 30 days",
+    "name": "Qualified activity by feature \u2014 30 days",
     "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -103,7 +89,7 @@
   },
   {
     "short_id": "4GBAnZ6I",
-    "name": "Active libraries by country — 30 days",
+    "name": "Active libraries by country \u2014 30 days",
     "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -116,7 +102,7 @@
   },
   {
     "short_id": "wly9WaDB",
-    "name": "Website visitors and conversions — 30 days",
+    "name": "Website visitors and conversions \u2014 30 days",
     "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -129,7 +115,7 @@
   },
   {
     "short_id": "kR3rOphU",
-    "name": "In-app update stages — 30 days",
+    "name": "In-app update stages \u2014 30 days",
     "description": "Clicks, verified fresh downloads, and replacement-app launches by target version. Cache reuse is excluded from completed downloads. Stages overlap and are never added to GitHub totals or qualified actives. Empty until the analytics release ships.",
     "query": {
       "kind": "DataVisualizationNode",

@@ -1,6 +1,6 @@
 [
   {
-    "name": "GitHub views and clones — daily",
+    "name": "GitHub views and clones \u2014 daily",
     "description": "Latest observed count per UTC reporting day. Repeated collections replace earlier snapshots. Missing days remain missing; GitHub traffic is separate from app activity.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -26,7 +26,7 @@
     }
   },
   {
-    "name": "GitHub unique viewers and cloners — daily",
+    "name": "GitHub unique viewers and cloners \u2014 daily",
     "description": "GitHub daily unique counts, using the latest observation for each day. Do not add these to derive weekly or monthly unique people.",
     "query": {
       "kind": "DataVisualizationNode",
@@ -52,8 +52,8 @@
     }
   },
   {
-    "name": "DMG downloads",
-    "description": "Last known download counters across observed DMG assets, including replaced assets. Downloads are not installs or unique users. See collection time below for freshness.",
+    "name": "Installer downloads \u2014 DMG",
+    "description": "GitHub installer download totals across website, direct GitHub, in-app updates, repeats and internal downloads. Supporting files are excluded. These are downloads, not installations or unique people.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -64,13 +64,13 @@
     }
   },
   {
-    "name": "GitHub asset downloads — cumulative observations",
-    "description": "Cumulative DMG and all release-asset counters by observation day. All assets include checksums and other files. Historical daily downloads are not inferred.",
+    "name": "Installer downloads \u2014 cumulative observations",
+    "description": "Last known installer-only DMG counters by observation day, including replaced installers and repeats. Supporting files are excluded. Historical daily download deltas are not inferred.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT toDate(properties.report_day) AS day,\n    argMax(toInt(properties.cumulative_dmg_downloads), timestamp) AS dmg_downloads,\n    argMax(toInt(properties.cumulative_release_asset_downloads), timestamp) AS all_asset_downloads\nFROM events\nWHERE event = 'github_download_snapshot'\n    AND properties.source = 'github'\n    AND properties.repository = 'wovenmatter/wovenmatter'\n    AND timestamp >= now() - INTERVAL 45 DAY\n    AND toDate(properties.report_day) >= toDate(now() - INTERVAL 30 DAY)\nGROUP BY day\nORDER BY day"
+        "query": "SELECT toDate(properties.report_day) AS day,\n    argMax(toInt(properties.cumulative_dmg_downloads), timestamp) AS dmg_downloads\nFROM events\nWHERE event = 'github_download_snapshot'\n    AND properties.source = 'github'\n    AND properties.repository = 'wovenmatter/wovenmatter'\n    AND timestamp >= now() - INTERVAL 45 DAY\n    AND toDate(properties.report_day) >= toDate(now() - INTERVAL 30 DAY)\nGROUP BY day\nORDER BY day"
       },
       "display": "ActionsBar",
       "chartSettings": {
@@ -80,9 +80,6 @@
         "yAxis": [
           {
             "column": "dmg_downloads"
-          },
-          {
-            "column": "all_asset_downloads"
           }
         ],
         "showLegend": true,
@@ -91,7 +88,7 @@
     }
   },
   {
-    "name": "GitHub collection time — UTC",
+    "name": "GitHub collection time \u2014 UTC",
     "description": "Latest stored observation for traffic and download snapshots. The nightly collector starts after the analytics workflow reaches main.",
     "query": {
       "kind": "DataVisualizationNode",

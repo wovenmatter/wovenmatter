@@ -8,7 +8,7 @@ spec.loader.exec_module(collector)
 
 class HistoryTests(unittest.TestCase):
     def test_rollover_and_asset_replacement(self):
-        history = {"schema_version":1,"repository":"o/r","traffic_days":{"2025-01-01":{"views":{"count":7,"uniques":3}}},"download_observations":{"2025-01-01":{"assets":[{"asset_id":1,"download_count":5}]}}}
+        history = {"schema_version":1,"repository":"o/r","traffic_days":{"2025-01-01":{"views":{"count":7,"uniques":3}}},"download_observations":{"2025-01-01":{"assets":[{"asset_id":1,"name":"Old.dmg","download_count":5}]}}}
         def fetch(path):
             if "traffic" in path:
                 metric="views" if "views" in path else "clones"
@@ -35,6 +35,24 @@ class HistoryTests(unittest.TestCase):
         assets = {a["asset_id"]: a["download_count"] for a in result["download_observations"]["2026-01-02"]["assets"]}
         self.assertEqual(assets, {1: 5, 2: 7, 3: 1})
         self.assertEqual(previous["download_observations"]["2026-01-02"]["assets"][1]["download_count"], 2)
+
+    def test_supporting_files_are_not_retained_from_legacy_or_new_observations(self):
+        previous = {"schema_version": 1, "repository": "o/r", "download_observations": {
+            "2025-01-01": {"assets": [
+                {"asset_id": 1, "name": "Old.dmg", "download_count": 5},
+                {"asset_id": 2, "name": "latest-mac.json", "download_count": 30},
+                {"asset_id": 3, "name": "SHA256SUMS.txt", "download_count": 2}]}}}
+        def fetch(path):
+            if "traffic" in path:
+                return {"views" if "views" in path else "clones": []}
+            return [{"draft": False, "tag_name": "v2", "assets": [
+                {"id": 4, "name": "New.DMG", "download_count": 10},
+                {"id": 5, "name": "latest-mac.json", "download_count": 100},
+                {"id": 6, "name": "SHA256SUMS.txt", "download_count": 50}]}]
+        result = collector.collect(previous, "o/r", fetch, "2026-01-02T15:00:00+00:00")
+        self.assertEqual([a["asset_id"] for a in result["download_observations"]["2025-01-01"]["assets"]], [1])
+        self.assertEqual([a["asset_id"] for a in result["download_observations"]["2026-01-02"]["assets"]], [4])
+        self.assertEqual(len(previous["download_observations"]["2025-01-01"]["assets"]), 3)
 
     def test_failure_preserves_previous_history(self):
         previous={}

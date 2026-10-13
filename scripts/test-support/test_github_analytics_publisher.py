@@ -26,7 +26,10 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(events[0]["properties"]["report_day"], "2026-10-10")
         self.assertEqual(events[0]["timestamp"], "2026-10-11T05:17:00+00:00")
         self.assertEqual(events[-1]["properties"]["cumulative_dmg_downloads"], 22)
-        self.assertEqual(events[-1]["properties"]["cumulative_release_asset_downloads"], 27)
+        self.assertEqual(events[-1]["properties"]["known_dmg_assets"], 2)
+        for event in events:
+            self.assertNotIn("cumulative_release_asset_downloads", event["properties"])
+            self.assertNotIn("known_release_assets", event["properties"])
         for event in events:
             props = event["properties"]
             self.assertFalse(props["qualifying_activity"])
@@ -35,6 +38,12 @@ class PublisherTests(unittest.TestCase):
             self.assertNotIn("name", props)
             self.assertNotIn("$ip", props)
             self.assertTrue(props["distinct_id"].startswith("github-repository:"))
+
+    def test_supporting_file_changes_do_not_change_installer_snapshots(self):
+        original = history()
+        changed = copy.deepcopy(original)
+        changed["download_observations"]["2026-10-10"]["assets"][1]["download_count"] = 5000
+        self.assertEqual(publisher.pending_snapshots(original), publisher.pending_snapshots(changed))
 
     def test_partial_failure_retry_and_changed_observation(self):
         value = history()

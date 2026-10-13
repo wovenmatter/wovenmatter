@@ -36,9 +36,10 @@ note edits are coalesced to at most one edit event per 30 seconds per process.
 Command retries reuse existing journals and do not generate fresh activity.
 
 App opens mean the first interface opening per process, after disclosure, not
-page navigation, polling, or background service starts. Daily opens count these
-events by their original UTC day; daily opening libraries count distinct library
-IDs among them. Opens and updater actions never independently qualify for DAU.
+page navigation, polling, or background service starts. Open reporting uses the
+whole rolling 24-hour, 7-day and 30-day windows up to now, showing both total
+open events and distinct opening library IDs. Opens and updater actions never
+independently qualify for DAU/WAU/MAU.
 Update completion uses a local bounded receipt and stable event UUID. Retries do
 not create another installation; the original preference epoch/library must still
 allow collection. Opt-out invalidates it. A successful install here means the
@@ -46,9 +47,11 @@ replacement version launched, not a guarantee of later application health.
 Mac clients without the Software updates controls and App Store updates are not
 measured by this in-app updater funnel.
 
-DAU is `COUNT(DISTINCT distinct_id)` for qualifying app events in the current UTC
-calendar day. WAU and MAU use distinct IDs over the entire rolling 7-day and
-30-day windows respectively, up to now. Never sum daily unique counts. Event
+Headline DAU is `COUNT(DISTINCT distinct_id)` for qualifying app events over the
+whole rolling 24 hours. WAU and MAU use distinct IDs over the whole rolling 7-day
+and 30-day windows respectively, up to now. All timestamps use UTC. Opens use the
+same three windows but never qualify as active use. The supplemental historical
+activity chart groups events by UTC calendar date and is not the headline DAU. Never sum daily unique counts. Event
 UUIDs and original timestamps survive central upload retries. Delayed events are
 attributed to their original activity date.
 
@@ -113,17 +116,19 @@ analytics module. It excludes query strings/fragments and sends only public rout
 referrer domain and named download/GitHub-link events. It respects DNT and GPC.
 Random browser/session IDs are separate from the app UUID. Development/preview
 hosts do not send analytics. Download click/redirect events measure intent,
-not installation. Release asset counters measure downloads, not unique users. Website and direct
+not installation. Installer DMG counters measure downloads, not unique users. Website and direct
 GitHub downloads share the same counter, including repeat/internal downloads and
 the in-app updater's network transfers. These totals cannot be split by source or
 added to the updater count without double counting. Website clicks/redirects are
 intent, not confirmed file transfer; an in-app download completion is verified
-locally. All-asset totals also contain update manifests/checksums and remain a
-separate technical metric. Do not label any GitHub count as installs or in-app
-release downloads.
+locally. Manifest/checksum downloads and other supporting release-file counters
+are excluded from collection, archives, publishing and reporting. A website or
+GitHub installer download fetches one DMG; supporting files are not downloaded
+alongside it. Do not label GitHub download counts as installs or in-app-only
+update downloads.
 
 `python3 scripts/collect-github-analytics.py --output PATH/history.json` preserves
-GitHub's daily views/clones and cumulative release asset counters. Existing rows
+GitHub's daily views/clones and cumulative installer DMG counters. Existing rows
 outside GitHub's 14-day traffic window remain in the output. Daily download
 observations retain asset IDs, including replaced/deleted assets in older snapshots
 and assets replaced between reruns on the same UTC day.
@@ -139,7 +144,7 @@ No additional GitHub permission or PostHog administrative secret is needed.
 | Event | Aggregate fields |
 | --- | --- |
 | `github_traffic_snapshot` | UTC reporting day, observation time, views/clones, total and daily unique counts |
-| `github_download_snapshot` | Observation day/time, cumulative DMG/all-asset download counts, known asset counts |
+| `github_download_snapshot` | Observation day/time, cumulative installer DMG download count, known DMG count |
 
 Both use one repository aggregate ID, `source: github`, profiles false,
 qualifying activity false and `$geoip_disable: true`. No GitHub visitor IDs,
@@ -154,8 +159,9 @@ HTTP acknowledgement means accepted for processing; verify stored events separat
 
 The dashboard takes the latest observed snapshot per reporting day and traffic
 metric, so revisions and retries do not add to totals. Download charts preserve
-last known asset counters across replaced/deleted assets. DMG downloads and all
-release-file downloads remain separate cumulative counters. They are not installs,
+last known installer counters across replaced/deleted DMGs. Supporting files are
+filtered out of older archives during collection and are never published. Installer
+download counts are not installs,
 unique users or historical daily download deltas. Missing observation days are
 not synthesized. The collection-time tile shows freshness. The saved SQL/chart
 configurations are in [github-dashboard-insights.json](github-dashboard-insights.json).
