@@ -3,23 +3,38 @@ import SwiftUI
 struct DictationMicrophone: View {
     let editor: DictationEditor
     var onActivate: () -> Void = {}
+    var usesNoteToolbarStyle = false
     private var dictation: DictationModel { .shared }
     var body: some View {
+        if usesNoteToolbarStyle {
+            microphoneButton.buttonStyle(DashboardIconButtonStyle())
+        } else {
+            microphoneButton.buttonStyle(DashboardComposerControlButtonStyle())
+        }
+    }
+
+    private var microphoneButton: some View {
         Button {
             onActivate()
             if dictation.retainedTranscript != nil { dictation.insertRetained(into: editor) }
             else { dictation.toggle(editor: editor) }
         } label: {
-            Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic")
-                .font(.system(size: 16))
-                .foregroundStyle(dictation.isRecording ? DashboardPalette.danger : DashboardPalette.foreground)
-                .frame(width: 36, height: 36)
-                .contentShape(Circle())
+            if usesNoteToolbarStyle {
+                microphoneIcon.font(.system(size: 14)).frame(width: 32, height: 32)
+            } else {
+                microphoneIcon.font(.system(size: 16)).frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
         }
-        .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(dictation.phase == .finishing)
         .accessibilityLabel(dictation.retainedTranscript != nil ? "Insert retained dictation here" : dictation.isRecording ? "Stop recording and insert here" : "Start dictation")
         .help(dictation.retainedTranscript != nil ? "Insert retained dictation here" : dictation.isRecording ? "Stop recording and insert here" : "Dictate with your Grok subscription")
+    }
+
+    private var microphoneIcon: some View {
+        Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic")
+            .foregroundStyle(dictation.isRecording ? DashboardPalette.danger
+                             : usesNoteToolbarStyle ? DashboardPalette.mutedForeground : DashboardPalette.foreground)
     }
 }
 
