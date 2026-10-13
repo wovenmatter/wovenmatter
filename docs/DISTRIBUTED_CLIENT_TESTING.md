@@ -202,11 +202,13 @@ scheduled time while iOS has suspended the app.
 
 ## Secondary Mac
 
-Pair from **Settings → Devices → Use another Mac’s central library**, then choose
-**Use as client and restart**. Check offline notes and drafts, the same library
-views, and direct execution. Optionally enable **Execution on this Mac** in client
-Settings and configure its agents and connections. Sharing this execution
-workspace is a separate explicit action.
+Pair from **Settings → Device Connections** using discovery and approval or a
+pairing link, then choose **Use as client and restart**. Check offline notes and
+drafts, the same library views, and direct execution. This Mac automatically keeps
+its own local agent workspace; configure its agents and connections in Settings.
+Use **Available to paired devices** in Device Connections to control access to
+that local execution workspace. Additional Linux workspaces are provisioned from
+the central Mac.
 
 With the central Mac unavailable, create and edit calendar events from both the
 client Calendar page and this Mac's local agent CLI. Each should see the other's
