@@ -566,6 +566,7 @@ public extension NoteDocument {
               case .richText(var block) = blocks[index] else {
           throw NoteEditError.blockNotFound(blockID)
         }
+        if block.style != style { block.list = nil }
         block.style = style
         blocks[index] = .richText(block)
       case .createTable(let afterBlockID, let rows, let columns, let headerRow):

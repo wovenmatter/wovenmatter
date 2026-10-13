@@ -580,10 +580,14 @@ private enum NoteAttributedDocument {
         let result = NSMutableAttributedString()
         var previousStyle: NoteParagraphStyle?
         var list: NSTextList?
+        var nativeLists: [NoteTextList: NSTextList] = [:]
         for block in document.normalized().blocks {
             switch block {
             case .richText(let richText):
-                let paragraph = paragraphStyle(for: richText.style, list: previousStyle == richText.style ? list : nil)
+                var paragraph = paragraphStyle(for: richText.style, list: previousStyle == richText.style ? list : nil)
+                if let formatting = richText.list {
+                    paragraph = restoreList(formatting, to: paragraph, lists: &nativeLists)
+                }
                 append(richText, paragraph: paragraph, to: result)
                 previousStyle = richText.style
                 list = paragraph.textLists.first
@@ -603,6 +607,11 @@ private enum NoteAttributedDocument {
             return (table.id, table)
           }
         )
+        let sourceLists = source.blocks.reduce(into: [String: NoteListFormatting]()) { result, block in
+            if case .richText(let text) = block, let list = text.list { result[text.id] = list }
+        }
+        var nativeLists: [ObjectIdentifier: NoteTextList] = [:]
+        var usedListIDs: Set<String> = []
         var tables = sourceTables
         var emittedTables: Set<String> = []
         var seenBlockIDs: Set<String> = []
@@ -643,7 +652,10 @@ private enum NoteAttributedDocument {
                 blocks.append(.richText(NoteRichTextBlock(
                     id: blockID,
                     style: style,
-                    runs: runs(in: attributed, range: contentRange)
+                    runs: runs(in: attributed, range: contentRange),
+                    list: captureList(attributes[.paragraphStyle] as? NSParagraphStyle,
+                                      previous: proposedID.flatMap { sourceLists[$0] },
+                                      lists: &nativeLists, usedIDs: &usedListIDs)
                 )))
             }
             guard paragraphRange.length > 0 else { break }
@@ -657,6 +669,58 @@ private enum NoteAttributedDocument {
         var document = source
         document.blocks = blocks
         return document.normalized()
+    }
+
+    private static func captureList(
+        _ paragraph: NSParagraphStyle?, previous: NoteListFormatting?,
+        lists: inout [ObjectIdentifier: NoteTextList], usedIDs: inout Set<String>
+    ) -> NoteListFormatting? {
+        guard let paragraph, !paragraph.textLists.isEmpty else { return nil }
+        let levels = paragraph.textLists.enumerated().map { depth, native in
+            let identity = ObjectIdentifier(native)
+            if let existing = lists[identity] { return existing }
+            var level = NoteTextList(markerFormat: native.markerFormat.rawValue,
+                                     options: native.listOptions.rawValue,
+                                     startingItemNumber: native.startingItemNumber)
+            if let previous, previous.levels.indices.contains(depth) {
+                let old = previous.levels[depth]
+                if old.markerFormat == level.markerFormat, old.options == level.options,
+                   old.startingItemNumber == level.startingItemNumber, !usedIDs.contains(old.id) {
+                    level.id = old.id
+                }
+            }
+            lists[identity] = level
+            usedIDs.insert(level.id)
+            return level
+        }
+        return NoteListFormatting(levels: levels, headIndent: paragraph.headIndent,
+                                  firstLineHeadIndent: paragraph.firstLineHeadIndent,
+                                  tabStops: paragraph.tabStops.map {
+                                      NoteListTabStop(alignment: $0.alignment.rawValue, location: $0.location)
+                                  }, defaultTabInterval: paragraph.defaultTabInterval)
+    }
+
+    private static func restoreList(
+        _ formatting: NoteListFormatting, to paragraph: NSParagraphStyle,
+        lists: inout [NoteTextList: NSTextList]
+    ) -> NSParagraphStyle {
+        guard let paragraph = paragraph.mutableCopy() as? NSMutableParagraphStyle else { return paragraph }
+        paragraph.textLists = formatting.levels.map { level in
+            if let existing = lists[level] { return existing }
+            let native = NSTextList(markerFormat: .init(rawValue: level.markerFormat),
+                                    options: .init(rawValue: level.options),
+                                    startingItemNumber: level.startingItemNumber)
+            lists[level] = native
+            return native
+        }
+        paragraph.headIndent = formatting.headIndent
+        paragraph.firstLineHeadIndent = formatting.firstLineHeadIndent
+        paragraph.tabStops = formatting.tabStops.map {
+            NSTextTab(textAlignment: NSTextAlignment(rawValue: $0.alignment) ?? .natural,
+                      location: $0.location)
+        }
+        paragraph.defaultTabInterval = formatting.defaultTabInterval
+        return paragraph
     }
 
     private static func append(_ block: NoteRichTextBlock, paragraph: NSParagraphStyle, to result: NSMutableAttributedString) {
