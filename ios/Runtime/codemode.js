@@ -1,6 +1,6 @@
 import { defineExtension, defineTool, ToolTask } from '@earendil-works/pi-durable';
 
-export function createCodeMode({hostCall,getHarness,policy={}}) {
+export function createCodeMode({hostCall,getHarness}) {
   const invocations = new Map(), conversationLocks = new Map();
   async function acquireConversation(id, signal) {
     signal?.throwIfAborted();
@@ -66,7 +66,6 @@ export function createCodeMode({hostCall,getHarness,policy={}}) {
     const {api,context,allowed,pending} = invocation;
     if (!allowed.some(tool=>tool.name===name)) throw new Error('Tool is not available in this code execution.');
     context.abortSignal?.throwIfAborted();
-    if (pending.size >= (policy.concurrentTools??16)) throw new Error("Code exceeded the configured simultaneous tool limit.");
     const work = (async () => {
       const model = (await api.agent(context)).model;
       const callID = `${api.callId}/nested/${++invocation.next}`;

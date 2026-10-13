@@ -17,9 +17,11 @@ private let testTools = """
 private actor ControlledHost {
   var inferenceCalls = 0
   var toolCalls = 0
+  var activeTools = 0
+  var peakTools = 0
   var toolsSeen: [String] = []
   var requests: [String] = []
-  enum Mode: Sendable { case normal, subagent, code, checkpointThenWait, parallelCode }
+  enum Mode: Sendable { case normal, subagent, code, checkpointThenWait, parallelCode, toolFanout }
   var mode: Mode = .normal
   func mode(_ value: Mode) { mode = value }
   var holdTool = false
@@ -37,6 +39,8 @@ private actor ControlledHost {
       call = ["type":"toolCall","id":"call-child","name":"subagent","arguments":["task":"delegated task","name":"Researcher"]]
     } else if mode == .checkpointThenWait {
       call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"store('phase', 'prepared'); await checkpoint(); await tools.save_note({text:'checkpointed'});"]]
+    } else if mode == .toolFanout {
+      call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"await Promise.all(Array.from({length:32},(_,i)=>tools.save_note({text:String(i)}))); store('completed',32); await checkpoint();"]]
     } else if mode == .code {
       call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"const result = await tools.save_note({text:'café 🟩'}); text(result); store('saved', true);"]]
     } else {
@@ -55,7 +59,16 @@ private actor ControlledHost {
   }
   func tool(_ request: String) async throws -> String {
     toolCalls += 1; toolStarted = true; toolsSeen.append(request)
+    activeTools += 1; peakTools = max(peakTools, activeTools)
+    defer { activeTools -= 1 }
     if holdTool { try await Task.sleep(for: .seconds(120)) }
+    if mode == .toolFanout {
+      let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+      while toolCalls < 32 {
+        guard ContinuousClock.now < deadline else { throw CancellationError() }
+        try await Task.sleep(for: .milliseconds(10))
+      }
+    }
     return try json(["content":[["type":"text","text":"Note saved: café 🟩"]]])
   }
   func hold() { holdTool = true }
@@ -292,6 +305,43 @@ final class PiDurableRuntimeTests: XCTestCase {
     let requests = await host.toolsSeen
     XCTAssertTrue(try object(XCTUnwrap(requests.first))["toolCallID"] as? String == "call-code/nested/1")
     try await engine.close()
+  }
+
+  func testCodeModeSDKTasksRunBeyondFormerConcurrencyCeiling() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost(); await host.mode(.toolFanout)
+    let engine = try runtime(path, host: host)
+    _ = try await engine.open()
+    let receipt = try object(await engine.submit(text: "Run the parallel tools", requestID: "tool-fanout"))
+    let settled = try object(await engine.wait(submissionID: XCTUnwrap(receipt["id"] as? Int)))
+    XCTAssertEqual(settled["status"] as? String, "done")
+    let requests = await host.toolsSeen
+    let peak = await host.peakTools
+    XCTAssertEqual(requests.count, 32)
+    XCTAssertEqual(peak, 32)
+    let ids = try requests.compactMap { try object($0)["toolCallID"] as? String }
+    XCTAssertEqual(Set(ids).count, 32, "Each nested SDK task retains its own durable call identity")
+    let history = try await engine.history()
+    XCTAssertTrue(history.contains("woven.ios-codemode-store"), history)
+    try await engine.close()
+  }
+
+  func testStoppingCodeModeCancelsAllParallelSDKTools() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost(); await host.mode(.toolFanout); await host.hold()
+    let engine = try runtime(path, host: host)
+    _ = try await engine.open()
+    _ = try await engine.submit(text: "Start parallel tools", requestID: "cancel-fanout")
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    while await host.toolCalls < 32 && ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let started = await host.toolCalls
+    XCTAssertEqual(started, 32)
+    try await engine.abort()
+    try await engine.close()
+    let active = await host.activeTools
+    XCTAssertEqual(active, 0, "Stopping the parent must cancel every nested SDK-owned tool")
   }
 
   func testConcurrentCodeProgramsPreserveBothCheckpointKeys() async throws {

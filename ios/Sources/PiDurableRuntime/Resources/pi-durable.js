@@ -18989,7 +18989,7 @@ ${SUMMARIZATION_PROMPT}${focus}`;
   }
 
   // ios/Runtime/codemode.js
-  function createCodeMode({ hostCall: hostCall2, getHarness, policy = {} }) {
+  function createCodeMode({ hostCall: hostCall2, getHarness }) {
     const invocations = /* @__PURE__ */ new Map(), conversationLocks = /* @__PURE__ */ new Map();
     async function acquireConversation(id, signal) {
       signal?.throwIfAborted();
@@ -19066,7 +19066,6 @@ ${SUMMARIZATION_PROMPT}${focus}`;
       const { api, context, allowed, pending } = invocation;
       if (!allowed.some((tool) => tool.name === name)) throw new Error("Tool is not available in this code execution.");
       context.abortSignal?.throwIfAborted();
-      if (pending.size >= (policy.concurrentTools ?? 16)) throw new Error("Code exceeded the configured simultaneous tool limit.");
       const work = (async () => {
         const model = (await api.agent(context)).model;
         const callID = `${api.callId}/nested/${++invocation.next}`;
@@ -20933,7 +20932,7 @@ ${SUMMARIZATION_PROMPT}${focus}`;
       }));
       registry.install(defineExtension({ name: "wovenmatter-ios", tools }));
       registry.install(createSubagents(() => root.id, config.executionPolicy));
-      codemode = createCodeMode({ hostCall, getHarness: () => harness, policy: config.executionPolicy });
+      codemode = createCodeMode({ hostCall, getHarness: () => harness });
       registry.install(codemode.extension);
       const storage = await JsonlStorage.open("/", filesystem(), BACKGROUND_CONTEXT, { fsync: true });
       harness = await Harness.open(storage, {

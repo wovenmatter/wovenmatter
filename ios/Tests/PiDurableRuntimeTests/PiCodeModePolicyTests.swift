@@ -17,20 +17,30 @@ final class PiCodeModePolicyTests: XCTestCase {
     XCTAssertTrue(output.contains("approved"))
   }
 
-  func testWorkerQueuesToolsToConfiguredConcurrencyAndCheckpointsAfterCompletion() async throws {
+  func testWorkerStartsAllParallelToolsAndCheckpointsAfterCompletion() async throws {
     let executor = PiCodeModeExecutor()
-    var active = 0, peak = 0, completed = 0
+    var started = 0, active = 0, peak = 0, completed = 0
     var checkpoint: String?
-    let source = "await Promise.all(Array.from({length:12},(_,i)=>tools.count({i}))); store('done',true); await checkpoint(); text('finished');"
+    let source = "await Promise.all(Array.from({length:32},(_,i)=>tools.count({i}))); store('done',true); await checkpoint(); text('finished');"
     let output = try await executor.run(requestJSON: request(source, tools: [["name": "count"]]),
-      policy: .init(concurrentTools: 2), checkpoint: { checkpoint = $0 }) { _, _ in
-        active += 1; peak = max(peak, active)
-        try await Task.sleep(for: .milliseconds(20))
-        active -= 1; completed += 1
+      checkpoint: { checkpoint = $0 }) { _, _ in
+        started += 1; active += 1; peak = max(peak, active)
+        defer { active -= 1 }
+        // No call may finish before the entire batch is admitted. The old queue
+        // would deadlock here even if all calls eventually completed in batches.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while started < 32 {
+          guard ContinuousClock.now < deadline else {
+            XCTFail("Parallel tools were held behind a concurrency ceiling.")
+            throw CancellationError()
+          }
+          try await Task.sleep(for: .milliseconds(10))
+        }
+        completed += 1
         return "{}"
       }
-    XCTAssertEqual(completed, 12)
-    XCTAssertLessThanOrEqual(peak, 2)
+    XCTAssertEqual(completed, 32)
+    XCTAssertEqual(peak, 32)
     XCTAssertTrue(checkpoint?.contains("true") == true)
     XCTAssertTrue(output.contains("finished"))
   }
@@ -53,17 +63,29 @@ final class PiCodeModePolicyTests: XCTestCase {
 
   func testRestoredPoliciesRaiseLegacyWatchdogWithoutReducingLongerBudgets() throws {
     for (saved, expected) in [(30.0, 120.0), (120.0, 120.0), (240.0, 240.0)] {
-      let original = PiExecutionPolicy(unresponsiveCodeSeconds: saved, concurrentTools: 8, concurrentSubagents: 3)
+      let original = PiExecutionPolicy(unresponsiveCodeSeconds: saved, concurrentSubagents: 3)
       let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: JSONEncoder().encode(original)).validated()
       XCTAssertEqual(restored.unresponsiveCodeSeconds, expected)
-      XCTAssertEqual(restored.concurrentTools, 8)
       XCTAssertEqual(restored.concurrentSubagents, 3)
+    }
+  }
+
+  func testLegacyToolConcurrencyIsIgnoredAndNotPersisted() throws {
+    for oldLimit in [0, 1, 16, 128] {
+      let data = try JSONSerialization.data(withJSONObject: [
+        "unresponsiveCodeSeconds": 30, "concurrentTools": oldLimit,
+        "concurrentSubagents": 3, "subagentDepth": 2,
+      ])
+      let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: data).validated()
+      XCTAssertEqual(restored.unresponsiveCodeSeconds, 120)
+      XCTAssertEqual(restored.concurrentSubagents, 3)
+      let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(restored)) as? [String: Any])
+      XCTAssertNil(encoded["concurrentTools"])
     }
   }
 
   func testInvalidResourcePolicyRejected() throws {
     XCTAssertThrowsError(try PiExecutionPolicy(unresponsiveCodeSeconds: .infinity).validated())
-    XCTAssertThrowsError(try PiExecutionPolicy(concurrentTools: 0).validated())
     XCTAssertThrowsError(try PiExecutionPolicy(subagentDepth: 0).validated())
   }
 }
