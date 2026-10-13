@@ -115,6 +115,38 @@ struct DashboardNoteEditorTests {
         print("PASS: \(cases) actual AppKit edit/parse/save/reopen and clear/reopen cases preserve document metadata and table links")
     }
 
+    static func verifyDocumentBindingCache() throws {
+        var decodes = 0
+        let cache = DashboardNoteDocumentCache { source in
+            decodes += 1
+            return NoteDocument.decode(source)
+        }
+        let first = cache.value(noteID: "first", source: "Legacy note")
+        for _ in 0..<100 {
+            try require(cache.value(noteID: "first", source: "Legacy note") == first,
+                "Repeated reads must preserve legacy block identity")
+        }
+        try require(decodes == 1, "Unchanged binding reads decoded the document again")
+
+        var table = NoteTableBlock(rows: 100, columns: 8, headerRow: true)
+        table.rows[99].cells[7].runs = [NoteTextRun(text: "Last cell")]
+        let edited = NoteDocument(kind: .spreadsheet, blocks: [.table(table)], html: "metadata")
+        let saved = try cache.encode(edited, noteID: "first")
+        try require(cache.value(noteID: "first", source: saved) == NoteDocument.decode(saved),
+            "Local edits and persisted document differ")
+        try require(decodes == 1, "A local edit was decoded immediately after encoding")
+
+        let external = try NoteDocument(kind: .html, html: "Fresh external update").encoded()
+        try require(cache.value(noteID: "first", source: external).html == "Fresh external update",
+            "An external edit with no timestamp change stayed stale")
+        try require(decodes == 2, "Changed source was not decoded exactly once")
+        try require(cache.value(noteID: "first", source: saved) == edited.normalized(),
+            "Returning to a prior source did not refresh the single-entry cache")
+        _ = cache.value(noteID: "second", source: saved)
+        try require(decodes == 4, "Switching notes must not reuse the prior note's entry")
+        print("PASS: bounded document reuse preserves edits, fresh external source, note identity, and normalized persistence")
+    }
+
     static func verifyTextStatistics() throws {
         func counts(_ text: String) -> DashboardNoteTextStatistics {
             DashboardNoteTextStatistics(document: NoteDocument(blocks: [.richText(NoteRichTextBlock(text: text))]))
@@ -270,38 +302,6 @@ struct DashboardNoteEditorTests {
         controller.unbind(textView)
         try require(!controller.canUndo && !controller.canRedo, "Detached editor must clear toolbar availability")
         print("PASS: actual hosted Notes editor enables spelling and isolates native undo/redo for typing, formatting, tables, dictation, external edits, separate notes, keyboard actions, and read-only states")
-    }
-
-    static func verifyDocumentBindingCache() throws {
-        var decodes = 0
-        let cache = DashboardNoteDocumentCache { source in
-            decodes += 1
-            return NoteDocument.decode(source)
-        }
-        let first = cache.value(noteID: "first", source: "Legacy note")
-        for _ in 0..<100 {
-            try require(cache.value(noteID: "first", source: "Legacy note") == first,
-                "Repeated reads must preserve legacy block identity")
-        }
-        try require(decodes == 1, "Unchanged binding reads decoded the document again")
-
-        var table = NoteTableBlock(rows: 100, columns: 8, headerRow: true)
-        table.rows[99].cells[7].runs = [NoteTextRun(text: "Last cell")]
-        let edited = NoteDocument(kind: .spreadsheet, blocks: [.table(table)], html: "metadata")
-        let saved = try cache.encode(edited, noteID: "first")
-        try require(cache.value(noteID: "first", source: saved) == NoteDocument.decode(saved),
-            "Local edits and persisted document differ")
-        try require(decodes == 1, "A local edit was decoded immediately after encoding")
-
-        let external = try NoteDocument(kind: .html, html: "Fresh external update").encoded()
-        try require(cache.value(noteID: "first", source: external).html == "Fresh external update",
-            "An external edit with no timestamp change stayed stale")
-        try require(decodes == 2, "Changed source was not decoded exactly once")
-        try require(cache.value(noteID: "first", source: saved) == edited.normalized(),
-            "Returning to a prior source did not refresh the single-entry cache")
-        _ = cache.value(noteID: "second", source: saved)
-        try require(decodes == 4, "Switching notes must not reuse the prior note's entry")
-        print("PASS: bounded document reuse preserves edits, fresh external source, note identity, and normalized persistence")
     }
 
     static func verifyMetadata(_ document: NoteDocument, original: NoteDocument, label: String) throws {
