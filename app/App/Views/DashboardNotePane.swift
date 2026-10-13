@@ -124,7 +124,6 @@ struct DashboardNotePane: View {
                     .disabled(isRefreshingLinkedData)
                 }
                 if currentDocument.kind == .note {
-                    DictationMicrophone(editor: dictationEditor, usesNoteToolbarStyle: true)
                     Button {
                         showsFormatting.toggle()
                     } label: {
@@ -134,6 +133,7 @@ struct DashboardNotePane: View {
                     }
                     .buttonStyle(DashboardIconButtonStyle())
                     .help("Format note")
+                    DictationMicrophone(editor: dictationEditor, usesNoteToolbarStyle: true)
                 }
             }
             .padding(.horizontal, 12)
@@ -214,7 +214,7 @@ struct DashboardNotePane: View {
                 .accessibilityLabel(showsCharacterCount ? "Note character count" : "Note word count")
                 .accessibilityValue(showsCharacterCount ? "\(statistics.characters)" : "\(statistics.words)")
                 .accessibilityHint(showsCharacterCount ? "Show word count" : "Show character count")
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.horizontal, 24).padding(.bottom, 12)
             }
         }
