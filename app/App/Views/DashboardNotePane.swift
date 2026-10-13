@@ -197,7 +197,7 @@ struct DashboardNotePane: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, 32)
-            .padding(.bottom, currentDocument.kind == .note ? 8 : 24)
+            .padding(.bottom, currentDocument.kind == .note ? 0 : 24)
 
             if currentDocument.kind == .note {
                 let statistics = DashboardNoteTextStatistics(document: currentDocument)
@@ -206,7 +206,8 @@ struct DashboardNotePane: View {
                          ? "\(statistics.characters.formatted()) \(statistics.characters == 1 ? "character" : "characters")"
                          : "\(statistics.words.formatted()) \(statistics.words == 1 ? "word" : "words")")
                         .font(.system(size: 11)).monospacedDigit()
-                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
                 }
                 .buttonStyle(DashboardIconButtonStyle())
                 .help(showsCharacterCount ? "Click to show words. Characters include spaces and line breaks."
@@ -215,7 +216,9 @@ struct DashboardNotePane: View {
                 .accessibilityValue(showsCharacterCount ? "\(statistics.characters)" : "\(statistics.words)")
                 .accessibilityHint(showsCharacterCount ? "Show word count" : "Show character count")
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.horizontal, 24).padding(.bottom, 12)
+                // One bottom gutter keeps the count clear of the scrolling
+                // editor without stacking extra space beneath its viewport.
+                .padding(.horizontal, 24)
             }
         }
         .disabled(model.noteActionIDs.contains(note.id))

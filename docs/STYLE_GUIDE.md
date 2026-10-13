@@ -68,7 +68,9 @@ when an intentional design change is accepted.
   Redo, Version history, Database, Format note, Microphone. Use the same compact
   icon button style and frames for the microphone and adjacent controls, without
   a divider. The note-body count sits at the bottom right, starts with words, and
-  switches between words and characters when clicked.
+  switches between words and characters when clicked. Keep it in one compact
+  24-point bottom gutter outside the scrolling text, without stacking additional
+  editor or footer padding beneath the note.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
