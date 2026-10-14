@@ -176,7 +176,7 @@ struct SettingsView: View {
                 SettingsDestinationRow(
                     title: AgentRuntimeKind.defaultAgent.displayName,
                     detail: "Conversation defaults, subagents, providers, and models.",
-                    icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
+                    icon: { DashboardHarnessLogoIcon(logo: .defaultAgent, size: 15) },
                     action: { section = .defaultAgent("global", .landing) }
                 )
                 SettingsDestinationRow(
