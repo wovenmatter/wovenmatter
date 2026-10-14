@@ -36,13 +36,10 @@ struct SettingsCompanionView: View {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
-                            Text(host.endpoint == nil ? "Sharing is off" : "Available to paired devices")
+                            Text(host.status)
                                 .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                         Spacer()
-                        Button(host.endpoint == nil ? "Start sharing" : "Stop sharing") {
-                            if host.endpoint == nil { Task { await host.start() } } else { host.stopSharing() }
-                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(host.isStarting).accessibilityIdentifier("companion.sharing")
                     }
                 }
                 if !host.pendingPairingRequests.isEmpty { pairingRequests }

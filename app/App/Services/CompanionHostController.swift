@@ -43,10 +43,10 @@ enum CompanionTestWorkspace {
 @Observable @MainActor
 final class CompanionHostController {
     weak var model: ApplicationModel?
-    private(set) var isEnabled: Bool
+    private(set) var isEnabled = false
     private(set) var isStarting = false
     private(set) var endpoint: URL?
-    private(set) var status = "Sharing is stopped"
+    private(set) var status = "Unavailable"
     private(set) var errorMessage: String?
     private(set) var pairingPayload: CompanionPairingPayload?
     private(set) var pairingExpiresAt: Date?
@@ -78,28 +78,39 @@ final class CompanionHostController {
     private let makeExposure: @MainActor () -> CompanionTailscaleServe
     private var generation = UUID()
     private var healthTask: Task<Void, Never>?
-    private var awakeActivity: NSObjectProtocol?
-    private static let enabledKey = "companion.sharing.enabled"
+    private var availabilityTask: Task<Void, Never>?
+    private let retryInterval: Duration
 
     init(model: ApplicationModel, defaults: UserDefaults = .standard, supportDirectory: URL? = nil,
+         retryInterval: Duration = .seconds(15),
          makeExposure: @escaping @MainActor () -> CompanionTailscaleServe = { CompanionTailscaleServe() }) {
         self.model = model
         self.defaults = defaults
         self.supportDirectory = supportDirectory
         self.makeExposure = makeExposure
-        self.isEnabled = defaults.bool(forKey: Self.enabledKey)
+        self.retryInterval = retryInterval
     }
 
-    func restoreIfEnabled() async {
+    /// The central database is available while the app and Tailscale are running.
+    /// Listening does not create a pairing offer or authorize any device.
+    func startForCentralDatabase() async {
+        guard model?.isLibraryClient == false else { return }
         if model?.isBackendFrontend == true { await forward(.status); return }
-        do { try await loadAuthentication() } catch { errorMessage = error.localizedDescription }
-        if isEnabled { await start() }
+        guard availabilityTask == nil else { return }
+        isEnabled = true
+        availabilityTask = Task { [weak self, retryInterval] in
+            while !Task.isCancelled {
+                guard self != nil else { return }
+                await self?.start()
+                do { try await Task.sleep(for: retryInterval) } catch { return }
+            }
+        }
     }
 
     func start() async {
         if model?.isBackendFrontend == true { await forward(.start); return }
-        guard !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
-        isStarting = true; errorMessage = nil; status = "Starting sharing…"
+        guard model?.isLibraryClient == false, !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
+        isStarting = true; errorMessage = nil; status = "Connecting…"
         generation = UUID()
         let expectedGeneration = generation
         var attemptListener: CompanionHTTPServer?
@@ -155,7 +166,6 @@ final class CompanionHostController {
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
             defaults.set(address.port ?? 443, forKey: portKey)
             endpoint = address; isEnabled = true; isStarting = false
-            defaults.set(true, forKey: Self.enabledKey)
             try await refreshExecutionRegistry()
             let identity = try await database.companionLibraryIdentity()
             let descriptors = try await database.companionExecutionWorkspaces()
@@ -176,14 +186,15 @@ final class CompanionHostController {
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
             status = "Available to your paired devices"
-            awakeActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled], reason: "Woven Matter iPhone companion sharing")
+            // Availability alone must not hold the Mac awake. Active execution
+            // continues to use the app's existing work/sleep policy.
             healthTask = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(5))
                     guard !Task.isCancelled, let self else { return }
                     if self.serve?.isRunning != true {
-                        self.stop()
-                        self.errorMessage = "Tailscale sharing stopped. Check Tailscale, then start sharing again."
+                        self.stopService()
+                        self.errorMessage = "Tailscale is unavailable. Woven Matter will reconnect automatically."
                         return
                     }
                     do { try await self.refreshExecutionRegistry() }
@@ -202,7 +213,7 @@ final class CompanionHostController {
             attemptListener?.stop()
             attemptExposure?.stop()
             guard generation == expectedGeneration else { return }
-            stop(); errorMessage = error.localizedDescription
+            stopService(); errorMessage = error.localizedDescription
         }
     }
 
@@ -220,9 +231,15 @@ final class CompanionHostController {
         return await libraryAPI.handle(request)
     }
 
-    /// Quit preserves the explicit enable preference for next launch. Stop sharing
-    /// in Settings also clears that preference; neither action cancels agent runs.
+    /// Quit and role changes cancel recovery as well as the owned listener.
+    /// Connection failures only stop the current attempt so recovery can continue.
     func stop() {
+        availabilityTask?.cancel(); availabilityTask = nil
+        isEnabled = false
+        stopService()
+    }
+
+    private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
         if let serve {
@@ -230,15 +247,13 @@ final class CompanionHostController {
             if !stoppingExposures.contains(where: { $0 === serve }) { stoppingExposures.append(serve) }
             self.serve = nil
         }
-        endpoint = nil; isStarting = false; status = "Sharing is stopped"
+        endpoint = nil; isStarting = false; status = "Unavailable"
         pairingPayload = nil; pairingExpiresAt = nil; discoveryIdentity = nil; pendingPairingRequests = []
-        if let awakeActivity { ProcessInfo.processInfo.endActivity(awakeActivity) }
-        awakeActivity = nil
         if let authentication { Task { await authentication.cancelOffer() } }
     }
     func stopSharing() {
         if model?.isBackendFrontend == true { Task { await forward(.stop) }; return }
-        isEnabled = false; defaults.set(false, forKey: Self.enabledKey); stop()
+        stop()
     }
 
     func createPairingCode() async {
@@ -338,7 +353,7 @@ final class CompanionHostController {
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
         if id == localExecutionWorkspaceID(libraryID: identity.libraryID) {
-            guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "Start sharing on the central Mac first.") }
+            guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "The central database connection is not ready yet.") }
             let expectedGeneration = generation
             let credential = try await executionAPI.provision(device: device)
             guard generation == expectedGeneration, endpoint != nil,

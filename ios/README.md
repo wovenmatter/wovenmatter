@@ -32,7 +32,7 @@ and inference acceptance must be checked by the user, separately from fixtures.
 
 ## Pairing and test workflow
 
-1. Run the requested development Mac app. For user acceptance, use `scripts/build_and_run.sh` with the existing library; reserve isolated workspaces for automated/disposable tests. Open Settings → Device Connections, start sharing, and create a pairing code.
+1. Run the requested development Mac app. For user acceptance, use `scripts/build_and_run.sh` with the existing library; reserve isolated workspaces for automated/disposable tests. Open Settings → Device Connections and create a pairing code. The central database becomes available automatically when Tailscale is connected; each new device still requires explicit pairing.
 2. Connect both devices to the same tailnet. In the iPhone or iPad Settings → Device Connections and scan the code or paste the pairing link. Its endpoint is the Tailscale HTTPS URL; the short-lived code is exchanged for a per-device credential stored only in Keychain.
 3. Create a folder and an ordinary note while the Mac is unavailable. The note reports **Saved on this device** only after durable local storage commits. Terminate and reopen the app to check that writing persists.
 4. Reconnect and wait for **Saved · synced with Mac**. The note's client-created ID is preserved. Reference it in a new chat; the app flushes the note before binding its canonical revision to the run.

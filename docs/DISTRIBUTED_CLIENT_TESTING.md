@@ -88,8 +88,10 @@ and inference acceptance remain a human test for each provider.
 
 ## Central library and direct execution
 
-1. In the isolated central Mac app, open **Settings → Device Connections**, start sharing,
-   and create a pairing QR code/link. Pair iPhone/iPad through **Settings → Device Connections**. On a second Mac,
+1. In the isolated central Mac app, open **Settings → Device Connections**. The central database
+   becomes available automatically when Tailscale is connected; there is no sharing switch.
+   Create a pairing QR code/link. Pair iPhone/iPad through **Settings → Device Connections**.
+   On a second Mac,
    change **Database role** to **Node** at the bottom of that page and restart.
    Test discovery and approval in both directions,
    then the link fallback. All devices must be on the same Tailscale network.
@@ -100,7 +102,7 @@ and inference acceptance remain a human test for each provider.
    disappear. Delete a central note that has unsynced client writing and verify
    recovery preserves that writing.
 3. Authorize a Linux or secondary Mac workspace while the central Mac is online.
-   Start and control a test conversation directly. Stop central sharing and
+   Start and control a test conversation directly. Quit the central app and
    continue controlling that workspace. Reconnect and compare the resulting
    transcript and activity from a second client. Close all viewing clients
    before reconnecting the Linux workspace to central: its own publisher must

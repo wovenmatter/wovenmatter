@@ -7,6 +7,68 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct CompanionHostLifecycleTests {
+    @Test(arguments: [false, true])
+    func centralStartupIgnoresLegacySharingPreferenceWithoutAuthorizingDevices(legacyEnabled: Bool) async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        fixture.defaults.set(legacyEnabled, forKey: "companion.sharing.enabled")
+        await fixture.host.startForCentralDatabase()
+        await fixture.host.startForCentralDatabase()
+        try await waitUntil { fixture.host.endpoint != nil && !fixture.host.isStarting }
+        #expect(fixture.host.isEnabled)
+        #expect(fixture.exposureCount == 1)
+        #expect(fixture.host.pairingPayload == nil)
+        #expect(fixture.host.pairedDevices.isEmpty)
+        let target = try #require(fixture.children.last?.target)
+        let base = try #require(URL(string: target))
+        var request = URLRequest(url: base.appending(path: "v1/workspace"))
+        request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 401)
+    }
+
+    @Test func automaticAvailabilityRecoversAfterTailscaleAndStopsRetryingOnQuit() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        fixture.tailscaleRunning = false
+        await fixture.host.startForCentralDatabase()
+        try await waitUntil { fixture.exposureCount > 0 && !fixture.host.isStarting }
+        #expect(fixture.host.endpoint == nil)
+        fixture.tailscaleRunning = true
+        try await waitUntil { fixture.host.endpoint != nil }
+        #expect(fixture.host.errorMessage == nil)
+        // A lost foreground Serve process is replaced without another user action.
+        let first = try #require(fixture.children.last)
+        first.forceStopped = true
+        try await waitUntil(timeout: .seconds(10)) { fixture.children.last !== first && fixture.host.endpoint != nil }
+        #expect(fixture.host.pairedDevices.isEmpty && fixture.host.pairingPayload == nil)
+        fixture.host.stop()
+        let attempts = fixture.exposureCount
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fixture.exposureCount == attempts)
+        #expect(fixture.host.endpoint == nil && !fixture.host.isEnabled)
+    }
+
+    @Test func quitDuringAutomaticStartupCannotPublishOrRestartService() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        fixture.holdFirstStatus = true
+        await fixture.host.startForCentralDatabase()
+        try await waitUntil { fixture.firstStatusArrived }
+        fixture.host.stop()
+        fixture.releaseFirstStatus()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fixture.exposureCount == 1)
+        #expect(fixture.children.isEmpty)
+        #expect(fixture.host.endpoint == nil && !fixture.host.isEnabled)
+    }
+
+    @Test func nodeDoesNotStartCentralDatabaseService() async throws {
+        let fixture = try await HostFixture(isNode: true); defer { fixture.remove() }
+        #expect(fixture.model.isLibraryClient)
+        await fixture.host.startForCentralDatabase()
+        await fixture.host.start()
+        #expect(fixture.exposureCount == 0)
+        #expect(fixture.host.endpoint == nil && !fixture.host.isEnabled)
+    }
+
     @Test func backendRPCControlsTheSameHostAndReplaysPairingReceipt() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         try await fixture.model.configureCompanionFixture(directory: fixture.directory)
@@ -185,7 +247,8 @@ struct CompanionHostLifecycleTests {
 
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
+        await fixture.host.startForCentralDatabase()
+        try await waitUntil { fixture.host.endpoint != nil }
         let target = try #require(fixture.children.last?.target)
         let base = try #require(URL(string: target))
         func post(_ path: String, _ body: Data) async throws -> (Data, Int) {
@@ -291,8 +354,9 @@ struct CompanionHostLifecycleTests {
         #expect(try await fixture.executionStatus(grant) == 200)
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<300 {
+    private func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -312,19 +376,21 @@ private enum HostFixtureError: Error { case timeout }
     var exposureCount = 0
     var children: [HostServingChild] = []
     var replacementCreatedWhileStopping = false
+    var tailscaleRunning = true
     var holdFirstStatus = false
     var firstStatusArrived = false
     private var firstStatusWaiter: CheckedContinuation<Void, Never>?
 
-    init() async throws {
+    init(isNode: Bool = false) async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-host-\(UUID())")
         suite = "companion.host.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
+        defaults.set(isNode, forKey: LocalExecutionRole.libraryClientPreferenceKey)
         let store = try await DashboardStore(supportDirectory: directory)
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
     }
     func makeHost() -> CompanionHostController {
-        CompanionHostController(model: model, defaults: defaults, supportDirectory: directory,
+        CompanionHostController(model: model, defaults: defaults, supportDirectory: directory, retryInterval: .milliseconds(25),
             makeExposure: { [unowned self] in makeExposure() })
     }
     func pairAndProvision(name: String, deviceID: String = UUID().uuidString.lowercased()) async throws -> CompanionExecutionCredential {
@@ -377,6 +443,7 @@ private enum HostFixtureError: Error { case timeout }
                 firstStatusArrived = true
                 await withCheckedContinuation { firstStatusWaiter = $0 }
             }
+            guard tailscaleRunning else { return Data(#"{"BackendState":"Stopped"}"#.utf8) }
             return Data(#"{"BackendState":"Running","Self":{"DNSName":"fixture.test.ts.net."}}"#.utf8)
         }
         let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })

@@ -76,7 +76,7 @@ public final class CompanionTailscaleServe {
           status["BackendState"] as? String == "Running",
           let node = status["Self"] as? [String: Any],
           let rawHost = node["DNSName"] as? String else {
-      throw failure("Connect Tailscale on this Mac, then start companion sharing.")
+      throw failure("Connect Tailscale on this Mac to make it available to paired devices.")
     }
     let host = rawHost.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
     guard host.hasSuffix(".ts.net"), host.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 46 }) else {

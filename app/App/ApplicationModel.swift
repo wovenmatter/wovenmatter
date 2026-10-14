@@ -762,7 +762,7 @@ final class ApplicationModel {
             state = .ready
             startAgentToolRuntime()
             startDashboardStoreIfReady()
-            await companionHost.restoreIfEnabled()
+            await companionHost.startForCentralDatabase()
             Task { [weak self] in
                 await self?.refreshDatabases()
             }
