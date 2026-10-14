@@ -12,7 +12,7 @@
     "licenses.json": "c395c4f43affafb3a13f0bde5b6692e8e126c646b6b0c6e49fa7a6ddeb9703f8"
   },
   "resources": {
-    "worker.js": "ea1c52e12da841e1fbed18d231be6d966dc7821c3822c5d0f6b9a74104fe5e4e",
+    "worker.js": "5cc771bdc80b873115b99cc278e63b97a2b74433dea4f8999a9b7a632f0c4791",
     "pyodide.asm.wasm": "cc36e3cab04fdfc9a63ff13eb52eae2b911bf46c025cc7b281f394bd3de1d5e6",
     "python_stdlib.zip": "fa1957e5777068fc4f7437f96d860ae2fbe9c19732ba06c84e004ec16dd7dd7a",
     "pyodide-lock.json": "a32a0001399cff875f9b8b84059fc756bcca3d78eb7a718d153aafce2244c626",

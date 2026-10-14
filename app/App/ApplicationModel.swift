@@ -3015,7 +3015,7 @@ final class ApplicationModel {
         if runtimeKind == .opencode {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
-                guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                guard localACPWorkspaceLaunchConfiguration != nil else { throw ApplicationModelError.localACPRuntimeUnavailable }
                 let id = try await openCode.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, allowMissingCalendarFolder: calendarExecutionRoot != nil,
                     executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: nil, root: resolvedRoot))
                 try await openCode.activateCreatedSession(id)
@@ -3024,7 +3024,7 @@ final class ApplicationModel {
             } catch { localRunError = error.localizedDescription; return nil }
         }
         guard localACPLaunchConfigurations[runtimeKind] != nil,
-              let creationWorkspace = localACPWorkspaceLaunchConfiguration,
+              localACPWorkspaceLaunchConfiguration != nil,
               isLocalACPAgentReady(runtimeKind) else {
             localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
             return nil
@@ -3103,7 +3103,6 @@ final class ApplicationModel {
                     throw ApplicationModelError.remoteHarnessUnavailable
                 }
                 try await instance.connectLocal()
-                let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
                 let id = try await instance.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, allowMissingCalendarFolder: calendarExecutionRoot != nil,
                     executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot))
                 try await instance.activateCreatedSession(id)
