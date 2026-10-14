@@ -3,6 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+case "${1:-}" in
+  '') build_image=true ;;
+  --skip-build) build_image=false ;;
+  *) printf '%s\n' 'usage: scripts/test-container.sh [--skip-build]' >&2; exit 64 ;;
+esac
 command -v docker >/dev/null 2>&1 || {
   printf '%s\n' 'Docker is required for the container smoke test.' >&2
   exit 69
@@ -34,7 +39,9 @@ trap cleanup EXIT HUP INT TERM
 cleanup
 mkdir -p "$legacy_data"
 
-docker build --tag wovenmatter/workspace:0.1 --file remote/Dockerfile .
+if [ "$build_image" = true ]; then
+  docker build --pull --no-cache --tag wovenmatter/workspace:0.1 --file remote/Dockerfile .
+fi
 WOVENMATTER_API_TOKEN="$token_a" \
   scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
 WOVENMATTER_API_TOKEN="$token_b" \
@@ -62,7 +69,7 @@ wait_for_health "$port_b" "$token_b"
 [ "$(docker exec "$container_a" getent passwd woven | cut -d: -f6)" = /home ]
 [ "$(docker exec "$container_a" sh -c 'test -w /home && printf writable')" = writable ]
 
-docker exec "$container_a" sh -c 'printf persistent > "$HOME/.woven-matter/.scratch/smoke-marker"'
+docker exec "$container_a" sh -c 'printf persistent > "$HOME/.woven-matter/smoke-marker"'
 status="$(scripts/remote-workspace.sh status "$workspace_a")"
 jq -e '
   .storageKind == "named-volume"
@@ -74,11 +81,11 @@ jq -e '
 ' <<< "$status" >/dev/null
 scripts/remote-workspace.sh restart "$workspace_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
-[ "$(docker exec "$container_a" cat /home/.woven-matter/.scratch/smoke-marker)" = persistent ]
+[ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
 scripts/remote-workspace.sh update "$workspace_a" wovenmatter/workspace:0.1 "" "" "$port_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
-[ "$(docker exec "$container_a" cat /home/.woven-matter/.scratch/smoke-marker)" = persistent ]
+[ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
 delete_status="$(scripts/remote-workspace.sh delete "$workspace_a")"
 jq -e '.persistentDataRemoved == false' <<< "$delete_status" >/dev/null
@@ -86,7 +93,7 @@ docker volume inspect "$volume_a" >/dev/null
 WOVENMATTER_API_TOKEN="$token_a" \
   scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
-[ "$(docker exec "$container_a" cat /home/.woven-matter/.scratch/smoke-marker)" = persistent ]
+[ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
 printf legacy > "$legacy_data/marker"
 docker create --name "$legacy_container" \

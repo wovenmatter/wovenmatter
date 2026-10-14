@@ -81,10 +81,13 @@ const methods = {
     const tools = JSON.parse(config.toolsJSON).map(descriptor => defineTool({
       ...descriptor,
       // An omitted replay policy intentionally keeps the SDK's interrupted error behavior.
-      execute: (arguments_,api,toolContext) => hostCall('tool',{
+      execute: async (arguments_,api,toolContext) => {
+        const {content,...result} = await hostCall('tool',{
         name:descriptor.name,arguments:arguments_,conversationID:config.conversationID,
         toolCallID:api.callId,taskID:api.taskId,nativeConversationID:api.conversationId,
-      },toolContext.abortSignal),
+        },toolContext.abortSignal);
+        return {...result,output:content??[]};
+      },
     }));
     registry.install(defineExtension({name:'wovenmatter-ios',tools}));
     registry.install(createSubagents(() => root.id, config.executionPolicy));

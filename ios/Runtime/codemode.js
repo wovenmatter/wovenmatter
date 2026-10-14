@@ -56,7 +56,7 @@ export function createCodeMode({hostCall,getHarness}) {
         }
       }
       if (result.state) await api.commit(tx=>tx.appendEntry(api.conversationId,{kind:'woven.ios-codemode-store',data:result.state}),context);
-      return {content:result.content??[],isError:!!result.isError};
+      return {output:result.content??[],isError:!!result.isError};
       } finally { release(); }
     },
   })]});
@@ -74,7 +74,7 @@ export function createCodeMode({hostCall,getHarness}) {
           role:'assistant',content:[{type:'toolCall',id:callID,name,arguments:arguments_}],api:'woven-ios-nested',provider:model?.provider??'native',model:model?.modelId??'native',
           stopReason:'toolUse',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},
         }]});
-        const taskID = await tx.createTask(ToolTask,{assistant:assistant.id,callId:callID},{conversationId:api.conversationId,ownership:{kind:'task',taskId:api.taskId}});
+        const taskID = await tx.createTask(ToolTask,{kind:'model',assistant:assistant.id,callId:callID},{conversationId:api.conversationId,ownership:{kind:'task',taskId:api.taskId}});
         await tx.appendEntry(api.conversationId,{kind:'woven.ios-codemode-context',edits:[{target:assistant.id,action:'omit'}]});
         return {taskID,assistantID:assistant.id};
       },context);

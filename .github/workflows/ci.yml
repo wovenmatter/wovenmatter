@@ -119,12 +119,15 @@ jobs:
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote
       - name: Build the remote workspace image
-        run: docker build --file remote/Dockerfile --tag wovenmatter-remote:ci .
+        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:0.1 .
+
+      - name: Verify workspace isolation and home preservation
+        run: scripts/test-container.sh --skip-build
 
       - name: Build the standalone Executor runtime
         run: |
           wm_executor_version="$(node --input-type=module -e 'import { latestExecutorVersion } from "./default-agent/src/executor/broker.mjs"; console.log(await latestExecutorVersion());')"
-          docker build --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
+          docker build --pull --no-cache --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
             --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
       - name: Verify Executor native helper prerequisites
         run: |

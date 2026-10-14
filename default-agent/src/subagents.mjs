@@ -20,7 +20,10 @@ const preview = value => {
   const last = result.charCodeAt(result.length - 1);
   return last >= 0xd800 && last <= 0xdbff ? result.slice(0, -1) : result;
 };
-const reply = (text, details, isError = false) => ({ content: [{ type: 'text', text }], ...(details ? { details } : {}), ...(isError ? { isError: true } : {}) });
+const reply = (text, details, isError = false) => {
+  const output = [{ type: 'text', text }];
+  return { content: output, output, ...(details ? { details } : {}), ...(isError ? { isError: true } : {}) };
+};
 const terminal = task => !task || task.state.status === 'terminal';
 const capFor = record => Number.isInteger(record.subagentConcurrency) && record.subagentConcurrency >= 2 && record.subagentConcurrency <= 24 ? record.subagentConcurrency : 8;
 const reportRequestID = (id, conversationID, answerID) => answerID === undefined ? `woven-subagent-report:${id}` : `woven-subagent-report:${conversationID}:answer:${answerID}`;
