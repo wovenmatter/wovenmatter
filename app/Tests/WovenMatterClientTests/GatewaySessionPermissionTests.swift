@@ -44,7 +44,7 @@ struct GatewaySessionPermissionTests {
     @Test func hermesFullThenInheritedUsesSessionFlagAndAuthoritativeRead() async throws {
         let transport = PermissionHermesTransport()
         let client = makeHermes(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         #expect(try await client.setSessionPermission("full").permission == "full")
         #expect(try await client.setSessionPermission("default").permission == "default")
         let writes = await transport.calls.filter { $0.0 == "config.set" }
@@ -58,10 +58,10 @@ struct GatewaySessionPermissionTests {
     @Test func hermesRestoresOnlyAnExplicitChoiceWhenTheSameSessionRecovers() async throws {
         let transport = PermissionHermesTransport()
         let client = makeHermes(transport)
-        let created = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let created = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         _ = try await client.setSessionPermission("full")
         await transport.resetSessionOverride()
-        let resumed = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: created.sessionID, title: nil, systemPrompt: nil)
+        let resumed = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: created.sessionID, title: nil)
         #expect(resumed.configuration.permission == "full")
         #expect(await transport.calls.filter { $0.0 == "config.set" }.count == 2)
         await client.shutdown()
@@ -70,7 +70,7 @@ struct GatewaySessionPermissionTests {
     @Test func hermesCannotClaimLowerAccessWhenProcessPolicyKeepsFull() async throws {
         let transport = PermissionHermesTransport(processFull: true)
         let client = makeHermes(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         await #expect(throws: (any Error).self) { try await client.setSessionPermission("default") }
         let configuration = await client.sessionConfiguration()
         #expect(configuration.permission == "full")
@@ -81,7 +81,7 @@ struct GatewaySessionPermissionTests {
     @Test func hermesRejectsWriteAcknowledgmentWithoutEffectiveState() async throws {
         let transport = PermissionHermesTransport(omitEffectiveState: true)
         let client = makeHermes(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         await #expect(throws: (any Error).self) { try await client.setSessionPermission("full") }
         #expect(await client.sessionConfiguration().permission == nil)
         await client.shutdown()
@@ -90,7 +90,7 @@ struct GatewaySessionPermissionTests {
     @Test func hermesRefreshesInheritedPolicyBeforeLoweringSessionAccess() async throws {
         let transport = PermissionHermesTransport(approvalMode: "off")
         let client = makeHermes(transport)
-        let initial = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let initial = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         #expect(initial.configuration.permissionOptions == ["full"])
         // Model a profile change from Settings whose session.info event was missed.
         await transport.setApprovalMode("smart")

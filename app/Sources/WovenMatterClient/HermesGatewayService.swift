@@ -141,8 +141,6 @@ public actor HermesGatewayService {
         process.executableURL = launch.executableURL
         process.arguments = ["serve", "--isolated", "--host", "127.0.0.1", "--port", "0"]
         var environment = ProcessInfo.processInfo.environment
-        for key in launch.environmentKeysToRemove { environment.removeValue(forKey: key) }
-        for key in Array(environment.keys) where launch.environmentKeyPrefixesToRemove.contains(where: key.hasPrefix) { environment.removeValue(forKey: key) }
         environment.merge(launch.environment) { _, new in new }
         let token = UUID().uuidString + UUID().uuidString
         environment["HERMES_HOME"] = home

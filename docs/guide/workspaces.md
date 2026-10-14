@@ -60,6 +60,3 @@ and removing its data are separate choices.
 
 Back up both your workspace files and WovenMatter's local data. Keeping a volume
 across container updates does not protect it from loss of the host or disk.
-
-Optional Buzz links connect existing local Buzz workspaces. Their files stay in
-those workspaces, and linking them does not create a remote container.

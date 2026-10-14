@@ -18,7 +18,7 @@ struct HermesIntegrationTests {
             processLease: try LocalACPProcessLease(fileURL: root.appending(path: "process.lock")),
             onChange: { if $0.phase == .terminal { continuation.yield(()) } },
             clientFactory: { _, _ in
-                LocalACPSessionDriver(initializeSession: { _, existing, _, _ in
+                LocalACPSessionDriver(initializeSession: { _, existing, _ in
                     #expect(existing == nil)
                     return LocalACPInitializedSession(sessionID: identity, loadedExistingSession: false, configuration: .empty)
                 }, prompt: { input, onEvent, _, _ in

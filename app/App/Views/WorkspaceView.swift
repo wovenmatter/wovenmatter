@@ -143,7 +143,6 @@ struct WorkspaceView: View {
     private var allAgents: [WorkspaceAgent] {
         model.orderedLocalCLIAgents
             + model.remoteWorkspaceAgents
-            + model.buzzWorkspaceAgents
     }
 
     private var selectedConversationID: String? {
@@ -153,7 +152,6 @@ struct WorkspaceView: View {
     private var sidebarAgents: [WorkspaceAgent] {
         model.visibleOrderedLocalCLIAgents
             + model.remoteWorkspaceAgents
-            + model.buzzWorkspaceAgents
     }
 
     private var surfacePreferenceSignature: String {
@@ -590,7 +588,6 @@ struct WorkspaceView: View {
             agents: allAgents,
             navigationAgents: sidebarAgents,
             remoteWorkspaces: model.remoteWorkspaces,
-            buzzWorkspaceSnapshot: model.buzzWorkspaceSnapshot,
             folders: model.workspaceOverview?.folders ?? [],
             conversations: model.workspaceOverview?.conversations ?? [],
             notes: model.workspaceOverview?.notes ?? [],
@@ -1056,8 +1053,6 @@ struct WorkspaceView: View {
             startDirectChat(runtimeKind)
         case .remoteWorkspace(let target):
             startRemoteChat(target)
-        case .buzzWorkspace(let enrollment):
-            startBuzzWorkspaceChat(enrollment)
         }
     }
 
@@ -1085,23 +1080,6 @@ struct WorkspaceView: View {
                 showNotice(
                     model.localRunError
                         ?? "The remote workspace chat could not be created."
-                )
-                return
-            }
-            closeNewChatChooser()
-            selectConversation(conversationID)
-        }
-    }
-
-    private func startBuzzWorkspaceChat(
-        _ enrollment: BuzzWorkspaceAgentEnrollment
-    ) {
-        Task {
-            guard let conversationID = await model
-                .createBuzzWorkspaceLocalACPSession(enrollment: enrollment) else {
-                showNotice(
-                    model.localRunError
-                        ?? "The linked Buzz agent chat could not be created."
                 )
                 return
             }

@@ -5,7 +5,6 @@ import WovenMatterCore
 enum DashboardNewChatSource: String, CaseIterable, Identifiable {
     case acpDirect
     case remoteWorkspace
-    case buzzWorkspace
 
     var id: String { rawValue }
 
@@ -13,7 +12,6 @@ enum DashboardNewChatSource: String, CaseIterable, Identifiable {
         switch self {
         case .acpDirect: "Local workspace agents"
         case .remoteWorkspace: "Remote workspace agents"
-        case .buzzWorkspace: "Buzz workspace agents"
         }
     }
 }
@@ -47,7 +45,6 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
             return pinnedIDs.contains(agent.id)
         case .localWorkspace:
             return agent.bucket == .localCLIAgents
-                && !(agent.platformCodename?.hasPrefix("buzz-workspace:") ?? false)
                 && !pinnedIDs.contains(agent.id)
         case .remoteWorkspaces:
             return agent.bucket == .remoteWorkspaceAgents
@@ -140,10 +137,6 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
     }
 }
 
-enum DashboardAgentSidebarHeading {
-    static let buzzWorkspaces = "Buzz agent workspaces"
-}
-
 struct DashboardRemoteWorkspaceSidebarLink: Equatable, Identifiable {
     let configuration: RemoteWorkspaceConfiguration
     let readyTargets: [RemoteHarnessChatTarget]
@@ -179,80 +172,10 @@ enum DashboardRemoteWorkspaceSidebarModel {
     }
 }
 
-struct DashboardBuzzWorkspaceSidebarLink: Equatable, Identifiable {
-    let link: BuzzWorkspaceLink
-    let agents: [WorkspaceAgent]
-    let enrollmentCount: Int
-
-    var id: UUID { link.id }
-}
-
-enum DashboardBuzzWorkspaceSidebarModel {
-    static func links(
-        snapshot: BuzzWorkspaceSnapshot,
-        agents: [WorkspaceAgent],
-        pinnedIDs: Set<UUID>,
-        customOrderByWorkspaceID: [UUID: [UUID]] = [:]
-    ) -> [DashboardBuzzWorkspaceSidebarLink] {
-        let buzzAgentsByID: [UUID: WorkspaceAgent] = Dictionary(
-            uniqueKeysWithValues: agents.compactMap { agent -> (UUID, WorkspaceAgent)? in
-                guard agent.platformCodename?.hasPrefix("buzz-workspace:") == true else {
-                    return nil
-                }
-                return (agent.id, agent)
-            }
-        )
-        let enrollmentsByLink = Dictionary(
-            grouping: snapshot.enrollments,
-            by: \.workspaceLinkID
-        )
-        return snapshot.links.sorted(by: linkSort).map { link in
-            let enrollments = enrollmentsByLink[link.id] ?? []
-            let linkAgents = enrollments.compactMap { enrollment in
-                buzzAgentsByID[enrollment.id]
-            }
-            .filter { !pinnedIDs.contains($0.id) }
-            .sorted(by: agentSort)
-            let orderedAgents = DashboardAgentSidebarGroup.applyPreferredOrder(
-                linkAgents,
-                preferred: customOrderByWorkspaceID[link.id] ?? []
-            )
-            return DashboardBuzzWorkspaceSidebarLink(
-                link: link,
-                agents: orderedAgents,
-                enrollmentCount: enrollments.count
-            )
-        }
-    }
-
-    private static func linkSort(
-        _ lhs: BuzzWorkspaceLink,
-        _ rhs: BuzzWorkspaceLink
-    ) -> Bool {
-        let result = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
-        if result == .orderedSame {
-            return lhs.id.uuidString < rhs.id.uuidString
-        }
-        return result == .orderedAscending
-    }
-
-    private static func agentSort(_ lhs: WorkspaceAgent, _ rhs: WorkspaceAgent) -> Bool {
-        if lhs.runtimeKind != rhs.runtimeKind {
-            return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
-        }
-        let result = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
-        if result == .orderedSame {
-            return lhs.id.uuidString < rhs.id.uuidString
-        }
-        return result == .orderedAscending
-    }
-}
-
 /// Presentation-only preferences, independent of runtime visibility and section expansion.
 enum DashboardWorkspaceSidebarVisibility: String {
     case localWorkspace
     case remoteWorkspaces
-    case buzzWorkspaces
 
     var storageKey: String {
         "wovenmatter.dashboard.show-\(rawValue)"
@@ -262,7 +185,6 @@ enum DashboardWorkspaceSidebarVisibility: String {
         switch self {
         case .localWorkspace: DashboardAgentSidebarGroup.localWorkspace.title
         case .remoteWorkspaces: DashboardAgentSidebarGroup.remoteWorkspaces.title
-        case .buzzWorkspaces: DashboardAgentSidebarHeading.buzzWorkspaces
         }
     }
 }
@@ -270,7 +192,6 @@ enum DashboardWorkspaceSidebarVisibility: String {
 enum DashboardAgentDisclosureKey {
     static let localWorkspace = "section:local-workspace"
     static let remoteWorkspaces = "section:remote-workspaces"
-    static let buzzWorkspaces = "section:buzz-workspaces"
 
     static func workspace(_ id: UUID) -> String {
         "workspace:\(id.uuidString.lowercased())"
@@ -346,10 +267,6 @@ enum DashboardAgentOrderStore {
 
     static func order(forKey key: String, in raw: String) -> [UUID] {
         decode(raw)[key] ?? []
-    }
-
-    static func buzzWorkspaceKey(_ id: UUID) -> String {
-        "buzzWorkspace:\(id.uuidString.lowercased())"
     }
 
     /// Preferred IDs first when present, then remaining present IDs in their given order.
@@ -481,7 +398,6 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let compass = Self("compass")
     static let panelTop = Self("panel-top")
     static let panelsTopLeft = Self("panels-top-left")
-    static let radioTower = Self("radio-tower")
     static let container = Self("container")
     static let flame = Self("flame")
     static let rocket = Self("rocket")
@@ -559,30 +475,6 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .pi: self = .pi
         case .cursor: self = .cursor
         case .opencode: self = .openCode
-        }
-    }
-
-    static func resolve(
-        harnessIdentifier: String,
-        runtimeKind: AgentRuntimeKind? = nil
-    ) -> DashboardHarnessLogo? {
-        if let runtimeKind {
-            return DashboardHarnessLogo(runtimeKind: runtimeKind)
-        }
-        let identity = harnessIdentifier
-            .lowercased()
-            .filter { $0.isLetter || $0.isNumber }
-        return switch identity {
-        case "defaultagent", "wovendefaultagent": .defaultAgent
-        case "codex", "codexcli", "openaicodex": .codex
-        case "claude", "claudecode", "claudeai": .claude
-        case "grok", "grokbuild": .grok
-        case "openclaw": .openClaw
-        case "hermes", "hermesagent": .hermes
-        case "pi", "piagent", "pimono", "picodingagent": .pi
-        case "cursor", "cursoragent", "cursorcli": .cursor
-        case "opencode", "opencodeai": .openCode
-        default: nil
         }
     }
 

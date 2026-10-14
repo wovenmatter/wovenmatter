@@ -449,7 +449,6 @@ struct DashboardDatabasesView: View {
         switch kind {
         case .local: .monitor
         case .remote: .container
-        case .buzz: .radioTower
         }
     }
 }
@@ -472,7 +471,7 @@ private enum DashboardDatabaseFilter: String, CaseIterable, Identifiable {
     func includes(_ kind: DashboardDatabaseSourceKind) -> Bool {
         switch self {
         case .all: true
-        case .local: kind == .local || kind == .buzz
+        case .local: kind == .local
         case .remote: kind == .remote
         }
     }

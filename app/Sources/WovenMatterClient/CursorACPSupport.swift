@@ -4,7 +4,7 @@ import Foundation
 /// Cursor CLI ACP helpers aligned with T3 Code's Cursor driver.
 ///
 /// Current Cursor still ships both `agent` and `cursor-agent` as symlinks to
-/// the same binary. T3 Code and Buzz spawn the unambiguous `cursor-agent`
+/// the same binary. T3 Code spawns the unambiguous `cursor-agent`
 /// name because `agent` collides with other CLIs on PATH. Login remains
 /// `agent login`; ACP auth is `cursor_login`.
 public enum CursorACPSupport: Sendable {

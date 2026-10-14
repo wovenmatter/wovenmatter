@@ -60,22 +60,9 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     private(set) var localCLIAgents: [WorkspaceAgent] = []
-    private var backendBuzzDiscoveryEnabled = false
-    private(set) var buzzWorkspaceAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
     let remoteWorkspaces: RemoteWorkspacesModel
-    private(set) var buzzWorkspaceSnapshot = BuzzWorkspaceSnapshot(
-        links: [],
-        enrollments: []
-    )
-    private(set) var buzzWorkspaceCandidates: [
-        UUID: [BuzzWorkspaceAgentCandidate]
-    ] = [:]
-    private(set) var launchableBuzzWorkspaceEnrollmentIDs: Set<UUID> = []
-    private(set) var checkingBuzzWorkspaceLinkIDs: Set<UUID> = []
-    private(set) var mutatingBuzzWorkspaceEnrollmentIDs: Set<UUID> = []
-    private(set) var buzzWorkspaceError: String?
     var openCode: OpenCodeModel?
     private(set) var remoteOpenCodes: [UUID: OpenCodeModel] = [:]
     private var remoteOpenCodeSyncGeneration = UUID()
@@ -208,7 +195,6 @@ final class ApplicationModel {
     private(set) var openClawResultRoutes: [UUID: [String: String]] = [:]
     private var lastOpenClawCronRefresh = Date.distantPast
     private var openClawGatewayConversationIDs: Set<String> = []
-    private var buzzBoundLocalACPConversationIDs: Set<String> = []
     private(set) var workspaceOverview: DashboardWorkspaceOverview?
     let library = LibraryModel()
     var libraryMessageTarget: WorkspaceLibraryItem?
@@ -414,8 +400,6 @@ final class ApplicationModel {
         "wovenmatter.title-generation.model"
     private static let titleGenerationThinkingDefaultsKey =
         "wovenmatter.title-generation.thinking"
-    private static let buzzDiscoveryEnabledDefaultsKey =
-        "wovenmatter.buzz.discovery-enabled"
 
     init(
         applicationDefaults: UserDefaults = .standard,
@@ -605,7 +589,6 @@ final class ApplicationModel {
             try await dashboardStore.database.recoverToolSessionCreations()
             try await dashboardStore.database.cancelPendingCoordinationAccess()
             await refreshLocalACPWorkspace()
-            await refreshBuzzWorkspaces()
             await refreshOpenClawGateways()
             await restoreOpenClawGatewayLinks()
             await refreshOpenClawCron()
@@ -2315,8 +2298,7 @@ final class ApplicationModel {
         // of attempting a second start for the same conversation.
         let steering = decision == .steer || runningToolSessionIDs.contains(conversation.id)
         defer { if ownsAdmission { toolSessionAdmission.finish(conversation.id) } }
-        if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
-           !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
+        if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil {
             try await requireLocalHermesLink(conversationID: conversation.id)
         }
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
@@ -2507,23 +2489,16 @@ final class ApplicationModel {
         guard let runtimeKind = conversation.localRuntimeKind else {
             throw ApplicationModelError.localACPRuntimeUnavailable
         }
-        let isBuzzWorkspaceSession = buzzBoundLocalACPConversationIDs.contains(
-            conversation.id
-        )
         let context = try await directACPLaunchContext(
             conversation: conversation,
-            runtimeKind: runtimeKind,
-            isBuzzWorkspaceSession: isBuzzWorkspaceSession
+            runtimeKind: runtimeKind
         )
         if runtimeKind == .defaultAgent, let workspaceID = conversation.remoteWorkspaceID,
            let remote = remoteWorkspaces.configuration(id: workspaceID) {
             try await remoteWorkspaces.ensureDefaultAgent(remote)
         }
-        let launch = context?.launch
-        let workspace = context?.workspace
-        guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
-            throw ApplicationModelError.localACPRuntimeUnavailable
-        }
+        let launch = context.launch
+        let workspace = context.workspace
         let input = try await remoteWorkspaces.stagingFiles(of: input, in: conversation.remoteWorkspaceID)
         try dispatchFence.check()
         return try await store.acceptLocalACPPrompt(
@@ -2561,7 +2536,6 @@ final class ApplicationModel {
 
     func isLocalACPSessionLaunchAvailable(_ conversation: WorkspaceConversationRecord) -> Bool {
         guard let runtimeKind = conversation.localRuntimeKind else { return false }
-        if buzzBoundLocalACPConversationIDs.contains(conversation.id) { return true }
         if let workspaceID = conversation.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { return false }
             return remoteWorkspaces.isHarnessReady(runtimeKind, in: configuration)
@@ -2596,19 +2570,12 @@ final class ApplicationModel {
         guard let runtimeKind = conversation.localRuntimeKind else {
             return
         }
-        let isBuzzWorkspaceSession = buzzBoundLocalACPConversationIDs.contains(
-            conversation.id
-        )
-        let context = try? await directACPLaunchContext(
+        guard let context = try? await directACPLaunchContext(
             conversation: conversation,
-            runtimeKind: runtimeKind,
-            isBuzzWorkspaceSession: isBuzzWorkspaceSession
-        )
-        let launch = context?.launch
-        let workspace = context?.workspace
-        guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
-            return
-        }
+            runtimeKind: runtimeKind
+        ) else { return }
+        let launch = context.launch
+        let workspace = context.workspace
         let request = localACPSessionRefreshLifecycle.beginRefresh(
             for: conversation.id
         )
@@ -2699,20 +2666,15 @@ final class ApplicationModel {
               updatingLocalACPSessionIDs.insert(conversation.id).inserted else {
             return
         }
-        let isBuzzWorkspaceSession = buzzBoundLocalACPConversationIDs.contains(
-            conversation.id
-        )
-        let context = try? await directACPLaunchContext(
+        guard let context = try? await directACPLaunchContext(
             conversation: conversation,
-            runtimeKind: runtimeKind,
-            isBuzzWorkspaceSession: isBuzzWorkspaceSession
-        )
-        let launch = context?.launch
-        let workspace = context?.workspace
-        guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
+            runtimeKind: runtimeKind
+        ) else {
             updatingLocalACPSessionIDs.remove(conversation.id)
             return
         }
+        let launch = context.launch
+        let workspace = context.workspace
         localRunError = nil
         ensureConversationState(id: conversation.id).setError(nil)
         Task {
@@ -3012,10 +2974,8 @@ final class ApplicationModel {
 
     func directACPLaunchContext(
         conversation: WorkspaceConversationRecord,
-        runtimeKind: AgentRuntimeKind,
-        isBuzzWorkspaceSession: Bool
-    ) async throws -> RemoteHarnessLaunchContext? {
-        if isBuzzWorkspaceSession { return nil }
+        runtimeKind: AgentRuntimeKind
+    ) async throws -> RemoteHarnessLaunchContext {
         let savedDirectory = try await dashboardStore?.database.toolSessionCreationConfiguration(targetID: conversation.id)?.nativeWorkingDirectory
         let inheritedRoot = savedDirectory.map { URL(fileURLWithPath: $0) }
         if let remoteWorkspaceID = conversation.remoteWorkspaceID {
@@ -3054,8 +3014,6 @@ final class ApplicationModel {
         if let inheritedRoot {
             var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
                 executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
-                environmentKeysToRemove: launch.environmentKeysToRemove,
-                environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
                 processWorkingDirectoryURL: inheritedRoot)
             scopedLaunch.historyRecorder = launch.historyRecorder
             return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
@@ -3065,56 +3023,6 @@ final class ApplicationModel {
             launch: launch,
             workspace: workspace
         )
-    }
-
-    func createBuzzWorkspaceLocalACPSession(
-        enrollment: BuzzWorkspaceAgentEnrollment
-    ) async -> String? {
-        if isBackendFrontend {
-            do {
-                let result = try await sendBackendWorkspaceService(.createBuzzSession(enrollment.id))
-                await refreshWorkspace()
-                return result.entityID
-            } catch { localRunError = error.localizedDescription; return nil }
-        }
-        guard launchableBuzzWorkspaceEnrollmentIDs.contains(enrollment.id) else {
-            localRunError = "The selected Buzz agent is not available from its linked workspace."
-            return nil
-        }
-        let selectionHarness = enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier
-        let selectionWorkspace = "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased()
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: selectionHarness, workspace: selectionWorkspace)
-        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
-            harness: selectionHarness, workspace: selectionWorkspace)
-        do {
-            guard let dashboardStore else {
-                throw ApplicationModelError.dashboardStoreUnavailable
-            }
-            let conversationID = try await dashboardStore
-                .createBuzzWorkspaceLocalACPSession(
-                    enrollmentID: enrollment.id,
-                    title: "New \(enrollment.displayNameSnapshot) chat"
-                )
-            buzzBoundLocalACPConversationIDs.insert(conversationID)
-            if isOpenClawGatewayLinked(agentID: enrollment.id) {
-                try await dashboardStore.attachOpenClawGatewaySession(
-                    conversationID: conversationID,
-                    agentID: enrollment.id,
-                    sessionKey: Self.openClawSessionKey(conversationID: conversationID)
-                )
-                openClawGatewayConversationIDs.insert(conversationID)
-            }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
-                usesProductPermissionDefault: usesProductPermissionDefault) }
-            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
-            localRunError = nil
-            await refreshWorkspace()
-            return conversationID
-        } catch {
-            localRunError = error.localizedDescription
-            await refreshBuzzWorkspaces()
-            return nil
-        }
     }
 
     func refreshRuntimeInventory() {
@@ -3191,13 +3099,12 @@ final class ApplicationModel {
 
     private func usesLocallyInstalledRuntime(_ conversation: WorkspaceConversationRecord) -> Bool {
         conversation.localRuntimeKind != nil && conversation.remoteWorkspaceID == nil
-            && !buzzBoundLocalACPConversationIDs.contains(conversation.id)
             && !isOpenClawGatewayConversation(conversation.id)
     }
 
     var localRuntimeMaintenanceHasActiveConversation: Bool {
         localRunningConversationIDs.contains { id in
-            if buzzBoundLocalACPConversationIDs.contains(id) || isOpenClawGatewayConversation(id) { return false }
+            if isOpenClawGatewayConversation(id) { return false }
             // A newly accepted turn may precede the workspace snapshot refresh.
             // Keep maintenance blocked until its execution location is known.
             guard let conversation = workspaceOverview?.conversations.first(where: { $0.id == id }) else { return true }
@@ -4125,36 +4032,6 @@ final class ApplicationModel {
                     ))
                 }
             }
-            for link in buzzWorkspaceSnapshot.links where link.isEnabled {
-                let sourceID = "buzz:\(link.id.uuidString.lowercased())"
-                let root = link.localWorkspaceURL.appending(
-                    path: LocalACPWorkspaceProvisioner.databasesDirectoryName,
-                    directoryHint: .isDirectory
-                )
-                do {
-                    let rows = try await Task.detached(priority: .utility) {
-                        try AgentDatabaseCatalog.list(at: root)
-                    }.value
-                    sources.append(Self.databaseSource(
-                        id: sourceID,
-                        name: link.displayName,
-                        kind: .buzz,
-                        detail: root.path,
-                        rows: rows
-                    ))
-                } catch {
-                    sources.append(DashboardDatabaseSource(
-                        id: sourceID,
-                        name: link.displayName,
-                        kind: .buzz,
-                        detail: root.path,
-                        databases: [],
-                        error: error.localizedDescription,
-                        allowsCreation: false,
-                        allowsExternalLinks: false
-                    ))
-                }
-            }
 
             guard remoteCatalogIdentity == remoteWorkspaces.databaseCatalogIdentity else {
                 databaseRefreshRequestedWhileRunning = true
@@ -4377,204 +4254,6 @@ final class ApplicationModel {
         )
     }
 
-
-    var buzzWorkspaceLinks: [BuzzWorkspaceLink] {
-        buzzWorkspaceSnapshot.links
-    }
-
-    var buzzWorkspaceAgentEnrollments: [BuzzWorkspaceAgentEnrollment] {
-        buzzWorkspaceSnapshot.enrollments
-    }
-
-    func isBuzzWorkspaceAgentLaunchable(
-        _ enrollment: BuzzWorkspaceAgentEnrollment
-    ) -> Bool {
-        launchableBuzzWorkspaceEnrollmentIDs.contains(enrollment.id)
-    }
-
-    func setBuzzDiscoveryEnabled(_ enabled: Bool) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.buzzEnabled(enabled)); return }
-        applicationDefaults.set(
-            enabled,
-            forKey: Self.buzzDiscoveryEnabledDefaultsKey
-        )
-        Task {
-            if enabled {
-                await refreshBuzzWorkspaces()
-            } else {
-                buzzWorkspaceSnapshot = BuzzWorkspaceSnapshot(
-                    links: [],
-                    enrollments: []
-                )
-                buzzWorkspaceCandidates.removeAll()
-                launchableBuzzWorkspaceEnrollmentIDs.removeAll()
-                buzzWorkspaceAgents = []
-            }
-            await refreshWorkspace()
-        }
-    }
-
-    @discardableResult
-    func addLocalBuzzWorkspace(
-        displayName: String,
-        workspacePath rawWorkspacePath: String,
-        agentStorePath rawAgentStorePath: String
-    ) async -> Bool {
-        if isBackendFrontend {
-            do { return try await sendBackendWorkspaceService(.addBuzz(name: displayName, workspacePath: rawWorkspacePath, agentStorePath: rawAgentStorePath)).success == true }
-            catch { buzzWorkspaceError = error.localizedDescription; return false }
-        }
-        let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanName.isEmpty else {
-            buzzWorkspaceError = "Enter a workspace name."
-            return false
-        }
-        let workspaceURL = Self.expandedLocalFileURL(rawWorkspacePath)
-        let storeURL = Self.expandedLocalFileURL(rawAgentStorePath)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(
-            atPath: workspaceURL.path,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else {
-            buzzWorkspaceError = "The selected Buzz workspace folder is unavailable."
-            return false
-        }
-        guard FileManager.default.fileExists(atPath: storeURL.path) else {
-            buzzWorkspaceError = "The selected Buzz agent catalog is unavailable."
-            return false
-        }
-        do {
-            guard let dashboardStore else {
-                throw ApplicationModelError.dashboardStoreUnavailable
-            }
-            let link = BuzzWorkspaceLink(
-                displayName: cleanName,
-                localWorkspaceURL: workspaceURL,
-                localAgentStoreURL: storeURL
-            )
-            try await dashboardStore.saveBuzzWorkspace(link)
-            buzzWorkspaceError = nil
-            await refreshBuzzWorkspaces()
-            await refreshWorkspace()
-            return true
-        } catch {
-            buzzWorkspaceError = error.localizedDescription
-            return false
-        }
-    }
-
-    func discoverBuzzWorkspaceAgents(_ link: BuzzWorkspaceLink) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.discoverBuzz(link.id)); return }
-        guard checkingBuzzWorkspaceLinkIDs.insert(link.id).inserted else { return }
-        buzzWorkspaceError = nil
-        Task {
-            defer { checkingBuzzWorkspaceLinkIDs.remove(link.id) }
-            do {
-                guard let dashboardStore else {
-                    throw ApplicationModelError.dashboardStoreUnavailable
-                }
-                buzzWorkspaceCandidates[link.id] = try await dashboardStore
-                    .discoverBuzzWorkspaceAgents(linkID: link.id)
-            } catch {
-                buzzWorkspaceCandidates[link.id] = []
-                buzzWorkspaceError = error.localizedDescription
-            }
-        }
-    }
-
-    func enrollBuzzWorkspaceAgent(_ candidate: BuzzWorkspaceAgentCandidate) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.enrollBuzz(workspaceID: candidate.workspaceLinkID, candidateID: candidate.id)); return }
-        Task {
-            do {
-                guard let dashboardStore else {
-                    throw ApplicationModelError.dashboardStoreUnavailable
-                }
-                let enrollment = try await dashboardStore
-                    .enrollBuzzWorkspaceAgent(candidate)
-                mutatingBuzzWorkspaceEnrollmentIDs.insert(enrollment.id)
-                defer { mutatingBuzzWorkspaceEnrollmentIDs.remove(enrollment.id) }
-                buzzWorkspaceError = nil
-                await refreshBuzzWorkspaces()
-                await refreshWorkspace()
-            } catch {
-                buzzWorkspaceError = error.localizedDescription
-            }
-        }
-    }
-
-    func removeBuzzWorkspaceAgentEnrollment(
-        _ enrollment: BuzzWorkspaceAgentEnrollment
-    ) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.removeBuzzEnrollment(enrollment.id)); return }
-        guard mutatingBuzzWorkspaceEnrollmentIDs.insert(enrollment.id).inserted else {
-            return
-        }
-        Task {
-            defer { mutatingBuzzWorkspaceEnrollmentIDs.remove(enrollment.id) }
-            do {
-                guard let dashboardStore else {
-                    throw ApplicationModelError.dashboardStoreUnavailable
-                }
-                try await dashboardStore.removeBuzzWorkspaceAgentEnrollment(
-                    id: enrollment.id
-                )
-                buzzWorkspaceError = nil
-                await refreshBuzzWorkspaces()
-                await refreshWorkspace()
-            } catch {
-                buzzWorkspaceError = error.localizedDescription
-            }
-        }
-    }
-
-    func deleteBuzzWorkspace(_ link: BuzzWorkspaceLink) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.deleteBuzz(link.id)); return }
-        guard checkingBuzzWorkspaceLinkIDs.insert(link.id).inserted else { return }
-        Task {
-            defer { checkingBuzzWorkspaceLinkIDs.remove(link.id) }
-            do {
-                guard let dashboardStore else {
-                    throw ApplicationModelError.dashboardStoreUnavailable
-                }
-                try await dashboardStore.deleteBuzzWorkspace(id: link.id)
-                buzzWorkspaceCandidates.removeValue(forKey: link.id)
-                buzzWorkspaceError = nil
-                await refreshBuzzWorkspaces()
-                await refreshWorkspace()
-            } catch {
-                buzzWorkspaceError = error.localizedDescription
-            }
-        }
-    }
-
-    private func refreshBuzzWorkspaces() async {
-        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.refreshBuzz); return }
-        guard applicationDefaults.bool(
-            forKey: Self.buzzDiscoveryEnabledDefaultsKey
-        ) else {
-            buzzWorkspaceSnapshot = BuzzWorkspaceSnapshot(
-                links: [],
-                enrollments: []
-            )
-            launchableBuzzWorkspaceEnrollmentIDs.removeAll()
-            return
-        }
-        do {
-            guard let dashboardStore else {
-                throw ApplicationModelError.dashboardStoreUnavailable
-            }
-            launchableBuzzWorkspaceEnrollmentIDs = try await dashboardStore
-                .reconcileBuzzWorkspaceAgents()
-            buzzWorkspaceSnapshot = try await dashboardStore.buzzWorkspaceSnapshot()
-            buzzBoundLocalACPConversationIDs = try await dashboardStore
-                .buzzBoundLocalACPConversationIDs()
-            buzzWorkspaceError = nil
-        } catch {
-            launchableBuzzWorkspaceEnrollmentIDs.removeAll()
-            buzzWorkspaceError = error.localizedDescription
-        }
-    }
-
     func isOpenClawGatewayLinked(agentID: UUID) -> Bool {
         openClawGatewayLinks.contains { $0.agentID == agentID }
     }
@@ -4738,7 +4417,7 @@ final class ApplicationModel {
                 openClawGatewayOperationStatuses[agentID] = nil
             }
             do {
-                if existing.location == .localAgentWorkspace || existing.location == .buzzLocal {
+                if existing.location == .localAgentWorkspace {
                     let prepared = try await preparedOpenClawGatewayLink(
                         for: agent,
                         existing: existing,
@@ -4817,7 +4496,7 @@ final class ApplicationModel {
     }
 
     private func openClawAgent(agentID: UUID) -> WorkspaceAgent? {
-        (localCLIAgents + remoteWorkspaceAgents + buzzWorkspaceAgents)
+        (localCLIAgents + remoteWorkspaceAgents)
             .first { $0.id == agentID }
     }
 
@@ -4852,14 +4531,6 @@ final class ApplicationModel {
                 requestHeaders: connection.requestHeaders
             )
             endpoint = connection.endpoint
-        } else if let enrollment = buzzWorkspaceSnapshot.enrollments
-            .first(where: { $0.id == agent.id }) {
-            location = .buzzLocal
-            endpoint = try await dashboardStore.prepareBuzzLocalOpenClawGateway(
-                enrollmentID: enrollment.id,
-                workspaceLinkID: enrollment.workspaceLinkID,
-                remoteAgentID: enrollment.agentID
-            )
         } else {
             location = .localAgentWorkspace
             guard let workspace = localACPWorkspaceLaunchConfiguration else {
@@ -4990,15 +4661,6 @@ final class ApplicationModel {
             do {
                 var link = persisted
                 switch persisted.location {
-                case .buzzLocal:
-                    guard let enrollment = buzzWorkspaceSnapshot.enrollments.first(where: {
-                        $0.id == persisted.agentID
-                    }) else { throw BuzzWorkspaceDatabaseError.enrollmentNotFound }
-                    link.endpoint = try await dashboardStore.prepareBuzzLocalOpenClawGateway(
-                        enrollmentID: enrollment.id,
-                        workspaceLinkID: enrollment.workspaceLinkID,
-                        remoteAgentID: enrollment.agentID
-                    )
                 case .localAgentWorkspace:
                     guard let workspace = localACPWorkspaceLaunchConfiguration else {
                         throw ApplicationModelError.localACPRuntimeUnavailable
@@ -5123,13 +4785,7 @@ final class ApplicationModel {
     ) async -> String? {
         if isBackendFrontend { return await forwardBackendCron(.openClawContext(agentID: agentID, context: context))?.conversationID }
         let conversationID: String?
-        if let enrollment = buzzWorkspaceSnapshot.enrollments.first(where: {
-            $0.id == agentID
-        }) {
-            conversationID = await createBuzzWorkspaceLocalACPSession(
-                enrollment: enrollment
-            )
-        } else if localCLIAgents.contains(where: {
+        if localCLIAgents.contains(where: {
             $0.id == agentID && $0.runtimeKind == .openclaw
         }) {
             conversationID = await createLocalACPSession(runtimeKind: .openclaw)
@@ -5193,21 +4849,6 @@ final class ApplicationModel {
         "agent:main:wovenmatter:\(conversationID)"
     }
 
-    private static func expandedLocalFileURL(_ rawPath: String) -> URL {
-        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let expanded: String
-        if trimmed == "~" {
-            expanded = FileManager.default.homeDirectoryForCurrentUser.path
-        } else if trimmed.hasPrefix("~/") {
-            expanded = FileManager.default.homeDirectoryForCurrentUser
-                .appending(path: String(trimmed.dropFirst(2)))
-                .path
-        } else {
-            expanded = trimmed
-        }
-        return URL(filePath: expanded).standardizedFileURL
-    }
-
     private func apply(_ snapshot: DashboardStoreSnapshot) {
         if let backendApplicationService, snapshot.revision != workspaceRevision {
             Task { await backendApplicationService.invalidations.publish(scopes: [.workspace, .calendar]) }
@@ -5230,24 +4871,12 @@ final class ApplicationModel {
         }
         let nextLocalCLIAgents = snapshot.agents.filter {
             $0.governingPlane == .wovenmatterMacOS
-                && !($0.platformCodename?.hasPrefix("buzz-workspace:") ?? false)
-        }
-        let buzzDiscoveryEnabled = isBackendFrontend ? backendBuzzDiscoveryEnabled : applicationDefaults.bool(
-            forKey: Self.buzzDiscoveryEnabledDefaultsKey
-        )
-        let nextBuzzWorkspaceAgents = snapshot.agents.filter {
-            buzzDiscoveryEnabled
-                && $0.governingPlane == .wovenmatterMacOS
-                && ($0.platformCodename?.hasPrefix("buzz-workspace:") ?? false)
         }
         let nextRemoteWorkspaceAgents = snapshot.agents.filter {
             $0.governingPlane == .remoteWorkspace
         }
         if localCLIAgents != nextLocalCLIAgents {
             localCLIAgents = nextLocalCLIAgents
-        }
-        if buzzWorkspaceAgents != nextBuzzWorkspaceAgents {
-            buzzWorkspaceAgents = nextBuzzWorkspaceAgents
         }
         if remoteWorkspaceAgents != nextRemoteWorkspaceAgents {
             remoteWorkspaceAgents = nextRemoteWorkspaceAgents
@@ -5337,7 +4966,6 @@ extension ApplicationModel {
         !installingLocalACPRuntimeKinds.isEmpty || !updatingRuntimeKinds.isEmpty
         || !openClawGatewayOperationAgentIDs.isEmpty || !openClawHeartbeatSavingAgentIDs.isEmpty
         || openClawCronBusy || !updatingDatabasePreferenceIDs.isEmpty
-        || !checkingBuzzWorkspaceLinkIDs.isEmpty || !mutatingBuzzWorkspaceEnrollmentIDs.isEmpty
         || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress || !executorRuntime.jobs.isEmpty || executorRuntime.isSettingUp
     }
 
@@ -6126,12 +5754,7 @@ extension ApplicationModel {
     }
 
     func backendGatewaySettingsSnapshot() -> BackendGatewaySettingsSnapshot {
-        .init(buzzEnabled: applicationDefaults.bool(forKey: Self.buzzDiscoveryEnabledDefaultsKey),
-              buzzLinks: buzzWorkspaceSnapshot.links, buzzEnrollments: buzzWorkspaceSnapshot.enrollments,
-              buzzCandidates: buzzWorkspaceCandidates, buzzLaunchable: launchableBuzzWorkspaceEnrollmentIDs,
-              buzzChecking: checkingBuzzWorkspaceLinkIDs, buzzMutating: mutatingBuzzWorkspaceEnrollmentIDs,
-              buzzBoundConversations: buzzBoundLocalACPConversationIDs, buzzAgents: buzzWorkspaceAgents, buzzError: buzzWorkspaceError,
-              linkedHermesIDs: Set(localCLIAgents.filter { isHermesGatewayLinked(agentID: $0.id) }.map(\.id)),
+        .init(linkedHermesIDs: Set(localCLIAgents.filter { isHermesGatewayLinked(agentID: $0.id) }.map(\.id)),
               connectedHermesIDs: Set(hermesGatewayConnections.keys), remoteHermesIDs: Set(remoteHermesConnections.keys),
               hermesCheckedAt: hermesGatewayCheckedAt, links: openClawGatewayLinks,
               conversationIDs: openClawGatewayConversationIDs, errors: openClawGatewayErrors,
@@ -6142,15 +5765,6 @@ extension ApplicationModel {
     }
 
     func applyBackendGatewaySettingsSnapshot(_ value: BackendGatewaySettingsSnapshot) {
-        backendBuzzDiscoveryEnabled = value.buzzEnabled
-        buzzWorkspaceSnapshot = .init(links: value.buzzLinks, enrollments: value.buzzEnrollments)
-        buzzWorkspaceCandidates = value.buzzCandidates
-        launchableBuzzWorkspaceEnrollmentIDs = value.buzzLaunchable
-        checkingBuzzWorkspaceLinkIDs = value.buzzChecking
-        mutatingBuzzWorkspaceEnrollmentIDs = value.buzzMutating
-        buzzBoundLocalACPConversationIDs = value.buzzBoundConversations
-        buzzWorkspaceAgents = value.buzzAgents
-        buzzWorkspaceError = value.buzzError
         backendLinkedHermesIDs = value.linkedHermesIDs
         backendConnectedHermesIDs = value.connectedHermesIDs
         backendRemoteHermesIDs = value.remoteHermesIDs
@@ -6214,26 +5828,6 @@ extension ApplicationModel {
         case .remoteOpenClawAgent(let id): response.entityID = try await remoteOpenClawAgentID(for: workspace(id)).uuidString
         case .consumePrefill(let id, let expected):
             if pendingComposerPrefills[id] == expected { pendingComposerPrefills.removeValue(forKey: id) }
-        case .buzzEnabled(let enabled): setBuzzDiscoveryEnabled(enabled)
-        case .refreshBuzz: await refreshBuzzWorkspaces()
-        case .addBuzz(let name, let path, let store):
-            response.success = await addLocalBuzzWorkspace(displayName: name, workspacePath: path, agentStorePath: store)
-        case .createBuzzSession(let id):
-            guard let enrollment = buzzWorkspaceAgentEnrollments.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz enrollment is no longer available.") }
-            response.entityID = await createBuzzWorkspaceLocalACPSession(enrollment: enrollment)
-            if response.entityID == nil { throw BackendRPCError.remote(localRunError ?? "This Buzz agent could not start a session.") }
-        case .discoverBuzz(let id):
-            guard let link = buzzWorkspaceLinks.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz workspace is no longer available.") }
-            discoverBuzzWorkspaceAgents(link)
-        case .enrollBuzz(let id, let candidateID):
-            guard let candidate = buzzWorkspaceCandidates[id]?.first(where: { $0.id == candidateID }) else { throw BackendRPCError.remote("Refresh this Buzz workspace before enrolling this agent.") }
-            enrollBuzzWorkspaceAgent(candidate)
-        case .removeBuzzEnrollment(let id):
-            guard let enrollment = buzzWorkspaceAgentEnrollments.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz enrollment is no longer available.") }
-            removeBuzzWorkspaceAgentEnrollment(enrollment)
-        case .deleteBuzz(let id):
-            guard let link = buzzWorkspaceLinks.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz workspace is no longer available.") }
-            deleteBuzzWorkspace(link)
         case let .connectHermes(id, restart): try await connectHermesGateway(agentID: id, restart: restart)
         case let .unlinkHermes(id): unlinkHermesGateway(agentID: id)
         case let .renameHermes(id, name): try await renameHermesAgent(agentID: id, displayName: name)

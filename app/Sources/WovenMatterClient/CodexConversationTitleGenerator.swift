@@ -51,8 +51,7 @@ public actor CodexConversationTitleGenerator {
         let initialized = try await client.initializeSession(
             workingDirectory: workspace.rootURL,
             existingSessionID: nil,
-            title: "Woven Matter title settings",
-            systemPrompt: nil
+            title: "Woven Matter title settings"
         )
         return CodexTitleGenerationCapabilities(
             configuration: initialized.configuration
@@ -74,8 +73,7 @@ public actor CodexConversationTitleGenerator {
         let initialized = try await client.initializeSession(
             workingDirectory: workspace.rootURL,
             existingSessionID: nil,
-            title: "Generate Woven Matter conversation title",
-            systemPrompt: nil
+            title: "Generate Woven Matter conversation title"
         )
         let configuration = initialized.configuration
         let selectedModel = model.flatMap {

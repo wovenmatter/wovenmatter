@@ -1,7 +1,6 @@
 import Foundation
 
 public enum OpenClawGatewayLocation: String, Codable, CaseIterable, Hashable, Sendable {
-  case buzzLocal = "buzz_local"
   case localAgentWorkspace = "local_agent_workspace"
   case remoteWorkspace = "remote_workspace"
 }

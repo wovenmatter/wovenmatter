@@ -12,7 +12,7 @@ struct RuntimeLifecycleTests {
     let lifecycle = OpenClawLocalGatewayLifecycle(launchProcess: { _, _ in state.launch() },
       isReady: { _ in false }, pause: { await gate.pause() })
     let start = Task { try await lifecycle.ensure(agentID: UUID(), identity: "cancel", launch: launch,
-                                                   workingDirectory: URL(filePath: "/private/tmp")) }
+                                                   workingDirectory: URL(filePath: "/private/tmp"), configuredPort: 18789) }
     await gate.waitForArrivals(1)
     start.cancel()
     await gate.release(0)
@@ -28,7 +28,7 @@ struct RuntimeLifecycleTests {
     let lifecycle = OpenClawLocalGatewayLifecycle(launchProcess: { _, _ in state.launch() },
       isReady: { _ in false }, pause: { await gate.pause() })
     let start = Task { try await lifecycle.ensure(agentID: UUID(), identity: "shutdown", launch: launch,
-                                                   workingDirectory: URL(filePath: "/private/tmp")) }
+                                                   workingDirectory: URL(filePath: "/private/tmp"), configuredPort: 18789) }
     await gate.waitForArrivals(1)
     await lifecycle.shutdown()
     #expect(!state.running)
@@ -36,7 +36,7 @@ struct RuntimeLifecycleTests {
     do { _ = try await start.value; Issue.record("shutdown startup succeeded") } catch { }
     do {
       _ = try await lifecycle.ensure(agentID: UUID(), identity: "new", launch: launch,
-                                     workingDirectory: URL(filePath: "/private/tmp"))
+                                     workingDirectory: URL(filePath: "/private/tmp"), configuredPort: 18789)
       Issue.record("shutdown lifecycle restarted")
     } catch is CancellationError { }
     #expect(state.launches == 1)
@@ -49,10 +49,10 @@ struct RuntimeLifecycleTests {
       isReady: { _ in state.ready }, pause: { await gate.pause() })
     let firstID = UUID(), secondID = UUID()
     let first = Task { try await lifecycle.ensure(agentID: firstID, identity: "shared", launch: launch,
-                                                   workingDirectory: URL(filePath: "/private/tmp")) }
+                                                   workingDirectory: URL(filePath: "/private/tmp"), configuredPort: 18789) }
     await gate.waitForArrivals(1)
     let second = Task { try await lifecycle.ensure(agentID: secondID, identity: "shared", launch: launch,
-                                                    workingDirectory: URL(filePath: "/private/tmp")) }
+                                                    workingDirectory: URL(filePath: "/private/tmp"), configuredPort: 18789) }
     state.setReady()
     await gate.release(0)
     #expect(try await first.value == second.value)
@@ -102,7 +102,7 @@ struct RuntimeLifecycleTests {
     let state = FakeGatewayProcess()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
       let process = state.launch()
-      return LocalACPSessionDriver(initializeSession: { _, _, _, _ in
+      return LocalACPSessionDriver(initializeSession: { _, _, _ in
         await gate.pause()
         try Task.checkCancellation()
         return LocalACPInitializedSession(sessionID: "fixture", loadedExistingSession: false)
@@ -140,7 +140,7 @@ struct RuntimeLifecycleTests {
         "trap '' TERM; echo $$ > '\(pidFile.path)'; exec /bin/sleep 60"])
     let lifecycle = OpenClawLocalGatewayLifecycle(isReady: { _ in false }, pause: { await gate.pause() })
     let start = Task { try await lifecycle.ensure(agentID: UUID(), identity: UUID().uuidString,
-      launch: launch, workingDirectory: directory) }
+      launch: launch, workingDirectory: directory, configuredPort: 18789) }
     await gate.waitForArrivals(1)
     var pid: Int32?
     for _ in 0..<100 {
@@ -174,7 +174,7 @@ struct RuntimeLifecycleTests {
     let late = LocalACPSessionConfiguration(model: "late", thinking: "late", thinkingOptions: ["high"])
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
       let process = state.launch()
-      return LocalACPSessionDriver(initializeSession: { _, _, _, _ in
+      return LocalACPSessionDriver(initializeSession: { _, _, _ in
         LocalACPInitializedSession(sessionID: "fixture", loadedExistingSession: false, configuration: initial)
       }, prompt: { _, _, _, _ in .endTurn }, configuration: { late },
       setConfiguration: { _, _ in await gate.pause(); return late }, cancel: {}, shutdown: { process.terminate() })

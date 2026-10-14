@@ -223,10 +223,6 @@ public actor DashboardStore {
     localWorkspacePrepared = true
   }
 
-  public func buzzWorkspaceSnapshot() async throws -> BuzzWorkspaceSnapshot {
-    try await database.buzzWorkspaceSnapshot()
-  }
-
   public func openClawGatewayLinks() async throws -> [OpenClawGatewayLink] {
     try await database.openClawGatewayLinks()
   }
@@ -279,44 +275,6 @@ public actor DashboardStore {
     return link
   }
 
-  public func prepareBuzzLocalOpenClawGateway(
-    enrollmentID: UUID,
-    workspaceLinkID: UUID,
-    remoteAgentID: String
-  ) async throws -> OpenClawGatewayEndpoint {
-    let source = try await database.buzzLocalAgentLaunchSource(
-      workspaceLinkID: workspaceLinkID,
-      agentID: remoteAgentID
-    )
-    guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
-    let resolver = BuzzLocalAgentLaunchResolver()
-    let initialPort = OpenClawLocalGatewayLifecycle.stablePort(for: remoteAgentID)
-    var resolved = try resolver.resolveDirectGateway(
-      agentID: remoteAgentID, in: source.link,
-      port: initialPort
-    )
-    let identity = resolved.authoritativeStateRoot ?? "buzz:\(remoteAgentID)"
-    let port = OpenClawLocalGatewayLifecycle.stablePort(for: identity)
-    if port != initialPort {
-      resolved = try resolver.resolveDirectGateway(
-        agentID: remoteAgentID, in: source.link,
-        port: port
-      )
-    }
-    var environment = ProcessInfo.processInfo.environment
-    for key in resolved.launch.environmentKeysToRemove { environment.removeValue(forKey: key) }
-    for prefix in resolved.launch.environmentKeyPrefixesToRemove {
-      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
-    }
-    environment.merge(resolved.launch.environment) { _, configured in configured }
-    try await prepareLocalOpenClawResults(executable: resolved.launch.executableURL, environment: environment)
-    _ = try await localOpenClawGateways.ensure(
-      agentID: enrollmentID, identity: identity,
-      launch: resolved.launch, workingDirectory: resolved.workingDirectory
-    )
-    return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
-  }
-
   public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) async throws {
     try await openClawGateway.setCLIConnectionProvider(provider)
     try await localSessions.setCLIConnectionProvider(provider)
@@ -353,10 +311,6 @@ public actor DashboardStore {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     var environment = ProcessInfo.processInfo.environment
-    for key in base.environmentKeysToRemove { environment.removeValue(forKey: key) }
-    for prefix in base.environmentKeyPrefixesToRemove {
-      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
-    }
     environment.merge(base.environment) { _, configured in configured }
     let configuration = try OpenClawLocalGatewayConfiguration(environment: environment)
     let identity = "local-config:" + configuration.configURL.standardizedFileURL.path
@@ -371,15 +325,12 @@ public actor DashboardStore {
       // Keep the user's authentication, bind and Tailscale settings. Never force
       // another listener or use --force against an existing OpenClaw service.
       arguments: ["gateway", "--port", String(configuration.port)],
-      environment: launchEnvironment,
-      environmentKeysToRemove: base.environmentKeysToRemove + ["BUZZ_PRIVATE_KEY", "NOSTR_PRIVATE_KEY"],
-      environmentKeyPrefixesToRemove: base.environmentKeyPrefixesToRemove + ["BUZZ_", "NOSTR_"]
+      environment: launchEnvironment
     )
     try await prepareLocalOpenClawResults(executable: base.executableURL, environment: environment.merging(launchEnvironment) { _, value in value })
     _ = try await localOpenClawGateways.ensure(
       agentID: agentID, identity: identity, launch: launch,
-      workingDirectory: workingDirectory, configuredPort: configuration.port,
-      reuseExistingListener: true
+      workingDirectory: workingDirectory, configuredPort: configuration.port
     )
     let endpoint = OpenClawGatewayEndpointResolver.localAgentWorkspace(port: configuration.port)
     try await openClawGateway.configureTransport(agentID: agentID, endpoint: endpoint,
@@ -588,126 +539,6 @@ public actor DashboardStore {
 
   public func emptyOpenClawCronTrash(agentID: UUID? = nil) async throws {
     try await database.emptyOpenClawCronTrash(agentID: agentID)
-  }
-
-  public func saveBuzzWorkspace(_ link: BuzzWorkspaceLink) async throws {
-    try await database.upsertBuzzWorkspaceLink(link)
-  }
-
-  public func deleteBuzzWorkspace(id: UUID) async throws {
-    try await prepareLocalWorkspace()
-    let deviceID = try await deviceIdentity.id()
-    for enrollment in try await database.buzzWorkspaceAgentEnrollments(
-      workspaceLinkID: id
-    ) {
-      try await database.retireBuzzWorkspaceAgent(
-        enrollmentID: enrollment.id,
-        ownerDeviceID: deviceID
-      )
-    }
-    try await database.deleteBuzzWorkspaceLink(id: id)
-  }
-
-  public func discoverBuzzWorkspaceAgents(
-    linkID: UUID
-  ) async throws -> [BuzzWorkspaceAgentCandidate] {
-    guard let link = try await database.buzzWorkspaceLinks().first(where: {
-      $0.id == linkID
-    }) else {
-      throw BuzzWorkspaceDatabaseError.workspaceNotFound
-    }
-    return try BuzzLocalAgentDiscovery().candidates(for: link)
-  }
-
-  @discardableResult
-  public func enrollBuzzWorkspaceAgent(
-    _ candidate: BuzzWorkspaceAgentCandidate
-  ) async throws -> BuzzWorkspaceAgentEnrollment {
-    try await prepareLocalWorkspace()
-    let enrollment = try await database.enrollBuzzWorkspaceAgent(candidate)
-    if try await database.buzzWorkspaceLinks().contains(where: {
-      $0.id == enrollment.workspaceLinkID
-    }), enrollment.runtimeKind != nil {
-      let resolved = try? await resolvedBuzzLaunch(
-        workspaceLinkID: enrollment.workspaceLinkID,
-        agentID: enrollment.agentID
-      )
-      let status: AgentRuntimeStatus = resolved?.launch.runtimeKind == enrollment.runtimeKind
-        ? .ready : .offline
-      try await database.reconcileBuzzWorkspaceAgent(
-        enrollment: enrollment,
-        ownerDeviceID: try await deviceIdentity.id(),
-        status: status
-      )
-    }
-    return enrollment
-  }
-
-  public func removeBuzzWorkspaceAgentEnrollment(id: UUID) async throws {
-    try await prepareLocalWorkspace()
-    let deviceID = try await deviceIdentity.id()
-    try await database.retireBuzzWorkspaceAgent(
-      enrollmentID: id,
-      ownerDeviceID: deviceID
-    )
-    try await database.removeBuzzWorkspaceAgentEnrollment(id: id)
-  }
-
-  public func reconcileBuzzWorkspaceAgents() async throws -> Set<UUID> {
-    try await prepareLocalWorkspace()
-    let deviceID = try await deviceIdentity.id()
-    let linksByID = Dictionary(
-      uniqueKeysWithValues: try await database.buzzWorkspaceLinks().map { ($0.id, $0) }
-    )
-    var launchable: Set<UUID> = []
-    for enrollment in try await database.buzzWorkspaceAgentEnrollments() {
-      guard let link = linksByID[enrollment.workspaceLinkID],
-        enrollment.runtimeKind != nil
-      else {
-        continue
-      }
-      let resolved = try? await resolvedBuzzLaunch(
-        workspaceLinkID: enrollment.workspaceLinkID,
-        agentID: enrollment.agentID
-      )
-      let isLaunchable = link.isEnabled
-        && resolved?.launch.runtimeKind == enrollment.runtimeKind
-      if isLaunchable { launchable.insert(enrollment.id) }
-      try await database.reconcileBuzzWorkspaceAgent(
-        enrollment: enrollment,
-        ownerDeviceID: deviceID,
-        status: isLaunchable ? .ready : .offline
-      )
-    }
-    return launchable
-  }
-
-  public func createBuzzWorkspaceLocalACPSession(
-    enrollmentID: UUID,
-    title: String
-  ) async throws -> String {
-    try await prepareLocalWorkspace()
-    guard let enrollment = try await database.buzzWorkspaceAgentEnrollments()
-      .first(where: { $0.id == enrollmentID }) else {
-      throw BuzzWorkspaceDatabaseError.enrollmentNotFound
-    }
-    let resolved = try await resolvedBuzzLaunch(
-      workspaceLinkID: enrollment.workspaceLinkID,
-      agentID: enrollment.agentID
-    )
-    guard resolved.launch.runtimeKind == enrollment.runtimeKind else {
-      throw BuzzWorkspaceDatabaseError.enrollmentRequiresRefresh
-    }
-    return try await database.createBuzzLocalACPSession(
-      enrollmentID: enrollmentID,
-      title: title,
-      ownerDeviceID: try await deviceIdentity.id(),
-      model: resolved.model
-    )
-  }
-
-  public func buzzBoundLocalACPConversationIDs() async throws -> Set<String> {
-    try await database.buzzBoundLocalACPConversationIDs()
   }
 
   public func start() async {
@@ -985,8 +816,8 @@ public actor DashboardStore {
     content: String,
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
-    launch: LocalACPRuntimeLaunchConfiguration?,
-    workspace: LocalACPWorkspaceLaunchConfiguration?,
+    launch: LocalACPRuntimeLaunchConfiguration,
+    workspace: LocalACPWorkspaceLaunchConfiguration,
     onPermission: LocalACPSessionCoordinator.PermissionHandler? = nil,
     onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
     dispatchFence: AgentDispatchFence? = nil
@@ -1010,27 +841,20 @@ public actor DashboardStore {
     input: AgentMessageInput,
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
-    launch: LocalACPRuntimeLaunchConfiguration?,
-    workspace: LocalACPWorkspaceLaunchConfiguration?,
+    launch: LocalACPRuntimeLaunchConfiguration,
+    workspace: LocalACPWorkspaceLaunchConfiguration,
     onPermission: LocalACPSessionCoordinator.PermissionHandler? = nil,
     onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
-    try dispatchFence?.check()
-    let context = try await localACPLaunchContext(
-      conversationID: conversationID,
-      directLaunch: launch,
-      directWorkspace: workspace
-    )
     try dispatchFence?.check()
     return try await localSessions.accept(
       conversationID: conversationID,
       input: input,
       deliveryContent: deliveryContent,
       noteContext: noteContext,
-      launch: context.launch,
-      workspace: context.workspace,
-      systemPrompt: context.systemPrompt,
+      launch: launch,
+      workspace: workspace,
       onPermission: onPermission,
       onInteraction: onInteraction,
       dispatchFence: dispatchFence
@@ -1105,19 +929,13 @@ public actor DashboardStore {
 
   public func localACPSessionConfiguration(
     conversationID: String,
-    launch: LocalACPRuntimeLaunchConfiguration?,
-    workspace: LocalACPWorkspaceLaunchConfiguration?
+    launch: LocalACPRuntimeLaunchConfiguration,
+    workspace: LocalACPWorkspaceLaunchConfiguration
   ) async throws -> LocalACPSessionConfiguration {
-    let context = try await localACPLaunchContext(
-      conversationID: conversationID,
-      directLaunch: launch,
-      directWorkspace: workspace
-    )
     return try await localSessions.configuration(
       conversationID: conversationID,
-      launch: context.launch,
-      workspace: context.workspace,
-      systemPrompt: context.systemPrompt
+      launch: launch,
+      workspace: workspace
     )
   }
 
@@ -1126,70 +944,16 @@ public actor DashboardStore {
     model: String? = nil,
     thinking: String? = nil,
     permission: String? = nil,
-    launch: LocalACPRuntimeLaunchConfiguration?,
-    workspace: LocalACPWorkspaceLaunchConfiguration?
+    launch: LocalACPRuntimeLaunchConfiguration,
+    workspace: LocalACPWorkspaceLaunchConfiguration
   ) async throws -> LocalACPSessionConfiguration {
-    let context = try await localACPLaunchContext(
-      conversationID: conversationID,
-      directLaunch: launch,
-      directWorkspace: workspace
-    )
     return try await localSessions.updateConfiguration(
       conversationID: conversationID,
       model: model,
       thinking: thinking,
       permission: permission,
-      launch: context.launch,
-      workspace: context.workspace,
-      systemPrompt: context.systemPrompt
-    )
-  }
-
-  private func localACPLaunchContext(
-    conversationID: String,
-    directLaunch: LocalACPRuntimeLaunchConfiguration?,
-    directWorkspace: LocalACPWorkspaceLaunchConfiguration?
-  ) async throws -> (
-    launch: LocalACPRuntimeLaunchConfiguration,
-    workspace: LocalACPWorkspaceLaunchConfiguration,
-    systemPrompt: String?
-  ) {
-    let descriptor = try await database.localACPSession(conversationID: conversationID)
-    if let workspaceLinkID = descriptor.buzzWorkspaceLinkID,
-       let buzzAgentID = descriptor.buzzAgentID {
-      let resolved = try await resolvedBuzzLaunch(
-        workspaceLinkID: workspaceLinkID,
-        agentID: buzzAgentID
-      )
-      return (
-        resolved.launch,
-        LocalACPWorkspaceLaunchConfiguration(
-          rootURL: resolved.workingDirectory,
-          repositoriesURL: resolved.workingDirectory.appending(
-            path: "repos",
-            directoryHint: .isDirectory
-          )
-        ),
-        resolved.systemPrompt
-      )
-    }
-    guard let directLaunch, let directWorkspace else {
-      throw LocalACPSessionDatabaseError.runtimeUnavailable
-    }
-    return (directLaunch, directWorkspace, nil)
-  }
-
-  private func resolvedBuzzLaunch(
-    workspaceLinkID: UUID,
-    agentID: String
-  ) async throws -> BuzzLocalAgentLaunch {
-    let source = try await database.buzzLocalAgentLaunchSource(
-      workspaceLinkID: workspaceLinkID,
-      agentID: agentID
-    )
-    return try BuzzLocalAgentLaunchResolver().resolve(
-      agentID: agentID,
-      in: source.link
+      launch: launch,
+      workspace: workspace
     )
   }
 

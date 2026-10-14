@@ -60,21 +60,12 @@ actor OpenClawLocalGatewayLifecycle {
     self.pause = pause
   }
 
-  static func stablePort(for identity: String) -> Int {
-    var hash: UInt64 = 14_695_981_039_346_656_037
-    for byte in identity.utf8 {
-      hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211
-    }
-    return 20_000 + Int(hash % 20_000)
-  }
-
   func ensure(
     agentID: UUID,
     identity: String,
     launch: LocalACPRuntimeLaunchConfiguration,
     workingDirectory: URL,
-    configuredPort: Int? = nil,
-    reuseExistingListener: Bool = false
+    configuredPort: Int
   ) async throws -> Int {
     try Task.checkCancellation()
     guard !isShutDown else { throw CancellationError() }
@@ -96,7 +87,7 @@ actor OpenClawLocalGatewayLifecycle {
       let generation = UUID()
       let task = Task { try await self.start(identity: identity, generation: generation,
                                             launch: launch, workingDirectory: workingDirectory,
-                                            configuredPort: configuredPort, reuseExistingListener: reuseExistingListener) }
+                                            configuredPort: configuredPort) }
       start = Pending(generation: generation, task: task, waiters: [waiter])
       pending[identity] = start
     }
@@ -135,7 +126,7 @@ actor OpenClawLocalGatewayLifecycle {
 
   private func start(identity: String, generation: UUID,
                      launch: LocalACPRuntimeLaunchConfiguration, workingDirectory: URL,
-                     configuredPort: Int?, reuseExistingListener: Bool) async throws -> Int {
+                     configuredPort: Int) async throws -> Int {
     try Task.checkCancellation()
     guard !isShutDown else { throw CancellationError() }
     let stale = entries.removeValue(forKey: identity)
@@ -145,11 +136,11 @@ actor OpenClawLocalGatewayLifecycle {
     }
     try Task.checkCancellation()
     guard !isShutDown else { throw CancellationError() }
-    let port = configuredPort ?? Self.stablePort(for: identity)
+    let port = configuredPort
     // A pre-existing listener is borrowed, never terminated by Woven. Protocol
     // and authentication are verified by the Gateway client before linking.
     let process: OwnedProcess
-    if reuseExistingListener, isReady(port) {
+    if isReady(port) {
       let ready = isReady
       process = OwnedProcess(isRunning: { ready(port) }, terminate: {})
     } else {
@@ -206,10 +197,6 @@ actor OpenClawLocalGatewayLifecycle {
     process.arguments = launch.arguments
     process.currentDirectoryURL = workingDirectory
     var environment = ProcessInfo.processInfo.environment
-    for key in launch.environmentKeysToRemove { environment.removeValue(forKey: key) }
-    for prefix in launch.environmentKeyPrefixesToRemove {
-      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
-    }
     environment.merge(launch.environment) { _, staged in staged }
     process.environment = environment
     // A pipe would break when the desktop exits and can terminate the Gateway
