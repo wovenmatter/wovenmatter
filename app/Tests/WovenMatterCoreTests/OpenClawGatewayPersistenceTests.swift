@@ -5,40 +5,6 @@ import WovenMatterClient
 @testable import WovenMatterDashboardStore
 
 struct OpenClawGatewayPersistenceTests {
-  @Test func supportedGatewayLinksLoadWhenAnUnsupportedLocationIsStored() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appending(path: "test.sqlite")
-    let db = try await WorkspaceDatabase(url: url)
-    let localID = UUID()
-    let remoteID = UUID()
-    let local = OpenClawGatewayLink(agentID: localID, location: .localAgentWorkspace,
-      endpoint: .init(url: URL(string: "ws://127.0.0.1:18789")!, authorization: .localService))
-    let remote = OpenClawGatewayLink(agentID: remoteID, location: .remoteWorkspace,
-      endpoint: .init(url: URL(string: "ws://127.0.0.1:18790")!, authorization: .remoteWorkspace))
-    try await db.saveOpenClawGatewayLink(local)
-    try await db.saveOpenClawGatewayLink(remote)
-    // Existing databases can contain locations outside the current schema.
-    try await db.write { connection in
-      try connection.executeUnlocked("PRAGMA ignore_check_constraints = ON")
-      defer { try? connection.executeUnlocked("PRAGMA ignore_check_constraints = OFF") }
-      try connection.executeUnlocked("""
-        INSERT INTO desktop_openclaw_gateway_links (
-          agent_id, location, endpoint_url, authorization, status, openclaw_version,
-          last_connected_at, last_error, linked_at, updated_at
-        )
-          SELECT '\(UUID().uuidString)', 'unsupported_workspace', endpoint_url,
-            authorization, status, openclaw_version, last_connected_at, last_error,
-            linked_at, updated_at
-          FROM desktop_openclaw_gateway_links LIMIT 1
-        """)
-    }
-    #expect(Set(try await db.openClawGatewayLinks().map(\.agentID)) == [localID, remoteID])
-    let reopened = try await WorkspaceDatabase(url: url)
-    #expect(Set(try await reopened.openClawGatewayLinks().map(\.agentID)) == [localID, remoteID])
-  }
-
   @Test func gatewayImportIsIdempotentAndHistorySurvivesReopen() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

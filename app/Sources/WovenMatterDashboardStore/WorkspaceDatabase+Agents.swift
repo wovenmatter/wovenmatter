@@ -265,8 +265,7 @@ extension WorkspaceDatabaseConnection {
         FROM dashboard_agents
         WHERE deleted_at IS NULL
           AND (
-            (governing_plane = 'wovenmatter_macos' AND runtime_device_id IS NULL
-              AND platform_codename IS NULL)
+            (governing_plane = 'wovenmatter_macos' AND runtime_device_id IS NULL)
             OR governing_plane = 'remote_workspace'
           )
         ORDER BY execution_location DESC, created_at, id
@@ -278,8 +277,7 @@ extension WorkspaceDatabaseConnection {
         FROM dashboard_agents
         WHERE (user_id = ? OR desktop_owned = 1) AND deleted_at IS NULL
           AND (
-            (governing_plane = 'wovenmatter_macos' AND runtime_device_id IS NULL
-              AND platform_codename IS NULL)
+            (governing_plane = 'wovenmatter_macos' AND runtime_device_id IS NULL)
             OR governing_plane = 'remote_workspace'
           )
         ORDER BY execution_location DESC, created_at, id

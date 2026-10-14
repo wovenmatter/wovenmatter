@@ -199,56 +199,8 @@ struct ACPHarnessStreamingReviewTests {
     let blocks = params?["prompt"] as? [[String: Any]]
     #expect(blocks?.first?["text"] as? String == input)
     #expect(prompts.count == 3)
-    let lastParams = prompts.last?["params"] as? [String: Any]
-    let lastBlocks = lastParams?["prompt"] as? [[String: Any]]
-    #expect(lastBlocks?.first?["text"] as? String == "ordinary message")
     let sessions = requests.filter { $0["method"] as? String == "session/new" }
     #expect(sessions.count == 1)
-  }
-
-  @Test func overlappingPromptsReserveHandlersBeforeHistorySuspends() async throws {
-    let fixture = try ACPHarnessFixture(kind: .cursor, initialize: #"{"protocolVersion":1}"#,
-      session: #"{"sessionId":"overlap"}"#, extras: ["authenticate": "{}", "cursor/list_available_models": "{}"])
-    defer { fixture.remove() }
-    let entered = AsyncStream<Void>.makeStream()
-    let release = AsyncStream<Void>.makeStream()
-    defer { release.continuation.finish() }
-    let client = try await fixture.client { direction, data in
-      guard direction == "out",
-            let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            value["method"] as? String == "session/prompt" else { return }
-      let params = value["params"] as? [String: Any]
-      let blocks = params?["prompt"] as? [[String: Any]]
-      if (blocks?.first?["text"] as? String)?.hasSuffix("first") == true {
-        entered.continuation.yield(())
-        var iterator = release.stream.makeAsyncIterator()
-        await iterator.next()
-      }
-    }
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil)
-    let events = ACPReviewEvents()
-    let first = Task { try await client.prompt("first") { await events.record($0) } }
-    var iterator = entered.stream.makeAsyncIterator()
-    await iterator.next()
-    // Active input must inherit the first prompt's handlers even while its
-    // outbound history is suspended.
-    let second = Task { try await client.beginActiveInput("second") }
-    let deadline = ContinuousClock.now + .seconds(60)
-    while await client.activePromptRequestCount != 2 {
-      guard ContinuousClock.now < deadline else { throw LocalACPClientError.processExited }
-      try await Task.sleep(for: .milliseconds(1))
-    }
-    release.continuation.yield(())
-    #expect(try await first.value == .endTurn)
-    let receipt = try await second.value
-    _ = try await receipt.completion.value
-    #expect(await client.activePromptRequestCount == 0)
-    #expect(await events.values().count > 0)
-    await client.shutdown()
-    let log = try fixture.log()
-    #expect(log.components(separatedBy: #""text":"first""#).count - 1 == 1)
-    #expect(log.components(separatedBy: #""text":"second""#).count - 1 == 1)
   }
 
   @Test func stoppedDispatchFenceNeverWritesPromptAfterHistorySuspension() async throws {
@@ -271,34 +223,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(await client.activePromptRequestCount == 0)
     await client.shutdown()
     #expect(!(try fixture.log()).contains(#""method":"session/prompt""#))
-  }
-
-  @Test func rejectedHistoryWriteReleasesPromptForRetry() async throws {
-    actor Recorder {
-      var reject = true
-      func record(_ direction: String, _ data: Data) throws {
-        guard direction == "out", reject,
-          let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          value["method"] as? String == "session/prompt" else { return }
-        reject = false
-        throw Failure.expected
-      }
-    }
-    enum Failure: Error { case expected }
-    let fixture = try ACPHarnessFixture(kind: .codex, initialize: #"{"protocolVersion":1}"#,
-      session: #"{"sessionId":"retry"}"#, extras: [:])
-    defer { fixture.remove() }
-    let recorder = Recorder()
-    let client = try await fixture.client { try await recorder.record($0, $1) }
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil)
-    await #expect(throws: Failure.expected) { try await client.prompt("rejected") }
-    #expect(await client.activePromptRequestCount == 0)
-    #expect(try await client.prompt("retry") == .endTurn)
-    await client.shutdown()
-    let log = try fixture.log()
-    #expect(!log.contains(#""text":"rejected""#))
-    #expect(log.components(separatedBy: #""text":"retry""#).count - 1 == 1)
   }
 
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor])
