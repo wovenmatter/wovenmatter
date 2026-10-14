@@ -1,4 +1,4 @@
-import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
+import { latestSupportedPackage, releaseVersion, compareVersions } from '../package-versions.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
 // cross the session CLI. Executor is used unchanged through its public local API.
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
@@ -12,8 +12,13 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { writePrivateJSON } from '../config.mjs';
 
-export const supportsExecutorVersion = version => releaseVersion(version) && version.startsWith('2.');
-export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', { major: 2, prerelease: true, executable: 'executor', fetchImplementation });
+// beta.18 replaced profiles and scoped targets with a different account model.
+// Keep install, launch, deployment and CI on the same verified public contract.
+export const maximumExecutorVersion = '2.0.0-beta.17';
+export const supportsExecutorVersion = version => releaseVersion(version)
+  && /^2\.0\.0-beta\.\d+$/.test(version) && compareVersions(version, maximumExecutorVersion) <= 0;
+export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', { major: 2, minor: 0,
+  maximum: maximumExecutorVersion, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 export function validateConfiguration(config) {

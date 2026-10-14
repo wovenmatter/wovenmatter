@@ -9,8 +9,9 @@ app uses. An app and an MCP server are not necessarily one-to-one.
 ## Setup
 
 Open **Settings → Connections → Executor**. Choose **On this Mac**, then
-**Install and start Executor**. Woven resolves the newest compatible Executor 2 release (stable when available,
-otherwise V2 beta), downloads the unchanged runtime and runs it alongside its background service.
+**Install and start Executor**. Woven resolves the newest compatible release through Executor 2.0.0-beta.17,
+downloads the unchanged runtime and runs it alongside its background service.
+Later releases changed the app-profile and scope contract and require an integration update.
 Node is bundled; a separate Pi or Executor CLI installation is unnecessary.
 Executor data and manager credentials live in Woven's private support directory,
 separately from the workspace database. Installation progress and failures stay

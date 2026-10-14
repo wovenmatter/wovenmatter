@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ExecutorBroker, validateConfiguration } from '../src/executor/broker.mjs';
+import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion } from '../src/executor/broker.mjs';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
@@ -22,6 +22,22 @@ async function fixture(t, run) {
   scope.grant = { token: 'scoped-secret', expires: Date.now() + 3600000 };
   return { broker, scope, calls, scopes, directory };
 }
+test('Executor install selection stays within the verified profile and scope contract', async () => {
+  const versions = ['1.6.10', '2.0.0-beta.7', '2.0.0-beta.17', '2.0.0-beta.18', '2.0.0-beta.19', '2.0.0'];
+  const fetcher = async url => new Response(JSON.stringify(url.endsWith('/latest')
+    ? { version: '2.0.0', bin: { executor: 'bin.mjs' } }
+    : { versions: Object.fromEntries(versions.map(version => [version, { bin: { executor: 'bin.mjs' } }])) }));
+  assert.equal(await latestExecutorVersion(fetcher), '2.0.0-beta.17');
+  assert.equal(supportsExecutorVersion('2.0.0-beta.17'), true);
+  assert.equal(supportsExecutorVersion('2.0.0-beta.7'), true);
+  for (const version of ['1.6.10', '2.0.0-beta.18', '2.0.0-beta.19', '2.0.0', '2.1.0', 'invalid']) {
+    assert.equal(supportsExecutorVersion(version), false);
+  }
+  await assert.rejects(latestExecutorVersion(async () => new Response(JSON.stringify({
+    version: '2.0.0-beta.19', bin: { executor: 'bin.mjs' },
+    versions: { '2.0.0-beta.19': { bin: { executor: 'bin.mjs' } } },
+  }))), /compatible/);
+});
 test('Execute waits for trusted approval, deduplicates IDs and binds jobs to their conversation', async t => {
   let executions = 0;
   const { broker, scope, directory } = await fixture(t, async () => { executions++; return { structuredContent: { status: 'completed', execution: { ok: true, value: 1 } } }; });
