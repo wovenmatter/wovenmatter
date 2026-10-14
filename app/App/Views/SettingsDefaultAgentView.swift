@@ -10,6 +10,13 @@ struct SettingsDefaultAgentView: View {
     private var agent: DefaultAgentSettingsModel { model.connections }
     @State private var syncError: String?
     @State private var browsingAllModels = false
+    @Environment(\.dashboardTheme) private var theme
+    @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
+        DashboardPiDurableLogoStyle.defaultStyle.rawValue
+
+    private var piDurableLogoStyle: DashboardPiDurableLogoStyle {
+        DashboardPiDurableLogoStyle(rawValue: storedPiDurableLogoStyle) ?? .defaultStyle
+    }
 
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
@@ -20,6 +27,7 @@ struct SettingsDefaultAgentView: View {
             scopeSection
             SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
             SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope)
+            piDurableIconCard
             connectionsSection
             SettingsCard(title: "Code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
                 Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
@@ -69,6 +77,32 @@ struct SettingsDefaultAgentView: View {
         .task { selectScope(initialScope) }
         .onChange(of: agent.scope) { _, _ in browsingAllModels = false }
         .onDisappear { agent.cancel() }
+    }
+    private var piDurableIconCard: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pi Durable icon")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Choose the icon used for Pi Durable throughout the app.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            DashboardHarnessLogoIcon(logo: .defaultAgent, size: 24)
+            Button("Change icon") {
+                storedPiDurableLogoStyle = piDurableLogoStyle.next.rawValue
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .help("Switch Pi Durable to the \(piDurableLogoStyle.next.displayName) icon")
+            .accessibilityLabel("Change Pi Durable icon")
+            .accessibilityValue(piDurableLogoStyle.displayName)
+            .accessibilityHint("Switches to the \(piDurableLogoStyle.next.displayName) icon")
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.palette.workspace)
+        .clipShape(DashboardShapes.card)
     }
     private var scopeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
