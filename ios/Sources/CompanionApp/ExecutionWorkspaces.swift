@@ -220,7 +220,7 @@ extension CompanionModel {
       runID: interaction.runID, interactionID: interaction.id, response: response))
   }
   func submitExecutionCommand(_ command: CompanionCommand) async {
-    let owner = command.conversationID.map { executionOwner(of: $0) } ?? selectedExecutionWorkspaceID
+    let owner = command.conversationID.map { executionRoute(for: $0) } ?? selectedExecutionWorkspaceID
     guard let client = workspaceClients[owner] else { return }
     do {
       let result = try await client.submit(command)

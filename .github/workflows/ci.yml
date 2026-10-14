@@ -68,8 +68,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.macos == 'true'
     runs-on: macos-26
-    # Cold desktop, native iOS, and integration builds exceed the former 30-minute budget.
-    timeout-minutes: 45
+    # Cold desktop builds plus iPhone/iPad UI suites need their own completion budget.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -78,7 +78,7 @@ jobs:
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
-      - name: Test desktop and companion packages, unsigned apps, and simulator models
+      - name: Test desktop, companion packages, and iPhone/iPad UI flows
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/test-changes.sh --macos

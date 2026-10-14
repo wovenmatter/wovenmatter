@@ -540,7 +540,7 @@ import CompanionInference
       approval.continuation.resume(returning: !response.cancelled && (response.optionID == "allow" || !response.answers.isEmpty))
       return
     }
-    if executionOwner(of: interaction.conversationID) != "central" { await respondInExecutionWorkspace(interaction, response: response); return }
+    if executionRoute(for: interaction.conversationID) != "central" { await respondInExecutionWorkspace(interaction, response: response); return }
     await submit(.init(deviceID: state.deviceID, kind: .respond, conversationID: interaction.conversationID,
       runID: interaction.runID, interactionID: interaction.id, response: response))
   }
@@ -549,7 +549,7 @@ import CompanionInference
     let conversationID: String?
     switch request { case .session(let id), .exportConversation(let id, _): conversationID = id; default: conversationID = nil }
     if let id = conversationID {
-      let owner = executionOwner(of: id)
+      let owner = executionRoute(for: id)
       if owner == "local" { return try await readDeviceWorkspace(request) }
       if owner != "central" {
         guard let client = workspaceClients[owner] else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
@@ -568,7 +568,7 @@ import CompanionInference
     default: conversationID = nil
     }
     if let id = conversationID {
-      let owner = executionOwner(of: id)
+      let owner = executionRoute(for: id)
       if owner == "local" { return await performDeviceAction(action) }
       if owner != "central" {
         guard let client = workspaceClients[owner] else { errorMessage = "This execution workspace is unavailable."; return false }

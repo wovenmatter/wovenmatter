@@ -193,15 +193,19 @@ extension CompanionModel {
     if let workspaceID = conversationWorkspaceIDs[conversationID] { return workspaceID == deviceWorkspaceID ? "local" : workspaceID }
     return "central"
   }
+  /// A transport fallback never changes which workspace owns retained history.
+  func executionRoute(for conversationID: String) -> String {
+    if let route = selectedConversationRoute, route.conversationID == conversationID { return route.workspaceID }
+    return executionOwner(of: conversationID)
+  }
   var selectedExecutionWorkspaceID: String {
-    if let route = selectedConversationRoute, route.conversationID == selectedConversationID { return route.workspaceID }
-    return selectedConversationID.map { executionOwner(of: $0) } ?? executionWorkspaceID
+    selectedConversationID.map { executionRoute(for: $0) } ?? executionWorkspaceID
   }
   func executionAvailable(for conversationID: String) -> Bool {
-    switch executionOwner(of: conversationID) {
+    switch executionRoute(for: conversationID) {
     case "local": return !fixture
     case "central": return online
-    default: return workspaceReachable[executionOwner(of: conversationID)] == true
+    default: return workspaceReachable[executionRoute(for: conversationID)] == true
     }
   }
   var executionName: String {
