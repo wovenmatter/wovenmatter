@@ -44,6 +44,7 @@ extension WorkspaceDatabaseConnection {
         SELECT agent_id, location, endpoint_url, authorization, status,
           openclaw_version, last_connected_at, last_error, linked_at, updated_at
         FROM desktop_openclaw_gateway_links
+        WHERE location IN ('local_agent_workspace', 'remote_workspace')
         ORDER BY linked_at, agent_id
         """)
       defer { sqlite3_finalize(statement) }

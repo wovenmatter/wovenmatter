@@ -110,21 +110,48 @@ struct PersistenceBehaviorTests {
     let owner = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
     let remote = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
     let date = Date(timeIntervalSince1970: 1_700_000_000.125)
-    _ = try await database.createLocalACPSession(
+    let localConversationID = try await database.createLocalACPSession(
       runtimeKind: .codex, title: "Local", ownerDeviceID: owner, createdAt: date
+    )
+    let externalConversationID = try await database.createLocalACPSession(
+      runtimeKind: .codex, title: "External", ownerDeviceID: owner, createdAt: date
     )
     let remoteID = try await database.ensureRemoteHarnessAgent(
       runtimeKind: .codex, remoteWorkspaceID: remote, remoteWorkspaceName: "Remote",
       ownerDeviceID: owner, updatedAt: date
     )
     #expect(remoteID.uuidString.lowercased() == "1f3691b1-c027-56fd-999f-9eed2130cd6a")
+    let sql = try PersistenceSQL(url: fixture.databaseURL)
+    // Externally scoped records must not become direct local CLI agents.
+    try sql.execute("""
+      INSERT INTO dashboard_agents (
+        id, user_id, codename, display_name, execution_location, governing_plane,
+        authority_kind, authority_device_id, runtime_kind, platform_codename,
+        status, created_at, updated_at, desktop_owned
+      ) SELECT '33333333-3333-4333-8333-333333333333', user_id, 'external-agent',
+          'External agent', execution_location, governing_plane, authority_kind,
+          authority_device_id, runtime_kind, 'external_workspace', status,
+          created_at, updated_at, desktop_owned
+        FROM dashboard_agents WHERE runtime_device_id IS NULL LIMIT 1;
+      UPDATE dashboard_conversations
+        SET agent_id = '33333333-3333-4333-8333-333333333333',
+          authority_agent_id = '33333333-3333-4333-8333-333333333333'
+        WHERE id = '\(externalConversationID)';
+      UPDATE desktop_local_acp_sessions
+        SET agent_id = '33333333-3333-4333-8333-333333333333',
+          authority_agent_id = '33333333-3333-4333-8333-333333333333'
+        WHERE conversation_id = '\(externalConversationID)';
+      """)
     let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
     let agents = try await reopened.dashboardAgents()
     #expect(Set(agents.map { $0.id.uuidString.lowercased() }) == [
       "5711c18c-4ab6-50f2-893f-e3d31837e15b", "1f3691b1-c027-56fd-999f-9eed2130cd6a",
     ])
     #expect(agents.allSatisfy { $0.createdAt == date })
-    let sql = try PersistenceSQL(url: fixture.databaseURL)
+    #expect(try await reopened.localACPSession(conversationID: localConversationID).runtimeKind == .codex)
+    await #expect(throws: LocalACPSessionDatabaseError.sessionNotFound) {
+      try await reopened.localACPSession(conversationID: externalConversationID)
+    }
     try sql.execute("UPDATE dashboard_agents SET updated_at = '2023-11-14T22:13:20Z'")
     #expect(try await reopened.dashboardAgents().allSatisfy {
       $0.updatedAt == Date(timeIntervalSince1970: 1_700_000_000)

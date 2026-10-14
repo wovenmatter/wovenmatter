@@ -476,9 +476,11 @@ extension WorkspaceDatabaseConnection {
         FROM desktop_local_acp_sessions AS session
         JOIN dashboard_conversations AS conversation
           ON conversation.id = session.conversation_id
+        JOIN dashboard_agents AS agent ON agent.id = session.agent_id
         WHERE session.conversation_id = ?
           AND conversation.desktop_owned = 1
           AND conversation.deleted_at IS NULL
+          AND (agent.governing_plane = 'remote_workspace' OR agent.platform_codename IS NULL)
         """)
       defer { sqlite3_finalize(statement) }
       try bind(conversationID, at: 1, to: statement)
