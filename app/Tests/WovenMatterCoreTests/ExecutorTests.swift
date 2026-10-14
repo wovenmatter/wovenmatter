@@ -20,6 +20,14 @@ struct ExecutorTests {
         #expect(!after.enabled.contains(.library))
         #expect(after.executorProfiles == ["app:profile"])
     }
+    @Test func cachedInventoryRemainsReadableAndAccountTargetsPersist() throws {
+        let cached = Data(#"{"id":"app:old-profile","app":"app","name":"App","profile":"old-profile","profileName":"Saved label"}"#.utf8)
+        let old = try JSONDecoder().decode(ExecutorAppTarget.self, from: cached)
+        #expect(old.targetName == "Saved label")
+        #expect(old.account == nil)
+        let selected = ExecutorAppTarget(id: "app:account:id", app: "app", name: "App", account: "id", targetName: "Work")
+        #expect(try JSONDecoder().decode(ExecutorAppTarget.self, from: JSONEncoder().encode(selected)) == selected)
+    }
     @Test func confirmedHarnessModesPreserveTheirMeaning() {
         let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.opencode, "allow"), (.opencode, "full")]
         for (runtime, mode) in full {
@@ -80,8 +88,8 @@ struct ExecutorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         var config = ExecutorConfiguration()
-        let first = ExecutorAppProfile(id: "first:p", app: "first", name: "First", profile: "p", profileName: "Default")
-        let second = ExecutorAppProfile(id: "second:p", app: "second", name: "Second", profile: "p", profileName: "Default")
+        let first = ExecutorAppTarget(id: "first:p", app: "first", name: "First", targetName: "App")
+        let second = ExecutorAppTarget(id: "second:p", app: "second", name: "Second", targetName: "App")
         config.apps = [first]
         try await database.updateExecutor(configuration: config)
         let base = try await database.toolSettings()

@@ -113,7 +113,7 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let client = try await executorClient()
         let value = try await client.call(.object(["operation": .string("inventory")]))
-        let apps = try JSONDecoder().decode([ExecutorAppProfile].self, from: JSONEncoder().encode(value))
+        let apps = try JSONDecoder().decode([ExecutorAppTarget].self, from: JSONEncoder().encode(value))
         try await database.updateExecutor(apps: apps)
     }
 
