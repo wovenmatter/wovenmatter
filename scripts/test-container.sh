@@ -74,14 +74,18 @@ printf '%s\n' 'Checking API authentication and persistent home ownership.'
 docker exec "$container_a" sh -c 'printf persistent > "$HOME/.woven-matter/smoke-marker"'
 printf '%s\n' 'Checking storage reporting and restart/update preservation.'
 status="$(scripts/remote-workspace.sh status "$workspace_a")"
-jq -e '
+if ! jq -e '
   .storageKind == "named-volume"
   and .legacyStorage == false
   and .swapMode == "default"
   and .storageUsedBytes > 0
   and .hostStorageCapacityBytes > 0
   and .hostStorageAvailableBytes >= 0
-' <<< "$status" >/dev/null
+' <<< "$status" >/dev/null; then
+  jq '{storageKind, legacyStorage, swapMode, storageUsedBytes, hostStorageCapacityBytes, hostStorageAvailableBytes}' <<< "$status" >&2
+  docker exec "$container_a" sh -c 'stat -c "%a %u:%g %n" /home /home/node 2>/dev/null; du -sk /home' >&2 || true
+  exit 1
+fi
 scripts/remote-workspace.sh restart "$workspace_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
