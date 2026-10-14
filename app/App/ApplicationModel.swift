@@ -69,7 +69,7 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     let isLibraryClient: Bool
-    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel()
+    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel(assets: workspaceAssets)
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
@@ -180,7 +180,8 @@ final class ApplicationModel {
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
-    let workspaceAssets = WorkspaceAssetSession()
+    let workspaceAssets: WorkspaceAssetSession
+    @ObservationIgnored var clientExecutionDirectory: URL?
     @ObservationIgnored var automationHost: WovenAutomationHost?
     var activeSessionLimitPresented = false
     var pendingSessionAccess: [WorkspaceCoordinationAccessRequest] = []
@@ -376,8 +377,10 @@ final class ApplicationModel {
         dashboardStore: DashboardStore? = nil,
         startsAutomatically: Bool? = nil,
         ownsExecutionOverride: Bool? = nil,
-        localUsageService: LocalUsageService? = nil
+        localUsageService: LocalUsageService? = nil,
+        workspaceAssets: WorkspaceAssetSession? = nil
     ) {
+        self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
         self.isLibraryClient = LocalExecutionRole.current != .backend
             && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
@@ -517,6 +520,7 @@ final class ApplicationModel {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
+        clientExecutionDirectory = directory
         try await dashboardStore.prepareLocalWorkspace()
         await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
             await self?.requestLocalACPPermission(conversationID: conversationID, request: request)

@@ -6,6 +6,54 @@ import WovenMatterCore
 @Suite("Companion central CLI authority and receipts", .serialized)
 @MainActor
 struct CompanionToolBridgeTests {
+  @Test func automationUploadBoundsAndCancellationRetainDeviceOwnership() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let data = Data(repeating: 0x41, count: 2 * 1_024 * 1_024).base64EncodedString()
+    let payload = "{\"action\":\"upload\",\"data\":\"" + data + "\"}"
+    let upload = fixture.request(["browser", "call", "--json", payload])
+    try await fixture.database.authorizeCompanionTool(upload, deviceID: fixture.deviceID)
+    let oversized = fixture.request(["browser", "call", "--json", String(repeating: "x", count: 3 * 1_024 * 1_024 + 1)])
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionTool(oversized, deviceID: fixture.deviceID)
+    }
+    try await fixture.database.setSessionTools(.init(enabled: []), sessionID: fixture.conversationID)
+    var cancel = fixture.request(["computer", "cancel", "--id", "all"]); cancel.enabledGroups = []
+    try await fixture.database.authorizeCompanionTool(cancel, deviceID: fixture.deviceID)
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionTool(cancel, deviceID: UUID().uuidString.lowercased())
+    }
+  }
+
+  @Test func desktopResponsesAreNotStoredInTransportReceiptsOrReexecuted() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let request = fixture.request(["browser", "call", "--json", "{\"action\":\"tabs\"}"])
+    let dispatcher = CompanionToolDispatcher(database: fixture.database)
+    var executions = 0
+    let result = try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, _ in
+      executions += 1; return .init(result: .string("synthetic page capture"))
+    }
+    #expect(result.result == .string("synthetic page capture"))
+    let restarted = CompanionToolDispatcher(database: try await WorkspaceDatabase(url: fixture.url))
+    let retry = try await restarted.execute(request, deviceID: fixture.deviceID) { _, _ in
+      executions += 1; return .init()
+    }
+    #expect(executions == 1 && retry.code == "automation_outcome_recorded" && retry.result == nil)
+  }
+
+  @Test func ongoingAutomationRechecksDeviceExecutionAccess() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let identity = try await fixture.database.companionLibraryIdentity()
+    let host = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+      id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+      kind: .mac, name: "Central Mac", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
+    try await fixture.database.requireCompanionAutomationAccess(callerID: fixture.conversationID)
+    try await fixture.database.setCompanionWorkspaceAccess(deviceID: fixture.deviceID, workspaceID: host.id,
+      enabled: false, authorizedBy: identity.hostDeviceID)
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.requireCompanionAutomationAccess(callerID: fixture.conversationID)
+    }
+  }
+
   @Test func onlyActualExecutionDeviceCanUseItsImportedConversation() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }
     let request = fixture.request(["notes", "list"])

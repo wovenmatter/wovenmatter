@@ -13,6 +13,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     var tabs = WorkspaceAssetTabs()
     private(set) var pages: [UUID: WMBrowserPage] = [:]
     private(set) var pageRevision = 0
+    private(set) var browserPresentationRevision = 0
     var notice: String?
     var automationTabs: [GatewayJSONValue] {
         tabs.browserIDs.compactMap { id in
@@ -56,6 +57,11 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         case .note: tabs.close(tab)
         case .browser(let id): pages[id]?.close()
         }
+    }
+
+    func focusAutomationBrowser(_ id: UUID) {
+        tabs.select(.browser(id))
+        browserPresentationRevision &+= 1
     }
 
     func title(for tab: WorkspaceAssetTabs.Tab, notes: [WorkspaceNoteRecord]) -> String {

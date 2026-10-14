@@ -299,6 +299,9 @@ final class ExecutionRoutingTests: XCTestCase {
       } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
     }
     XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["wovenmatter_notes"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_browser", selection: nil))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: ["wovenmatter_computer"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_notes", selection: ["read_note"]))
     XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.map { "wovenmatter_" + $0.rawValue }))

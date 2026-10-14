@@ -264,7 +264,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 route = "remote:\(id.uuidString.lowercased()):"
             }
             command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
-        case (.executor, "execute"), (.executor, "cancel"):
+        case (.executor, "execute"), (.executor, "cancel"), (.browser, "call"), (.computer, "call"):
             command = .init(deviceID: deviceID, kind: .createSession, providerID: "local:")
         default: return
         }

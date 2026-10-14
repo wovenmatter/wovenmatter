@@ -24,9 +24,12 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func authorizeCompanionToolUnlocked(_ value: CompanionToolRequest, deviceID: String) throws {
+    let command = try WovenMatterToolCommand(value.request.arguments)
+    let maximumBytes = command.group?.isAutomation == true ? 4 * 1_024 * 1_024 : WovenMatterToolResponse.maximumResponseBytes
     guard UUID(uuidString: deviceID) != nil, UUID(uuidString: value.conversationID) != nil,
           value.request.schemaVersion == 1, UUID(uuidString: value.request.requestID) != nil,
-          try JSONEncoder().encode(value).count <= WovenMatterToolResponse.maximumResponseBytes else {
+          try JSONEncoder().encode(value).count <= maximumBytes,
+          command.group?.isAutomation != true || (command.options["json"]?.utf8.count ?? 0) <= 3 * 1_024 * 1_024 else {
       throw CompanionAPIError(code: "invalid_request", message: "Tool calls require bounded requests and stable UUID identities.")
     }
     let owners = try companionIDsUnlocked("""
@@ -39,17 +42,36 @@ extension WorkspaceDatabaseConnection {
           workspace.ownerDeviceID == deviceID, (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID else {
       throw CompanionAPIError(code: "wrong_owner", message: "Sync this device's conversation before using the central library tools.")
     }
-    let command = try WovenMatterToolCommand(value.request.arguments)
     if let supplied = command.options["request-id"] {
       guard UUID(uuidString: supplied) == UUID(uuidString: value.request.requestID) else {
         throw CompanionAPIError(code: "invalid_request", message: "--request-id must match the request envelope.")
       }
     }
     if !command.wantsHelp, command.action != "context", let group = command.group {
+      // Cleanup retains device/caller ownership, including after revocation.
+      if group.isAutomation, command.action == "cancel" { return }
       guard value.enabledGroups.contains(group) else { throw WorkspaceToolError.disabled(group) }
       // History retains the desktop's independent attachment/management checks.
       // All other groups require the persisted central session policy as well.
       if group != .history { try requireToolUnlocked(group, sessionID: value.conversationID) }
+    }
+  }
+
+  /// Recheck the existing device execution policy between native input steps.
+  /// Caller ownership is derived from the journal, never automation arguments.
+  public func requireCompanionAutomationAccess(callerID: String) throws {
+    try withLock {
+      guard let id = try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [callerID]).first else { return }
+      guard let owner = try federationWorkspaceUnlocked(id), !owner.deleted else {
+        throw CompanionAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")
+      }
+      let identity = try companionLibraryIdentityUnlocked()
+      let workspaces = try federationValuesUnlocked("SELECT payload FROM companion_execution_workspaces", as: CompanionExecutionWorkspace.self)
+      guard let host = workspaces.first(where: { $0.kind == .mac && !$0.deleted && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID }) else { return }
+      let denied = try companionIDsUnlocked("SELECT workspace_id FROM companion_workspace_access WHERE device_id=? AND workspace_id=? AND enabled=0", bindings: [owner.executionDeviceID ?? owner.ownerDeviceID, host.id])
+      guard denied.isEmpty else {
+        throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this Mac is disabled in Device Connections.")
+      }
     }
   }
 
@@ -98,6 +120,9 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
+  public func requireCompanionAutomationAccess(callerID: String) async throws {
+    try await read { try $0.requireCompanionAutomationAccess(callerID: callerID) }
+  }
   public func authorizeCompanionTool(_ value: CompanionToolRequest, deviceID: String) async throws {
     try await read { try $0.authorizeCompanionTool(value, deviceID: deviceID) }
   }

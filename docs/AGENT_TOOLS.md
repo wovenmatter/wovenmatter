@@ -68,6 +68,13 @@ The bundled server is available as `wovenmatter mcp`, without editing global
 harness configuration. Managed remote agents use the same tools on the Mac
 hosting Woven Matter; remote schedules without a Mac connection do not borrow one.
 
+Secondary Mac agents use their own visible browser, shared with the client's
+Browser pane. Device-owned Pi Durable on iPhone routes browser/computer commands
+to the paired central Mac and returns screenshots inline. The device's tool
+selection narrows the central chat's policy; Computer Use must be enabled there
+as well. Existing Device Connections execution access applies, including checks
+between input steps. Local command help is available while offline.
+
 Browser Use controls only the browser inside Woven Matter. It shares the user's
 tabs, profile and signed-in sessions. Start with `{"action":"tabs"}` or
 `{"action":"open","url":"https://example.com"}`, then use its `tabId`:

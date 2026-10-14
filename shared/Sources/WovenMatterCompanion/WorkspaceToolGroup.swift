@@ -3,6 +3,7 @@ import Foundation
 public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sendable {
   case notes, history, sessions, timers, usage, calendar, library, executor, browser, computer
   public var id: String { rawValue }
+  public var isAutomation: Bool { self == .browser || self == .computer }
   public var title: String {
     switch self {
     case .notes: "Notes"

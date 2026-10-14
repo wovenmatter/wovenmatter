@@ -1,3 +1,6 @@
+#if COMPANION_FACADE_TESTS
+import CompanionBrowserTestBridge
+#endif
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
@@ -73,6 +76,7 @@ final class WovenAutomationHost {
                     let admit: @MainActor @Sendable () async throws -> Void = { @MainActor [database] in
                         try Task.checkCancellation()
                         try await database.requireAutomationRequest(group, callerID: invocation.callerID, requestID: id)
+                        try await database.requireCompanionAutomationAccess(callerID: invocation.callerID)
                         try Task.checkCancellation()
                     }
                     let result = group == .computer
@@ -111,7 +115,7 @@ final class WovenAutomationHost {
             return .object(["content": .array([.object(["type": .string("text"), "text": .string("tabId: " + id.uuidString.lowercased())])])])
         }
         guard let raw = args["tabId"]?.stringValue, let id = UUID(uuidString: raw), let page = assets.pages[id], !page.closed else { throw WorkspaceToolError.invalid("Choose a current tabId from tabs or open.") }
-        if action == "focus" { assets.tabs.select(.browser(id)); return .object(["focused": .bool(true)]) }
+        if action == "focus" { assets.focusAutomationBrowser(id); return .object(["focused": .bool(true)]) }
         if action == "close" { assets.close(.browser(id)); return .object(["closed": .bool(true)]) }
         if action == "downloads" { return try JSONDecoder().decode(GatewayJSONValue.self, from: JSONSerialization.data(withJSONObject: page.automationDownloads)) }
         if action == "read-download" {

@@ -10,10 +10,15 @@ extension ApplicationModel {
     func startAutomationHost() {
         guard LocalExecutionRole.current != .backend, automationHost == nil, let database = dashboardStore?.database else { return }
         do {
-            let url = try Self.automationSocket()
-            try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(url)
             let host = WovenAutomationHost(assets: workspaceAssets, database: database)
-            try host.start(at: url); automationHost = host
+            // Secondary Mac execution lives in this GUI process. It must not
+            // replace the primary library's GUI/backend automation socket.
+            if clientExecutionDirectory == nil {
+                let url = try Self.automationSocket()
+                try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(url)
+                try host.start(at: url)
+            }
+            automationHost = host
         } catch { workspaceAssets.notice = error.localizedDescription }
     }
     func handleAutomationTool(callerID: String, command: WovenMatterToolCommand,

@@ -16,7 +16,12 @@ struct CentralLibraryClientView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Woven Matter").font(.system(size: 21, weight: .semibold)).padding(.horizontal, 12).padding(.top, 24)
                 ForEach(CentralLibraryClientModel.Section.allCases) { section in
-                    Button { model.section = section } label: {
+                    Button {
+                        model.section = section
+                        if section == .browser, application.workspaceAssets.tabs.browserIDs.isEmpty {
+                            application.workspaceAssets.openBrowser()
+                        }
+                    } label: {
                         HStack(spacing: 10) {
                             DashboardLucideIcon(glyph: section.icon, size: 16)
                             Text(section.rawValue); Spacer()
@@ -56,6 +61,13 @@ struct CentralLibraryClientView: View {
         .navigationSplitViewStyle(.balanced)
         .disabled(model.preparingTransition)
         .task { await model.run() }
+        .onChange(of: application.workspaceAssets.tabs.selected) { _, tab in
+            if case .browser = tab { model.section = .browser }
+        }
+        .onChange(of: application.workspaceAssets.browserPresentationRevision) { _, _ in model.section = .browser }
+        .onChange(of: application.workspaceAssets.tabs.isPresented) { _, presented in
+            if !presented, model.section == .browser { model.section = .chats }
+        }
         .alert("Woven Matter", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
@@ -73,6 +85,16 @@ struct CentralLibraryClientView: View {
         case .chats: chats
         case .library: LibraryClientLibraryPane(model: model)
         case .calendar: LibraryClientCalendarPane(model: model)
+        case .browser:
+            if application.workspaceAssets.tabs.browserIDs.isEmpty {
+                ContentUnavailableView("Browser unavailable", systemImage: "globe",
+                    description: Text(application.workspaceAssets.notice ?? "Open a browser tab to browse alongside your work."))
+            } else {
+                DashboardAssetPane(model: application, assets: application.workspaceAssets,
+                    compact: true, noteOnLeft: .constant(false), focused: .constant(false),
+                    reservesLeadingRailControlSpace: false, reservesTrailingRailControlSpace: false,
+                    newlyCreatedNoteID: nil, onNewNoteFocusHandled: { _ in }, onBack: { model.section = .chats })
+            }
         case .trash: LibraryClientTrashPane(model: model)
         case .settings: CentralLibraryClientSettings(model: model, application: application)
         }

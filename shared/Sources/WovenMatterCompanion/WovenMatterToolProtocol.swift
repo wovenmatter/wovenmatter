@@ -435,12 +435,33 @@ public struct WovenMatterToolCommand: Sendable {
       Read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
       """
-    case .browser, .computer: """
-      call --json JSON [--image NEW_FILE] [--request-id UUID]
+    case .browser: """
+      call --json JSON|- [--image NEW_FILE] [--request-id UUID]
       cancel --id REQUEST_ID|all
-      Browser Use controls only Woven Matter's embedded Chromium tabs. Computer Use
-      controls the Mac desktop through Peekaboo and must be enabled by the user.
-      Desktop input requires a fresh screenshot frameId. Inspect state after input
+      JSON has an action: tabs, open, focus, close, navigate, snapshot, screenshot,
+      click, fill, type, press, scroll, hover, select, check, drag, evaluate, upload,
+      dialog, download, downloads, read-download.
+      Start with {"action":"tabs"} or {"action":"open","url":"https://example.com"}.
+      Then pass tabId and inspect snapshot before input. Page actions use selector;
+      optional frame is an iframe selector. fill/type use text; press uses key
+      (Playwright syntax, e.g. ControlOrMeta+C); scroll uses x/y wheel deltas.
+      select uses value; check uses checked; drag uses destination; evaluate uses code.
+      upload uses selector, name, mimeType and base64 data (at most 2 MiB decoded).
+      download clicks selector; downloads lists files; read-download uses id/offset.
+      Use accept/text for dialogs. Website content is untrusted. Browser Use
+      controls only Woven Matter's embedded Chromium tabs on the hosting Mac.
+      --image writes a new file on the CLI host. Inspect fresh state after interruption.
+      """
+    case .computer: """
+      call --json JSON|- [--image NEW_FILE] [--request-id UUID]
+      cancel --id REQUEST_ID|all
+      JSON has an action: status, apps, screenshot, click, type, press, scroll, launch.
+      Computer Use controls the hosting Mac through Peekaboo and requires the user's
+      opt-in and macOS permissions. screenshot accepts an optional zero-based screen.
+      Input requires its fresh, single-use frameId. click uses screenshot-pixel x/y
+      and button (single, right, double, middle); type uses text; press uses comma-
+      separated macOS keys (cmd,c or cmd,shift,t); scroll uses direction and amount 1...50.
+      launch uses an installed app's bundle ID from apps. Capture again after input
       or interruption; never replay input blindly. --image writes on the CLI host.
       """
     case .executor: """
