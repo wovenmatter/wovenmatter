@@ -9,7 +9,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "$mode" == "--all-devices" ]]; then
   "$root/scripts/test-ios.sh" --ui
   WOVENMATTER_IOS_SIMULATOR_DESTINATION="" \
-    WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE="${WOVENMATTER_IOS_TABLET_DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4}" \
+    WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE="${WOVENMATTER_IOS_TABLET_DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB}" \
     "$root/scripts/test-ios.sh" --ui
   exit 0
 fi

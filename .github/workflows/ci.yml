@@ -96,7 +96,7 @@ jobs:
           - name: iPhone
             type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro
           - name: iPad
-            type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4
+            type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Test native mobile flows
