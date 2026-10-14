@@ -89,7 +89,7 @@ struct DevicePairingDiscoveryCard: View {
 struct DevicePairingCodeCard: View {
     @Bindable var host: CompanionHostController
     var body: some View {
-        SettingsCard(title: "Pair with a code", detail: "Scan the QR code or paste its link on another device.") {
+        SettingsCard(title: "Pair with a QR code or link", detail: "Scan the QR code or paste its link on another device.") {
             if let payload = host.pairingPayload {
                 HStack(alignment: .center, spacing: 24) {
                     if let qr = qrImage(payload.encodedURL.absoluteString) {
@@ -110,8 +110,9 @@ struct DevicePairingCodeCard: View {
                     }
                 }.accessibilityIdentifier("companion.pairing-code")
             } else {
-                Button("Create pairing code") { Task { await host.createPairingCode() } }
-                    .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("companion.create-code")
+                Button("Create QR code or link") { Task { await host.createPairingCode() } }
+                    .buttonStyle(SettingsQuietButtonStyle()).disabled(host.endpoint == nil || host.isStarting)
+                    .accessibilityIdentifier("companion.create-code")
             }
         }
     }

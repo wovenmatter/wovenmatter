@@ -161,11 +161,13 @@ final class CompanionHostController {
             attemptExposure = exposure
             serve = exposure
             let portKey = "companion.https.port." + (try await database.companionWorkspaceID())
-            let savedPort = defaults.object(forKey: portKey) as? Int
+            // Only paired devices rely on a stable address. Before the first
+            // pairing, an old occupied port must not prevent initial setup.
+            let savedPort = pairedDevices.isEmpty ? nil : defaults.object(forKey: portKey) as? Int
             let address = try await exposure.start(loopbackPort: localPort, preferredHTTPSPort: savedPort)
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
             defaults.set(address.port ?? 443, forKey: portKey)
-            endpoint = address; isEnabled = true; isStarting = false
+            endpoint = address; isEnabled = true
             try await refreshExecutionRegistry()
             let identity = try await database.companionLibraryIdentity()
             let descriptors = try await database.companionExecutionWorkspaces()
@@ -185,7 +187,7 @@ final class CompanionHostController {
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
-            status = "Available to your paired devices"
+            isStarting = false; status = "Available to your paired devices"
             // Availability alone must not hold the Mac awake. Active execution
             // continues to use the app's existing work/sleep policy.
             healthTask = Task { [weak self] in
@@ -258,7 +260,7 @@ final class CompanionHostController {
 
     func createPairingCode() async {
         if model?.isBackendFrontend == true { await forward(.createCode); return }
-        guard let endpoint, let authentication else { return }
+        guard !isStarting, let endpoint, let authentication else { return }
         do {
             let offer = try await authentication.createOffer(endpoint: endpoint)
             pairingPayload = offer.payload; pairingExpiresAt = offer.expiresAt; errorMessage = nil

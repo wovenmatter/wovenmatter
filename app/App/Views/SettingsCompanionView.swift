@@ -49,7 +49,7 @@ struct SettingsCompanionView: View {
             if !model.isLibraryClient || client.credential == nil {
                 DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
             }
-            if !model.isLibraryClient, host.endpoint != nil { DevicePairingCodeCard(host: host) }
+            if !model.isLibraryClient { DevicePairingCodeCard(host: host) }
             if !model.isLibraryClient, let message = host.errorMessage {
                 Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                     .textSelection(.enabled).accessibilityIdentifier("companion.error")

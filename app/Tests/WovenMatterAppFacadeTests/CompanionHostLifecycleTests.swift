@@ -38,7 +38,7 @@ struct CompanionHostLifecycleTests {
         // A lost foreground Serve process is replaced without another user action.
         let first = try #require(fixture.children.last)
         first.forceStopped = true
-        try await waitUntil(timeout: .seconds(10)) { fixture.children.last !== first && fixture.host.endpoint != nil }
+        try await waitUntil(attempts: 1_000) { fixture.children.last !== first && fixture.host.endpoint != nil }
         #expect(fixture.host.pairedDevices.isEmpty && fixture.host.pairingPayload == nil)
         fixture.host.stop()
         let attempts = fixture.exposureCount
@@ -67,6 +67,26 @@ struct CompanionHostLifecycleTests {
         await fixture.host.start()
         #expect(fixture.exposureCount == 0)
         #expect(fixture.host.endpoint == nil && !fixture.host.isEnabled)
+    }
+
+    @Test func initialSetupSkipsOccupiedOldPortButPairedAddressNeverMovesSilently() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let workspaceID = try await database.companionWorkspaceID()
+        fixture.defaults.set(8443, forKey: "companion.https.port." + workspaceID)
+        fixture.existingPorts.insert(8443)
+        await fixture.host.start()
+        #expect(fixture.host.endpoint?.port == 10000)
+        #expect(fixture.host.errorMessage == nil)
+        #expect(fixture.existingPorts == [443, 8443])
+        _ = try await fixture.pairAndProvision(name: "Fixture iPhone")
+        fixture.host.stopSharing()
+        fixture.existingPorts.insert(10000)
+        await fixture.host.start()
+        #expect(fixture.host.endpoint == nil)
+        #expect(fixture.host.errorMessage != nil)
+        #expect(fixture.children.count == 1, "A paired endpoint must not move to a free port")
+        #expect(fixture.existingPorts == [443, 8443, 10000])
     }
 
     @Test func backendRPCControlsTheSameHostAndReplaysPairingReceipt() async throws {
@@ -354,9 +374,11 @@ struct CompanionHostLifecycleTests {
         #expect(try await fixture.executionStatus(grant) == 200)
     }
 
-    private func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
+    private func waitUntil(attempts: Int = 300, _ condition: () -> Bool) async throws {
+        // CI can run every package's suites in one process. Bound observations,
+        // so unrelated MainActor work cannot consume this fixture's entire wait
+        // before its startup task gets another chance to run.
+        for _ in 0..<attempts {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -372,7 +394,7 @@ private enum HostFixtureError: Error { case timeout }
     let defaults: UserDefaults
     let model: ApplicationModel
     lazy var host = makeHost()
-    let existingPorts: Set<Int> = [443]
+    var existingPorts: Set<Int> = [443]
     var exposureCount = 0
     var children: [HostServingChild] = []
     var replacementCreatedWhileStopping = false

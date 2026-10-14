@@ -87,7 +87,7 @@ public final class CompanionTailscaleServe {
     let used = try Self.occupiedPorts(in: before)
     let candidates = preferredHTTPSPort.map { [$0] } ?? [8443, 10_000, 8444, 8445]
     guard let httpsPort = candidates.first(where: { (1...65535).contains($0) && !used.contains($0) }) else {
-      throw failure("The paired companion HTTPS port is in use by another Tailscale Serve route. Stop that route or retry after this app finishes stopping; existing routes were preserved.")
+      throw failure("Another service is using this device connection address.")
     }
     let child = try launch(executable, ["serve", "--https=\(httpsPort)", "--set-path=/wovenmatter", "http://127.0.0.1:\(loopbackPort)"])
     process = child

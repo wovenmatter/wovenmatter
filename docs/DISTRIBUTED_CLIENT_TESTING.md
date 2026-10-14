@@ -95,6 +95,11 @@ and inference acceptance remain a human test for each provider.
    change **Database role** to **Node** at the bottom of that page and restart.
    Test discovery and approval in both directions,
    then the link fallback. All devices must be on the same Tailscale network.
+   QR/link controls remain visible, but disabled, while the connection is unavailable.
+   Quit/relaunch the app and interrupt its Serve helper: its child must be reaped,
+   the address must become available again, and no device may pair automatically.
+   Before first pairing an occupied old address may be replaced by a free one;
+   after pairing the saved address must remain stable.
    Mere discovery must never authorize library reads. Verify device type and
    each device’s own last contact; activity on one device must not update another.
 2. Synchronize a note in both directions. Disconnect, edit on both sides, reopen
