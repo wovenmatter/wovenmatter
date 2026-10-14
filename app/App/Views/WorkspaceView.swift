@@ -1098,45 +1098,76 @@ struct WorkspaceView: View {
         compactDrawer = .none
     }
 
+    private struct ChatCreationSelection {
+        let id = UUID()
+        let previousConversationID: String?
+        let previousAgentID: UUID?
+        var conversationID: String { id.uuidString.lowercased() }
+    }
+
+    private func beginChatCreation(agentID: UUID?) -> ChatCreationSelection {
+        let selection = ChatCreationSelection(previousConversationID: selectedConversationID, previousAgentID: selectedAgentID)
+        selectedAgentID = agentID
+        closeNewChatChooser()
+        presentCreatedConversation(selection.conversationID)
+        return selection
+    }
+
+    private func finishChatCreation(_ selection: ChatCreationSelection, conversationID: String?) {
+        // A late setup response must not take focus from a newer navigation action.
+        guard selectedConversationID == selection.conversationID else { return }
+        if let conversationID { presentCreatedConversation(conversationID) }
+        else {
+            _ = chatPanels.replaceActiveConversation(with: selection.previousConversationID)
+            selectedAgentID = selection.previousAgentID
+        }
+    }
+
     private func startDirectChat(_ runtimeKind: AgentRuntimeKind) {
         let requestedFolderID = selectedFolderID
+        let selection = beginChatCreation(agentID: allAgents.first {
+            $0.governingPlane != .remoteWorkspace && $0.runtimeKind == runtimeKind
+        }?.id)
         Task {
             let owner = try? await model.executionWorkspaceIdentity(workspaceID: nil)
             let folderID = model.workspaceOverview?.folders.first(where: {
                 $0.id == requestedFolderID && ($0.executionWorkspaceID == nil || $0.executionWorkspaceID == owner)
             })?.id
             guard let conversationID = await model.createLocalACPSession(
-                runtimeKind: runtimeKind, folderID: folderID
+                runtimeKind: runtimeKind, requestedConversationID: selection.id, folderID: folderID
             ) else {
+                finishChatCreation(selection, conversationID: nil)
                 showNotice(
                     model.localRunError
                         ?? "The local CLI chat could not be created."
                 )
                 return
             }
-            closeNewChatChooser()
-            presentCreatedConversation(conversationID)
+            finishChatCreation(selection, conversationID: conversationID)
         }
     }
 
     private func startRemoteChat(_ target: RemoteHarnessChatTarget) {
         let requestedFolderID = selectedFolderID
+        let selection = beginChatCreation(agentID: allAgents.first {
+            $0.governingPlane == .remoteWorkspace && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
+        }?.id)
         Task {
             let owner = "remote:" + target.configuration.id.uuidString.lowercased()
             let folderID = model.workspaceOverview?.folders.first(where: {
                 $0.id == requestedFolderID && ($0.executionWorkspaceID == nil || $0.executionWorkspaceID == owner)
             })?.id
             guard let conversationID = await model.createRemoteACPSession(
-                target: target, folderID: folderID
+                target: target, requestedConversationID: selection.id, folderID: folderID
             ) else {
+                finishChatCreation(selection, conversationID: nil)
                 showNotice(
                     model.localRunError
                         ?? "The remote workspace chat could not be created."
                 )
                 return
             }
-            closeNewChatChooser()
-            presentCreatedConversation(conversationID)
+            finishChatCreation(selection, conversationID: conversationID)
         }
     }
 
