@@ -26,7 +26,7 @@ struct LibraryPane: View {
       List {
         CompanionInlineError(model: model)
         if !savedArtifacts.isEmpty {
-          Section("Saved artifacts") {
+          Group {
             ForEach(savedArtifacts.filter { item in
               !item.deleted && (search.isEmpty || item.title.localizedCaseInsensitiveContains(search)) &&
               (kind.isEmpty || kind == "photo" && item.mediaType.hasPrefix("image/") || kind == "file" && !item.mediaType.hasPrefix("image/"))
@@ -132,7 +132,6 @@ struct ItemManagementSheet: View {
   var body: some View {
     Group {
       Form {
-        if !isNote { Section { ChatOfflineToggle(model: model, conversationID: id) } }
         Group {
         CompanionInlineError(model: model)
         if busy { ProgressView("Saving…") }

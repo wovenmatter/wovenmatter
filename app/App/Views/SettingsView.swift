@@ -229,7 +229,7 @@ struct SettingsView: View {
                 if !executionOnly {
                 SettingsDestinationRow(
                     title: "Device Connections",
-                    detail: "Connect Macs, iPhones, and iPads to one central library over Tailscale.",
+                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
                     icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
                     action: { section = .companion }
                 )

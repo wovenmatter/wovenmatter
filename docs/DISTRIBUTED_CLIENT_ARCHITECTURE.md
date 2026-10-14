@@ -24,7 +24,11 @@ The central Mac manages membership and access in Settings → Device Connections
 Macs discover compatible Woven Matter services among peers visible through their
 existing Tailscale client. Initial pairing requires approval; discovery alone
 never grants library access. A one-time pairing link remains available. iPhone
-and iPad use Settings → Pair to Mac with QR scanning or a pasted pairing link.
+and iPad use Settings → Device Connections with QR scanning or a pasted pairing link.
+Each Mac defaults to **Central database**. The **Database role** section at the
+bottom switches it to **Node** through a guarded restart, preserving the existing
+database separately. An unpaired node opens setup; after pairing it starts its
+own execution workspace. Only nodes offer central-database discovery/link entry.
 Workspaces lists available execution locations rather than housing library pairing.
 
 A paired client receives the registry and access to enabled execution workspaces
@@ -57,8 +61,12 @@ When the central Mac is offline, ordinary library edits on one client remain loc
 until central synchronization resumes. Direct workspace commands and history reads
 continue against reachable owners. No client becomes a replacement central library,
 and no viewing client acts as a synchronization intermediary for another workspace.
-Sync status and conflicts belong in connection settings or the affected item;
-ordinary disconnection must not create intrusive banners or dialogs.
+Sync runs automatically. Device Connections contains pairing and device access,
+not sync-lane dashboards or optional per-chat offline toggles. Recovery for an
+actual conflict belongs with the affected item. Ordinary disconnection must not
+create intrusive banners or dialogs. Explicit **Unpair** removes central-issued
+access grants, retaining cached content, pending writing, inference sign-ins,
+and the database binding so another database cannot receive old pending writes.
 
 ## Pi Durable on iOS and iPadOS
 

@@ -44,21 +44,31 @@ extension CompanionModel {
     try await ensureDeviceWorkspace()
   }
 
-  func disconnectMac(clearCredential: () throws -> Void = MobileCredentialVault.clear) async {
+  func disconnectMac(clearCredential: () throws -> Void = MobileCredentialVault.clear,
+                     clearWorkspaceCredential: (String) throws -> Void = WorkspaceCredentialVault.clear) async {
     guard !pairingInProgress else { return }
     pairingInProgress = true
     defer { pairingInProgress = false }
+    connectionGeneration = UUID()
+    connectionRefreshTask?.cancel(); connectionRefreshTask = nil
+    for task in workspacePollTasks.values { task.cancel() }
+    workspacePollTasks = [:]
+    let previousEngine = engine
+    credential = nil; transport = nil; engine = nil
+    online = false; connecting = false; connectionLabel = "Disconnected"
+    let workspaceIDs = Set(workspaceClients.keys).union(executionWorkspaces.map(\.id))
+    workspaceClients = [:]; workspaceProviders = [:]; workspaceReachable = [:]
+    remotePending = [:]; pending = []; providers = []
+    await previousEngine?.cancelSynchronization()
     do {
+      // Do not touch inference credentials, content, outboxes, or the library
+      // binding. Only explicit unpairing drops the central-issued access grants.
       try clearCredential()
-      connectionGeneration = UUID()
-      await engine?.cancelSynchronization()
-      credential = nil; transport = nil; engine = nil
-      online = false; connecting = false; connectionLabel = "Disconnected"
-      connectionRefreshTask?.cancel(); connectionRefreshTask = nil
-      pending = []
+      let journalIDs = await store?.journal.snapshot().workspaces.keys.map { $0 } ?? []
+      for id in workspaceIDs.union(journalIDs) where id != deviceWorkspaceID {
+        try clearWorkspaceCredential(id)
+      }
       pairingError = nil
-      // The replica, outbox, calendar, local runs and separately issued direct
-      // workspace grants remain on this device. Disconnect is not an erase.
       await reload()
     } catch { pairingError = error.localizedDescription }
   }

@@ -6131,9 +6131,7 @@ extension ApplicationModel {
     }
 
     func activateLibraryClientMode() async throws {
-        guard !isLibraryClient, libraryClient.credential != nil else {
-            throw BackendRPCError.remote("Pair this Mac with your central library before switching to client mode.")
-        }
+        guard !isLibraryClient else { return }
         try await changeLibraryClientMode(enabled: true)
     }
 

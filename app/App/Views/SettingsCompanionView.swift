@@ -8,6 +8,7 @@ struct SettingsCompanionView: View {
     @Bindable var host: CompanionHostController
     @State private var recoveryError: String?
     @State private var switching = false
+    @State private var confirmRoleChange = false
     @State private var updatingAccess: Set<String> = []
     var reservesRailControlSpace = false
     var onBack: () -> Void
@@ -15,8 +16,8 @@ struct SettingsCompanionView: View {
 
     var body: some View {
         SettingsPage(title: "Device Connections", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            CentralLibraryPairingCard(client: client, application: model)
             if model.isLibraryClient {
+                CentralLibraryPairingCard(client: client, application: model)
                 SettingsCard(title: "This Mac") {
                     HStack {
                         DeviceConnectionIcon(kind: .mac)
@@ -28,10 +29,9 @@ struct SettingsCompanionView: View {
                     }
                     if let error = client.deviceConnectionsError { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
                 }
-                synchronization
                 if !client.connectedDevices.isEmpty { clientDeviceRoster }
             } else {
-                SettingsCard(title: "This central library") {
+                SettingsCard(title: "Central database") {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
@@ -49,74 +49,56 @@ struct SettingsCompanionView: View {
                 if !host.pairedDevices.isEmpty { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
-            DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: client.credential == nil)
+            if !model.isLibraryClient || client.credential == nil {
+                DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
+            }
             if !model.isLibraryClient, host.endpoint != nil { DevicePairingCodeCard(host: host) }
             if !model.isLibraryClient, let message = host.errorMessage {
                 Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                     .textSelection(.enabled).accessibilityIdentifier("companion.error")
             }
+            if let error = client.deviceConnectionsError, !model.isLibraryClient {
+                Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+            }
             if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
-            if model.isLibraryClient {
-                SettingsCard(title: "This Mac’s previous library", detail: "Switching keeps this client’s saved data and pending changes on this Mac.") {
-                    Button("Return to this Mac’s library and restart") {
-                        switching = true
-                        Task {
-                            defer { switching = false }
-                            do { try await model.returnToCentralLibraryMode() }
-                            catch { client.deviceConnectionsError = error.localizedDescription }
-                        }
-                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
+            SettingsCard(title: "Database role", detail: model.isLibraryClient
+                ? "This Mac is a node. Pair it with a central database to share its data and workspaces."
+                : "This Mac hosts the central database. Paired devices use this database and its connected workspaces.") {
+                HStack {
+                    Text(model.isLibraryClient ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Button(model.isLibraryClient ? "Use as central database…" : "Change to node…") { confirmRoleChange = true }
+                        .buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
                 }
+                Text("Changing roles restarts Woven Matter. This Mac’s existing data stays on this Mac.")
+                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
             }
         }
         .task {
             await client.initialize()
-            await client.devicePairing.restorePendingRequest()
+            if model.isLibraryClient { await client.devicePairing.restorePendingRequest() }
             while !Task.isCancelled {
                 if !model.isLibraryClient { await host.refreshStatus() }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
         .onDisappear { client.devicePairing.stopPairingMode() }
-    }
-    private var synchronization: some View {
-        SettingsCard(title: "Synchronization") {
-            HStack {
-                Text(client.status).font(.system(size: 13, weight: .medium))
-                Spacer()
-                Button("Sync now") { Task { await client.refresh() } }.buttonStyle(SettingsQuietButtonStyle()).disabled(client.refreshing || client.credential == nil)
-            }
-            ForEach(MobileSyncLane.allCases, id: \.self) { lane in
-                let value = client.synchronization.lanes[lane] ?? .init()
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(laneLabel(lane)).font(.system(size: 12))
-                        Spacer()
-                        Text(laneSummary(value)).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                        if value.conflictCount > 0 {
-                            Button("Review") { client.section = lane == .calendar ? .calendar : .home }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                        }
-                    }
-                    if let error = value.lastError {
-                        Text(error).font(.system(size: 11)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled)
-                    }
+        .confirmationDialog(model.isLibraryClient ? "Use this Mac as a central database?" : "Change this Mac to a node?", isPresented: $confirmRoleChange) {
+            Button("Change role and restart") {
+                switching = true
+                Task {
+                    defer { switching = false }
+                    do {
+                        if model.isLibraryClient { try await model.returnToCentralLibraryMode() }
+                        else { try await model.activateLibraryClientMode() }
+                    } catch { client.deviceConnectionsError = error.localizedDescription }
                 }
             }
+        } message: {
+            Text(model.isLibraryClient
+                ? "This reopens this Mac’s own database. Its paired database and pending changes stay saved separately."
+                : "After restarting, pair this node with a central database. This Mac’s existing database stays saved separately.")
         }
-    }
-    private func laneLabel(_ lane: MobileSyncLane) -> String {
-        switch lane { case .library: "Library"; case .calendar: "Calendar and scheduled tasks"; case .journal: "Agent history"; case .artifacts: "Saved artifacts"; case .offlineCache: "Offline copies" }
-    }
-    private func laneSummary(_ value: MobileSyncLaneStatus) -> String {
-        if value.conflictCount > 0 { return "\(value.conflictCount) conflicts" }
-        if value.phase == .syncing { return "Syncing…" }
-        if value.phase == .unsupported { return "Unavailable on this central Mac" }
-        if value.pendingCount > 0 { return "\(value.pendingCount) pending" }
-        if value.hasMoreRemoteChanges { return "Downloading…" }
-        if value.lastError != nil { return "Retry needed" }
-        if let date = value.lastSuccessfulSync { return "Synced " + date.formatted(date: .omitted, time: .shortened) }
-        return "Saved on this Mac"
     }
     private var clientDeviceRoster: some View {
         SettingsCard(title: "Paired devices") {
@@ -174,9 +156,9 @@ struct SettingsCompanionView: View {
                             }
                         }.toggleStyle(DashboardSwitchToggleStyle()).disabled(updatingAccess.contains(key))
                     }
-                    Text("Workspace access controls agent execution. The shared library remains available.")
+                    Text("Workspace access controls agent execution. The central database remains available.")
                         .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                    Button("Revoke device access", role: .destructive) { Task { await host.revoke(device.id) } }
+                    Button("Unpair device", role: .destructive) { Task { await host.revoke(device.id) } }
                         .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("companion.revoke")
                 } label: {
                     HStack(spacing: 12) {

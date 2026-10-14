@@ -197,6 +197,15 @@ import CompanionInference
       else {
         do { credential = try MobileCredentialVault.load(); try configureTransport() }
         catch { errorMessage = error.localizedDescription }
+        #if DEBUG
+        if CommandLine.arguments.contains("--unpair-devices") {
+          await disconnectMac()
+          let result = ["unpaired": pairingError == nil && credential == nil && workspaceClients.isEmpty]
+          if let data = try? JSONEncoder().encode(result) {
+            try? data.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("wovenmatter-unpair-result.json"), options: .atomic)
+          }
+        }
+        #endif
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
       }

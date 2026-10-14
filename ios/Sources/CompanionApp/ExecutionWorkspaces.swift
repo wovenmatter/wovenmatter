@@ -7,16 +7,20 @@ extension CompanionModel {
   func authorizedWorkspaceCredential(_ id: String) async throws -> DirectWorkspaceCredential {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to authorize execution workspaces.") }
     if let existing = try WorkspaceCredentialVault.load(workspaceID: id), existing.deviceID == state.deviceID, existing.libraryID == state.workspaceID { return existing }
-    guard online, let transport else { throw DeviceExecutionError.unavailable("Connect to your central library to authorize this workspace for the first time.") }
+    guard online, let transport else { throw DeviceExecutionError.unavailable("Connect to your central database to authorize this workspace for the first time.") }
+    let generation = connectionGeneration
     let credential = try await transport.executionCredential(workspaceID: id)
+    guard generation == connectionGeneration, !pairingInProgress else { throw MobileConnectionError.revoked }
     guard credential.deviceID == state.deviceID, credential.libraryID == state.workspaceID else { throw MobileConnectionError.revoked }
     try WorkspaceCredentialVault.save(credential)
     return credential
   }
   func renewWorkspaceAccess(_ id: String) async {
-    guard !fixture, !isolatedTestHost, let store, online, let transport else { errorMessage = "Connect to your central library to refresh device access."; return }
+    guard !fixture, !isolatedTestHost, let store, online, let transport else { errorMessage = "Connect to your central database to refresh device access."; return }
+    let generation = connectionGeneration
     do {
       let credential = try await transport.executionCredential(workspaceID: id)
+      guard generation == connectionGeneration, !pairingInProgress else { return }
       guard credential.deviceID == state.deviceID, credential.libraryID == state.workspaceID else { throw MobileConnectionError.revoked }
       try WorkspaceCredentialVault.save(credential)
       let connections = inferenceConnections + executionRecords.values.compactMap(\.connection)
@@ -44,6 +48,7 @@ extension CompanionModel {
   func refreshExecutionWorkspaces(force: Bool = false) async {
     guard !fixture, let store, !executionWorkspaceRefreshInProgress else { return }
     executionWorkspaceRefreshInProgress = true; defer { executionWorkspaceRefreshInProgress = false }
+    let generation = connectionGeneration
     do {
       try await ensureDeviceWorkspace()
       let journal = await store.journal.snapshot()
@@ -64,6 +69,7 @@ extension CompanionModel {
         workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
         workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)
       }
+      guard generation == connectionGeneration, !pairingInProgress, credential != nil else { return }
       for workspace in executionWorkspaces {
         guard workspace.endpoint != nil else { continue }
         if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
@@ -74,6 +80,7 @@ extension CompanionModel {
             if !force, let retry = workspaceAuthorizationRetryAt[workspace.id], retry > Date() { continue }
             do {
               saved = try await transport.executionCredential(workspaceID: workspace.id)
+              guard generation == connectionGeneration, !pairingInProgress else { return }
               if let saved { try WorkspaceCredentialVault.save(saved) }
             } catch {
               workspaceAuthorizationRetryAt[workspace.id] = Date().addingTimeInterval(30)

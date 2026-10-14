@@ -358,6 +358,27 @@ extension Color {
     }
 }
 
+/// Quiet single-line inputs use the same surface as sidebar search. Keep native
+/// editing/keyboard behavior without the platform's rounded-border focus ring.
+struct DashboardInputModifier: ViewModifier {
+    @Environment(\.dashboardTheme) private var theme
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .font(DashboardControlMetrics.inputFont)
+            .foregroundStyle(DashboardPalette.foreground)
+            .padding(.horizontal, 12)
+            .frame(minHeight: DashboardControlMetrics.searchHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.palette.themeWhisper)
+            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+    }
+}
+
+extension View {
+    func dashboardInput() -> some View { modifier(DashboardInputModifier()) }
+}
+
 struct DashboardSearchField: View {
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.dashboardSidebarForeground) private var sidebarForeground

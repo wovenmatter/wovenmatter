@@ -6,6 +6,21 @@ import WovenMatterCompanion
 
 @MainActor @Suite(.serialized)
 struct CentralLibraryClientTests {
+    @Test func unpairedNodeWaitsForDatabaseBeforeCreatingExecutionWorkspace() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        var attempts = 0
+        let model = CentralLibraryClientModel(store: replica, preferences: fixture.defaults,
+            makeLocalExecution: { _, _ in attempts += 1; throw MobileStore.Failure.wrongWorkspace })
+        await model.initializeClientWorkspace()
+        #expect(attempts == 0)
+        #expect(model.localExecution == nil)
+        #expect(model.errorMessage == nil)
+        #expect(!CentralLibraryClientConfiguration.isEnabled(defaults: fixture.defaults))
+        fixture.defaults.set(true, forKey: CentralLibraryClientConfiguration.preferenceKey)
+        #expect(CentralLibraryClientConfiguration.isEnabled(defaults: fixture.defaults))
+    }
+
     @Test func secondaryMacAlwaysStartsItsOwnWorkspaceAndKeepsItAfterDisconnect() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
@@ -16,13 +31,14 @@ struct CentralLibraryClientTests {
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let central = MacClientFakeCentral(); await central.setOffline(true)
         var created = 0, cleared = 0
+        var clearedWorkspaceIDs: [String] = []
         let model = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
             preferences: fixture.defaults, makeLocalExecution: { directory, store in
                 created += 1
                 return try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: library,
                     ownerDeviceID: owner, kind: .mac, name: "This Mac", executionDeviceID: owner),
                     model: fixture.model, replica: store, directory: directory)
-            }, clearCentralCredential: { cleared += 1 })
+            }, clearCentralCredential: { cleared += 1 }, clearWorkspaceCredential: { clearedWorkspaceIDs.append($0) })
         await model.initialize()
         #expect(created == 0) // Opening central pairing settings does not start another executor.
         await model.initializeClientWorkspace()
@@ -31,12 +47,18 @@ struct CentralLibraryClientTests {
         #expect(model.localExecution?.descriptor.id == owner)
         #expect(model.canControl(workspaceID: owner))
         #expect(!model.sharingLocalExecution)
+        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux")
+        try await model.attachExecutionWorkspace(remote, transport: MacClientFakeExecution(workspace: remote))
+        await model.refresh()
+        #expect(model.canControl(workspaceID: remote.id))
         await model.createNote()
         let note = try #require(model.selectedNote)
         model.editNote(note, title: "Keep offline", content: "Pending writing")
         model.composer = "Keep draft"
         await model.disconnectCentralLibrary()
         #expect(cleared == 1)
+        #expect(clearedWorkspaceIDs == ["remote"])
+        #expect(!model.canControl(workspaceID: remote.id))
         #expect(model.localExecution != nil)
         #expect(model.canControl(workspaceID: owner))
         #expect(model.state.notes[note.id]?.content == "Pending writing")

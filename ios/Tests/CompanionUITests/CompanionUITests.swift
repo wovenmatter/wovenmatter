@@ -56,12 +56,14 @@ final class CompanionUITests: XCTestCase {
     XCTAssertFalse(app.buttons["Mac pairing"].exists)
     XCTAssertFalse(app.buttons["Tailscale inference"].exists)
     app.navigationBars["Workspaces"].buttons.firstMatch.tap()
-    app.buttons["Pair to Mac"].tap()
-    XCTAssertTrue(app.navigationBars["Pair to Mac"].waitForExistence(timeout: 5))
+    app.buttons["Device Connections"].tap()
+    XCTAssertTrue(app.navigationBars["Device Connections"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["pairing-scan"].exists)
     XCTAssertTrue(app.descendants(matching: .any)["pairing-link"].exists)
     XCTAssertTrue(app.buttons["pairing-connect"].exists)
     XCTAssertFalse(app.buttons["Done"].exists)
+    XCTAssertFalse(app.buttons["Sync status"].exists)
+    XCTAssertFalse(app.buttons["Keep Offline"].exists)
   }
 
   @MainActor func testNewChatChooserAndKeyboardDismissal() {

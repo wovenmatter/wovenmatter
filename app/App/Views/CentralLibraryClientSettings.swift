@@ -9,7 +9,7 @@ struct CentralLibraryClientSettings: View {
     let application: ApplicationModel
     var body: some View {
         Group {
-            if showingDevices {
+            if showingDevices || model.credential == nil {
                 SettingsCompanionView(model: application, host: application.companionHost, onBack: { showingDevices = false })
             } else if let execution = model.localExecution {
                 SettingsView(model: execution.model, clientContext: model, applicationContext: application)
@@ -36,38 +36,26 @@ struct CentralLibraryPairingCard: View {
     @Bindable var client: CentralLibraryClientModel
     let application: ApplicationModel
     @State private var pairing = false
-    @State private var switching = false
     @State private var message: String?
     var body: some View {
-        SettingsCard(title: application.isLibraryClient ? "Central library" : "Connect to a central library") {
+        SettingsCard(title: "Central database") {
             if let credential = client.credential {
                 HStack(spacing: 12) {
                     DashboardLucideIcon(glyph: .monitor, size: 20)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(credential.endpoint.host ?? "Central Mac").font(.system(size: 13, weight: .medium))
+                        Text(credential.endpoint.host ?? "Central database").font(.system(size: 13, weight: .medium))
                         if application.isLibraryClient {
                             Text(client.status).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
                     Spacer()
-                    Button("Disconnect") { Task { await client.disconnectCentralLibrary() } }
+                    Button("Unpair") { Task { await client.disconnectCentralLibrary() } }
                         .buttonStyle(SettingsQuietButtonStyle())
                 }
-                if !application.isLibraryClient {
-                    Text("Your existing library stays on this Mac when you connect to another central library.")
-                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                    Button("Use this central library and restart") {
-                        switching = true
-                        Task {
-                            defer { switching = false }
-                            do { try await application.activateLibraryClientMode() }
-                            catch { message = error.localizedDescription }
-                        }
-                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
-                }
+
             } else {
                 HStack {
-                    SecureField("Paste pairing link", text: $client.pairingText).textFieldStyle(.roundedBorder)
+                    SecureField("Paste pairing link", text: $client.pairingText).dashboardInput().privacySensitive()
                     Button(pairing ? "Pairing…" : "Pair") {
                         pairing = true; message = nil
                         Task {

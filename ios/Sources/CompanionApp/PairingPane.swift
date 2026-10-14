@@ -7,65 +7,48 @@ struct PairingPane: View {
   @Bindable var model: CompanionModel
   @State private var scanning = false
   @State private var scannerError: String?
-  @State private var replacingPairing = false
   @State private var confirmDisconnect = false
   var body: some View {
     Form {
-      if model.credential != nil {
-        Section("Central Mac") {
-          LabeledContent("Connection", value: model.online ? "Connected" : "Disconnected")
-          if let endpoint = model.credential?.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
-          NavigationLink("Sync status") { LibrarySyncStatusPane(model: model) }
-          NavigationLink("Keep Offline") { KeepOfflinePane(model: model) }
-          if model.hasPendingRecovery { NavigationLink("Pending changes") { SyncRecoveryPane(model: model) } }
-          Button(model.connecting ? "Syncing…" : "Sync now") { Task { await model.refresh(); await model.refreshExecutionWorkspaces(force: true) } }
-            .disabled(model.connecting || model.pairingInProgress)
+      if let credential = model.credential {
+        Section("Central database") {
+          Text(credential.endpoint.host ?? "Paired database").textSelection(.enabled)
+          Button("Unpair", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
         }
-        Section {
-          Button("Pair again") { replacingPairing.toggle(); model.pairingError = nil }
-          Button("Disconnect Mac", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
-        }
-      }
-      if model.credential == nil || replacingPairing {
+      } else {
         Section {
           Button { Task { await beginScanning() } } label: { Label("Scan pairing code", systemImage: "qrcode.viewfinder") }
             .disabled(model.pairingInProgress).accessibilityIdentifier("pairing-scan")
           TextField("Paste pairing link", text: $model.pairingText, axis: .vertical)
-            .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
-          Button(model.pairingInProgress ? "Pairing…" : "Pair with Mac") {
+            .dashboardInput().textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
+          Button(model.pairingInProgress ? "Pairing…" : "Pair") {
             guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
               model.pairingError = "Paste the full pairing link from your Mac."; return
             }
-            Task { await model.pair(url: url); if model.pairingError == nil { replacingPairing = false } }
+            Task { await model.pair(url: url) }
           }.disabled(model.pairingInProgress || model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityIdentifier("pairing-connect")
-        } header: { Text("Pair to Mac") } footer: {
-          Text("On your central Mac, open Woven Matter → Settings → Device Connections. Scan its code or paste its link. Both devices must use the same Tailscale network.")
+        } header: { Text("Device Connections") } footer: {
+          Text("On the Mac hosting your central database, open Woven Matter → Settings → Device Connections. Scan its code or paste its link. Both devices must use the same Tailscale network.")
         }
-        if model.state.workspaceID != nil && model.credential == nil {
-          Section {
-            NavigationLink("Sync status") { LibrarySyncStatusPane(model: model) }
-            NavigationLink("Keep Offline") { KeepOfflinePane(model: model) }
-            if model.hasPendingRecovery { NavigationLink("Pending changes") { SyncRecoveryPane(model: model) } }
-          } footer: { Text("Your library and pending changes remain on this device. Pair again with the same central Mac to resume syncing.") }
-        }
+
       }
       if let problem = model.pairingError ?? scannerError {
         Section { Text(problem).font(.callout).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
       }
-    }.mobileNavigationPage("Pair to Mac")
+    }.mobileNavigationPage("Device Connections")
       .sheet(isPresented: $scanning) {
         NavigationStack {
           QRScanner(found: { value in
             scanning = false
-            if let url = URL(string: value) { Task { await model.pair(url: url); if model.pairingError == nil { replacingPairing = false } } }
+            if let url = URL(string: value) { Task { await model.pair(url: url) } }
           }, failed: { message in scanning = false; scannerError = message }).ignoresSafeArea(edges: .bottom).navigationTitle("Scan pairing code")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
         }
       }
-      .confirmationDialog("Disconnect this Mac?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
-        Button("Disconnect Mac", role: .destructive) { Task { await model.disconnectMac() } }
-      } message: { Text("Your local library and pending changes stay on this device. Existing direct workspace connections remain available.") }
+      .confirmationDialog("Unpair from the central database?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+        Button("Unpair", role: .destructive) { Task { await model.disconnectMac() } }
+      } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on this device. Access to its connected workspaces ends until you pair again.") }
       .tint(theme.palette.themeAccent)
   }
   private func beginScanning() async {

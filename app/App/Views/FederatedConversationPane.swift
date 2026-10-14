@@ -165,7 +165,7 @@ private struct FederatedInteractionCard: View {
                         } else { selected[question.id] = value ? [option.id] : [] }
                     })).toggleStyle(.checkbox)
                 }
-                if question.allowsFreeText { TextField("Answer", text: Binding(get: { freeText[question.id, default: ""] }, set: { freeText[question.id] = $0 })).textFieldStyle(.roundedBorder) }
+                if question.allowsFreeText { TextField("Answer", text: Binding(get: { freeText[question.id, default: ""] }, set: { freeText[question.id] = $0 })).dashboardInput() }
             }
             HStack {
                 ForEach(interaction.options) { option in

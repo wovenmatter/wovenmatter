@@ -36,11 +36,10 @@
 		56E472BF925668912FAE8B6D /* DeviceTranscriptDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4D9B449F66925FE77B44508 /* DeviceTranscriptDetails.swift */; };
 		57EA3EEB2F0BBDFF9ABDE830 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 720F344E0FB173E20D379983 /* ConversationMarkdownDocument.swift */; };
 		5A447C4E2D85DF75ACBD335C /* ChatPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9629C131A94C4EEA152D5629 /* ChatPane.swift */; };
-		5A949EFE30B5F83E73C65C75 /* KeepOfflinePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0CA92C4167E2F7EA4BDC8F2 /* KeepOfflinePane.swift */; };
+		5A949EFE30B5F83E73C65C75 /* LibraryArtifactPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0CA92C4167E2F7EA4BDC8F2 /* LibraryArtifactPreview.swift */; };
 		5C7E46700F0C0DB79E1C2536 /* CompanionInference in Frameworks */ = {isa = PBXBuildFile; productRef = C2762EC15C0AD31C16264485 /* CompanionInference */; };
 		69B53BA6F41FA3B556A20AB8 /* WovenMatterCompanion in Frameworks */ = {isa = PBXBuildFile; productRef = 6B56A71A2722CEB3EC8E9AC7 /* WovenMatterCompanion */; };
 		6EB409035453921552E7E7D2 /* DeviceExecution.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51E6AD164458836BD60AFA58 /* DeviceExecution.swift */; };
-		72E3D00FBAC69BB08AA49E0D /* LibrarySyncStatusPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11125D318B3894164687FC1 /* LibrarySyncStatusPane.swift */; };
 		749D4011CF1D15C83973BE8E /* MobileOfflineAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0CDCE0317D53152F07FFF36 /* MobileOfflineAvailability.swift */; };
 		7C99770CD40DF36C5439D234 /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5CF78B55599027310424E6 /* CompanionUITests.swift */; };
 		7D2DB734CE12BB31C6D32C08 /* PiDurableRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = 10BE8055F81A268B2D857DDD /* PiDurableRuntime */; };
@@ -128,7 +127,7 @@
 		ABAAD9F7280F6177E4EA7D56 /* AssistantTranscriptProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantTranscriptProjection.swift; sourceTree = "<group>"; };
 		ACE6C08436FBC343B6BE4931 /* MobileKeyboardDismissal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileKeyboardDismissal.swift; sourceTree = "<group>"; };
 		AD5CF78B55599027310424E6 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
-		B0CA92C4167E2F7EA4BDC8F2 /* KeepOfflinePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeepOfflinePane.swift; sourceTree = "<group>"; };
+		B0CA92C4167E2F7EA4BDC8F2 /* LibraryArtifactPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryArtifactPreview.swift; sourceTree = "<group>"; };
 		B38EEDC7D482A17856A16295 /* DeviceCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCLI.swift; sourceTree = "<group>"; };
 		B6EA08B853D8F9DF586B2806 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
 		B9850315B032C364C200D69F /* CompanionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionModel.swift; sourceTree = "<group>"; };
@@ -146,7 +145,6 @@
 		EA1A5B261369F34BB4118D61 /* DevicePromptSubmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePromptSubmission.swift; sourceTree = "<group>"; };
 		EA9A8D6024DC4BFA046AD6D7 /* DashboardStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStyle.swift; sourceTree = "<group>"; };
 		F01EF4D15862473242DC3DFE /* WorkspaceHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceHistory.swift; sourceTree = "<group>"; };
-		F11125D318B3894164687FC1 /* LibrarySyncStatusPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySyncStatusPane.swift; sourceTree = "<group>"; };
 		F3ED79A6C0DF989A50FAEA02 /* DeviceTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTools.swift; sourceTree = "<group>"; };
 		FD6781D14083326D6B2CE4B9 /* ConversationTranscriptState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranscriptState.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -220,8 +218,7 @@
 				14486989616346BE7D7F4EF4 /* ExecutionSettings.swift */,
 				22CB94BB1FE76AEF28F124AF /* ExecutionWorkspaces.swift */,
 				91C5AC2A9D61EA42F4983352 /* HomeDataPanes.swift */,
-				B0CA92C4167E2F7EA4BDC8F2 /* KeepOfflinePane.swift */,
-				F11125D318B3894164687FC1 /* LibrarySyncStatusPane.swift */,
+				B0CA92C4167E2F7EA4BDC8F2 /* LibraryArtifactPreview.swift */,
 				068A5989435B8391A7340E82 /* MobileCalendarActions.swift */,
 				CF95D1A54C91FFF900C9AE4E /* MobileConnectionLifecycle.swift */,
 				94257C0EDA417A9BB92E813B /* MobileConversationTranscript.swift */,
@@ -494,8 +491,7 @@
 				A9483CAF62A494A126BFEF2A /* ExecutionSettings.swift in Sources */,
 				0AC9BF1DE82D8FE4E01D882E /* ExecutionWorkspaces.swift in Sources */,
 				AF2B07FD41AEE1C52E7A3E6A /* HomeDataPanes.swift in Sources */,
-				5A949EFE30B5F83E73C65C75 /* KeepOfflinePane.swift in Sources */,
-				72E3D00FBAC69BB08AA49E0D /* LibrarySyncStatusPane.swift in Sources */,
+				5A949EFE30B5F83E73C65C75 /* LibraryArtifactPreview.swift in Sources */,
 				376B57A0BD7551BDE6960BA2 /* MobileCalendarActions.swift in Sources */,
 				F040F35268BD8C5315042494 /* MobileConnectionLifecycle.swift in Sources */,
 				3BAE916DA746DB25CD357329 /* MobileConversationTranscript.swift in Sources */,
@@ -540,7 +536,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = 3M84Q9NAMN;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -643,7 +639,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = 3M84Q9NAMN;
 				INFOPLIST_FILE = Config/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

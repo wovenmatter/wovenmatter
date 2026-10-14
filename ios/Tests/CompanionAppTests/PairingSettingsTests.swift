@@ -37,7 +37,7 @@ private actor DisabledPairingWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class PairingSettingsTests: XCTestCase {
-  @MainActor func testDisconnectPreservesPendingWritingLibraryBindingAndDirectWorkspaceAvailability() async throws {
+  @MainActor func testUnpairPreservesWritingAndBindingButClearsDirectWorkspaceAccess() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try MobileStore(file: directory.appendingPathComponent("library.json"))
@@ -46,12 +46,15 @@ final class PairingSettingsTests: XCTestCase {
     let model = CompanionModel(store: store, transport: PairingSettingsMac())
     await model.reload()
     model.workspaceReachable["linux-workspace"] = true
+    try await store.journal.upsertWorkspace(.init(id: "linux-workspace", libraryID: "library-a", ownerDeviceID: "linux", kind: .linux, name: "Linux"), pending: false)
     let before = await store.snapshot()
     var cleared = false
-    await model.disconnectMac { cleared = true }
+    var clearedWorkspaces: [String] = []
+    await model.disconnectMac(clearCredential: { cleared = true }, clearWorkspaceCredential: { clearedWorkspaces.append($0) })
     XCTAssertTrue(cleared)
+    XCTAssertEqual(clearedWorkspaces, ["linux-workspace"])
     XCTAssertNil(model.credential); XCTAssertNil(model.engine); XCTAssertFalse(model.online)
-    XCTAssertEqual(model.workspaceReachable["linux-workspace"], true)
+    XCTAssertNil(model.workspaceReachable["linux-workspace"])
     let after = await store.snapshot()
     XCTAssertEqual(after, before)
     XCTAssertGreaterThan(model.pendingSyncCount, 0)
@@ -103,7 +106,7 @@ final class PairingSettingsTests: XCTestCase {
     XCTAssertEqual(saved, paired)
     XCTAssertEqual(model.state.workspaceID, "library-a")
     XCTAssertFalse(model.online)
-    await model.disconnectMac { }
+    await model.disconnectMac(clearCredential: {}, clearWorkspaceCredential: { _ in })
     let reopened = try MobileStore(file: directory.appendingPathComponent("library.json"))
     let persisted = await reopened.snapshot()
     XCTAssertEqual(persisted.workspaceID, "library-a")
@@ -122,7 +125,7 @@ final class PairingSettingsTests: XCTestCase {
       try await Task.sleep(for: .milliseconds(10))
     }
     let waiting = await mac.providerRequestWaiting; XCTAssertTrue(waiting)
-    await model.disconnectMac { }
+    await model.disconnectMac(clearCredential: {}, clearWorkspaceCredential: { _ in })
     await mac.releaseProviders(); await refresh.value
     XCTAssertNil(model.engine); XCTAssertFalse(model.online)
     XCTAssertEqual(model.connectionLabel, "Disconnected")

@@ -357,7 +357,7 @@ struct CompanionSettingsPane: View {
           SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
           SettingsNavigationRow(title: "Pi Durable", icon: .bot) { DeviceAgentSettingsPane(model: model) }
           SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
-          SettingsNavigationRow(title: "Pair to Mac", icon: .monitor) { PairingPane(model: model) }
+          SettingsNavigationRow(title: "Device Connections", icon: .monitor) { PairingPane(model: model) }
           SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }
           SettingsNavigationRow(title: "Usage Settings", icon: .barChart) { UsageSettingsPane(model: model) }
         }.padding(.horizontal, 18).padding(.bottom, 24)
@@ -426,7 +426,7 @@ struct WorkspacesSettingsPane: View {
         }
         if model.credential != nil || model.state.workspaceID != nil {
           NavigationLink { CentralWorkspaceSettingsPane(model: model) } label: {
-            Label("Central Mac", glyph: .monitor).opacity(model.online ? 1 : 0.5)
+            Label("Central database", glyph: .monitor).opacity(model.online ? 1 : 0.5)
           }
         }
         ForEach(model.executionWorkspaces) { workspace in
@@ -456,7 +456,7 @@ private struct CentralWorkspaceSettingsPane: View {
           }.disabled(!agent.isAvailable)
         }
       }
-    }.listStyle(.insetGrouped).mobileNavigationPage("Central Mac")
+    }.listStyle(.insetGrouped).mobileNavigationPage("Central database")
   }
 }
 

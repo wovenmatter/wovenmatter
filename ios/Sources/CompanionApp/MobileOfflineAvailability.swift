@@ -60,7 +60,7 @@ extension CompanionModel {
 
   func artifactURL(_ id: String) async throws -> URL {
     if let url = await store?.artifacts.localURL(id: id) { return url }
-    guard let engine, online else { throw DeviceExecutionError.unavailable("Connect to the central Mac to download this artifact.") }
+    guard let engine, online else { throw DeviceExecutionError.unavailable("Connect to the central database to download this artifact.") }
     return try await engine.ensureArtifactCached(id)
   }
 

@@ -32,8 +32,8 @@ and inference acceptance must be checked by the user, separately from fixtures.
 
 ## Pairing and test workflow
 
-1. Run the development Mac app with its isolated workspace. Open Settings → Devices, enable sharing, and create a pairing code.
-2. Connect both devices to the same tailnet. In Settings → Workspaces, select Pair your Mac and scan the code or paste the pairing link. Its endpoint is the Tailscale HTTPS URL; the short-lived code is exchanged for a per-device credential stored only in Keychain.
+1. Run the requested development Mac app. For user acceptance, use `scripts/build_and_run.sh` with the existing library; reserve isolated workspaces for automated/disposable tests. Open Settings → Device Connections, start sharing, and create a pairing code.
+2. Connect both devices to the same tailnet. In the iPhone or iPad Settings → Device Connections and scan the code or paste the pairing link. Its endpoint is the Tailscale HTTPS URL; the short-lived code is exchanged for a per-device credential stored only in Keychain.
 3. Create a folder and an ordinary note while the Mac is unavailable. The note reports **Saved on this device** only after durable local storage commits. Terminate and reopen the app to check that writing persists.
 4. Reconnect and wait for **Saved · synced with Mac**. The note's client-created ID is preserved. Reference it in a new chat; the app flushes the note before binding its canonical revision to the run.
 5. Open the same conversation on the Mac, respond to a pending approval/question on either device, and verify the other sees the first accepted response. Disconnecting the phone never stops a Mac-owned run.
@@ -85,7 +85,7 @@ Portable tests cover controlled provider streams and real SDK/tool persistence. 
 ## First testing session
 
 1. Build the Mac host from the same PR revision with `scripts/build-companion-desktop.sh build`. When ready to test, `scripts/build-companion-desktop.sh run` opens its separate workspace. Keep an existing signed-in Tailscale connection available on the Mac. The phone’s own inference connections are configured and signed in on the phone.
-2. Open `ios/WovenMatterCompanion.xcodeproj`, select the WovenMatterCompanion scheme, and run on an iPhone simulator. Repeat on an iPad simulator. Pair each with its own fresh URL from Mac Settings → Devices; the simulator can use the pasted pairing URL.
+2. Open `ios/WovenMatterCompanion.xcodeproj`, select the WovenMatterCompanion scheme, and run on an iPhone simulator. Repeat on an iPad simulator. Pair each with its own fresh URL from Mac Settings → Device Connections; the simulator can use the pasted pairing URL.
 3. Exercise a note in both directions, then edit the same note while disconnected, terminate/reopen the mobile app, reconnect, and review its conflict/recovery UI. Check that deleting a note on the Mac preserves unsynced mobile writing as a recovery copy.
 4. Try each configured agent route: create, send, continue, respond to approvals/questions, and Stop. Switch conversations while a request is pending. Check that the Mac keeps accepted work running when the mobile app closes.
 5. Browse Library files/links/photos; open exports and linked documents. Rename, move, pin, trash and restore notes/conversations. Adjust session model, thinking, permissions and tools. Create/edit recurring Calendar events and scheduled prompts in local and remote workspaces.

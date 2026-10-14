@@ -89,8 +89,9 @@ and inference acceptance remain a human test for each provider.
 ## Central library and direct execution
 
 1. In the isolated central Mac app, open **Settings → Device Connections**, start sharing,
-   and create a pairing QR code/link. Pair iPhone/iPad through **Settings → Pair
-   to Mac**. On a second Mac, test discovery and approval in both directions,
+   and create a pairing QR code/link. Pair iPhone/iPad through **Settings → Device Connections**. On a second Mac,
+   change **Database role** to **Node** at the bottom of that page and restart.
+   Test discovery and approval in both directions,
    then the link fallback. All devices must be on the same Tailscale network.
    Mere discovery must never authorize library reads. Verify device type and
    each device’s own last contact; activity on one device must not update another.
@@ -271,9 +272,9 @@ suspension behavior, or Tailscale availability.
   pending count must clear only after durable central acceptance. A conflict in
   one folder or a failed artifact transfer must not block unrelated calendar or
   execution history synchronization.
-- Keep an older chat and a saved artifact offline, complete their download, then
-  disconnect and reopen them. Verify pinned content survives ordinary cache
-  cleanup. Never show a partial download as complete.
+- Open a chat and a Library file, then disconnect and reopen cached content.
+  Verify local writing survives restart. Connection settings and conversation
+  details must not expose Keep Offline switches or sync-lane management.
 - Disconnect and re-pair with the same central library without discarding local
   writing or device credentials for inference. A different library must not
   receive the old library’s pending writes.
@@ -281,6 +282,19 @@ suspension behavior, or Tailscale availability.
   through central after reconnection. Edit the same note on both: both versions
   remain recoverable. Deletion plus an offline edit must preserve recovery
   without restoring the deleted canonical identity.
-- Verify status distinguishes central reachability, local pending writing and
-  completed synchronization. Ordinary disconnects remain quiet outside Settings
-  and the affected item. Test iPhone, iPad portrait/landscape, and secondary Mac.
+- Verify internal sync state distinguishes reachability, pending writing, and
+  acknowledged synchronization. Ordinary disconnects remain quiet. Explicit
+  Unpair clears direct workspace access too; losing the network does not.
+  Test iPhone, iPad portrait/landscape, and secondary Mac.
+
+## Requested clean pairing handoff
+
+Never pair a user's device as part of a build/install. Leave central sharing and
+the QR/link setup for the user to exercise. Use the standard Mac development app
+with the user's existing library when requested, not an empty test variant.
+
+For an explicitly requested iOS development unpair, launch the Debug build once
+with `--unpair-devices`, verify `tmp/wovenmatter-unpair-result.json` contains
+`{"unpaired":true}`, and relaunch without arguments. This calls the same unpair
+operation as Settings and preserves content and provider sign-ins. The flag has
+no effect in Release builds and is never supplied by build/install scripts.

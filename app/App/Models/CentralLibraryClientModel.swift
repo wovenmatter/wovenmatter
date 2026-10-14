@@ -208,6 +208,7 @@ final class CentralLibraryClientModel {
         guard !running else { return }; running = true
         defer { running = false }
         await initializeClientWorkspace()
+        if credential == nil { section = .settings }
         while !Task.isCancelled {
             await refresh(background: true)
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
@@ -220,7 +221,7 @@ final class CentralLibraryClientModel {
     }
     @discardableResult func pair(_ text: String) async -> Bool {
         guard let store, let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            deviceConnectionsError = "Paste the pairing link from your central Mac."; return false
+            deviceConnectionsError = "Paste the pairing link from your central database."; return false
         }
         do {
             let payload = try CompanionPairingPayload.parseURL(url)
@@ -249,10 +250,19 @@ final class CentralLibraryClientModel {
         do {
             try await flushLocalWrites()
             try clearCentralCredential()
+            devicePairing.cancelRequest(); devicePairing.stopPairingMode()
             connectionGeneration = UUID()
             let previousEngine = engine
             credential = nil; engine = nil; transport = nil; connectedDevices = []
+            let remoteIDs = Set(directClients.keys).union(journal.workspaces.keys)
+                .subtracting([localExecution?.descriptor.id ?? state.deviceID])
+            for id in remoteIDs {
+                directClients.removeValue(forKey: id); directOnline.remove(id)
+                directProviders.removeValue(forKey: id); directPending.removeValue(forKey: id)
+            }
             await previousEngine?.cancelSynchronization()
+            for id in remoteIDs { try clearWorkspaceCredential(id) }
+            if sharingLocalExecution { await stopLocalSharing() }
             centralProviders = []; centralPending = []; online = false; status = "Not connected"
             publishedManagement = nil
             updateExecutionPresentation()
@@ -262,7 +272,7 @@ final class CentralLibraryClientModel {
     private func configureTransport() throws {
         guard let credential, let store else { return }
         guard credential.deviceID == state.deviceID else {
-            throw CompanionAPIError(code: "device_identity_changed", message: "Pair this Mac with the central library again. Its local replica has a different device identity.")
+            throw CompanionAPIError(code: "device_identity_changed", message: "Pair this Mac with the central database again. Its local replica has a different device identity.")
         }
         let transport = try HTTPSCompanionTransport(credential: credential)
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
@@ -314,7 +324,7 @@ final class CentralLibraryClientModel {
         return root.appending(path: "LibraryClient/Execution/" + state.deviceID)
     }
     func enableLocalExecution() async {
-        guard !preparingTransition, !localExecutionBusy, localExecution == nil, let store else { return }
+        guard !preparingTransition, !localExecutionBusy, localExecution == nil, state.workspaceID != nil, let store else { return }
         localExecutionBusy = true; defer { localExecutionBusy = false }
         do {
             let workspace = try await makeLocalExecution(executionDirectory, store)
@@ -387,7 +397,7 @@ final class CentralLibraryClientModel {
     }
     func prepareForQuit() async throws { try await prepareForRoleChange() }
     private func configureDirectClients() throws {
-        guard let store else { return }
+        guard credential != nil, let store else { return }
         for workspace in executionWorkspaces where directClients[workspace.id] == nil {
             if let credential = try WorkspaceCredentialVault.load(workspaceID: workspace.id) {
                 guard credential.deviceID == state.deviceID, credential.libraryID == state.workspaceID else { continue }
@@ -398,8 +408,10 @@ final class CentralLibraryClientModel {
     }
     func enableDirectAccess(_ workspaceID: String) async {
         guard let transport else { return }
+        let generation = connectionGeneration
         do {
             let value = try await transport.executionCredential(workspaceID: workspaceID)
+            guard generation == connectionGeneration else { return }
             try WorkspaceCredentialVault.save(value)
             try configureDirectClients()
             selectedExecutionWorkspaceID = workspaceID
@@ -422,16 +434,21 @@ final class CentralLibraryClientModel {
         guard let client = directClients[workspaceID] else { return }
         do {
             try await client.refresh()
-            directProviders[workspaceID] = try await client.providers()
-            directPending[workspaceID] = try await client.pending()
+            let receivedProviders = try await client.providers()
+            let receivedPending = try await client.pending()
+            guard directClients[workspaceID] === client else { return }
+            directProviders[workspaceID] = receivedProviders
+            directPending[workspaceID] = receivedPending
             if let id = selectedConversationID, executionOwner(for: id) == workspaceID {
                 _ = try await client.refreshTranscript(id)
                 sessionProviders[id] = try? await client.capabilities(id)
             }
+            guard directClients[workspaceID] === client else { return }
             directOnline.insert(workspaceID); directFailures[workspaceID] = 0
             let active = state.conversations.values.contains { executionOwner(for: $0.id) == workspaceID && $0.activeRunID != nil }
             nextDirectRefresh[workspaceID] = Date().addingTimeInterval(workspaceID == localExecution?.descriptor.id || active ? 2 : 15)
         } catch {
+            guard directClients[workspaceID] === client else { return }
             directOnline.remove(workspaceID)
             if case MobileConnectionError.http(let status, _) = error, status == 401 || status == 403,
                workspaceID != localExecution?.descriptor.id {
@@ -593,7 +610,7 @@ final class CentralLibraryClientModel {
                     guard let note = state.notes[noteID], state.conflicts[noteID] == nil else { throw MobileStore.Failure.conflictingNote }
                     noteRevision = note.revision
                 } else {
-                    throw CompanionAPIError(code: "note_context_unavailable", message: "Use the central Mac route to attach a shared note to this workspace’s agent.")
+                    throw CompanionAPIError(code: "note_context_unavailable", message: "Use the central database route to attach a shared note to this workspace’s agent.")
                 }
             }
             if let id = target {

@@ -41,7 +41,7 @@ struct DevicePairingDiscoveryCard: View {
                     Task { await pairing.refreshDiscovery(); if isCentral { await host.refreshDiscovery() } }
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(pairing.isDiscovering)
                 if canPairWithCentral {
-                    Button(pairing.isPairingMode ? "Stop pairing mode" : "Allow a central Mac to invite this Mac") {
+                    Button(pairing.isPairingMode ? "Stop discovery" : "Make this node discoverable") {
                         if pairing.isPairingMode { pairing.stopPairingMode() }
                         else { Task { await pairing.startPairingMode() } }
                     }.buttonStyle(SettingsQuietButtonStyle())
@@ -52,7 +52,7 @@ struct DevicePairingDiscoveryCard: View {
                     DeviceConnectionIcon(kind: peer.advertisement.identity.metadata.kind)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(peer.advertisement.identity.deviceName).font(.system(size: 13, weight: .medium))
-                        Text(peer.advertisement.role == .central ? "Central library" : DeviceConnectionIcon.label(peer.advertisement.identity.metadata.kind))
+                        Text(peer.advertisement.role == .central ? "Central database" : DeviceConnectionIcon.label(peer.advertisement.identity.metadata.kind))
                             .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     Spacer()
@@ -66,7 +66,7 @@ struct DevicePairingDiscoveryCard: View {
             }
             if pairing.isRequestPending {
                 HStack {
-                    Text("Waiting for approval on the central Mac").font(.system(size: 12))
+                    Text("Waiting for approval on the central database").font(.system(size: 12))
                     Spacer()
                     Button("Cancel") { pairing.cancelRequest() }.buttonStyle(SettingsQuietButtonStyle())
                 }

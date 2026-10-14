@@ -71,7 +71,7 @@ final class CompanionMacPairingController {
             let serve = makeExposure(); exposure = serve
             _ = try await serve.start(loopbackPort: port)
             guard generation == attempt else { serve.stop(); return }
-            status = "Available for a central Mac to invite"
+            status = "Available for a central database to invite"
             modeTask = Task { [weak self] in
                 let deadline = Date().addingTimeInterval(600)
                 while !Task.isCancelled {
@@ -108,7 +108,7 @@ final class CompanionMacPairingController {
             guard claim.request.identity.deviceID == identity().deviceID,
                   CompanionPairingPayload.isValidEndpoint(claim.endpoint), claim.expiresAt > Date() else {
                 try saveClaim(nil, identity().deviceID)
-                if claim.cancelled == true { errorMessage = "Cancellation could not be confirmed. Review paired devices on the central Mac before pairing again." }
+                if claim.cancelled == true { errorMessage = "Cancellation could not be confirmed. Review paired devices on the central database before pairing again." }
                 return
             }
             if claim.cancelled == true { beginCancellation(claim) } else { beginClaim(claim) }
@@ -117,7 +117,7 @@ final class CompanionMacPairingController {
     private func beginClaim(_ claim: CompanionStoredPairingClaim) {
         requestGeneration = UUID(); let attempt = requestGeneration
         pendingClaim = claim; isRequestPending = true; errorMessage = nil
-        status = "Waiting for approval on the central Mac"
+        status = "Waiting for approval on the central database"
         pollTask = Task { [weak self] in
             var registered = false
             while !Task.isCancelled {
@@ -147,7 +147,7 @@ final class CompanionMacPairingController {
         }
     }
     private func acceptResult(_ result: CompanionPairingApprovalResult, endpoint: URL, identity: CompanionPairingDeviceIdentity) async throws -> Bool {
-        if result.state == .denied { throw CompanionAPIError(code: "pairing_denied", message: "The central Mac declined this pairing request.") }
+        if result.state == .denied { throw CompanionAPIError(code: "pairing_denied", message: "The central database declined this pairing request.") }
         guard result.state == .approved else { return false }
         guard let response = result.pairing, response.deviceID == identity.deviceID, response.protocolVersion == CompanionProtocol.version else {
             throw CompanionAPIError(code: "invalid_response", message: "The pairing response belongs to another device.")
@@ -164,7 +164,7 @@ final class CompanionMacPairingController {
         guard !isInstallingPairing, var claim = pendingClaim else { return }
         do {
             claim.cancelled = true
-            // Retain proof across disconnect/restart until the central Mac has
+            // Retain proof across disconnect/restart until the central database has
             // durably closed the request and queued any direct-access revokes.
             try saveClaim(claim, claim.request.identity.deviceID)
             beginCancellation(claim)
@@ -188,7 +188,7 @@ final class CompanionMacPairingController {
                     if claim.expiresAt <= Date() {
                         try? self.saveClaim(nil, claim.request.identity.deviceID)
                         self.pendingClaim = nil; self.isRequestPending = false
-                        self.errorMessage = "Cancellation could not be confirmed. Review paired devices on the central Mac before pairing again."
+                        self.errorMessage = "Cancellation could not be confirmed. Review paired devices on the central database before pairing again."
                         return
                     }
                 }
