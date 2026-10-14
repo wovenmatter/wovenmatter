@@ -196,8 +196,8 @@ struct ChatPane: View {
         }
         if model.activeRunID == nil || model.activeProvider?.canSteer == true {
           Button { Task { await model.send() } } label: {
-            Group { if model.sending { ProgressView().tint(.white) } else { DashboardLucideIcon(glyph: .arrowUp, size: 20) } }
-              .frame(width: 44, height: 44).foregroundStyle(.white).background(canSend ? DashboardPalette.primary : Color.gray.opacity(0.35), in: Circle())
+            Group { if model.sending { ProgressView().tint(DashboardPalette.primaryForeground) } else { DashboardLucideIcon(glyph: .arrowUp, size: 20) } }
+              .frame(width: 44, height: 44).foregroundStyle(DashboardPalette.primaryForeground).background(canSend ? DashboardPalette.primaryFill : Color.gray.opacity(0.35), in: Circle())
           }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
         }
       }

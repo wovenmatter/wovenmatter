@@ -83,13 +83,13 @@ struct DashboardConversationPopover<Content: View>: NSViewRepresentable {
 
         func update(presented: Bool, anchor: NSView) {
             if presented {
+                popover.appearance = anchor.effectiveAppearance
                 if popover.isShown {
                     if closing { animate(visible: true) }
                     return
                 }
                 guard let parentWindow = anchor.window, !anchor.visibleRect.isEmpty else { return }
                 popover.contentViewController = host
-                popover.appearance = anchor.effectiveAppearance
                 host.view.layoutSubtreeIfNeeded()
                 popover.contentSize = host.view.fittingSize
                 popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: preferredEdge)

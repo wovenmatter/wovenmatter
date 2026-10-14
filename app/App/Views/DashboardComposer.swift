@@ -605,10 +605,13 @@ struct DashboardComposer: View {
                 if showsStop { Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold)) }
                 else { DashboardLucideIcon(glyph: .arrowUp, size: 16) }
             }
-                .foregroundStyle(.white)
+                .foregroundStyle(DashboardPalette.primaryForeground)
                 .frame(width: 36, height: 36)
-                .background(DashboardPalette.primary)
+                .background(DashboardPalette.primaryFill)
                 .clipShape(Circle())
+                .overlay {
+                    if theme == .dark { Circle().stroke(theme.palette.themeRing, lineWidth: 1) }
+                }
         }
         .buttonStyle(.plain)
         .disabled(!canSend && !showsStop)

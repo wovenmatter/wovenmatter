@@ -55,14 +55,14 @@ struct DashboardConversationEmptyState: View {
         VStack(spacing: 0) {
             ZStack {
                 Circle()
-                    .fill(DashboardPalette.primary)
+                    .fill(DashboardPalette.primaryFill)
                     .frame(width: 56, height: 56)
-                    .shadow(color: DashboardPalette.primary.opacity(0.30), radius: 15, y: 8)
+                    .shadow(color: DashboardPalette.primaryFill.opacity(0.30), radius: 15, y: 8)
                 if loading {
-                    ProgressView().controlSize(.small).tint(.white)
+                    ProgressView().controlSize(.small).tint(DashboardPalette.primaryForeground)
                 } else {
                     DashboardLucideIcon(glyph: icon, size: 22)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(DashboardPalette.primaryForeground)
                 }
             }
             Text(title)

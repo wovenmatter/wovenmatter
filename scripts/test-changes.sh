@@ -24,6 +24,7 @@ run_static_checks() {
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh
+  scripts/test-appearance.sh
   scripts/test-note-editor.sh
   scripts/test-note-drafts.sh
   scripts/test-note-socket.sh

@@ -1273,25 +1273,25 @@ struct DashboardUsageView: View {
 
     private func providerColor(_ provider: ProviderKind) -> Color {
         switch provider {
-        case .codex: .hex(0x0D8F5A)
-        case .claude: .hex(0xC46B3C)
-        case .grok: .hex(0x535A63)
-        case .cursor: .hex(0x4D69D8)
-        case .openCodeGo: .hex(0x8B5CF6)
-        case .openRouter: .hex(0xE05D8B)
-        case .unknown: .hex(0x8A8F98)
+        case .codex: DashboardPalette.success
+        case .claude: DashboardPalette.usageOrange
+        case .grok: DashboardPalette.usageGray
+        case .cursor: DashboardPalette.usageBlue
+        case .openCodeGo: DashboardPalette.usagePurple
+        case .openRouter: DashboardPalette.usagePink
+        case .unknown: DashboardPalette.usageUnknown
         }
     }
 
     private func modelColor(_ model: String) -> Color {
         let colors: [Color] = [
-            .hex(0x4D69D8),
-            .hex(0x0D8F5A),
-            .hex(0xC46B3C),
-            .hex(0x8B5CF6),
-            .hex(0xE05D8B),
-            .hex(0xC28A20),
-            .hex(0x535A63),
+            DashboardPalette.usageBlue,
+            DashboardPalette.success,
+            DashboardPalette.usageOrange,
+            DashboardPalette.usagePurple,
+            DashboardPalette.usagePink,
+            DashboardPalette.usageYellow,
+            DashboardPalette.usageGray,
         ]
         let hash = model.utf8.reduce(UInt32(2_166_136_261)) {
             ($0 ^ UInt32($1)) &* 16_777_619
@@ -1627,12 +1627,12 @@ private struct UsageEmptyCard: View {
 private extension ProviderKind {
     var usageColor: Color {
         switch self {
-        case .codex: Color.hex(0x0D8F5A)
-        case .claude: Color.hex(0xC46B3C)
-        case .grok: Color.hex(0x535A63)
-        case .cursor: Color.hex(0x4D69D8)
-        case .openCodeGo: Color.hex(0x8B5CF6)
-        case .openRouter: Color.hex(0xE05D8B)
+        case .codex: DashboardPalette.success
+        case .claude: DashboardPalette.usageOrange
+        case .grok: DashboardPalette.usageGray
+        case .cursor: DashboardPalette.usageBlue
+        case .openCodeGo: DashboardPalette.usagePurple
+        case .openRouter: DashboardPalette.usagePink
         case .unknown: DashboardPalette.mutedForeground
         }
     }
@@ -1685,7 +1685,7 @@ private extension UsageLimitStatus {
     var color: Color {
         switch self {
         case .available: DashboardPalette.success
-        case .signedIn: Color.hex(0x4D69D8)
+        case .signedIn: DashboardPalette.usageBlue
         case .needsCredential: DashboardPalette.warning
         case .unavailable: DashboardPalette.mutedForeground
         case .failed: DashboardPalette.danger
