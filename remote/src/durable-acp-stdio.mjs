@@ -8,8 +8,7 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   if (!token) throw new Error('Remote service authentication is unavailable')
   if (!/^\d+$/.test(String(port))) throw new Error('Invalid service port')
   const lifecycle = new AbortController()
-  const pi = harnessID === 'pi'
-  let stopped = false, cursor = 0, state, observingRun = false, piReconnecting = false, idleBackoff = 100
+  let stopped = false, cursor = 0, state, observingRun = false, idleBackoff = 100
   let attachmentToken
   const attachment = randomUUID(), requestIDs = new Map(), requestMethods = new Map(), incomingRequests = new Set()
   const write = message => new Promise((resolve, reject) => output.write(JSON.stringify(message) + '\n', error => error ? reject(error) : resolve()))
@@ -25,7 +24,6 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   if (attached.state === 'stopped') attached = await call('recover', { attachmentProtocol: 1 })
   attachmentToken = attached.attachmentToken
   state = attached.snapshot
-  piReconnecting = pi && !!state.piState
   // Historical notifications are reconciled through recoveredRuns, never blindly
   // replayed into a transcript that already contains them.
   cursor = attached.events.at(-1)?.sequence ?? 0
@@ -40,15 +38,15 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   async function handleMessage(message) {
       let dispatched = false
       try {
-        if (!attachmentToken && !['initialize', 'session/load', 'get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands'].includes(message.method ?? message.type)) {
+        if (!attachmentToken && !['initialize', 'session/load'].includes(message.method)) {
           throw new Error('Update the workspace service and reconnect before sending messages; this service cannot fence replaced attachments.')
         }
-        const cliConnection = (pi ? message._meta : message.params?._meta)?.wovenToolsConnection
+        const cliConnection = message.params?._meta?.wovenToolsConnection
         if (cliConnection) await call('cli', { context: cliConnection, attachmentToken })
         if (message.method === 'initialize' && state.initialized) {
           await write({ jsonrpc: '2.0', id: message.id, result: state.initialized }); return
         }
-        if ((message.method === 'session/load' && state.session?.sessionId === message.params?.sessionId) || (piReconnecting && message.type === 'get_state')) {
+        if ((message.method === 'session/load' && state.session?.sessionId === message.params?.sessionId)) {
           // Re-issue only callbacks still waiting on the service-owned process.
           // The client handles them with its normal permission and filesystem policy.
           for (const pending of state.pendingRequests ?? []) {
@@ -61,7 +59,7 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
             // A restored callback can wait on the user. Its deliberation time
             // must not expire initialization and disconnect the approval UI.
             // Once callbacks settle, retain the normal bounded completion wait.
-            if (state.pendingRequests?.some(request => !pi || ['select', 'confirm', 'input', 'editor'].includes(request.method))) {
+            if (state.pendingRequests?.length) {
               deadline = Date.now() + loadTimeout
             } else if (Date.now() >= deadline) break
             await new Promise(resolve => setTimeout(resolve, 100))
@@ -69,43 +67,27 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
           }
           if (state.busy) throw new Error('Remote task is still running; reconnect after it finishes')
           state = (await call('poll', { after: cursor, includeRecovery: true })).snapshot
-          if (pi) {
-            piReconnecting = false
-            await write({ type: 'response', id: message.id, command: 'get_state', success: true, data: {
-              ...state.piState, _meta: { recoveredRuns: state.recoveredRuns, recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.piState?.sessionId ?? state.piState?.session_id },
-            } }); return
-          }
           const { sessionId, ...result } = state.session
           await write({ jsonrpc: '2.0', id: message.id, result: {
             ...result, _meta: { ...result._meta, recoveredRuns: state.recoveredRuns, recoveryComplete: state.recoveryComplete === true, recoverySessionID: sessionId },
           } }); return
         }
         if (attached.state !== 'running') throw new Error('Remote process stopped; start a new session to continue')
-        if ((message.method || (pi && message.type !== 'extension_ui_response')) && message.id !== undefined) {
+        if (message.method && message.id !== undefined) {
           const id = `${attachment}:${String(message.id)}`
           requestIDs.set(id, message.id)
-          requestMethods.set(id, message.method ?? message.type)
+          requestMethods.set(id, message.method)
           message.id = id
         } else if (!message.method && message.id !== undefined) {
           if (!incomingRequests.delete(message.id)) return
         }
-        if (message.method === 'session/prompt' || message.method === '_session/steering' || (pi && message.type === 'prompt')) observingRun = true
+        if (message.method === 'session/prompt' || message.method === '_session/steering') observingRun = true
         dispatched = true
-        const receipt = await call('message', { deliveryID: randomUUID(), message })
-        if (pi && receipt.stoppedPreflight) {
-          const id = requestIDs.get(message.id) ?? message.id
-          requestIDs.delete(message.id); requestMethods.delete(message.id)
-          await write({ type: 'response', id, command: 'abort', success: true })
-        }
+        await call('message', { deliveryID: randomUUID(), message })
       } catch (error) {
         const originalID = requestIDs.get(message.id) ?? message.id
         requestIDs.delete(message.id)
         requestMethods.delete(message.id)
-        if (pi) {
-          if (message.id !== undefined) await write({ type: 'response', id: originalID, command: message.type, success: false,
-            error: error.message, _meta: { deliveryUncertain: dispatched } })
-          return
-        }
         if (message.id !== undefined) await write({ jsonrpc: '2.0', id: originalID,
           error: { code: -32000, message: error.message, data: { deliveryUncertain: dispatched } } })
       }
@@ -129,20 +111,17 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
       state = { ...state, ...batch.snapshot }
       for (const event of batch.events) {
         const message = event.message
-        if (message.id !== undefined && !message.method && message.type !== 'extension_ui_request') {
+        if (message.id !== undefined && !message.method) {
           if (requestIDs.has(message.id)) {
             let delivered = { ...message, id: requestIDs.get(message.id) }
             if (requestMethods.get(message.id) === 'session/load' && message.result) delivered.result = {
               ...message.result, _meta: { ...message.result._meta, recoveredRuns: state.recoveredRuns ?? [], recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.session?.sessionId },
             }
-            if (pi && requestMethods.get(message.id) === 'get_state' && message.success) delivered.data = {
-              ...message.data, _meta: { ...message.data?._meta, recoveredRuns: state.recoveredRuns ?? [], recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.piState?.sessionId ?? state.piState?.session_id },
-            }
             await write(delivered)
             requestIDs.delete(message.id)
             requestMethods.delete(message.id)
           }
-        } else if ((message.method || (pi && message.type !== 'extension_ui_response')) && message.id !== undefined) {
+        } else if (message.method && message.id !== undefined) {
           if (!incomingRequests.has(message.id)) {
             incomingRequests.add(message.id)
             await write(message)
@@ -151,10 +130,10 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
         cursor = event.sequence
       }
       // Admission can remove the last request ID while a detached Codex turn
-      // or Pi continuation is still streaming. Keep forwarding through the
+      // is still streaming. Keep forwarding through the
       // complete terminal batch, including paginated output already journaled.
       if (state.busy === false && batch.events.length < 256
-        && ![...requestMethods.values()].some(method => ['session/prompt', '_session/steering', 'prompt'].includes(method))) observingRun = false
+        && ![...requestMethods.values()].some(method => ['session/prompt', '_session/steering'].includes(method))) observingRun = false
       if (batch.state !== 'running') throw new Error('Remote process stopped; reconnect to recover its saved results')
       // An older service may ignore waitMs. Avoid spinning its idle endpoint.
       if (!batch.events.length && performance.now() - pollStarted < 25) {

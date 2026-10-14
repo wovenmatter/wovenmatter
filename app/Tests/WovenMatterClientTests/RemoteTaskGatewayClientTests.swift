@@ -30,7 +30,7 @@ struct RemoteTaskGatewayClientTests {
         #expect(direct.launch.arguments.last?.contains("durable-acp") == false)
     }
 
-    @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild, .cursor, .pi, .hermes])
+    @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
     func nativeArchiveScopeIdentifiesRemoteExecutionHost(runtimeKind: AgentRuntimeKind) throws {
         let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
         let launch = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtimeKind,
@@ -39,22 +39,6 @@ struct RemoteTaskGatewayClientTests {
         if runtimeKind == .defaultAgent {
             #expect(launch.environment["WOVEN_DEFAULT_AGENT_SCOPE"] == configuration.id.uuidString.lowercased())
         }
-    }
-
-    @Test func durablePiLaunchKeepsSessionArgumentsInsideSSHAndProbesDirect() throws {
-        let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
-        let channel = UUID().uuidString
-        let launch = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .pi,
-            processWorkingDirectory: URL(fileURLWithPath: "/tmp"), durableChannelID: channel).launch
-        #expect(launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1")
-        #expect(launch.arguments.last?.contains("durable-acp-stdio") == true)
-        let resumed = PiRPCClient.sessionLaunchArguments(launch, sessionID: "native-session")
-        #expect(resumed.count == launch.arguments.count)
-        #expect(resumed.last?.hasSuffix("'--session' 'native-session'") == true)
-        let probe = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .pi,
-            processWorkingDirectory: URL(fileURLWithPath: "/tmp")).launch
-        #expect(probe.arguments.last?.contains("durable-acp-stdio") == false)
-        #expect(probe.environment["WOVEN_DURABLE_REMOTE_ACP"] == nil)
     }
 
     @Test func durableGrokPermissionIsPassedToRelayAfterNodeExecutable() throws {

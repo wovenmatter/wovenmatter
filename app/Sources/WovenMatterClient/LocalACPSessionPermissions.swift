@@ -24,16 +24,9 @@ enum LocalACPSessionPermissions {
     }
 
     private static func explicitPermission(runtimeKind: AgentRuntimeKind, arguments: [String]) -> String? {
-        if runtimeKind == .cursor, arguments.contains(where: ["--force", "--yolo", "-f"].contains) { return "force" }
         return runtimeKind == .grokBuild ? explicitGrokPermission(in: arguments) : nil
     }
 
-    // Cursor permission choices control its native process flag.
-    static let cursorOptions = ["native-default", "force"]
-    static let cursorMetadata: [String: SessionOptionMetadata] = [
-        "native-default": .init(name: "Native defaults", description: "Launch Cursor without --force. Cursor’s saved session and native allow/deny policies remain in effect."),
-        "force": .init(name: "Full access", description: "Launch Cursor with its native --force flag. Explicit native deny rules and required input remain in effect."),
-    ]
     static let grokOptions = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
 
     static let grokMetadata: [String: SessionOptionMetadata] = [
@@ -109,14 +102,6 @@ enum LocalACPSessionPermissions {
     static func launchArguments(
         _ arguments: [String], runtimeKind: AgentRuntimeKind, permission: String?
     ) throws -> [String] {
-        if runtimeKind == .cursor, let permission, !cursorOptions.contains(permission) {
-            throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
-        }
-        if runtimeKind == .cursor, let permission, cursorOptions.contains(permission) {
-            let flags = Set(["--force", "--yolo", "-f"])
-            let clean = arguments.filter { !flags.contains($0) }
-            return permission == "force" ? ["--force"] + clean : clean
-        }
         guard runtimeKind == .grokBuild, let permission else { return arguments }
         guard grokOptions.contains(permission) else {
             throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)

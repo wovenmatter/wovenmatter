@@ -324,6 +324,16 @@ struct DashboardCalendarSurface: View {
 
 /// A list presentation of the same schedules used by Calendar. Calendar visibility
 /// changes presentation only; tasks keep their existing identity and run history.
+struct DashboardCronSurface: View {
+    @Bindable var model: ApplicationModel
+    let onOpenConversation: (String) -> Void
+    @State private var provider = "Scheduled Tasks"
+
+    var body: some View {
+        DashboardScheduledTasksSurface(model: model, provider: $provider, onOpenSession: onOpenConversation)
+    }
+}
+
 struct DashboardScheduledTasksSurface: View {
     @Bindable var model: ApplicationModel
     @Binding var provider: String
@@ -385,8 +395,8 @@ struct DashboardScheduledTasksSurface: View {
         }
     }
     private var tabs: some View {
-        DashboardSegmentedSelector(options: ["Scheduled Tasks", "Calendar Tasks", "Hermes", "OpenClaw"],
-            selection: $provider) { $0 }.frame(width: 440)
+        DashboardSegmentedSelector(options: ["Scheduled Tasks", "Calendar Tasks"],
+            selection: $provider) { $0 }.frame(width: 300)
     }
     private func newTask() {
         model.clearCalendarMutationError()

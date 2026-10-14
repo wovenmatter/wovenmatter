@@ -40,7 +40,6 @@ struct DashboardConversationContextMenu: ViewModifier {
     let conversation: WorkspaceConversationRecord
     let folders: [WorkspaceFolderRecord]
     let isRunning: Bool
-    let onMove: (String, String?) -> Void
     let onAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
 
     func body(content: Content) -> some View {
@@ -50,11 +49,6 @@ struct DashboardConversationContextMenu: ViewModifier {
                     onAction(conversation, .setPinned(!conversation.isPinned))
                 }
                 Button("Rename") { onAction(conversation, .rename) }
-                Menu("Move to Folder") {
-                    DashboardMoveToFolderMenu(folderID: conversation.folderID, folders: folders) {
-                        onMove(conversation.id, $0)
-                    }
-                }
                 Divider()
                 Button("Export messages") { onAction(conversation, .export(.messages)) }
                 Button("Export full run") { onAction(conversation, .export(.fullRun)) }

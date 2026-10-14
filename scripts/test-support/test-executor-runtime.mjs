@@ -36,16 +36,17 @@ try {
     catch (error) { if (child.exitCode !== null || child.signalCode !== null || Date.now() > deadline) throw runtimeFailure(error); await wait(500); }
   }
   check('Unchanged runtime starts with isolated state');
+  const framework = (await broker.request('/api/framework/release')).body.version;
   const apps = [];
   for (const label of ['alpha', 'beta']) {
-    const source = `import {defineApp,query,mutation,object,router} from 'apps'; import {always} from 'apps/operations/approval'; export default defineApp({accounts:{}},async ctx=>({tools:router({read:query({input:object({})},async()=>({fixture:'${label}'})),approved:mutation({input:object({}),approval:always()},async()=>({changed:'${label}'})),ask:query({input:object({})},async()=>await ctx.elicit({mode:'form',message:'Fixture input',requestedSchema:{type:'object',properties:{answer:{type:'string'}},required:['answer']}})),blocked:mutation({input:object({}),approval:async()=> 'denied'},async()=>({bad:true}))})}));`;
-    const deployed = await broker.request('/v1/apps/deploy', { method: 'POST', value: { owner: 'woven-fixture', name: `Fixture ${label}`, files: [{ path: 'index.ts', content: source }, { path: 'package.json', content: JSON.stringify({ dependencies: { apps: '0.0.1-beta.14' } }) }] } });
+    const source = `import {defineApp,query,mutation,object,router} from 'apps'; import {always} from 'apps/operations/approval'; export default defineApp({}, {tools:router({read:query({input:object({})},async()=>({fixture:'${label}'})),approved:mutation({input:object({}),approval:always()},async()=>({changed:'${label}'})),ask:query({input:object({})},async ctx=>await ctx.elicit({mode:'form',message:'Fixture input',requestedSchema:{type:'object',properties:{answer:{type:'string'}},required:['answer']}})),blocked:mutation({input:object({}),approval:async()=> 'denied'},async()=>({bad:true}))})});`;
+    const deployed = await broker.request('/v1/apps/deploy', { method: 'POST', value: { owner: 'woven-fixture', name: `Fixture ${label}`, files: [{ path: 'index.ts', content: source }, { path: 'package.json', content: JSON.stringify({ dependencies: { apps: framework } }) }] } });
     apps.push(deployed.body.app);
   }
-  const profiles = await broker.inventory();
-  assert.equal(profiles.length, 2); assert.ok(profiles.every(profile => profile.name.startsWith('Fixture')));
-  check('Account-free profiles are saved and the administrator app is excluded');
-  const selected = apps.map(app => profiles.find(profile => profile.app === app.id));
+  const targets = await broker.inventory();
+  assert.equal(targets.length, 2); assert.ok(targets.every(target => target.name.startsWith('Fixture')));
+  check('App targets are discovered and the administrator app is excluded');
+  const selected = apps.map(app => targets.find(target => target.app === app.id));
   const a = await broker.scope('conversation-a', [selected[0]], true);
   const b = await broker.scope('conversation-b', [selected[1]], true);
   async function run(scope, session, code, respond) {
@@ -60,7 +61,7 @@ try {
       await wait(100);
     }
   }
-  const path = (app, profile) => `tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.profile)}]`;
+  const path = app => `tools[${JSON.stringify(app.slug)}]`;
   assert.equal((await run(a, 'conversation-a', `return await ${path(apps[0], selected[0])}.read({});`)).result.execution.value.fixture, 'alpha');
   assert.equal((await run(b, 'conversation-b', `return await ${path(apps[1], selected[1])}.read({});`)).result.execution.value.fixture, 'beta');
   check('Broker issues working conversation-bound grants through the public API');
@@ -94,7 +95,35 @@ try {
   await broker.scope('conversation-a', [], false);
   assert.equal(cancellation.status, 'cancelled');
   check('Master off empties the remote scope and cancels pending work');
-  console.log(`${passed} runtime checks passed; no provider accounts or API services used.`);
+  // Synthetic credentials stay in disposable state and never call an external service.
+  const accountSource = `import {defineApp,defineProvider,secrets,string,query,mutation,object,router} from 'apps'; import {always} from 'apps/operations/approval'; const fixture=defineProvider({name:'Synthetic fixture',auth:{key:secrets({label:'Fixture field',fields:object({marker:string()})})}}); export default defineApp({user:{accounts:{fixtures:fixture.many()}}},{tools:router({read:query({input:object({})},async ctx=>ctx.user.accounts.fixtures.map(account=>account.id)),approved:mutation({input:object({}),approval:always()},async ctx=>ctx.user.accounts.fixtures.map(account=>account.id))})});`;
+  const accountApp = (await broker.request('/v1/apps/deploy', { method: 'POST', value: { owner: 'woven-fixture', name: 'Fixture accounts', files: [
+    { path: 'index.ts', content: accountSource }, { path: 'package.json', content: JSON.stringify({ dependencies: { apps: framework } }) },
+  ] } })).body.app;
+  const accounts = [];
+  for (const label of ['First fixture', 'Second fixture']) {
+    accounts.push((await broker.request(`/dashboard/api/apps/${accountApp.id}/accounts/user/fixtures/connections`, {
+      method: 'POST', value: { method: 'key', label, fields: { marker: 'synthetic' } },
+    })).body);
+  }
+  const accountTargets = (await broker.inventory()).filter(target => target.app === accountApp.id);
+  assert.deepEqual(accountTargets.map(target => target.account).sort(), accounts.map(account => account.id).sort());
+  const first = accountTargets.find(target => target.account === accounts[0].id), second = accountTargets.find(target => target.account === accounts[1].id);
+  const c = await broker.scope('account-conversation-a', [first], true);
+  const d = await broker.scope('account-conversation-b', [second], true);
+  assert.deepEqual((await run(c, 'account-conversation-a', `return await ${path(accountApp)}.read({});`)).result.execution.value, [accounts[0].id]);
+  assert.deepEqual((await run(d, 'account-conversation-b', `return await ${path(accountApp)}.read({});`)).result.execution.value, [accounts[1].id]);
+  const combined = await broker.scope('account-conversation-b', [first, second], true);
+  assert.deepEqual((await run(combined, 'account-conversation-b', `return await ${path(accountApp)}.read({});`)).result.execution.value.sort(), accounts.map(account => account.id).sort());
+  check('Linked accounts are narrowed to each conversation and multiple explicit targets work');
+  const accountApproval = await run(c, 'account-conversation-a', `return await ${path(accountApp)}.approved({});`);
+  assert.equal(accountApproval.status, 'approval-required');
+  await broker.scope('account-conversation-a', [second], true);
+  await broker.advance(accountApproval, { action: 'accept', content: {} });
+  while (accountApproval.status === 'running') await wait(100);
+  assert.equal(accountApproval.result.execution.ok, false);
+  check('Removing an account during approval blocks the captured invocation');
+  console.log(`${passed} runtime checks passed; no provider services or real accounts used.`);
 } finally {
   await broker.stop(); child.kill('SIGTERM');
   if (child.exitCode === null) await Promise.race([new Promise(resolve => child.once('exit', resolve)), wait(10000).then(() => child.kill('SIGKILL'))]);

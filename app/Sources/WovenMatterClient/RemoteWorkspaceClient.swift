@@ -148,7 +148,6 @@ public enum RemoteHarnessLaunchResolver {
         var harnessArgumentsStartIndex = command.count
         let supportsDurableRelay = harness.map {
             ["acp", "agent-stdio", "acp-and-gateway"].contains($0.transport)
-                || (runtimeKind == .pi && $0.transport == "rpc")
         } ?? false
         let usesDurableRelay = configuration.backgroundExecutionEnabled
             && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
@@ -197,11 +196,7 @@ public enum RemoteHarnessLaunchResolver {
             ),
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
-                repositoriesURL: workspaceRoot.appending(
-                    path: "repos",
-                    directoryHint: .isDirectory
-                ),
-                databasesURL: workspaceRoot.appending(path: "databases", directoryHint: .isDirectory)
+                databasesURL: URL(fileURLWithPath: "/home/.local/share/wovenmatter/databases", isDirectory: true)
             )
         )
     }
@@ -375,28 +370,6 @@ public struct RemoteWorkspaceHealth: Codable, Equatable, Sendable {
     public let version: String
     public let workspaceRoot: String
     public let harnessCount: Int
-}
-
-public struct RemoteOpenClawGatewayStatus: Codable, Equatable, Sendable {
-    public let desired: Bool
-    public let state: String
-    public let pid: Int?
-    public let restarts: Int
-    public let lastError: String?
-    public let socketPath: String
-}
-
-public struct RemoteOpenClawGatewayConnection: Sendable {
-    public let endpoint: OpenClawGatewayEndpoint
-    public let requestHeaders: [String: String]
-
-    public init(
-        endpoint: OpenClawGatewayEndpoint,
-        requestHeaders: [String: String]
-    ) {
-        self.endpoint = endpoint
-        self.requestHeaders = requestHeaders
-    }
 }
 
 public struct RemoteHarnessOperation: Codable, Equatable, Identifiable, Sendable {
@@ -1106,11 +1079,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: name, preference: preference)))
     }
 
-    public func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String) async throws -> RemoteAgentDatabase {
-        try await request(path: "v1/databases/preference", method: "PATCH", body: JSONEncoder().encode(
-            RemoteDatabaseRequest(databaseID: databaseID, preference: preference)))
-    }
-
     public func databaseData(for link: DatabaseArtifactLink) async throws -> RemoteDatabaseData {
         try await request(path: "v1/databases/data", method: "POST", body: JSONEncoder().encode(
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
@@ -1128,10 +1096,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             body: nil
         )
         return document.harnesses
-    }
-
-    public func hermesResults(offset: Int) async throws -> [HermesScheduledResult] {
-        try await request(path: "v1/workspace-instances/hermes/results", method:"GET", body:nil, queryItems:[URLQueryItem(name:"offset",value:String(offset))])
     }
 
     public func workspaceInstance(
@@ -1252,30 +1216,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(
             path: "v1/operations/\(id.uuidString)",
             method: "GET",
-            body: nil
-        )
-    }
-
-    public func openClawGatewayStatus() async throws -> RemoteOpenClawGatewayStatus {
-        try await request(
-            path: "v1/openclaw/gateway",
-            method: "GET",
-            body: nil
-        )
-    }
-
-    public func startOpenClawGateway() async throws -> RemoteOpenClawGatewayStatus {
-        try await request(
-            path: "v1/openclaw/gateway/start",
-            method: "POST",
-            body: nil
-        )
-    }
-
-    public func restartOpenClawGateway() async throws -> RemoteOpenClawGatewayStatus {
-        try await request(
-            path: "v1/openclaw/gateway/restart",
-            method: "POST",
             body: nil
         )
     }
@@ -1585,5 +1525,39 @@ enum RemoteWorkspaceProcess {
             data: data,
             status: process.terminationStatus
         )
+    }
+}
+
+
+public struct RemoteProjectDirectory: Codable, Sendable { public let path: String }
+
+extension RemoteWorkspaceServiceClient {
+    public func ensureScratchDirectory(path: String) async throws -> RemoteProjectDirectory {
+        try await request(path: "v1/scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
+    }
+    public func createProject(name: String, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
+        struct Request: Encodable { let name: String; let reuseExisting: Bool }
+        return try await request(path: "v1/projects", method: "POST", body: JSONEncoder().encode(Request(name: name, reuseExisting: reuseExisting)))
+    }
+}
+
+
+extension RemoteWorkspaceServiceClient {
+    public func managedDatabaseOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
+                                         snapshot: ManagedDatabaseSnapshot? = nil) async throws -> GatewayJSONValue {
+        struct Request: Encodable { let databaseID: String?; let sql: String?; let name: String?; let snapshot: ManagedDatabaseSnapshot? }
+        return try await request(path: "v1/databases/" + action, method: "POST",
+            body: JSONEncoder().encode(Request(databaseID: id, sql: sql, name: name, snapshot: snapshot)))
+    }
+    public func databaseSnapshot(id: String) async throws -> ManagedDatabaseSnapshot {
+        struct Request: Encodable { let databaseID: String }
+        return try await request(path: "v1/databases/snapshot", method: "POST", body: JSONEncoder().encode(Request(databaseID: id)))
+    }
+}
+
+
+extension RemoteWorkspaceServiceClient {
+    public func deleteProject(path: String) async throws -> RemoteProjectDirectory {
+        try await request(path: "v1/projects/delete", method: "POST", body: JSONEncoder().encode(["path": path]))
     }
 }

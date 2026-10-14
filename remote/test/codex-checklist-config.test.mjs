@@ -13,11 +13,12 @@ test('remote live ACP and readiness use the same Codex checklist launch override
   assert.deepEqual(JSON.parse(environment({ id: 'codex' }).CODEX_CONFIG), {
     approvals_reviewer: 'auto_review', 'tools.update_plan.enabled': true,
   });
-  assert.equal(environment({ id: 'pi' }).CODEX_CONFIG, undefined);
-  assert.equal(environment({ id: 'hermes' }).HERMES_ACP_SKIP_CONFIGURED_MCP, '0');
+  assert.equal(environment({ id: 'grok_build' }).CODEX_CONFIG, undefined);
+  const composed = runInNewContext(`(${definition})`, { harnessEnvironment: () => ({ CODEX_CONFIG: JSON.stringify({ developer_instructions: 'Existing additions', model: 'native-model' }) }) });
+  assert.equal(JSON.parse(composed({ id: 'codex' }).CODEX_CONFIG).developer_instructions, 'Existing additions');
+  assert.equal(JSON.parse(composed({ id: 'codex' }).CODEX_CONFIG).model, 'native-model');
   assert.match(source, /createDurableACP\(\{ catalog, workspaceRoot,\s+environment: harness => harness.id === 'codex' \? harnessRuntimeEnvironment\(harness\) : harnessEnvironment\(\),/);
-  // Scheduled launches must pass their selected harness to this callback; the
-  // runner currently omits it and is a separate integration-owner change.
+  // Scheduled launches use the same harness-specific environment.
   assert.match(source, /createTaskExecutor\(\{catalog,workspaceRoot,\s+environment: harness => harness\?\.id === 'codex' \? harnessRuntimeEnvironment\(harness\) : harnessEnvironment\(\),/);
   assert.match(source, /env: harnessRuntimeEnvironment\(harness\)/);
   const relay = await readFile(new URL('../src/durable-acp.mjs', import.meta.url), 'utf8');

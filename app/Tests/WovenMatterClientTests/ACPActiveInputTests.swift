@@ -5,7 +5,7 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPActiveInputTests {
-    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .cursor, .grokBuild])
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
     func activeInputStreamsWithoutCancellingOrStartingAnotherSession(kind: AgentRuntimeKind) async throws {
         let f = try ActiveInputFixture(mode: "ordinary")
         defer { f.remove() }
@@ -19,7 +19,7 @@ struct ACPActiveInputTests {
         try await f.waitForPrompt()
         for text in ["first", "second", "finish"] {
             let receipt = try await client.beginActiveInput(input(text))
-            if kind != .cursor { #expect(try await receipt.completion.value == nil) }
+            #expect(try await receipt.completion.value == nil)
         }
         #expect(try await prompt.value == .endTurn)
         await client.shutdown()
@@ -140,7 +140,7 @@ private struct ActiveInputFixture {
             value=''.join(b.get('text','') for b in p.get('prompt',[])) or p.get('text','')
             if method=='initialize': result(i,dict(protocolVersion=2,_meta=dict(steering=dict(supported=mode!='unsupported'))))
             elif method=='session/new': result(i,dict(sessionId='parent'))
-            elif method in ['authenticate','cursor/list_available_models']: result(i,{})
+            elif method in ['authenticate']: result(i,{})
             elif method=='session/cancel':
                 for pid in prompts: result(pid,dict(stopReason='cancelled'))
                 prompts=[]

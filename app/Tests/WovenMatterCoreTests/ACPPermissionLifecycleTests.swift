@@ -5,28 +5,6 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPPermissionLifecycleTests {
-  @Test(arguments: [(false, nil as String?), (true, nil), (false, "existing-cursor")])
-  func cursorNativeFullAccessRestartPreservesDraftOrSavedIdentity(remote: Bool, existing: String?) async throws {
-    let fixture = try await PermissionLifecycleFixture(runtime: .cursor, remote: remote)
-    defer { fixture.cleanUp() }
-    if let existing { try await fixture.database.updateLocalACPSessionID(conversationID: fixture.id, sessionID: existing) }
-    let native = try await fixture.coordinator.configuration(
-      conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace)
-    #expect(native.permission == "native-default")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == existing)
-    let full = try await fixture.coordinator.updateConfiguration(conversationID: fixture.id,
-      permission: "force", launch: fixture.launch, workspace: fixture.workspace)
-    #expect(full.permission == "force")
-    #expect(full.model == native.model && full.thinking == native.thinking)
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "force")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == existing)
-    #expect(fixture.factory.drivers.map(\.launchPermission) == [nil, "force"])
-    #expect(fixture.factory.drivers[0].shutdownCount == 1)
-    #expect(fixture.factory.drivers[1].existingSessionID == existing)
-    #expect(fixture.factory.drivers.allSatisfy { $0.promptCount == 0 })
-    await fixture.coordinator.shutdown()
-  }
-
   @Test func storedPermissionBelongsToTheSessionAndSurvivesDatabaseReopen() async throws {
     let fixture = try await PermissionLifecycleFixture(runtime: .grokBuild)
     defer { fixture.cleanUp() }
@@ -81,6 +59,7 @@ struct ACPPermissionLifecycleTests {
     let launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: .grokBuild, executableURL: fixture.launch.executableURL,
       arguments: ["host", "--", "quoted-command"], environment: ["OUTER": "kept"],
+      environmentKeysToRemove: ["REMOVE"], environmentKeyPrefixesToRemove: ["TOKEN_"],
       processWorkingDirectoryURL: fixture.directory,
       wrappedCommand: wrapped
     )
@@ -93,6 +72,8 @@ struct ACPPermissionLifecycleTests {
     #expect(observed.wrappedCommand?.harnessArgumentsStartIndex == wrapped.harnessArgumentsStartIndex)
     #expect(observed.arguments == launch.arguments)
     #expect(observed.environment == launch.environment)
+    #expect(observed.environmentKeysToRemove == launch.environmentKeysToRemove)
+    #expect(observed.environmentKeyPrefixesToRemove == launch.environmentKeyPrefixesToRemove)
     #expect(observed.processWorkingDirectoryURL == launch.processWorkingDirectoryURL)
     await fixture.coordinator.shutdown()
   }
@@ -348,7 +329,7 @@ private struct PermissionLifecycleFixture: Sendable {
       runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-permission-fixture"), arguments: [],
       requestedPermission: "bypassPermissions"
     )
-    workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
     let factory = PermissionLifecycleFactory(
       failingLaunchPermission: failingLaunchPermission, forkedLaunchPermission: forkedLaunchPermission,
       unconfirmedPermission: unconfirmedPermission, promptGate: promptGate,
@@ -404,7 +385,7 @@ private final class PermissionLifecycleFactory: @unchecked Sendable {
       return driver
     }
     return LocalACPSessionDriver(
-      initializeSession: { [self] _, existing, _ in
+      initializeSession: { [self] _, existing, _, _ in
         driver.recordExisting(existing)
         if let policy = launch.requestedPermission {
           if policy == gatedLaunchPermission { await launchGate?.hold() }
@@ -431,7 +412,7 @@ private final class PermissionLifecycleFactory: @unchecked Sendable {
           throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
         if driver.configuration.permission == permission { return driver.configuration }
-        if launch.runtimeKind == .grokBuild || launch.runtimeKind == .cursor {
+        if launch.runtimeKind == .grokBuild {
           throw LocalACPClientError.permissionChangeRequiresRestart
         }
         let result = driver.select(permission: permission == unconfirmedPermission ? "default" : permission)
@@ -463,9 +444,8 @@ private final class PermissionLifecycleDriver: @unchecked Sendable {
     current = LocalACPSessionConfiguration(
       model: "default-model", thinking: "low", modelOptions: ["default-model", "selected-model", "no-effort"],
       thinkingOptions: ["low", "high"],
-      permission: launch.runtimeKind == .cursor ? launch.requestedPermission ?? "native-default"
-        : launch.runtimeKind == .grokBuild ? launch.requestedPermission ?? "default" : "default",
-      permissionOptions: launch.runtimeKind == .cursor ? ["native-default", "force"] : ["default", "auto", "dontAsk"]
+      permission: launch.runtimeKind == .grokBuild ? launch.requestedPermission ?? "default" : "default",
+      permissionOptions: ["default", "auto", "dontAsk"]
     )
   }
 

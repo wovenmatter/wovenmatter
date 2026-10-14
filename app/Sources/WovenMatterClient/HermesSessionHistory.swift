@@ -16,7 +16,7 @@ public struct HermesSessionImport: Sendable {
     }
 
     public func nativeArchiveBatch() throws -> WorkspaceNativeRunRecordBatch {
-        let parsed = HermesGatewayClient.parseIdentity(identity)
+        let parsed = HermesSessionArchive.parseIdentity(identity)
         var records = try messages.map { row in
             let bytes = try NativeHarnessArchive.encode(row)
             let id = row["id"].number.flatMap { Int64(exactly: $0) }.map(String.init) ?? NativeHarnessArchive.digest(bytes)
@@ -31,60 +31,41 @@ public struct HermesSessionImport: Sendable {
     }
 }
 
-public enum HermesSessionHistory {
-    /// Native export includes durable row IDs, full tool results and original metadata.
-    /// The RPC display history intentionally omits some of these fields.
-    public static func load(connection: HermesGatewayConnection, sessionID: String) async throws -> HermesSessionImport {
-        guard !sessionID.isEmpty, let segment = sessionID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else {
-            throw HermesGatewayError.message("Invalid Hermes session ID.")
-        }
-        let raw = try await fetchData(connection: connection, path: "/api/sessions/" + segment + "/export", maximumResponseBytes: 64 * 1_024 * 1_024)
-        let snapshot = try HermesValue.decode(raw)
-        guard snapshot["id"].text == sessionID, case .array(let messages) = snapshot["messages"] else {
-            throw HermesGatewayError.message("Hermes returned a different or incomplete session export.")
-        }
-        var ids: Set<Double> = []
-        for message in messages {
-            guard let id = message["id"].number, id >= 1, id <= 9_007_199_254_740_991, id.rounded() == id, ids.insert(id).inserted else {
-                throw HermesGatewayError.message("Hermes export is missing unique message identities.")
-            }
-        }
-        return HermesSessionImport(identity: HermesGatewayClient.identity(home: connection.identityHome, storedID: sessionID, imported: true),
-            title: snapshot["title"].string ?? "Hermes conversation",
-            createdAt: Date(timeIntervalSince1970: snapshot["started_at"].number ?? Date().timeIntervalSince1970), messages: messages,
-            nativeSnapshot: snapshot, nativeSnapshotData: raw)
+
+
+/// Extraction helpers for archived Hermes records retained in Woven history.
+public enum HermesSessionArchive {
+    public static func identity(home: String, storedID: String, imported: Bool = false) -> String {
+        (imported ? "hermes-import:" : "hermes-gateway:") + Data(home.utf8).base64EncodedString() + ":" + storedID
     }
-    public static func fetch(connection: HermesGatewayConnection, path: String, method: String = "GET", body: HermesValue? = nil,
-                             maximumResponseBytes: Int? = 32 * 1_024 * 1_024) async throws -> HermesValue {
-        try HermesValue.decode(await fetchData(connection: connection, path: path, method: method, body: body,
-            maximumResponseBytes: maximumResponseBytes))
+    public static func parseIdentity(_ value: String) -> (home: String?, storedID: String) {
+        guard value.hasPrefix("hermes-gateway:") || value.hasPrefix("hermes-import:") else { return (nil, value) }
+        let pieces = value.split(separator: ":", maxSplits: 2).map(String.init)
+        guard pieces.count == 3, let bytes = Data(base64Encoded: pieces[1]),
+              let home = String(data: bytes, encoding: .utf8), home.hasPrefix("/"), !pieces[2].isEmpty else { return (nil, "") }
+        return (home, pieces[2])
     }
 
-    private static func fetchData(connection: HermesGatewayConnection, path: String, method: String = "GET", body: HermesValue? = nil,
-                                  maximumResponseBytes: Int? = 32 * 1_024 * 1_024) async throws -> Data {
-        guard (1...65535).contains(connection.port), path.hasPrefix("/api/"), !path.contains("..") else {
-            throw HermesGatewayError.message("Invalid Hermes request.")
+    public static func checklistUpdate(_ payload: HermesValue) -> AgentRunActivity? {
+        guard ["todo_list", "todo"].contains(payload["name"].text),
+              case .array = payload["args"]["todos"],
+              payload["result"]["error"].isNull,
+              let revision = payload["result"]["revision"].number,
+              revision.isFinite, revision >= 1, revision.rounded() == revision,
+              case .array(let todos) = payload["result"]["todos"] else { return nil }
+        var seen: Set<String> = []
+        var entries: [AgentRunPlanEntry] = []
+        for todo in todos {
+            guard let id = todo["id"].string, !id.isEmpty, seen.insert(id).inserted,
+                  let content = todo["content"].string, !content.isEmpty,
+                  let status = todo["status"].string, !status.isEmpty else { return nil }
+            entries.append(AgentRunPlanEntry(content: content, status: status, nativeID: id))
         }
-        let url = URL(string: "http://127.0.0.1:\(connection.port)" + connection.apiPrefix + path)!
-        var request = URLRequest(url: url)
-        request.setValue("Bearer " + connection.token, forHTTPHeaderField: "Authorization")
-        request.httpMethod = method
-        if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        request.timeoutInterval = 45
-        let session = URLSession(configuration: .ephemeral, delegate: NativeArchiveDownloadDelegate(), delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let status = (response as? HTTPURLResponse)?.statusCode, (200...299).contains(status) else {
-            throw HermesGatewayError.message("Hermes could not complete the request. Its existing state has not been changed.")
-        }
-        var data = Data()
-        for try await byte in bytes {
-            if let maximumResponseBytes, data.count >= maximumResponseBytes {
-                throw HermesGatewayError.message("Hermes response exceeds the bounded import limit. Its native session remains available; retry archive synchronization or import a smaller session.")
-            }
-            data.append(byte)
-        }
-        return data
+        return AgentRunActivity(id: "hermes-checklist", kind: .plan,
+            phase: entries.isEmpty ? "clear" : "update", title: "Plan",
+            planEntries: entries, rawInputJSON: payload["args"].json,
+            rawOutputJSON: payload["result"].json, planKind: "checklist",
+            planOperation: entries.isEmpty ? "clear" : "replace")
     }
 
 }

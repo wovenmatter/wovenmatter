@@ -155,46 +155,6 @@ final class ApplicationModel {
         await refreshWorkspace()
     }
 
-    func remoteOpenClawAgentID(for configuration: RemoteWorkspaceConfiguration) async throws -> UUID {
-        if isBackendFrontend {
-            guard let raw = try await sendBackendWorkspaceService(.remoteOpenClawAgent(configuration.id)).entityID,
-                  let id = UUID(uuidString: raw) else { throw ApplicationModelError.remoteHarnessUnavailable }
-            await refreshWorkspace()
-            return id
-        }
-        guard let dashboardStore, remoteWorkspaces.configuration(id: configuration.id) == configuration else {
-            throw ApplicationModelError.remoteHarnessUnavailable
-        }
-        let id = try await dashboardStore.ensureRemoteHarnessAgent(runtimeKind: .openclaw,
-            remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name)
-        await refreshWorkspace()
-        return id
-    }
-    private(set) var openClawGatewayLinks: [OpenClawGatewayLink] = []
-    private(set) var openClawGatewayErrors: [UUID: String] = [:]
-    private(set) var openClawGatewayNotices: [UUID: String] = [:]
-    private(set) var openClawGatewayOperationAgentIDs: Set<UUID> = []
-    private(set) var openClawGatewayOperationStatuses: [
-        UUID: OpenClawGatewayConnectionStatus
-    ] = [:]
-    private(set) var pendingOpenClawGatewayAgentID: UUID?
-    private(set) var openClawHeartbeatConfigurations: [UUID: OpenClawHeartbeatConfiguration] = [:]
-    private(set) var openClawHeartbeatMessages: [UUID: String] = [:]
-    private(set) var openClawHeartbeatErrorAgentIDs: Set<UUID> = []
-    private(set) var openClawHeartbeatSavingAgentIDs: Set<UUID> = []
-    private(set) var openClawGatewaySessionMetadata: [String: LocalACPSessionMetadata] = [:]
-    private(set) var openClawCronJobs: [OpenClawCronJob] = []
-    private(set) var openClawCronRuns: [OpenClawCronRun] = []
-    private(set) var openClawCronHasOlderRuns: Set<String> = []
-    private(set) var loadingOlderOpenClawCronJobs: Set<String> = []
-    private var openClawCronRunLimits: [String: Int] = [:]
-    private var openClawCronSnapshotGeneration: UInt64 = 0
-    private(set) var isRefreshingOpenClawCron = false
-    private(set) var openClawCronError: String?
-    private(set) var openClawCronBusy = false
-    private(set) var openClawResultRoutes: [UUID: [String: String]] = [:]
-    private var lastOpenClawCronRefresh = Date.distantPast
-    private var openClawGatewayConversationIDs: Set<String> = []
     private(set) var workspaceOverview: DashboardWorkspaceOverview?
     let library = LibraryModel()
     var libraryMessageTarget: WorkspaceLibraryItem?
@@ -247,25 +207,15 @@ final class ApplicationModel {
     private(set) var localACPDatabaseReadyRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var localACPAgentReconciliationError: String?
     private(set) var checkingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
-    struct PendingWorkspaceFolderChange {
-        let folder: LocalACPWorkspaceFolder
-        let destination: URL
-    }
-    private(set) var pendingWorkspaceFolderChange: PendingWorkspaceFolderChange?
-    private(set) var workspaceFolderChangeError: String?
-    private(set) var workspaceFolderChangeInProgress = false
-    private(set) var workspaceFolderRecovery: LocalACPWorkspaceFolderChangeResult?
     private(set) var localACPWorkspaceAvailability = LocalACPWorkspaceAvailability(
         state: .setupRequired,
         detail: "Set up the shared direct workspace before starting a chat.",
-        rootPath: nil,
-        repositoriesPath: nil,
-        usesExternalRepositories: false
+        rootPath: nil
     )
+    var lastDatabaseSyncAt = Date.distantPast
     private(set) var databasesSnapshot = DashboardDatabasesSnapshot.empty
     private(set) var isRefreshingDatabases = false
     private(set) var databaseError: String?
-    private(set) var updatingDatabasePreferenceIDs: Set<String> = []
     @ObservationIgnored
     private var databaseRefreshWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored
@@ -420,7 +370,8 @@ final class ApplicationModel {
             defaults: applicationDefaults
         )
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
-        self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore()
+        self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
+            databasesDirectory: try? Self.dashboardSupportDirectory().appendingPathComponent("ManagedDatabases", isDirectory: true))
         self.dashboardStore = dashboardStore
         let localACPRuntimePreferenceState = localACPRuntimePreferences.state
         enabledLocalACPRuntimeKinds =
@@ -514,6 +465,7 @@ final class ApplicationModel {
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteOpenCodeInstances()
+                await self?.refreshDatabases()
             }
             remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
             await synchronizeRemoteOpenCodeInstances()
@@ -583,9 +535,6 @@ final class ApplicationModel {
             try await dashboardStore.database.recoverToolSessionCreations()
             try await dashboardStore.database.cancelPendingCoordinationAccess()
             await refreshLocalACPWorkspace()
-            await refreshOpenClawGateways()
-            await restoreOpenClawGatewayLinks()
-            await refreshOpenClawCron()
             await refreshWorkspace()
             for entry in recoveredEntries {
                 let note = workspaceOverview?.notes.first { $0.id == entry.noteID }
@@ -1035,11 +984,7 @@ final class ApplicationModel {
         if let conversation = workspaceOverview?.conversations.first(where: {
             $0.id == change.conversationID
         }) {
-            if openClawGatewayConversationIDs.contains(change.conversationID) {
-                await refreshOpenClawGatewaySession(
-                    conversationID: change.conversationID
-                )
-            } else if conversation.localRuntimeKind != nil {
+            if conversation.localRuntimeKind != nil {
                 await refreshLocalACPSession(conversation: conversation)
             }
         }
@@ -1095,14 +1040,8 @@ final class ApplicationModel {
     private func refreshWorkspace(force: Bool) async {
         workspaceRefreshGeneration &+= 1
         let generation = workspaceRefreshGeneration
-        if !isBackendFrontend, Date().timeIntervalSince(lastOpenClawCronRefresh) >= 30 {
-            lastOpenClawCronRefresh = Date()
-            Task { await refreshOpenClawCron() }
-        }
-        if !isBackendFrontend, Date().timeIntervalSince(lastHermesCronRefresh) >= 30 {
-            lastHermesCronRefresh = Date()
-            Task { await refreshHermesCron() }
-        }
+
+
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -1455,18 +1394,42 @@ final class ApplicationModel {
         }
     }
 
-    func createFolder(name: String) async -> String? {
+    func createFolder(name: String, workspaceID: UUID? = nil, externalRoot: URL? = nil) async -> String? {
         folderMutationError = nil
         do {
             if isBackendFrontend {
-                let result = try await sendBackendCommand(.workspaceMutation(.createFolder(name: name)))
+                let result = try await sendBackendCommand(.workspaceMutation(.createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot)))
                 await refreshWorkspace()
                 return result.entityID
             }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            let folderID = try await dashboardStore.createFolder(name: name)
+            let owner = try await executionWorkspaceIdentity(workspaceID: workspaceID)
+            let path: String
+            let managed: Bool
+            if let workspaceID {
+                guard externalRoot == nil, let configuration = remoteWorkspaces.configuration(id: workspaceID) else {
+                    throw WorkspaceToolError.invalid("Remote folders must be created in their owning workspace.")
+                }
+                path = try await remoteWorkspaces.createProject(name: name, in: configuration).path
+                managed = true
+            } else {
+                guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                if let externalRoot {
+                    let url = externalRoot.standardizedFileURL.resolvingSymlinksInPath()
+                    var directory: ObjCBool = false
+                    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else {
+                        throw WorkspaceToolError.invalid("Choose an existing directory on this Mac.")
+                    }
+                    path = url.path; managed = false
+                } else {
+                    path = try LocalACPWorkspaceProvisioner.createProject(named: name, in: workspace.rootURL).path
+                    managed = true
+                }
+            }
+            let folderID = try await dashboardStore.createFolder(name: name,
+                location: .init(workspaceID: owner, rootPath: path, managed: managed))
             await refreshWorkspace()
             return folderID
         } catch {
@@ -1541,16 +1504,34 @@ final class ApplicationModel {
         }
     }
 
-    func deleteFolder(id: String) async -> Bool {
+    func deleteFolder(id: String, deleteRoot: Bool = false) async -> Bool {
         folderMutationError = nil
         do {
             if isBackendFrontend {
-                let result = try await sendBackendCommand(.workspaceMutation(.deleteFolder(id: id)))
+                let result = try await sendBackendCommand(.workspaceMutation(.deleteFolder(id: id, deleteRoot: deleteRoot)))
                 await refreshWorkspace()
                 return result.accepted
             }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
+            }
+            if deleteRoot {
+                guard let folder = try await dashboardStore.database.workspaceOverview().folders.first(where: { $0.id == id }),
+                      folder.managedRoot, let owner = folder.executionWorkspaceID, let path = folder.rootPath else {
+                    throw WorkspaceToolError.invalid("Only a managed Woven project root can be deleted.")
+                }
+                if owner.hasPrefix("remote:"), let workspaceID = UUID(uuidString: String(owner.dropFirst(7))),
+                   let configuration = remoteWorkspaces.configuration(id: workspaceID) {
+                    try await remoteWorkspaces.deleteProject(path: path, in: configuration)
+                } else {
+                    guard owner == (try await executionWorkspaceIdentity(workspaceID: nil)),
+                          let root = localACPWorkspaceLaunchConfiguration?.rootURL else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                    let target = URL(fileURLWithPath: path).standardizedFileURL
+                    let managed = root.standardizedFileURL.resolvingSymlinksInPath()
+                    guard target.resolvingSymlinksInPath().deletingLastPathComponent() == managed,
+                          target != managed, target.lastPathComponent.lowercased() != "scratch" else { throw WorkspaceToolError.invalid("This directory is outside the managed Woven workspace.") }
+                    try FileManager.default.trashItem(at: target, resultingItemURL: nil)
+                }
             }
             try await dashboardStore.deleteFolder(id: id)
             await refreshWorkspace()
@@ -1576,11 +1557,29 @@ final class ApplicationModel {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
+            guard try await dashboardStore.database.canChooseSessionFolder(id: id) else { throw WorkspaceToolError.invalid("The folder is fixed after the first message.") }
+            guard !runningToolSessionIDs.contains(id), toolSessionAdmission.begin(id, running: runningToolSessionIDs, limit: Int.max) == .start else { throw ApplicationModelError.localSessionConfigurationInProgress }
+            defer { toolSessionAdmission.finish(id) }
+            let descriptor = try await dashboardStore.database.localACPSession(conversationID: id)
+            let root: URL
+            if folderID == nil, let scratch = try await dashboardStore.database.sessionScratchDirectory(id: id) {
+                root = URL(fileURLWithPath: scratch.rootPath)
+            } else { root = try await folderWorkingDirectory(folderID: folderID, workspaceID: descriptor.remoteWorkspaceID) }
+            if descriptor.runtimeKind == .opencode {
+                guard let native = openCodeModel(for: id) else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                try await native.moveDraftWorkspace(conversationID: id, root: root)
+            } else {
+                try await dashboardStore.discardDraftSession(conversationID: id)
+            }
             let moved = try await dashboardStore.moveConversation(id: id, toFolderID: folderID)
             if !moved {
                 folderMutationError = "The chat could not be moved."
                 return false
             }
+            // Only the execution directory changed. The saved native selections
+            // survive draft disposal and are reapplied on its next use; keep the
+            // already confirmed controls visible in the meantime.
+            localACPSessionMetadata[id] = localACPSessionMetadata[id]?.withWorkingDirectory(root.path)
             await refreshWorkspace()
             return true
         } catch {
@@ -1893,7 +1892,6 @@ final class ApplicationModel {
                 reason: .credentialChanged
             )
             remoteWorkspaces.refreshAll()
-            await refreshOpenClawGateways()
             credentialAccessStatus = "Saved credentials are ready. Automatic refreshes will stay silent."
         } catch is CancellationError {
             credentialAccessStatus = "Credential recovery stopped. Automatic refreshes will stay silent."
@@ -1915,20 +1913,7 @@ final class ApplicationModel {
                 try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
             }
         }
-        let links = openClawGatewayLinks.filter {
-            $0.location != .remoteWorkspace || remoteWorkspaces.isCredentialAccessEnabled
-        }
-        if !links.isEmpty {
-            guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-            for link in links {
-                try Task.checkCancellation()
-                guard openClawGatewayOperationAgentIDs.insert(link.agentID).inserted else {
-                    throw CancellationError()
-                }
-                defer { openClawGatewayOperationAgentIDs.remove(link.agentID) }
-                try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
-            }
-        }
+
     }
 
     func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
@@ -2013,18 +1998,7 @@ final class ApplicationModel {
         guard enabledLocalACPRuntimeKinds.contains(runtimeKind) else {
             return
         }
-        if runtimeKind == .hermes, let launch = localACPLaunchConfigurations[.hermes], let home = launch.environment["HERMES_HOME"] {
-            Task {
-                do {
-                    try await HermesGatewayService.shared.stopIfIdle(home: home)
-                    let state = localACPRuntimePreferences.disable(runtimeKind)
-                    enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
-                    shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-                    refreshLocalACPRuntimesNow()
-                } catch { localRunError = error.localizedDescription }
-            }
-            return
-        }
+
         let state = localACPRuntimePreferences.disable(runtimeKind)
         enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
         shownLocalACPRuntimeKinds = state.shownRuntimeKinds
@@ -2199,8 +2173,7 @@ final class ApplicationModel {
         if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
             openCode.cancelPendingInput(conversationID)
             _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST")
-        } else if isOpenClawGatewayConversation(conversationID) {
-            try await dashboardStore?.cancelOpenClawGatewayPrompt(conversationID: conversationID)
+
         } else {
             try await dashboardStore?.stopLocalACPPrompt(conversationID: conversationID)
         }
@@ -2272,15 +2245,16 @@ final class ApplicationModel {
         // of attempting a second start for the same conversation.
         let steering = decision == .steer || runningToolSessionIDs.contains(conversation.id)
         defer { if ownsAdmission { toolSessionAdmission.finish(conversation.id) } }
-        if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil {
-            try await requireLocalHermesLink(conversationID: conversation.id)
-        }
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
         var normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
+        if !steering {
+            try await prepareUngroupedLaunch(conversation: conversation, firstMessage: normalized.text)
+            try dispatchFence.check()
+        }
         for reference in normalized.references where reference.kind == .conversation {
             try await dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)
         }
@@ -2305,6 +2279,11 @@ final class ApplicationModel {
             try await dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
         }
         try dispatchFence.check()
+        if conversation.localRuntimeKind == .opencode {
+            guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
+            try await openCode.validateExecutionRoot(conversation.id)
+            try dispatchFence.check()
+        }
         if !steering { localRunningConversationIDs.insert(conversation.id) }
         do {
             if conversation.localRuntimeKind == .opencode {
@@ -2315,24 +2294,21 @@ final class ApplicationModel {
                 try dispatchFence.check()
                 try await openCode.send(conversation.id, input: normalized, dispatchFence: dispatchFence)
             } else if steering {
-                if isOpenClawGatewayConversation(conversation.id) {
-                    _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent, dispatchFence: dispatchFence)
-                } else {
-                    let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
-                    try dispatchFence.check()
-                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent, dispatchFence: dispatchFence)
-                }
-            } else if isOpenClawGatewayConversation(conversation.id) {
-                _ = try await acceptOpenClawGatewayMessage(conversation: conversation, input: normalized,
-                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore, dispatchFence: dispatchFence)
+                let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
+                try dispatchFence.check()
+                _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent, dispatchFence: dispatchFence)
             } else {
                 _ = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
                     deliveryContent: deliveryContent, noteContext: context, store: dashboardStore, dispatchFence: dispatchFence)
             }
         } catch {
+            if dispatchFence.hasDispatched {
+                try? await dashboardStore.database.lockSessionFolder(id: conversation.id)
+            }
             if !steering { localRunningConversationIDs.remove(conversation.id) }
             throw error
         }
+        try await dashboardStore.database.lockSessionFolder(id: conversation.id)
         // A workspace refresh may have cleared the provisional running ID while
         // session setup awaited. Reconcile accepted work before its dispatch
         // lease ends, including runs that already completed during submission.
@@ -2408,31 +2384,6 @@ final class ApplicationModel {
         try? await store.database.dismissTerminalRemoteNoteEdits()
     }
 
-    private func acceptOpenClawGatewayMessage(
-        conversation: WorkspaceConversationRecord,
-        input: AgentMessageInput,
-        deliveryContent: String,
-        noteContext: AgentNoteContext?,
-        store: DashboardStore,
-        dispatchFence: AgentDispatchFence
-    ) async throws -> LocalACPRunIdentifiers {
-        guard openClawGatewayConversationIDs.contains(conversation.id) else {
-            throw OpenClawGatewayClientError.invalidEndpoint
-        }
-        return try await store.acceptOpenClawGatewayPrompt(
-            conversationID: conversation.id,
-            input: input,
-            deliveryContent: deliveryContent,
-            noteContext: noteContext,
-            onPermission: { request in
-                await self.requestLocalACPPermission(
-                    conversationID: conversation.id,
-                    request: request
-                )
-            },
-            dispatchFence: dispatchFence
-        )
-    }
 
     private func acceptLocalAgentMessage(
         conversation: WorkspaceConversationRecord,
@@ -2591,8 +2542,7 @@ final class ApplicationModel {
     }
 
     func publishSessionSelectionMetadata(_ metadata: LocalACPSessionMetadata, conversationID: String, gateway: Bool) {
-        if gateway { openClawGatewaySessionMetadata[conversationID] = metadata }
-        else { localACPSessionMetadata[conversationID] = metadata }
+        localACPSessionMetadata[conversationID] = metadata
     }
 
     func updateLocalACPSession(
@@ -2734,51 +2684,37 @@ final class ApplicationModel {
         return workspace.rootURL.path
     }
 
-    func prepareCreatedOpenClawSession(_ target: WorkspaceConversationRecord,
-                                       configuration: WorkspaceSessionCreationConfiguration) async throws {
-        guard let store = dashboardStore, let agentID = target.agentID.flatMap(UUID.init(uuidString:)),
-              isOpenClawGatewayLinked(agentID: agentID) else {
-            throw WorkspaceToolError.invalid("Connect OpenClaw in this workspace's settings before creating its sessions.")
-        }
-        let descriptor = try? await store.database.openClawGatewaySession(conversationID: target.id)
-        let key = descriptor?.sessionKey ?? "agent:main:wovenmatter:\(target.id)"
-        let directory: URL
-        if let path = configuration.nativeWorkingDirectory { directory = URL(fileURLWithPath: path) }
-        else if let workspaceID = target.remoteWorkspaceID, let workspace = remoteWorkspaces.configuration(id: workspaceID) {
-            directory = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: workspace))
-        } else if let workspace = localACPWorkspaceLaunchConfiguration { directory = workspace.rootURL }
-        else { throw ApplicationModelError.localACPRuntimeUnavailable }
-        try await store.createOpenClawWorkspaceSession(agentID: agentID, sessionKey: key, cwd: directory, recover: true)
-        if descriptor == nil {
-            try await store.attachOpenClawGatewaySession(conversationID: target.id, agentID: agentID, sessionKey: key)
-        }
-        openClawGatewayConversationIDs.insert(target.id)
-    }
 
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
         nativeWorkingDirectory: URL? = nil,
         initialTitle: String? = nil,
-        nativeWorkspaceID: String? = nil
+        nativeWorkspaceID: String? = nil,
+        folderID: String? = nil,
+        calendarExecutionRoot: WorkspaceFolderLocation? = nil
     ) async -> String? {
         if isBackendFrontend {
             do {
-                return try await sendBackendCommand(.createSession(runtime: runtimeKind, workspaceID: nil,
+                let result = try await sendBackendCommand(.createSession(runtime: runtimeKind, workspaceID: nil,
                     conversationID: requestedConversationID ?? UUID(), workingDirectory: nativeWorkingDirectory,
-                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)).conversationID
+                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID))
+                await refreshWorkspace()
+                return result.conversationID
             } catch { localRunError = error.localizedDescription; return nil }
         }
 
-        if runtimeKind == .hermes {
-            do { try await requireLocalHermesLink(openSettings: true) }
-            catch { localRunError = error.localizedDescription; return nil }
-        }
+        if !AgentRuntimeKind.allCases.contains(runtimeKind) { localRunError = "This harness has been retired."; return nil }
+        let resolvedRoot: URL
+        do { resolvedRoot = try await folderWorkingDirectory(folderID: folderID, workspaceID: nil, explicit: nativeWorkingDirectory, calendarExecutionRoot: calendarExecutionRoot) }
+        catch { localRunError = error.localizedDescription; return nil }
         if runtimeKind == .opencode {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
+                let id = try await openCode.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
+                try await persistExecutionRoot(id: id, folderID: folderID, workspaceID: nil, root: resolvedRoot)
+                try await openCode.activateCreatedSession(id)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2789,7 +2725,7 @@ final class ApplicationModel {
             localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
             return nil
         }
-        let selectionWorkspace = "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path
+        let selectionWorkspace = "local:" + resolvedRoot.standardizedFileURL.path
         let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue, workspace: selectionWorkspace)
         let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
             harness: runtimeKind.rawValue, workspace: selectionWorkspace)
@@ -2797,29 +2733,13 @@ final class ApplicationModel {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            let openClawAgent = runtimeKind == .openclaw
-                ? localCLIAgents.first(where: { $0.runtimeKind == .openclaw }) : nil
-            let gatewayKey = Self.openClawSessionKey(conversationID: (requestedConversationID ?? UUID()).uuidString.lowercased())
-            if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
-               let workspace = localACPWorkspaceLaunchConfiguration {
-                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey,
-                    cwd: nativeWorkingDirectory ?? workspace.rootURL, recover: requestedConversationID != nil)
-            }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
                 title: "New \(runtimeKind.displayName) chat",
-                requestedConversationID: requestedConversationID
+                requestedConversationID: requestedConversationID,
+                allowMissingCalendarFolder: calendarExecutionRoot != nil
             )
-            if runtimeKind == .openclaw,
-               let agent = localCLIAgents.first(where: { $0.runtimeKind == .openclaw }),
-               isOpenClawGatewayLinked(agentID: agent.id) {
-                try await dashboardStore.attachOpenClawGatewaySession(
-                    conversationID: conversationID,
-                    agentID: agent.id,
-                    sessionKey: gatewayKey
-                )
-                openClawGatewayConversationIDs.insert(conversationID)
-            }
+            try await persistExecutionRoot(id: conversationID, folderID: folderID, workspaceID: nil, root: resolvedRoot)
             do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
                 usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
@@ -2844,13 +2764,17 @@ final class ApplicationModel {
         requestedConversationID: UUID? = nil,
         nativeWorkingDirectory: URL? = nil,
         initialTitle: String? = nil,
-        nativeWorkspaceID: String? = nil
+        nativeWorkspaceID: String? = nil,
+        folderID: String? = nil,
+        calendarExecutionRoot: WorkspaceFolderLocation? = nil
     ) async -> String? {
         if isBackendFrontend {
             do {
-                return try await sendBackendCommand(.createSession(runtime: target.harness.id, workspaceID: target.configuration.id,
+                let result = try await sendBackendCommand(.createSession(runtime: target.harness.id, workspaceID: target.configuration.id,
                     conversationID: requestedConversationID ?? UUID(), workingDirectory: nativeWorkingDirectory,
-                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)).conversationID
+                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID))
+                await refreshWorkspace()
+                return result.conversationID
             } catch { localRunError = error.localizedDescription; return nil }
         }
 
@@ -2861,6 +2785,9 @@ final class ApplicationModel {
             localRunError = "This remote harness is not ready. Refresh it in Settings and try again."
             return nil
         }
+        let resolvedRoot: URL
+        do { resolvedRoot = try await folderWorkingDirectory(folderID: folderID, workspaceID: target.configuration.id, explicit: nativeWorkingDirectory, calendarExecutionRoot: calendarExecutionRoot) }
+        catch { localRunError = error.localizedDescription; return nil }
         let selectionWorkspace = "remote:" + target.configuration.id.uuidString.lowercased()
         let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
@@ -2873,46 +2800,29 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
+                let id = try await instance.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
+                try await persistExecutionRoot(id: id, folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)
+                try await instance.activateCreatedSession(id)
                 await refreshWorkspace()
                 return id
             }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            var unlinkedOpenClawAgentID: UUID?
             let conversationID = try await dashboardStore.createRemoteACPSession(
                 runtimeKind: target.harness.id,
                 remoteWorkspaceID: target.configuration.id,
                 remoteWorkspaceName: target.configuration.name,
                 title: "New \(target.harness.displayName) chat",
-                requestedConversationID: requestedConversationID
+                requestedConversationID: requestedConversationID,
+                allowMissingCalendarFolder: calendarExecutionRoot != nil
             )
-            if target.harness.id == .openclaw {
-                let agentID = try await dashboardStore.ensureRemoteHarnessAgent(
-                    runtimeKind: .openclaw,
-                    remoteWorkspaceID: target.configuration.id,
-                    remoteWorkspaceName: target.configuration.name
-                )
-                if isOpenClawGatewayLinked(agentID: agentID) {
-                    try await dashboardStore.attachOpenClawGatewaySession(
-                        conversationID: conversationID,
-                        agentID: agentID,
-                        sessionKey: Self.openClawSessionKey(
-                            conversationID: conversationID
-                        )
-                    )
-                    openClawGatewayConversationIDs.insert(conversationID)
-                } else {
-                    unlinkedOpenClawAgentID = agentID
-                }
-            }
+            try await persistExecutionRoot(id: conversationID, folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)
             do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
                 usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
-            pendingOpenClawGatewayAgentID = unlinkedOpenClawAgentID
             return conversationID
         } catch {
             localRunError = error.localizedDescription
@@ -2932,7 +2842,7 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind
     ) async throws -> RemoteHarnessLaunchContext {
-        let savedDirectory = try await dashboardStore?.database.toolSessionCreationConfiguration(targetID: conversation.id)?.nativeWorkingDirectory
+        let savedDirectory = try await dashboardStore?.database.sessionExecutionRoot(id: conversation.id)?.rootPath
         let inheritedRoot = savedDirectory.map { URL(fileURLWithPath: $0) }
         if let remoteWorkspaceID = conversation.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(
@@ -2942,17 +2852,7 @@ final class ApplicationModel {
             }
             let processDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
                 ?? FileManager.default.homeDirectoryForCurrentUser
-            if runtimeKind == .hermes {
-                guard let connection = remoteHermesConnections[remoteWorkspaceID] else {
-                    throw HermesGatewayError.message("Connect Hermes in this remote workspace's settings first.")
-                }
-                let encoded = try JSONEncoder().encode(connection).base64EncodedString()
-                let workspaceRoot = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
-                let root = inheritedRoot ?? workspaceRoot
-                return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
-                    executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "repos"), databasesURL: workspaceRoot.appending(path: "databases")))
-            }
+
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
                 runtimeKind: runtimeKind,
@@ -2962,7 +2862,6 @@ final class ApplicationModel {
                 durableChannelID: conversation.id
             )
         }
-        if runtimeKind == .hermes { try await requireLocalHermesLink(conversationID: conversation.id) }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw ApplicationModelError.localACPRuntimeUnavailable
@@ -2973,7 +2872,7 @@ final class ApplicationModel {
                 processWorkingDirectoryURL: inheritedRoot)
             scopedLaunch.historyRecorder = launch.historyRecorder
             return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
-                repositoriesURL: workspace.repositoriesURL, databasesURL: workspace.databasesURL))
+                databasesURL: workspace.databasesURL))
         }
         return RemoteHarnessLaunchContext(
             launch: launch,
@@ -3055,12 +2954,10 @@ final class ApplicationModel {
 
     private func usesLocallyInstalledRuntime(_ conversation: WorkspaceConversationRecord) -> Bool {
         conversation.localRuntimeKind != nil && conversation.remoteWorkspaceID == nil
-            && !isOpenClawGatewayConversation(conversation.id)
     }
 
     var localRuntimeMaintenanceHasActiveConversation: Bool {
         localRunningConversationIDs.contains { id in
-            if isOpenClawGatewayConversation(id) { return false }
             // A newly accepted turn may precede the workspace snapshot refresh.
             // Keep maintenance blocked until its execution location is known.
             guard let conversation = workspaceOverview?.conversations.first(where: { $0.id == id }) else { return true }
@@ -3171,298 +3068,6 @@ final class ApplicationModel {
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
     private let backendSpeech = BackendSpeechService()
-    private(set) var pendingHermesSettingsAgentID: UUID?
-    private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
-    private(set) var hermesCronJobs: [UUID: [HermesValue]] = [:]
-    private(set) var hermesCronResults: [UUID: [HermesScheduledResult]] = [:]
-    private(set) var hermesResultRoutes: [UUID: [String: String]] = [:]
-    private(set) var hermesCronErrors: [UUID: String] = [:]
-    private(set) var isRefreshingHermesCron = false
-    private var backendLinkedHermesIDs: Set<UUID> = []
-    private var backendConnectedHermesIDs: Set<UUID> = []
-    private var backendRemoteHermesIDs: Set<UUID> = []
-    private var backendHermesCronAgentIDs: Set<UUID> = []
-    private var lastHermesCronRefresh = Date.distantPast
-    private(set) var remoteHermesConnections: [UUID: HermesGatewayConnection] = [:]
-    private(set) var hermesGatewayCheckedAt: [UUID: Date] = [:]
-
-    func dismissPendingHermesSettings() { pendingHermesSettingsAgentID = nil }
-
-    func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) async throws {
-        guard let agent = localCLIAgents.first(where: { $0.runtimeKind == .hermes }) else {
-            throw HermesGatewayError.message("Enable Hermes in Local agent workspace first.")
-        }
-        guard isHermesGatewayLinked(agentID: agent.id) else {
-            if openSettings { pendingHermesSettingsAgentID = agent.id }
-            throw HermesGatewayError.message("Connect this Hermes agent's Gateway in Settings before starting or continuing a chat.")
-        }
-        if let conversationID,
-           let stored = try await dashboardStore?.database.localACPSession(conversationID: conversationID).acpSessionID,
-           let home = HermesGatewayClient.parseIdentity(stored).home,
-           home != applicationDefaults.string(forKey: "hermes.gateway.link." + agent.id.uuidString) {
-            throw HermesGatewayError.message("This chat belongs to another Hermes profile. Select and connect that profile before continuing.")
-        }
-    }
-
-    func isHermesGatewayLinked(agentID: UUID) -> Bool {
-        if isBackendFrontend { return backendLinkedHermesIDs.contains(agentID) }
-        guard enabledLocalACPRuntimeKinds.contains(.hermes),
-              let launch = localACPLaunchConfigurations[.hermes] else { return false }
-        let home = launch.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".hermes").path
-        return applicationDefaults.string(forKey: "hermes.gateway.link." + agentID.uuidString) == home
-    }
-
-    func connectHermesGateway(agentID: UUID, restart: Bool = false) async throws {
-        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.connectHermes(agentID, restart: restart)); return }
-        guard localCLIAgents.contains(where: { $0.id == agentID && $0.runtimeKind == .hermes }) else {
-            throw HermesGatewayError.message("This Hermes agent is no longer available.")
-        }
-        hermesGatewayConnections[agentID] = nil
-        let connected: HermesGatewayConnection
-        if restart {
-            let current = try await hermesGatewayConnection()
-            try await HermesGatewayService.shared.stopIfIdle(home: current.home)
-        }
-        connected = try await hermesGatewayConnection()
-        let client = HermesGatewayRPC(connection: connected)
-        do {
-            try await client.connect()
-            let setup = try await client.call("setup.runtime_check")
-            guard setup["ok"].bool else {
-                throw HermesGatewayError.message("Hermes needs provider setup. Run hermes model for this profile, then reconnect.")
-            }
-            await client.disconnect()
-        } catch { await client.disconnect(); throw error }
-        hermesGatewayConnections[agentID] = connected
-        hermesGatewayCheckedAt[agentID] = Date()
-        localRunError = nil
-        applicationDefaults.set(connected.home, forKey: "hermes.gateway.link." + agentID.uuidString)
-    }
-
-    func invalidateHermesGatewayConnection(agentID: UUID, expected: HermesGatewayConnection) {
-        guard hermesGatewayConnections[agentID] == expected else { return }
-        hermesGatewayConnections[agentID] = nil
-    }
-
-    func unlinkHermesGateway(agentID: UUID) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.unlinkHermes(agentID)); return }
-        hermesGatewayConnections[agentID] = nil
-        hermesGatewayCheckedAt[agentID] = nil
-        applicationDefaults.removeObject(forKey: "hermes.gateway.link." + agentID.uuidString)
-    }
-
-    func renameHermesAgent(agentID: UUID, displayName: String) async throws {
-        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.renameHermes(agentID, displayName)); return }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        try await dashboardStore.database.renameHermesAgent(id: agentID, displayName: displayName)
-        await refreshWorkspace()
-    }
-
-    var hermesCronAgents: [WorkspaceAgent] {
-        if isBackendFrontend {
-            return (localCLIAgents + remoteWorkspaceAgents).filter { backendHermesCronAgentIDs.contains($0.id) }
-        }
-        return localCLIAgents.filter { $0.runtimeKind == .hermes && isHermesGatewayLinked(agentID:$0.id) }
-          + remoteWorkspaceAgents.filter { agent in
-              agent.runtimeKind == .hermes && agent.runtimeDeviceID.map { applicationDefaults.bool(forKey:"hermes.remote.link." + $0.uuidString) } == true
-          }
-    }
-
-    private func cronHermesConnection(agent: WorkspaceAgent) async throws -> HermesGatewayConnection {
-        if let workspaceID = agent.runtimeDeviceID, let configuration = remoteWorkspaces.configuration(id:workspaceID) {
-            let connection = try await remoteWorkspaces.prepareHermesConnection(for:configuration)
-            remoteHermesConnections[workspaceID] = connection
-            return connection
-        }
-        guard isHermesGatewayLinked(agentID:agent.id) else { throw HermesGatewayError.message("Connect Hermes in Settings first.") }
-        return try await hermesGatewayConnection()
-    }
-
-    func refreshHermesCron() async {
-        if isBackendFrontend { _ = await forwardBackendCron(.refreshHermes); return }
-        guard !isRefreshingHermesCron, let dashboardStore else { return }
-        isRefreshingHermesCron = true
-        lastHermesCronRefresh = Date()
-        defer { isRefreshingHermesCron = false }
-        for agent in hermesCronAgents {
-            let expectedWorkspace = agent.runtimeDeviceID.flatMap { remoteWorkspaces.configuration(id: $0) }
-            let expectedHome = applicationDefaults.string(forKey: "hermes.gateway.link." + agent.id.uuidString)
-            func isCurrent() -> Bool {
-                self.dashboardStore === dashboardStore && !Task.isCancelled
-                    && hermesCronAgents.contains(where: { $0.id == agent.id })
-                    && agent.runtimeDeviceID.flatMap { remoteWorkspaces.configuration(id: $0) } == expectedWorkspace
-                    && applicationDefaults.string(forKey: "hermes.gateway.link." + agent.id.uuidString) == expectedHome
-            }
-            do {
-                let connection = try await cronHermesConnection(agent:agent)
-                guard isCurrent() else { continue }
-                let query = try await HermesDelivery.profileQuery(connection:connection)
-                let document = try await HermesSessionHistory.fetch(connection:connection,path:"/api/cron/jobs" + query)
-                guard isCurrent() else { continue }
-                guard case .array(let jobs) = document, jobs.allSatisfy({!$0["id"].text.isEmpty}) else {
-                    throw HermesGatewayError.message("Hermes returned an incomplete scheduled-job list.")
-                }
-                hermesCronJobs[agent.id] = jobs
-                let sourcePrefix=connection.identity + "::"
-                let routes = try await dashboardStore.hermesResultRoutes(agentID: agent.id)
-                guard isCurrent() else { continue }
-                hermesResultRoutes[agent.id] = Dictionary(uniqueKeysWithValues: routes.filter{$0.key.hasPrefix(sourcePrefix)}.map{(String($0.key.dropFirst(sourcePrefix.count)),$0.value)})
-                let owner = try await dashboardStore.dashboardDeviceID()
-                guard isCurrent() else { continue }
-                var offset = 0
-                var all:[HermesScheduledResult] = []
-                var collectionError: String?
-                while true {
-                    try Task.checkCancellation()
-                    let page:[HermesScheduledResult]
-                    if let workspaceID=connection.remoteWorkspaceID, let configuration=remoteWorkspaces.configuration(id:workspaceID) {
-                        page = try await remoteWorkspaces.hermesResults(for:configuration,offset:offset)
-                    } else {
-                        let home = connection.home, pageOffset = offset
-                        page = try await Task.detached(priority: .utility) {
-                            try HermesResultQueue.read(home: home, offset: pageOffset)
-                        }.value
-                    }
-                    guard isCurrent() else { throw CancellationError() }
-                    for result in page {
-                      do {
-                        guard isCurrent() else { throw CancellationError() }
-                        try await dashboardStore.collectHermesResult(agentID:agent.id,jobID:connection.identity + "::" + result.jobID,runID:result.runID,
-                            title:jobs.first(where:{$0["id"].text == result.jobID})?["name"].string ?? "Hermes scheduled result",output:result.output,
-                            ownerDeviceID:owner,remoteWorkspaceID:connection.remoteWorkspaceID,
-                            remoteWorkspaceName:connection.remoteWorkspaceID.flatMap{remoteWorkspaces.configuration(id:$0)?.name} ?? "")
-                      } catch is CancellationError { throw CancellationError() }
-                      catch { collectionError = collectionError ?? error.localizedDescription }
-                    }
-                    all.append(contentsOf:page)
-                    if page.count < 100 { break }
-                    offset += page.count
-                }
-                guard isCurrent() else { continue }
-                hermesCronResults[agent.id] = all
-                hermesCronErrors[agent.id] = collectionError
-            } catch is CancellationError { }
-            catch { if isCurrent() { hermesCronErrors[agent.id] = error.localizedDescription } }
-        }
-    }
-
-    func continueHermesResult(agent:WorkspaceAgent,result:HermesScheduledResult) async -> String? {
-        if isBackendFrontend { return await forwardBackendCron(.continueHermes(agentID: agent.id, resultID: result.id))?.conversationID }
-        guard let dashboardStore else { return nil }
-        do {
-            let connection=try await cronHermesConnection(agent:agent)
-            let existing=try await dashboardStore.database.hermesResultConversation(agentID:agent.id,jobID:connection.identity + "::" + result.jobID,runID:result.runID)
-            let id:String
-            if let existing { id=existing }
-            else if let workspaceID=connection.remoteWorkspaceID,let configuration=remoteWorkspaces.configuration(id:workspaceID) {
-                id=try await dashboardStore.createRemoteACPSession(runtimeKind:.hermes,remoteWorkspaceID:workspaceID,remoteWorkspaceName:configuration.name,title:"Hermes scheduled result")
-            } else {
-                guard let created=await createLocalACPSession(runtimeKind:.hermes) else { return nil }
-                id=created
-            }
-            pendingComposerPrefills[id]="Discuss this scheduled result.\n\n" + result.output
-            await refreshWorkspace()
-            return id
-        } catch { hermesCronErrors[agent.id]=error.localizedDescription;return nil }
-    }
-
-    private func hermesDeliveryTargets(agentID:UUID,jobID:String) -> String {
-        let current=hermesCronJobs[agentID]?.first(where:{$0["id"].text == jobID})?["deliver"].string ?? "local"
-        var targets=current.split(separator:",").map{String($0).trimmingCharacters(in:.whitespaces)}.filter{!$0.isEmpty && $0 != "local" && !$0.hasPrefix("wovenmatter:")}
-        targets.append("wovenmatter:" + jobID)
-        return targets.joined(separator:",")
-    }
-
-    func createHermesCron(agent:WorkspaceAgent,name:String,schedule:String,prompt:String) async -> Bool {
-        if isBackendFrontend { return await forwardBackendCron(.createHermes(agentID: agent.id, name: name, schedule: schedule, prompt: prompt))?.accepted ?? false }
-        do {
-            let connection=try await cronHermesConnection(agent:agent)
-            let job = try await HermesSessionHistory.fetch(connection:connection,path:"/api/cron/jobs" + (try await HermesDelivery.profileQuery(connection:connection)),method:"POST",
-                body:["name":.string(name),"schedule":.string(schedule),"prompt":.string(prompt),"paused":.bool(true),"deliver":"local"])
-            guard let jobID = job["id"].string, !jobID.isEmpty else { throw HermesGatewayError.message("Hermes created no identifiable scheduled job.") }
-            await refreshHermesCron()
-            await setHermesResultRoute(agent: agent, jobID: jobID, destination: "")
-            return true
-        } catch { hermesCronErrors[agent.id]=error.localizedDescription;return false }
-    }
-
-    func setHermesResultRoute(agent:WorkspaceAgent, jobID:String, destination:String) async {
-        if isBackendFrontend { _ = await forwardBackendCron(.routeHermes(agentID: agent.id, jobID: jobID, destination: destination)); return }
-        guard let dashboardStore else { return }
-        do {
-            var connection = try await cronHermesConnection(agent:agent)
-            let needsRestart = try await HermesDelivery.enable(connection:connection)
-            if needsRestart, let workspaceID=connection.remoteWorkspaceID, let configuration=remoteWorkspaces.configuration(id:workspaceID) {
-                try await remoteWorkspaces.restartHermes(for:configuration)
-            } else if needsRestart { try await HermesGatewayService.shared.stopIfIdle(home:connection.home) }
-            connection = try await cronHermesConnection(agent:agent)
-            let id = jobID.addingPercentEncoding(withAllowedCharacters:.alphanumerics)!
-            _ = try await HermesSessionHistory.fetch(connection:connection,path:"/api/cron/jobs/" + id + (try await HermesDelivery.profileQuery(connection:connection)),method:"PUT",
-                body:["updates":["deliver":.string(hermesDeliveryTargets(agentID:agent.id,jobID:jobID))]])
-            try await dashboardStore.database.setHermesResultRoute(agentID:agent.id,jobID:connection.identity + "::" + jobID,destination:destination)
-            await refreshHermesCron()
-            await refreshWorkspace()
-        } catch { hermesCronErrors[agent.id] = error.localizedDescription }
-    }
-
-    func changeHermesCron(agent:WorkspaceAgent,jobID:String,action:String) async {
-        if isBackendFrontend { _ = await forwardBackendCron(.changeHermes(agentID: agent.id, jobID: jobID, action: action)); return }
-        guard ["pause","resume"].contains(action) else { return }
-        do {
-            let connection=try await cronHermesConnection(agent:agent)
-            let id=jobID.addingPercentEncoding(withAllowedCharacters:.alphanumerics)!
-            _ = try await HermesSessionHistory.fetch(connection:connection,path:"/api/cron/jobs/"+id+"/"+action + (try await HermesDelivery.profileQuery(connection:connection)),method:"POST")
-            await refreshHermesCron()
-        } catch { hermesCronErrors[agent.id]=error.localizedDescription }
-    }
-
-    func stopRemoteHermes(_ configuration:RemoteWorkspaceConfiguration) async throws {
-        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.stopRemoteHermes(configuration.id)); return }
-        applicationDefaults.set(false,forKey:"hermes.remote.link." + configuration.id.uuidString)
-        do { try await remoteWorkspaces.restartHermes(for:configuration,action:"stop") }
-        catch { applicationDefaults.set(true,forKey:"hermes.remote.link." + configuration.id.uuidString);throw error }
-        remoteHermesConnections[configuration.id]=nil
-        remoteWorkspaces.refresh(configuration)
-    }
-
-    func connectRemoteHermes(_ configuration: RemoteWorkspaceConfiguration) async throws {
-        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.connectRemoteHermes(configuration.id)); return }
-        let connection = try await remoteWorkspaces.prepareHermesConnection(for: configuration)
-        let rpc = HermesGatewayRPC(connection: connection)
-        do { try await rpc.connect(); await rpc.disconnect() }
-        catch { await rpc.disconnect(); throw error }
-        guard remoteWorkspaces.configuration(id: configuration.id) == configuration else { throw CancellationError() }
-        remoteHermesConnections[configuration.id] = connection
-        applicationDefaults.set(true, forKey:"hermes.remote.link." + configuration.id.uuidString)
-        remoteWorkspaces.refresh(configuration)
-    }
-
-    func hermesGatewayConnection() async throws -> HermesGatewayConnection {
-        guard !isBackendFrontend else { throw BackendRPCError.remote("Gateway connections are owned by the background service.") }
-        guard enabledLocalACPRuntimeKinds.contains(.hermes), let launch = localACPLaunchConfigurations[.hermes] else {
-            throw HermesGatewayError.message("Enable Hermes in Local agent workspace, then refresh this page.")
-        }
-        return try await HermesGatewayService.shared.ensure(launch: launch)
-    }
-
-    func knownHermesSessions(home: String) async throws -> Set<String> {
-        try await dashboardStore?.database.knownHermesSessionIDs(home: home) ?? []
-    }
-
-    func importHermesSession(connection: HermesGatewayConnection, sessionID: String) async throws {
-        guard !isBackendFrontend else { throw BackendRPCError.remote("Use the background service to import this session.") }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        try await requireLocalHermesLink()
-        guard localCLIAgents.contains(where: { $0.runtimeKind == .hermes && hermesGatewayConnections[$0.id] == connection }) else {
-            throw HermesGatewayError.message("The Hermes connection changed. Reconnect before importing.")
-        }
-        guard try await !dashboardStore.database.knownHermesSessionIDs(home: connection.home).contains(sessionID) else { return }
-        let snapshot = try await HermesSessionHistory.load(connection: connection, sessionID: sessionID)
-        let owner = try await dashboardStore.dashboardDeviceID()
-        _ = try await dashboardStore.database.createLocalACPSession(runtimeKind: .hermes, title: snapshot.title,
-            ownerDeviceID: owner, createdAt: snapshot.createdAt, hermesImport: snapshot)
-        await refreshWorkspace()
-    }
 
     func refreshLocalACPRuntimesNow(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) {
         if isBackendFrontend { sendBackendRuntimeCommand(.refreshRuntimes(runtimeKinds)); return }
@@ -3517,67 +3122,10 @@ final class ApplicationModel {
         }
     }
 
-    func configureLocalACPRepositories(_ repositoriesURL: URL?) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.repositories(repositoriesURL)); return }
-        configureWorkspaceFolder(.repositories, destination: repositoriesURL)
-    }
 
-    func configureLocalACPDatabases(_ databasesURL: URL?) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.databases(databasesURL)); return }
-        configureWorkspaceFolder(.databases, destination: databasesURL)
-    }
 
-    func cancelWorkspaceFolderChange() {
-        if isBackendFrontend { sendBackendRuntimeCommand(.cancelFolderChange); return }
-        pendingWorkspaceFolderChange = nil
-    }
 
-    func confirmWorkspaceFolderChange(copyContents: Bool) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.confirmFolderChange(copyContents)); return }
-        guard let pending = pendingWorkspaceFolderChange else { return }
-        pendingWorkspaceFolderChange = nil
-        configureWorkspaceFolder(
-            pending.folder, destination: pending.destination,
-            recovery: copyContents ? .copyAndBackUp : .backUp
-        )
-    }
 
-    private func configureWorkspaceFolder(
-        _ folder: LocalACPWorkspaceFolder, destination: URL?,
-        recovery: LocalACPWorkspaceFolderRecovery = .requireConfirmation
-    ) {
-        guard !workspaceFolderChangeInProgress else { return }
-        workspaceFolderChangeInProgress = true
-        workspaceFolderChangeError = nil
-        workspaceFolderRecovery = nil
-        Task {
-            defer { workspaceFolderChangeInProgress = false }
-            do {
-                let result: LocalACPWorkspaceFolderChangeResult
-                switch folder {
-                case .repositories:
-                    result = try await localACPWorkspaceStore.configureRepositories(
-                        destination, recovery: recovery
-                    )
-                case .databases:
-                    result = try await localACPWorkspaceStore.configureDatabases(
-                        destination, recovery: recovery
-                    )
-                }
-                workspaceFolderRecovery = result
-                localRunError = nil
-                await refreshLocalACPWorkspace()
-                await refreshDatabases()
-            } catch let error as LocalACPWorkspaceError
-                where error == .defaultRepositoriesNotEmpty || error == .defaultDatabasesNotEmpty {
-                if let destination {
-                    pendingWorkspaceFolderChange = PendingWorkspaceFolderChange(folder: folder, destination: destination)
-                }
-            } catch {
-                workspaceFolderChangeError = error.localizedDescription
-            }
-        }
-    }
 
     func resolveLocalACPPermission(id: UUID, optionID: String?) {
         if isBackendFrontend {
@@ -3647,7 +3195,6 @@ final class ApplicationModel {
             resolveLocalACPInteraction(id: interactionID, response: .cancelled)
         }
         LocalACPClient.terminateAllProcesses()
-        PiRPCClient.terminateAllProcesses()
         Task { for instance in openCodeInstances { await instance.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
     }
 
@@ -3903,6 +3450,7 @@ final class ApplicationModel {
     }
 
     func refreshDatabases() async {
+        lastDatabaseSyncAt = Date()
         if isBackendFrontend {
             do { _ = try await sendBackendWorkspaceService(.refreshDatabases) }
             catch { databaseError = error.localizedDescription }
@@ -3926,35 +3474,36 @@ final class ApplicationModel {
         repeat {
             databaseRefreshRequestedWhileRunning = false
             var sources: [DashboardDatabaseSource] = []
+            let localSource = (try? await executionWorkspaceIdentity(workspaceID: nil)) ?? "device:unavailable"
             if let root = localACPWorkspaceLaunchConfiguration?.databasesURL {
                 do {
                     let rows = try await Task.detached(priority: .utility) {
                         try AgentDatabaseCatalog.list(at: root)
                     }.value
                     sources.append(Self.databaseSource(
-                        id: "local",
+                        id: localSource,
                         name: "Local workspace",
                         kind: .local,
                         detail: root.path,
                         rows: rows,
                         allowsCreation: true,
-                        allowsExternalLinks: true
+                        allowsExternalLinks: false
                     ))
                 } catch {
                     sources.append(DashboardDatabaseSource(
-                        id: "local",
+                        id: localSource,
                         name: "Local workspace",
                         kind: .local,
                         detail: root.path,
                         databases: [],
                         error: error.localizedDescription,
                         allowsCreation: true,
-                        allowsExternalLinks: true
+                        allowsExternalLinks: false
                     ))
                 }
             } else {
                 sources.append(DashboardDatabaseSource(
-                    id: "local",
+                    id: localSource,
                     name: "Local workspace",
                     kind: .local,
                     detail: "Set up the local agent workspace in Settings.",
@@ -3971,24 +3520,32 @@ final class ApplicationModel {
                 let sourceID = Self.remoteDatabaseSourceID(configuration.id)
                 do {
                     let rows = try await remoteWorkspaces.databases(for: configuration)
+                    let replicaRoot = try Self.databaseReplicaDirectory(sourceID: sourceID)
+                    let existing = (try? await Task.detached { try AgentDatabaseCatalog.list(at: replicaRoot) }.value) ?? []
+                    for row in rows where !existing.contains(where: { $0.id == row.id && $0.revision >= row.revision }) {
+                        let snapshot = try await remoteWorkspaces.datasetSnapshot(id: row.id, in: configuration)
+                        _ = try await Task.detached { try AgentDatabaseCatalog.importSnapshot(snapshot, in: replicaRoot, sourceOwner: row.owner) }.value
+                    }
                     sources.append(DashboardDatabaseSource(
                         id: sourceID, name: configuration.name, kind: .remote,
                         detail: "\(configuration.hostName) · Databases",
                         databases: rows.map { DashboardAgentDatabase(
                             sourceID: sourceID, databaseID: $0.id, name: $0.name,
-                            preference: $0.preference, localURL: nil, isExternal: false
+                            preference: .sqlite, localURL: replicaRoot.appendingPathComponent($0.id + ".sqlite"), isExternal: false, revision: $0.revision, updatedAt: $0.updatedAt
                         ) }, error: nil, allowsCreation: true, allowsExternalLinks: false
                     ))
                 } catch {
                     sources.append(DashboardDatabaseSource(
                         id: sourceID, name: configuration.name, kind: .remote,
-                        detail: configuration.hostName, databases: [],
+                        detail: configuration.hostName,
+                        databases: ((try? AgentDatabaseCatalog.list(at: Self.databaseReplicaDirectory(sourceID: sourceID))) ?? []).map {
+                            DashboardAgentDatabase(sourceID: sourceID, databaseID: $0.id, name: $0.name, preference: .sqlite, localURL: $0.url, isExternal: false, revision: $0.revision, updatedAt: $0.updatedAt, offline: true)
+                        },
                         error: error is CancellationError ? "Workspace connection changed. Refresh to reconnect." : error.localizedDescription,
                         allowsCreation: false, allowsExternalLinks: false
                     ))
                 }
             }
-
             guard remoteCatalogIdentity == remoteWorkspaces.databaseCatalogIdentity else {
                 databaseRefreshRequestedWhileRunning = true
                 continue
@@ -4011,7 +3568,7 @@ final class ApplicationModel {
             do { return try await sendBackendWorkspaceService(.createDatabase(sourceID: sourceID, name: name, preference: preference)).entityID }
             catch { databaseError = error.localizedDescription; return nil }
         }
-        if sourceID == "local" { return await createLocalDatabase(name: name, preference: preference) }
+        if databasesSnapshot.sources.contains(where: { $0.id == sourceID && $0.kind == .local }) { return await createLocalDatabase(name: name, preference: preference) }
         guard let configuration = remoteDatabaseConfiguration(sourceID: sourceID) else {
             databaseError = "Choose an available workspace."
             return nil
@@ -4033,76 +3590,26 @@ final class ApplicationModel {
         name: String,
         preference: AgentDatabasePreference
     ) async -> String? {
-        if isBackendFrontend { return await createDatabase(sourceID: "local", name: name, preference: preference) }
+        if isBackendFrontend { return await createDatabase(sourceID: databasesSnapshot.sources.first(where: { $0.kind == .local })?.id ?? "", name: name, preference: preference) }
         guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else {
             databaseError = "Set up the local agent workspace before creating a database."
             return nil
         }
         do {
+            let owner = try await executionWorkspaceIdentity(workspaceID: nil)
             let database = try await Task.detached(priority: .userInitiated) {
                 try AgentDatabaseCatalog.create(
                     named: name,
                     preference: preference,
-                    in: root
+                    in: root, owner: owner
                 )
             }.value
             databaseError = nil
             await refreshDatabases()
-            return "local:\(database.id)"
+            return "\(owner):\(database.id)"
         } catch {
             databaseError = error.localizedDescription
             return nil
-        }
-    }
-
-    @discardableResult
-    func registerExternalDatabase(_ url: URL) async -> String? {
-        if isBackendFrontend {
-            do { return try await sendBackendWorkspaceService(.registerDatabase(url)).entityID }
-            catch { databaseError = error.localizedDescription; return nil }
-        }
-        guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else {
-            databaseError = "Set up the local agent workspace before linking a database."
-            return nil
-        }
-        do {
-            let database = try await Task.detached(priority: .userInitiated) {
-                try AgentDatabaseCatalog.registerExternal(url, in: root)
-            }.value
-            databaseError = nil
-            await refreshDatabases()
-            return "local:\(database.id)"
-        } catch {
-            databaseError = error.localizedDescription
-            return nil
-        }
-    }
-
-    func updateDatabasePreference(
-        _ preference: AgentDatabasePreference,
-        database: DashboardAgentDatabase
-    ) async {
-        if isBackendFrontend {
-            do { _ = try await sendBackendWorkspaceService(.databasePreference(id: database.id, preference: preference)) }
-            catch { databaseError = error.localizedDescription }
-            return
-        }
-        guard updatingDatabasePreferenceIDs.insert(database.id).inserted else { return }
-        defer { updatingDatabasePreferenceIDs.remove(database.id) }
-        do {
-            if let configuration = remoteDatabaseConfiguration(sourceID: database.sourceID) {
-                try await remoteWorkspaces.setDatabasePreference(preference, databaseID: database.databaseID, in: configuration)
-            } else if let url = database.localURL {
-                try await Task.detached(priority: .userInitiated) {
-                    try AgentDatabaseCatalog.setPreference(preference, for: url)
-                }.value
-            } else {
-                throw DashboardDatabaseLinkError.databaseUnavailable
-            }
-            databaseError = nil
-            await refreshDatabases()
-        } catch {
-            databaseError = error.localizedDescription
         }
     }
 
@@ -4113,20 +3620,6 @@ final class ApplicationModel {
     func linkedData(for link: DatabaseArtifactLink) async throws -> DatabaseTabularData {
         if isBackendFrontend {
             guard let data = try await sendBackendWorkspaceService(.databaseData(link)).data else { throw DashboardDatabaseLinkError.databaseUnavailable }
-            return data
-        }
-        if let configuration = remoteDatabaseConfiguration(sourceID: link.sourceID) {
-            let result = try await remoteWorkspaces.databaseData(for: link, in: configuration)
-            let identity = remoteWorkspaces.databaseCatalogIdentity
-            let data = try await Task.detached(priority: .utility) {
-                if let query = result.query { return try DatabaseLinkedData.load(queryResponse: query) }
-                guard let encoded = result.jsonBase64, let data = Data(base64Encoded: encoded) else {
-                    throw DashboardDatabaseLinkError.remoteDataUnavailable
-                }
-                return try DatabaseLinkedData.load(data: data, fileExtension: "json", preference: .json, sqliteQuery: nil)
-            }.value
-            guard identity == remoteWorkspaces.databaseCatalogIdentity else { throw CancellationError() }
-            try Task.checkCancellation()
             return data
         }
         var database = databasesSnapshot.database(
@@ -4145,35 +3638,9 @@ final class ApplicationModel {
         }
         if let databaseURL = database.localURL {
             return try await Task.detached(priority: .utility) {
-                let fileExtension = URL(
-                    fileURLWithPath: link.relativePath
-                ).pathExtension.lowercased()
-                if DatabaseLinkedData.requiresSQLiteFileAccess(
-                    fileExtension: fileExtension,
-                    preference: database.preference
-                ) {
-                    return try AgentDatabaseCatalog.withConfinedSQLiteFile(
-                        relativePath: link.relativePath,
-                        in: databaseURL
-                    ) { stagedURL in
-                        try DatabaseLinkedData.load(
-                            from: stagedURL,
-                            preference: .sqlite,
-                            sqliteQuery: link.sqliteQuery
-                        )
-                    }
-                }
-                let data = try AgentDatabaseCatalog.readDataFile(
-                    relativePath: link.relativePath,
-                    in: databaseURL,
-                    maximumBytes: DatabaseLinkedData.maximumFileBytes
-                )
-                return try DatabaseLinkedData.load(
-                    data: data,
-                    fileExtension: fileExtension,
-                    preference: database.preference,
-                    sqliteQuery: link.sqliteQuery
-                )
+                guard let query = link.sqliteQuery else { throw DatabaseLinkedDataError.sqliteQueryRequired }
+                return try AgentDatabaseCatalog.query(id: database.databaseID, sql: query,
+                    in: databaseURL.deletingLastPathComponent())
             }.value
         }
 
@@ -4201,7 +3668,7 @@ final class ApplicationModel {
                     name: $0.name,
                     preference: $0.preference,
                     localURL: $0.url,
-                    isExternal: $0.isExternal
+                    isExternal: false, revision: $0.revision, updatedAt: $0.updatedAt
                 )
             },
             error: nil,
@@ -4210,600 +3677,37 @@ final class ApplicationModel {
         )
     }
 
-    func isOpenClawGatewayLinked(agentID: UUID) -> Bool {
-        openClawGatewayLinks.contains { $0.agentID == agentID }
-    }
 
-    func isOpenClawGatewayConversation(_ conversationID: String) -> Bool {
-        openClawGatewayConversationIDs.contains(conversationID)
-    }
 
-    func openClawGatewayLink(agentID: UUID) -> OpenClawGatewayLink? {
-        openClawGatewayLinks.first { $0.agentID == agentID }
-    }
 
-    func renameOpenClawAgent(agentID: UUID, displayName: String) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.renameOpenClaw(agentID, displayName)); return }
-        guard let dashboardStore else { return }
-        guard !openClawGatewayOperationAgentIDs.contains(agentID) else { return }
-        let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanName.isEmpty else {
-            openClawGatewayErrors[agentID] = "Enter a Woven Matter agent name."
-            return
-        }
-        openClawGatewayOperationAgentIDs.insert(agentID)
-        openClawGatewayErrors[agentID] = nil
-        openClawGatewayNotices[agentID] = nil
-        Task {
-            defer { openClawGatewayOperationAgentIDs.remove(agentID) }
-            do {
-                try await dashboardStore.renameOpenClawAgent(
-                    agentID: agentID,
-                    displayName: cleanName
-                )
-                await refreshWorkspace()
-                openClawGatewayNotices[agentID] = "Woven Matter name updated."
-            } catch {
-                openClawGatewayErrors[agentID] = error.localizedDescription
-            }
-        }
-    }
 
-    func linkOpenClawGateway(agent: WorkspaceAgent) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.linkOpenClaw(agent.id)); return }
-        guard agent.runtimeKind == .openclaw, let dashboardStore else {
-            openClawGatewayErrors[agent.id] = OpenClawGatewayEndpointResolutionError
-                .openClawRequired.localizedDescription
-            return
-        }
-        guard openClawGatewayOperationAgentIDs.insert(agent.id).inserted else { return }
-        openClawGatewayOperationStatuses[agent.id] = .connecting
-        openClawGatewayErrors[agent.id] = nil
-        openClawGatewayNotices[agent.id] = nil
-        Task {
-            defer {
-                openClawGatewayOperationAgentIDs.remove(agent.id)
-                openClawGatewayOperationStatuses[agent.id] = nil
-            }
-            do {
-                let link = try await preparedOpenClawGatewayLink(
-                    for: agent,
-                    status: .connecting,
-                    authorizeCredentials: true
-                )
-                let linked = try await dashboardStore.linkOpenClawGateway(link)
-                if linked.connectionStatus == .ready {
-                    try await dashboardStore.syncOpenClawCron(agentID: agent.id)
-                }
-                await refreshOpenClawGateways()
-                await loadOpenClawCronSnapshot()
-                openClawGatewayNotices[agent.id] = "Gateway connected and healthy."
-            } catch {
-                openClawGatewayErrors[agent.id] = error.localizedDescription
-                await refreshOpenClawGateways()
-            }
-        }
-    }
 
-    func confirmPendingOpenClawGatewayLink() {
-        guard let agentID = pendingOpenClawGatewayAgentID else { return }
-        pendingOpenClawGatewayAgentID = nil
-        guard let agent = openClawAgent(agentID: agentID) else { return }
-        linkOpenClawGateway(agent: agent)
-    }
 
-    func dismissPendingOpenClawGatewayLink() {
-        pendingOpenClawGatewayAgentID = nil
-    }
 
-    func unlinkOpenClawGateway(agentID: UUID) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.unlinkOpenClaw(agentID)); return }
-        guard let dashboardStore else { return }
-        guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
-        openClawGatewayOperationStatuses[agentID] = .unlinking
-        openClawGatewayErrors[agentID] = nil
-        openClawGatewayNotices[agentID] = nil
-        Task {
-            defer {
-                openClawGatewayOperationAgentIDs.remove(agentID)
-                openClawGatewayOperationStatuses[agentID] = nil
-            }
-            do {
-                try await dashboardStore.unlinkOpenClawGateway(agentID: agentID)
-                await refreshOpenClawGateways()
-                openClawGatewayNotices[agentID] = "Gateway unlinked from this Mac."
-            } catch {
-                openClawGatewayErrors[agentID] = error.localizedDescription
-            }
-        }
-    }
 
-    func reconnectOpenClawGateway(agentID: UUID) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.reconnectOpenClaw(agentID)); return }
-        guard let existing = openClawGatewayLink(agentID: agentID),
-              let agent = openClawAgent(agentID: agentID),
-              let dashboardStore else { return }
-        guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
-        openClawGatewayOperationStatuses[agentID] = .reconnecting
-        openClawGatewayErrors[agentID] = nil
-        openClawGatewayNotices[agentID] = nil
-        Task {
-            defer {
-                openClawGatewayOperationAgentIDs.remove(agentID)
-                openClawGatewayOperationStatuses[agentID] = nil
-            }
-            do {
-                _ = try await dashboardStore.markOpenClawGateway(
-                    agentID: agentID,
-                    status: .reconnecting
-                )
-                await refreshOpenClawGateways()
-                let link = try await preparedOpenClawGatewayLink(
-                    for: agent,
-                    existing: existing,
-                    status: .reconnecting,
-                    authorizeCredentials: true
-                )
-                _ = try await dashboardStore.linkOpenClawGateway(link)
-                await refreshOpenClawGateways()
-                openClawGatewayNotices[agentID] = "Gateway reconnected and healthy."
-            } catch {
-                openClawGatewayErrors[agentID] = error.localizedDescription
-                _ = try? await dashboardStore.markOpenClawGateway(
-                    agentID: agentID,
-                    status: .unavailable
-                )
-                await refreshOpenClawGateways()
-            }
-        }
-    }
 
-    func restartOpenClawGateway(agentID: UUID) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.restartOpenClaw(agentID)); return }
-        guard let existing = openClawGatewayLink(agentID: agentID),
-              let agent = openClawAgent(agentID: agentID),
-              let dashboardStore else { return }
-        guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
-        openClawGatewayOperationStatuses[agentID] = .restarting
-        openClawGatewayErrors[agentID] = nil
-        openClawGatewayNotices[agentID] = nil
-        Task {
-            defer {
-                openClawGatewayOperationAgentIDs.remove(agentID)
-                openClawGatewayOperationStatuses[agentID] = nil
-            }
-            do {
-                if existing.location == .localAgentWorkspace {
-                    let prepared = try await preparedOpenClawGatewayLink(
-                        for: agent,
-                        existing: existing,
-                        status: .reconnecting,
-                        authorizeCredentials: true
-                    )
-                    _ = try await dashboardStore.linkOpenClawGateway(prepared)
-                } else {
-                    try await dashboardStore.authorizeOpenClawGatewayCredentials(existing)
-                }
-                _ = try await dashboardStore.restartOpenClawGateway(agentID: agentID)
-                await refreshOpenClawGateways()
-                openClawGatewayNotices[agentID] = "Gateway restarted, reconnected, and passed health checks."
-            } catch {
-                openClawGatewayErrors[agentID] = error.localizedDescription
-                _ = try? await dashboardStore.markOpenClawGateway(
-                    agentID: agentID,
-                    status: .unavailable
-                )
-                await refreshOpenClawGateways()
-            }
-        }
-    }
 
-    func refreshOpenClawGatewayStatus(agentID: UUID) async {
-        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.refreshOpenClaw(agentID)); return }
-        guard openClawGatewayLink(agentID: agentID) != nil,
-              !openClawGatewayOperationAgentIDs.contains(agentID),
-              let dashboardStore else { return }
-        do {
-            _ = try await dashboardStore.refreshOpenClawGatewayStatus(agentID: agentID)
-            openClawGatewayErrors[agentID] = nil
-        } catch {
-            openClawGatewayErrors[agentID] = error.localizedDescription
-        }
-        await refreshOpenClawGateways()
-    }
 
-    func loadOpenClawHeartbeat(agentID: UUID) async {
-        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.loadHeartbeat(agentID)); return }
-        guard let dashboardStore else { return }
-        do {
-            openClawHeartbeatConfigurations[agentID] = try await dashboardStore
-                .openClawHeartbeatConfiguration(agentID: agentID)
-            openClawHeartbeatMessages[agentID] = nil
-            openClawHeartbeatErrorAgentIDs.remove(agentID)
-        } catch {
-            openClawHeartbeatMessages[agentID] = error.localizedDescription
-            openClawHeartbeatErrorAgentIDs.insert(agentID)
-        }
-    }
 
-    func saveOpenClawHeartbeat(
-        agentID: UUID,
-        configuration: OpenClawHeartbeatConfiguration
-    ) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.saveHeartbeat(agentID, configuration)); return }
-        guard let dashboardStore else { return }
-        openClawHeartbeatSavingAgentIDs.insert(agentID)
-        openClawHeartbeatMessages[agentID] = nil
-        Task {
-            defer { openClawHeartbeatSavingAgentIDs.remove(agentID) }
-            do {
-                openClawHeartbeatConfigurations[agentID] = try await dashboardStore
-                    .updateOpenClawHeartbeat(
-                        agentID: agentID,
-                        configuration: configuration
-                    )
-                openClawHeartbeatMessages[agentID] = "Heartbeat saved and confirmed by OpenClaw."
-                openClawHeartbeatErrorAgentIDs.remove(agentID)
-            } catch {
-                openClawHeartbeatMessages[agentID] = error.localizedDescription
-                openClawHeartbeatErrorAgentIDs.insert(agentID)
-            }
-        }
-    }
 
-    private func openClawAgent(agentID: UUID) -> WorkspaceAgent? {
-        (localCLIAgents + remoteWorkspaceAgents)
-            .first { $0.id == agentID }
-    }
 
-    private func preparedOpenClawGatewayLink(
-        for agent: WorkspaceAgent,
-        existing: OpenClawGatewayLink? = nil,
-        status: OpenClawGatewayConnectionStatus,
-        authorizeCredentials: Bool = false
-    ) async throws -> OpenClawGatewayLink {
-        guard let dashboardStore else {
-            throw ApplicationModelError.dashboardStoreUnavailable
-        }
-        let location: OpenClawGatewayLocation
-        let endpoint: OpenClawGatewayEndpoint
-        if agent.governingPlane == .remoteWorkspace {
-            location = .remoteWorkspace
-            guard let remoteWorkspaceID = agent.runtimeDeviceID,
-                  let configuration = remoteWorkspaces.configuration(
-                    id: remoteWorkspaceID
-                  ) else {
-                throw ApplicationModelError.remoteHarnessUnavailable
-            }
-            if authorizeCredentials {
-                try await remoteWorkspaces.authorizeCredentialAccess(for: configuration)
-            }
-            let connection = try await remoteWorkspaces.prepareOpenClawGateway(
-                for: configuration
-            )
-            await dashboardStore.configureOpenClawGatewayTransport(
-                agentID: agent.id,
-                endpoint: connection.endpoint,
-                requestHeaders: connection.requestHeaders
-            )
-            endpoint = connection.endpoint
-        } else {
-            location = .localAgentWorkspace
-            guard let workspace = localACPWorkspaceLaunchConfiguration else {
-                throw ApplicationModelError.localACPRuntimeUnavailable
-            }
-            endpoint = try await dashboardStore.prepareLocalWorkspaceOpenClawGateway(
-                agentID: agent.id,
-                workingDirectory: workspace.rootURL
-            )
-        }
-        let link = OpenClawGatewayLink(
-            agentID: agent.id,
-            location: location,
-            endpoint: endpoint,
-            status: status.rawValue,
-            openClawVersion: existing?.openClawVersion,
-            lastConnectedAt: existing?.lastConnectedAt,
-            lastError: nil,
-            linkedAt: existing?.linkedAt ?? Date(),
-            updatedAt: Date()
-        )
-        if authorizeCredentials {
-            try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
-        }
-        return link
-    }
 
-    func cancelOpenClawGatewayPrompt(conversationID: String) {
-        cancelPendingAgentDispatch(conversationID: conversationID)
-        if isBackendFrontend {
-            stopBackendFromFrontend(conversationID: conversationID)
-            return
-        }
-        stopAgentLocally(conversationID: conversationID)
-    }
 
-    func patchOpenClawGatewaySession(
-        conversationID: String,
-        model: String?,
-        thinkingLevel: String?,
-        permission: String? = nil
-    ) {
-        if isBackendFrontend { forwardBackendWorkspaceService(.patchOpenClawSession(conversationID, model: model, thinking: thinkingLevel, permission: permission)); return }
-        guard model != nil || thinkingLevel != nil || permission != nil else { return }
-        if retryPendingSessionSelections(conversationID: conversationID,
-            selections: SessionSelections(model: model, thinking: thinkingLevel, permission: permission)) { return }
-        guard let dashboardStore,
-              !localRunningConversationIDs.contains(conversationID),
-              updatingLocalACPSessionIDs.insert(conversationID).inserted else { return }
-        Task {
-            defer { updatingLocalACPSessionIDs.remove(conversationID) }
-            do {
-                _ = try await dashboardStore
-                    .patchOpenClawGatewaySession(
-                        conversationID: conversationID,
-                        preferences: OpenClawSessionPreferences(
-                            model: model,
-                            thinkingLevel: thinkingLevel,
-                            permissionMode: permission
-                        )
-                    )
-                openClawGatewaySessionMetadata[conversationID] = try await dashboardStore
-                    .openClawGatewaySessionMetadata(conversationID: conversationID)
-                if let metadata = openClawGatewaySessionMetadata[conversationID] {
-                    await recordConfirmedSessionSelections(conversationID: conversationID, metadata: metadata)
-                }
-                ensureConversationState(id: conversationID).setError(nil)
-            } catch {
-                ensureConversationState(id: conversationID).setError(
-                    error.localizedDescription
-                )
-            }
-        }
-    }
 
-    func refreshOpenClawGatewaySession(conversationID: String) async {
-        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.refreshOpenClawSession(conversationID)); return }
-        guard let dashboardStore else { return }
-        do {
-            try await applyPendingSessionSelections(conversationID: conversationID)
-            _ = try await dashboardStore.synchronizeOpenClawSession(conversationID: conversationID)
-            openClawGatewaySessionMetadata[conversationID] = try await dashboardStore
-                .openClawGatewaySessionMetadata(conversationID: conversationID)
-            if let metadata = openClawGatewaySessionMetadata[conversationID] {
-                await recordConfirmedSessionSelections(conversationID: conversationID, metadata: metadata)
-            }
-            ensureConversationState(id: conversationID).setError(nil)
-        } catch {
-            ensureConversationState(id: conversationID).setError(
-                error.localizedDescription
-            )
-        }
-    }
 
-    private func refreshOpenClawGateways() async {
-        do {
-            guard let dashboardStore else { return }
-            openClawGatewayLinks = try await dashboardStore.openClawGatewayLinks()
-            openClawGatewayConversationIDs = try await dashboardStore
-                .openClawGatewayConversationIDs()
-        } catch {
-            for link in openClawGatewayLinks {
-                openClawGatewayErrors[link.agentID] = error.localizedDescription
-            }
-        }
-    }
 
-    func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
-        if isBackendFrontend {
-            let response = try await sendBackendWorkspaceService(.openClawSessions(agentID, offset: offset))
-            return (response.openClawSessions ?? [], response.nextOffset)
-        }
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        return try await dashboardStore.openClawNativeSessions(agentID: agentID, offset: offset)
-    }
 
-    func importOpenClawSession(agentID: UUID, session: OpenClawGatewaySession) async throws {
-        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.importOpenClaw(agentID, session)); return }
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        _ = try await dashboardStore.importOpenClawSession(agentID: agentID, session: session)
-        await refreshOpenClawGateways()
-        await refreshWorkspace()
-    }
 
-    private func restoreOpenClawGatewayLinks() async {
-        guard let dashboardStore else { return }
-        for persisted in openClawGatewayLinks {
-            do {
-                var link = persisted
-                switch persisted.location {
-                case .localAgentWorkspace:
-                    guard let workspace = localACPWorkspaceLaunchConfiguration else {
-                        throw ApplicationModelError.localACPRuntimeUnavailable
-                    }
-                    link.endpoint = try await dashboardStore.prepareLocalWorkspaceOpenClawGateway(
-                        agentID: persisted.agentID,
-                        workingDirectory: workspace.rootURL
-                    )
-                case .remoteWorkspace:
-                    // Remote workspace tokens are intentionally not read during
-                    // app startup. The user can reconnect this gateway from its
-                    // workspace controls when they want Keychain access.
-                    continue
-                }
-                _ = try await dashboardStore.linkOpenClawGateway(link)
-            } catch {
-                openClawGatewayErrors[persisted.agentID] = error.localizedDescription
-            }
-        }
-        await refreshOpenClawGateways()
-    }
 
-    func refreshOpenClawCron() async {
-        if isBackendFrontend { _ = await forwardBackendCron(.refreshOpenClaw); return }
-        guard !isRefreshingOpenClawCron, let dashboardStore else { return }
-        isRefreshingOpenClawCron = true
-        lastOpenClawCronRefresh = Date()
-        defer { isRefreshingOpenClawCron = false }
-        var failures: [String] = []
-        for link in openClawGatewayLinks {
-            do {
-                try await dashboardStore.syncOpenClawCron(agentID: link.agentID)
-            } catch {
-                failures.append(error.localizedDescription)
-            }
-        }
-        await loadOpenClawCronSnapshot()
-        openClawCronError = failures.isEmpty ? nil : failures.joined(separator: "\n")
-    }
 
-    func saveOpenClawCron(agentID: UUID, job: OpenClawCronJob?, name: String, message: String,
-                          expression: String, timeZone: String, declarationKey: String,
-                          destination: String, preserveSchedule: Bool = false) async -> String? {
-        if isBackendFrontend {
-            guard let response = await forwardBackendCron(.saveOpenClaw(agentID: agentID, jobID: job?.id,
-                name: name, message: message, expression: expression, timeZone: timeZone,
-                declarationKey: declarationKey, destination: destination, preserveSchedule: preserveSchedule)) else {
-                return openClawCronError ?? "The background service is unavailable."
-            }
-            return response.error
-        }
-        guard let dashboardStore, !openClawCronBusy else { return "Another job change is in progress." }
-        openClawCronBusy = true
-        defer { openClawCronBusy = false }
-        do {
-            if let job {
-                var patch: [String: GatewayJSONValue] = ["name": .string(name),
-                    "schedule": .object(["kind": .string("cron"), "expr": .string(expression), "tz": .string(timeZone)])]
-                if preserveSchedule { patch.removeValue(forKey: "schedule") }
-                if !message.isEmpty { patch["payload"] = .object(["message": .string(message)]) }
-                try await dashboardStore.updateOpenClawCron(job: job, patch: .object(patch))
-                try await dashboardStore.setOpenClawResultRoute(agentID: agentID, jobID: job.id, destination: destination)
-            } else {
-                try await dashboardStore.createOpenClawCron(agentID: agentID, name: name, message: message,
-                    expression: expression, timeZone: timeZone, declarationKey: declarationKey, destination: destination)
-            }
-            await refreshOpenClawCron()
-            return nil
-        } catch {
-            return error.localizedDescription + " Refresh the job list before retrying; the Gateway may have accepted the change."
-        }
-    }
 
-    func performOpenClawCronAction(job: OpenClawCronJob, action: String) {
-        if isBackendFrontend { Task { _ = await forwardBackendCron(.actionOpenClaw(agentID: job.agentID, jobID: job.id, action: action)) }; return }
-        guard let dashboardStore, !openClawCronBusy else { return }
-        openClawCronBusy = true
-        Task {
-            defer { openClawCronBusy = false }
-            do {
-                if action == "toggle" {
-                    try await dashboardStore.updateOpenClawCron(job: job, patch: .object(["enabled": .bool(!job.enabled)]))
-                } else {
-                    try await dashboardStore.performOpenClawCronAction(job: job, action: action)
-                }
-                await refreshOpenClawCron()
-            } catch {
-                openClawCronError = error.localizedDescription + " Refresh before retrying; this action was not automatically retried."
-            }
-        }
-    }
 
-    func setOpenClawResultRoute(job: OpenClawCronJob, destination: String) {
-        if isBackendFrontend { Task { _ = await forwardBackendCron(.routeOpenClaw(agentID: job.agentID, jobID: job.id, destination: destination)) }; return }
-        guard let dashboardStore else { return }
-        Task {
-            do {
-                try await dashboardStore.setOpenClawResultRoute(agentID: job.agentID, jobID: job.id, destination: destination)
-                await loadOpenClawCronSnapshot()
-                await refreshOpenClawCron()
-                await refreshWorkspace()
-            } catch { openClawCronError = error.localizedDescription }
-        }
-    }
 
-    func emptyOpenClawCronTrash() {
-        if isBackendFrontend { Task { _ = await forwardBackendCron(.emptyOpenClawTrash) }; return }
-        guard let dashboardStore else { return }
-        Task {
-            do {
-                try await dashboardStore.emptyOpenClawCronTrash()
-                await loadOpenClawCronSnapshot()
-            } catch {
-                openClawCronError = error.localizedDescription
-            }
-        }
-    }
 
-    func createOpenClawContextConversation(
-        agentID: UUID,
-        context: String? = nil
-    ) async -> String? {
-        if isBackendFrontend { return await forwardBackendCron(.openClawContext(agentID: agentID, context: context))?.conversationID }
-        let conversationID: String?
-        if localCLIAgents.contains(where: {
-            $0.id == agentID && $0.runtimeKind == .openclaw
-        }) {
-            conversationID = await createLocalACPSession(runtimeKind: .openclaw)
-        } else {
-            localRunError = "The selected OpenClaw is no longer available."
-            return nil
-        }
-        guard let conversationID else { return nil }
-        if let context,
-           let conversation = workspaceOverview?.conversations.first(where: {
-               $0.id == conversationID
-           }) {
-            _ = await sendAgentMessage(
-                conversation: conversation,
-                content: context
-            )
-        }
-        return conversationID
-    }
 
-    private func loadOpenClawCronSnapshot() async {
-        guard let dashboardStore else { return }
-        openClawCronSnapshotGeneration &+= 1
-        let generation = openClawCronSnapshotGeneration
-        do {
-            let snapshot = try await dashboardStore.openClawCronPresentation(limits: openClawCronRunLimits)
-            guard self.dashboardStore === dashboardStore, generation == openClawCronSnapshotGeneration,
-                  !Task.isCancelled else { return }
-            if openClawCronJobs != snapshot.jobs { openClawCronJobs = snapshot.jobs }
-            if openClawCronRuns != snapshot.runs { openClawCronRuns = snapshot.runs }
-            if openClawCronHasOlderRuns != snapshot.hasOlder { openClawCronHasOlderRuns = snapshot.hasOlder }
-            if openClawResultRoutes != snapshot.routes { openClawResultRoutes = snapshot.routes }
-            let keys = Set(snapshot.jobs.map { Self.openClawCronHistoryKey($0) })
-            openClawCronRunLimits = openClawCronRunLimits.filter { keys.contains($0.key) }
-        } catch is CancellationError {
-        } catch {
-            guard self.dashboardStore === dashboardStore, generation == openClawCronSnapshotGeneration else { return }
-            openClawCronError = error.localizedDescription
-        }
-    }
 
-    static func openClawCronHistoryKey(_ job: OpenClawCronJob) -> String {
-        DashboardStore.openClawCronHistoryKey(agentID: job.agentID, jobID: job.id)
-    }
 
-    func loadOlderOpenClawCronRuns(job: OpenClawCronJob) async {
-        let key = Self.openClawCronHistoryKey(job)
-        guard !loadingOlderOpenClawCronJobs.contains(key) else { return }
-        loadingOlderOpenClawCronJobs.insert(key)
-        defer { loadingOlderOpenClawCronJobs.remove(key) }
-        if isBackendFrontend {
-            _ = await forwardBackendCron(.loadOlderOpenClaw(agentID: job.agentID, jobID: job.id))
-            return
-        }
-        guard openClawCronJobs.contains(where: { $0.agentID == job.agentID && $0.id == job.id }) else { return }
-        openClawCronRunLimits[key] = min(openClawCronRunLimits[key] ?? 50, Int.max - 51) + 50
-        await loadOpenClawCronSnapshot()
-    }
 
-    private static func openClawSessionKey(conversationID: String) -> String {
-        "agent:main:wovenmatter:\(conversationID)"
-    }
 
     private func apply(_ snapshot: DashboardStoreSnapshot) {
         if let backendApplicationService, snapshot.revision != workspaceRevision {
@@ -4920,9 +3824,7 @@ extension ApplicationModel {
     var isBackendFrontend: Bool { LocalExecutionRole.current == .frontend }
     private var executionHasPendingOperations: Bool {
         !installingLocalACPRuntimeKinds.isEmpty || !updatingRuntimeKinds.isEmpty
-        || !openClawGatewayOperationAgentIDs.isEmpty || !openClawHeartbeatSavingAgentIDs.isEmpty
-        || openClawCronBusy || !updatingDatabasePreferenceIDs.isEmpty
-        || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress || !executorRuntime.jobs.isEmpty || executorRuntime.isSettingUp
+        || !updatingLocalACPSessionIDs.isEmpty || !executorRuntime.jobs.isEmpty || executorRuntime.isSettingUp
     }
 
 
@@ -4948,7 +3850,6 @@ extension ApplicationModel {
             }
             observeBackendApplicationState()
             observeBackendRemoteState()
-            observeBackendCronState()
             observeBackendGatewaySettingsState()
             observeBackendDatabasesState()
             observeBackendUsageState()
@@ -4995,8 +3896,6 @@ extension ApplicationModel {
             if request.method == "databases.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendDatabasesSnapshot()))
             }
-            if request.method == "cron.command" { return .init(id: request.id, result: try await handleBackendCronRequest(payload: request.payload)) }
-            if request.method == "cron.snapshot" { return .init(id: request.id, result: try JSONEncoder().encode(backendCronSnapshot())) }
             if request.method == "library.command" {
                 guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
                 let command = try JSONDecoder().decode(BackendLibraryCommand.self, from: request.payload)
@@ -5165,7 +4064,6 @@ extension ApplicationModel {
             try await configureFrontendNoteWriteBehind(store: store, supportDirectory: support)
             try await refreshBackendApplicationState()
             try await refreshBackendRemoteState()
-            try await refreshBackendCronState()
             try await refreshBackendGatewaySettingsState()
             try await refreshBackendDatabasesState()
             try await refreshBackendOpenCodeState()
@@ -5187,7 +4085,6 @@ extension ApplicationModel {
                         if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
                             try await self.refreshBackendApplicationState()
                         }
-                        if change.requiresReload || change.scopes.contains(.cron) { try await self.refreshBackendCronState() }
                         if change.requiresReload || change.scopes.contains(.gatewaySettings) { try await self.refreshBackendGatewaySettingsState() }
                         if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
                         if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
@@ -5384,10 +4281,7 @@ extension ApplicationModel {
             checkedUpdates: checkedRuntimeKinds, updatingKinds: updatingRuntimeKinds,
             failedUpdates: failedRuntimeUpdateKinds, installingKinds: installingLocalACPRuntimeKinds,
             installPreview: preparedLocalACPRuntimeInstall?.preview,
-            workspace: localACPWorkspaceAvailability, pendingFolder: pendingWorkspaceFolderChange?.folder,
-            pendingDestination: pendingWorkspaceFolderChange?.destination,
-            folderError: workspaceFolderChangeError, folderInProgress: workspaceFolderChangeInProgress,
-            folderRecovery: workspaceFolderRecovery, runError: localRunError,
+            workspace: localACPWorkspaceAvailability, runError: localRunError,
             signInStatuses: localSignInStatuses, checkingSignIn: checkingLocalSignIn, signInError: localSignInError,
             titleEnabled: titleGenerationSettings.isEnabled, titleModel: titleGenerationSettings.model,
             titleThinking: titleGenerationSettings.thinking, titleCapabilities: titleGenerationCapabilities,
@@ -5419,17 +4313,11 @@ extension ApplicationModel {
         localACPWorkspaceAvailability = value.workspace
         // Public paths support UI path pickers. Never project executable launch
         // environments or saved provider credentials into the frontend.
-        if let root = value.workspace.rootPath, let repositories = value.workspace.repositoriesPath {
+        if let root = value.workspace.rootPath {
             localACPWorkspaceLaunchConfiguration = LocalACPWorkspaceLaunchConfiguration(
-                rootURL: URL(fileURLWithPath: root), repositoriesURL: URL(fileURLWithPath: repositories),
+                rootURL: URL(fileURLWithPath: root),
                 databasesURL: value.workspace.databasesPath.map { URL(fileURLWithPath: $0) })
         } else { localACPWorkspaceLaunchConfiguration = nil }
-        if let folder = value.pendingFolder, let destination = value.pendingDestination {
-            pendingWorkspaceFolderChange = PendingWorkspaceFolderChange(folder: folder, destination: destination)
-        } else { pendingWorkspaceFolderChange = nil }
-        workspaceFolderChangeError = value.folderError
-        workspaceFolderChangeInProgress = value.folderInProgress
-        workspaceFolderRecovery = value.folderRecovery
         localRunError = value.runError
         localSignInStatuses = value.signInStatuses
         checkingLocalSignIn = value.checkingSignIn
@@ -5470,10 +4358,6 @@ extension ApplicationModel {
             if enabled { enableLocalACPRuntimeCredentialAccess(kind) }
             else { disableLocalACPRuntimeCredentialAccess(kind) }
         case .setUpWorkspace(let url): setUpLocalACPWorkspace(homeDirectory: url)
-        case .repositories(let url): configureLocalACPRepositories(url)
-        case .databases(let url): configureLocalACPDatabases(url)
-        case .confirmFolderChange(let copy): confirmWorkspaceFolderChange(copyContents: copy)
-        case .cancelFolderChange: cancelWorkspaceFolderChange()
         case .titleEnabled(let enabled): setTitleGenerationEnabled(enabled)
         case .titleModel(let model): setTitleGenerationModel(model)
         case .titleThinking(let thinking): setTitleGenerationThinking(thinking)
@@ -5485,94 +4369,9 @@ extension ApplicationModel {
 
 
 extension ApplicationModel {
-    func backendCronSnapshot() -> BackendCronSnapshot {
-        .init(hermesAgentIDs: Set(hermesCronAgents.map(\.id)), hermesJobs: hermesCronJobs,
-              hermesResults: hermesCronResults, hermesRoutes: hermesResultRoutes,
-              hermesErrors: hermesCronErrors, refreshingHermes: isRefreshingHermesCron,
-              openClawJobs: openClawCronJobs, openClawRuns: openClawCronRuns,
-              openClawRoutes: openClawResultRoutes, refreshingOpenClaw: isRefreshingOpenClawCron,
-              openClawBusy: openClawCronBusy, openClawError: openClawCronError,
-              openClawHasOlderRuns: openClawCronHasOlderRuns)
-    }
 
-    func applyBackendCronSnapshot(_ value: BackendCronSnapshot) {
-        backendHermesCronAgentIDs = value.hermesAgentIDs
-        hermesCronJobs = value.hermesJobs
-        hermesCronResults = value.hermesResults
-        hermesResultRoutes = value.hermesRoutes
-        hermesCronErrors = value.hermesErrors
-        isRefreshingHermesCron = value.refreshingHermes
-        openClawCronJobs = value.openClawJobs
-        openClawCronRuns = value.openClawRuns
-        openClawCronHasOlderRuns = value.openClawHasOlderRuns ?? []
-        openClawResultRoutes = value.openClawRoutes
-        isRefreshingOpenClawCron = value.refreshingOpenClaw
-        openClawCronBusy = value.openClawBusy
-        openClawCronError = value.openClawError
-    }
 
-    private func forwardBackendCron(_ command: BackendCronCommand) async -> BackendCronResponse? {
-        do {
-            let data = try await callBackend(method: "cron.command", payload: JSONEncoder().encode(command))
-            let response = try JSONDecoder().decode(BackendCronResponse.self, from: data)
-            applyBackendCronSnapshot(response.snapshot)
-            return response
-        } catch {
-            openClawCronError = error.localizedDescription
-            for id in backendHermesCronAgentIDs { hermesCronErrors[id] = error.localizedDescription }
-            return nil
-        }
-    }
 
-    func handleBackendCronRequest(payload: Data) async throws -> Data {
-        guard !isBackendFrontend else { throw BackendRPCError.unavailable }
-        let command = try JSONDecoder().decode(BackendCronCommand.self, from: payload)
-        func agent(_ id: UUID) throws -> WorkspaceAgent {
-            guard let agent = hermesCronAgents.first(where: { $0.id == id }) else {
-                throw BackendRPCError.remote("This Hermes agent is no longer available.")
-            }
-            return agent
-        }
-        func job(_ agentID: UUID, _ id: String) throws -> OpenClawCronJob {
-            guard let job = openClawCronJobs.first(where: { $0.agentID == agentID && $0.id == id }) else {
-                throw BackendRPCError.remote("This scheduled job is no longer available. Refresh before trying again.")
-            }
-            return job
-        }
-        var accepted = true
-        var conversationID: String?
-        var error: String?
-        switch command {
-        case .refreshHermes: await refreshHermesCron()
-        case let .continueHermes(id, resultID):
-            guard let result = hermesCronResults[id]?.first(where: { $0.id == resultID }) else {
-                throw BackendRPCError.remote("This scheduled result is no longer available.")
-            }
-            conversationID = await continueHermesResult(agent: try agent(id), result: result)
-            accepted = conversationID != nil
-        case let .createHermes(id, name, schedule, prompt):
-            accepted = await createHermesCron(agent: try agent(id), name: name, schedule: schedule, prompt: prompt)
-        case let .routeHermes(id, jobID, destination):
-            await setHermesResultRoute(agent: try agent(id), jobID: jobID, destination: destination)
-        case let .changeHermes(id, jobID, action):
-            await changeHermesCron(agent: try agent(id), jobID: jobID, action: action)
-        case .refreshOpenClaw: await refreshOpenClawCron()
-        case let .loadOlderOpenClaw(id, jobID): await loadOlderOpenClawCronRuns(job: try job(id, jobID))
-        case let .saveOpenClaw(id, jobID, name, message, expression, zone, key, destination, preserve):
-            error = await saveOpenClawCron(agentID: id, job: try jobID.map { try job(id, $0) },
-                name: name, message: message, expression: expression, timeZone: zone,
-                declarationKey: key, destination: destination, preserveSchedule: preserve)
-            accepted = error == nil
-        case let .actionOpenClaw(id, jobID, action): performOpenClawCronAction(job: try job(id, jobID), action: action)
-        case let .routeOpenClaw(id, jobID, destination): setOpenClawResultRoute(job: try job(id, jobID), destination: destination)
-        case .emptyOpenClawTrash: emptyOpenClawCronTrash()
-        case let .openClawContext(id, context):
-            conversationID = await createOpenClawContextConversation(agentID: id, context: context)
-            accepted = conversationID != nil
-        }
-        return try JSONEncoder().encode(BackendCronResponse(snapshot: backendCronSnapshot(),
-            accepted: accepted, conversationID: conversationID, error: error))
-    }
 }
 
 
@@ -5651,96 +4450,26 @@ extension ApplicationModel {
 }
 
 extension ApplicationModel {
-    func isHermesGatewayConnected(agentID: UUID) -> Bool {
-        isBackendFrontend ? backendConnectedHermesIDs.contains(agentID) : hermesGatewayConnections[agentID] != nil
-    }
 
-    func isRemoteHermesGatewayConnected(workspaceID: UUID) -> Bool {
-        isBackendFrontend ? backendRemoteHermesIDs.contains(workspaceID) : remoteHermesConnections[workspaceID] != nil
-    }
 
-    func hermesProfileApproval(agentID: UUID?, workspaceID: UUID?, mode: HermesProfileApprovalMode?) async throws -> String {
-        if isBackendFrontend {
-            guard let value = try await sendBackendWorkspaceService(.hermesApprovals(agentID: agentID,
-                workspaceID: workspaceID, mode: mode?.rawValue)).approvalMode else { throw BackendRPCError.invalidFrame }
-            return value
-        }
-        let connection: HermesGatewayConnection?
-        if let workspaceID { connection = remoteHermesConnections[workspaceID] }
-        else if let agentID { connection = hermesGatewayConnections[agentID] }
-        else { connection = nil }
-        guard let connection else { throw BackendRPCError.remote("Connect this Hermes Gateway first.") }
-        if let mode { return try await HermesProfileApprovals.set(mode, connection: connection) }
-        return try await HermesProfileApprovals.read(connection: connection)
-    }
 
-    func availableHermesSessions(agentID: UUID) async throws -> [HermesValue] {
-        if isBackendFrontend {
-            return try await sendBackendWorkspaceService(.hermesSessions(agentID)).hermesSessions ?? []
-        }
-        guard let connection = hermesGatewayConnections[agentID] else {
-            throw BackendRPCError.remote("Connect this Hermes Gateway first.")
-        }
-        let rpc = HermesGatewayRPC(connection: connection)
-        do {
-            try await rpc.connect()
-            let fetched = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
-            await rpc.disconnect()
-            let known = try await knownHermesSessions(home: connection.home)
-            return fetched.filter { !known.contains($0["id"].text) }
-        } catch {
-            await rpc.disconnect()
-            invalidateHermesGatewayConnection(agentID: agentID, expected: connection)
-            throw error
-        }
-    }
 
-    func importHermesSession(agentID: UUID, sessionID: String) async throws {
-        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.importHermes(agentID, sessionID)); return }
-        guard let connection = hermesGatewayConnections[agentID] else {
-            throw BackendRPCError.remote("Connect this Hermes Gateway first.")
-        }
-        try await importHermesSession(connection: connection, sessionID: sessionID)
-    }
 
     func backendGatewaySettingsSnapshot() -> BackendGatewaySettingsSnapshot {
-        .init(linkedHermesIDs: Set(localCLIAgents.filter { isHermesGatewayLinked(agentID: $0.id) }.map(\.id)),
-              connectedHermesIDs: Set(hermesGatewayConnections.keys), remoteHermesIDs: Set(remoteHermesConnections.keys),
-              hermesCheckedAt: hermesGatewayCheckedAt, links: openClawGatewayLinks,
-              conversationIDs: openClawGatewayConversationIDs, errors: openClawGatewayErrors,
-              notices: openClawGatewayNotices, operations: openClawGatewayOperationAgentIDs,
-              statuses: openClawGatewayOperationStatuses, heartbeats: openClawHeartbeatConfigurations,
-              heartbeatMessages: openClawHeartbeatMessages, heartbeatErrors: openClawHeartbeatErrorAgentIDs,
-              heartbeatSaving: openClawHeartbeatSavingAgentIDs, metadata: openClawGatewaySessionMetadata)
+        .init(metadata: localACPSessionMetadata)
     }
 
     func applyBackendGatewaySettingsSnapshot(_ value: BackendGatewaySettingsSnapshot) {
-        backendLinkedHermesIDs = value.linkedHermesIDs
-        backendConnectedHermesIDs = value.connectedHermesIDs
-        backendRemoteHermesIDs = value.remoteHermesIDs
-        hermesGatewayCheckedAt = value.hermesCheckedAt
-        openClawGatewayLinks = value.links
-        openClawGatewayConversationIDs = value.conversationIDs
-        openClawGatewayErrors = value.errors
-        openClawGatewayNotices = value.notices
-        openClawGatewayOperationAgentIDs = value.operations
-        openClawGatewayOperationStatuses = value.statuses
-        openClawHeartbeatConfigurations = value.heartbeats
-        openClawHeartbeatMessages = value.heartbeatMessages
-        openClawHeartbeatErrorAgentIDs = value.heartbeatErrors
-        openClawHeartbeatSavingAgentIDs = value.heartbeatSaving
-        openClawGatewaySessionMetadata = value.metadata
     }
 
     func backendDatabasesSnapshot() -> BackendDatabasesSnapshot {
         .init(catalog: databasesSnapshot, refreshing: isRefreshingDatabases,
-              updating: updatingDatabasePreferenceIDs, error: databaseError)
+              error: databaseError)
     }
 
     func applyBackendDatabasesSnapshot(_ value: BackendDatabasesSnapshot) {
         databasesSnapshot = value.catalog
         isRefreshingDatabases = value.refreshing
-        updatingDatabasePreferenceIDs = value.updating
         databaseError = value.error
     }
 
@@ -5775,52 +4504,20 @@ extension ApplicationModel {
         switch command {
         case .openCodeSettingsAgent(let id): response.agent = try await openCodeSettingsAgent(workspaceID: id)
         case .renameOpenCode(let id, let name): try await renameOpenCodeAgent(agentID: id, displayName: name)
-        case .remoteOpenClawAgent(let id): response.entityID = try await remoteOpenClawAgentID(for: workspace(id)).uuidString
         case .consumePrefill(let id, let expected):
             if pendingComposerPrefills[id] == expected { pendingComposerPrefills.removeValue(forKey: id) }
-        case let .connectHermes(id, restart): try await connectHermesGateway(agentID: id, restart: restart)
-        case let .unlinkHermes(id): unlinkHermesGateway(agentID: id)
-        case let .renameHermes(id, name): try await renameHermesAgent(agentID: id, displayName: name)
-        case let .connectRemoteHermes(id): try await connectRemoteHermes(workspace(id))
-        case let .stopRemoteHermes(id): try await stopRemoteHermes(workspace(id))
-        case let .hermesApprovals(agentID, workspaceID, raw):
-            let mode = raw.flatMap(HermesProfileApprovalMode.init(rawValue:))
-            guard raw == nil || mode != nil else { throw BackendRPCError.remote("Unknown Hermes approval mode.") }
-            response.approvalMode = try await hermesProfileApproval(agentID: agentID, workspaceID: workspaceID, mode: mode)
-        case let .hermesSessions(id): response.hermesSessions = try await availableHermesSessions(agentID: id)
-        case let .importHermes(id, session): try await importHermesSession(agentID: id, sessionID: session)
-        case let .renameOpenClaw(id, name): renameOpenClawAgent(agentID: id, displayName: name)
-        case let .linkOpenClaw(id):
-            guard let agent = openClawAgent(agentID: id) else { throw BackendRPCError.remote("This agent is no longer available.") }
-            linkOpenClawGateway(agent: agent)
-        case let .unlinkOpenClaw(id): unlinkOpenClawGateway(agentID: id)
         case .authorizeSavedConnections:
             try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
                 try await authorizeSavedConnections()
             }
-        case let .reconnectOpenClaw(id): reconnectOpenClawGateway(agentID: id)
-        case let .restartOpenClaw(id): restartOpenClawGateway(agentID: id)
-        case let .refreshOpenClaw(id): await refreshOpenClawGatewayStatus(agentID: id)
-        case let .loadHeartbeat(id): await loadOpenClawHeartbeat(agentID: id)
-        case let .saveHeartbeat(id, configuration): saveOpenClawHeartbeat(agentID: id, configuration: configuration)
-        case let .patchOpenClawSession(id, model, thinking, permission):
-            patchOpenClawGatewaySession(conversationID: id, model: model, thinkingLevel: thinking, permission: permission)
-        case let .refreshOpenClawSession(id): await refreshOpenClawGatewaySession(conversationID: id)
-        case let .openClawSessions(id, offset):
-            let result = try await openClawNativeSessions(agentID: id, offset: offset)
-            response.openClawSessions = result.sessions; response.nextOffset = result.nextOffset
-        case let .importOpenClaw(id, session): try await importOpenClawSession(agentID: id, session: session)
+        case let .copyDatabase(database, destination, name):
+            databaseCommand = true
+            response.entityID = await copyDatabase(database: database, destinationSourceID: destination, name: name)
+            if response.entityID == nil { throw BackendRPCError.remote(databaseError ?? "Database copy failed.") }
         case .refreshDatabases: databaseCommand = true; await refreshDatabases()
         case let .createDatabase(sourceID, name, preference):
             databaseCommand = true
             response.entityID = await createDatabase(sourceID: sourceID, name: name, preference: preference)
-        case let .registerDatabase(url): databaseCommand = true; response.entityID = await registerExternalDatabase(url)
-        case let .databasePreference(id, preference):
-            databaseCommand = true
-            guard let database = databasesSnapshot.databases.first(where: { $0.id == id }) else {
-                throw BackendRPCError.remote("This database is no longer available. Refresh before trying again.")
-            }
-            await updateDatabasePreference(preference, database: database)
         case let .databaseData(link): databaseCommand = true; response.data = try await linkedData(for: link)
         }
         if databaseCommand { response.databases = backendDatabasesSnapshot() }
@@ -5831,15 +4528,6 @@ extension ApplicationModel {
 
 
 extension ApplicationModel {
-    private func observeBackendCronState() {
-        withObservationTracking { _ = backendCronSnapshot() } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self, let service = self.backendApplicationService else { return }
-                self.observeBackendCronState()
-                await service.invalidations.publish(scopes: [.cron])
-            }
-        }
-    }
 
     private func observeBackendGatewaySettingsState() {
         withObservationTracking { _ = backendGatewaySettingsSnapshot() } onChange: { [weak self] in
@@ -5861,10 +4549,6 @@ extension ApplicationModel {
         }
     }
 
-    private func refreshBackendCronState() async throws {
-        applyBackendCronSnapshot(try JSONDecoder().decode(BackendCronSnapshot.self,
-            from: await callBackend(method: "cron.snapshot")))
-    }
 
     private func refreshBackendGatewaySettingsState() async throws {
         applyBackendGatewaySettingsSnapshot(try JSONDecoder().decode(BackendGatewaySettingsSnapshot.self,
@@ -5885,6 +4569,164 @@ extension ApplicationModel {
         if isBackendFrontend {
             consumedBackendPrefills[conversationID] = expected
             forwardBackendWorkspaceService(.consumePrefill(conversationID, expected))
+        }
+    }
+}
+
+
+extension ApplicationModel {
+    func executionWorkspaceIdentity(workspaceID: UUID?) async throws -> String {
+        if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        return "device:" + (try await store.dashboardDeviceID()).uuidString.lowercased()
+    }
+
+    func folderWorkingDirectory(folderID: String?, workspaceID: UUID?, explicit: URL? = nil,
+                                calendarExecutionRoot: WorkspaceFolderLocation? = nil) async throws -> URL {
+        let owner = try await executionWorkspaceIdentity(workspaceID: workspaceID)
+        if let captured = calendarExecutionRoot {
+            guard !isBackendFrontend, captured.workspaceID == owner, captured.rootPath.hasPrefix("/"),
+                  !captured.rootPath.contains("\0"), explicit?.path == captured.rootPath else {
+                throw WorkspaceToolError.invalid("The scheduled task's execution directory does not belong to this workspace.")
+            }
+            if let folderID {
+                let current = try await folderWorkingDirectory(folderID: folderID, workspaceID: workspaceID)
+                guard current.path == captured.rootPath else { throw WorkspaceToolError.invalid("The scheduled task's saved folder root has changed.") }
+            }
+            return URL(fileURLWithPath: captured.rootPath)
+        }
+        if let folderID {
+            // Read the current folder projection on the execution owner.
+            guard let snapshot = try await dashboardStore?.database.workspaceOverview(),
+                  let folder = snapshot.folders.first(where: { $0.id == folderID }) else {
+                throw WorkspaceToolError.invalid("This folder is no longer available.")
+            }
+            if folder.executionWorkspaceID == nil {
+                guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+                let path: String
+                if let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) {
+                    path = try await remoteWorkspaces.createProject(name: folder.name, in: configuration, reuseExisting: true).path
+                } else if workspaceID == nil, let workspace = localACPWorkspaceLaunchConfiguration {
+                    path = try LocalACPWorkspaceProvisioner.createProject(named: folder.name, in: workspace.rootURL, reuseExisting: true).path
+                } else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
+                // Existing directories remain user-owned, including after a retry.
+                try await database.bindFolderExecutionRoot(id: folderID,
+                    location: .init(workspaceID: owner, rootPath: path, managed: false))
+                await refreshWorkspace()
+                return URL(fileURLWithPath: path)
+            }
+            guard folder.executionWorkspaceID == owner, let path = folder.rootPath else {
+                throw WorkspaceToolError.invalid("Select a folder owned by this agent's workspace, or All Workspaces.")
+            }
+            if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
+            return URL(fileURLWithPath: path)
+        }
+        let defaultRoot = try URL(fileURLWithPath: defaultToolWorkingDirectory(workspaceID: workspaceID))
+        if let explicit, explicit.standardizedFileURL != defaultRoot.standardizedFileURL {
+            throw WorkspaceToolError.invalid("Chats in All Workspaces use their own scratch directory. Create or link a folder to use another root.")
+        }
+        return defaultRoot
+    }
+
+    func persistExecutionRoot(id: String, folderID: String?, workspaceID: UUID?, root: URL) async throws {
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try await store.database.saveSessionExecutionRoot(id: id, folderID: folderID,
+            location: .init(workspaceID: try await executionWorkspaceIdentity(workspaceID: workspaceID), rootPath: root.path, managed: false),
+            defaultPath: defaultToolWorkingDirectory(workspaceID: workspaceID))
+    }
+}
+
+
+extension ApplicationModel {
+    static func databaseReplicaDirectory(sourceID: String) throws -> URL {
+        try dashboardSupportDirectory().appendingPathComponent("DatabaseReplicas", isDirectory: true)
+            .appendingPathComponent(sourceID.replacingOccurrences(of: ":", with: "-"), isDirectory: true)
+    }
+}
+
+
+extension ApplicationModel {
+    func setFolderReferencePaths(id: String, paths: [String]) async -> Bool {
+        do {
+            if isBackendFrontend { return try await sendBackendCommand(.workspaceMutation(.folderReferences(id: id, paths: paths))).accepted }
+            guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            try await database.setFolderReferences(id: id, paths: paths)
+            await refreshWorkspace(); return true
+        } catch { folderMutationError = error.localizedDescription; return false }
+    }
+    func conversationExecutionWorkspaceID(id: String) async -> String? {
+        try? await dashboardStore?.database.sessionExecutionRoot(id: id)?.workspaceID
+    }
+    func canChooseConversationFolder(id: String) async -> Bool {
+        (try? await dashboardStore?.database.canChooseSessionFolder(id: id)) ?? false
+    }
+    func copyDatabase(database: DashboardAgentDatabase, destinationSourceID: String, name: String) async -> String? {
+        do {
+            if isBackendFrontend {
+                return try await sendBackendWorkspaceService(.copyDatabase(database: database, destinationSourceID: destinationSourceID, name: name)).entityID
+            }
+            guard let destination = databasesSnapshot.sources.first(where: { $0.id == destinationSourceID }), destination.allowsCreation,
+                  let source = databasesSnapshot.database(sourceID: database.sourceID, databaseID: database.databaseID),
+                  let sourceURL = source.localURL else { throw DashboardDatabaseLinkError.databaseUnavailable }
+            let cached = try await Task.detached { try AgentDatabaseCatalog.snapshot(id: source.databaseID, in: sourceURL.deletingLastPathComponent()) }.value
+            let snapshot: ManagedDatabaseSnapshot
+            if !source.offline, let configuration = remoteDatabaseConfiguration(sourceID: source.sourceID) {
+                let latest = try await remoteWorkspaces.datasetSnapshot(id: source.databaseID, in: configuration)
+                guard latest.database.id == cached.database.id, latest.database.owner == cached.database.owner,
+                      latest.database.revision >= cached.database.revision else { throw DashboardDatabaseLinkError.databaseUnavailable }
+                snapshot = latest
+            } else { snapshot = cached }
+            let newID: String
+            if let configuration = remoteDatabaseConfiguration(sourceID: destinationSourceID) {
+                let value = try await remoteWorkspaces.datasetOperation(action: "copy", name: name, snapshot: snapshot, in: configuration)
+                guard let id = value.objectValue?["id"]?.stringValue else { throw DashboardDatabaseLinkError.databaseUnavailable }
+                newID = id
+            } else {
+                guard destination.kind == .local, let root = localACPWorkspaceLaunchConfiguration?.databasesURL else { throw DashboardDatabaseLinkError.databaseUnavailable }
+                let owner = try await executionWorkspaceIdentity(workspaceID: nil)
+                let row = try await Task.detached { try AgentDatabaseCatalog.importSnapshot(snapshot, in: root, sourceOwner: snapshot.database.owner,
+                    copyName: name, destinationOwner: owner) }.value
+                newID = row.id
+            }
+            await refreshDatabases(); return destinationSourceID + ":" + newID
+        } catch { databaseError = error.localizedDescription; return nil }
+    }
+}
+
+extension ApplicationModel {
+    func ensureChatScratchDirectory(_ path: String, workspaceID: UUID?, workspaceRoot: String) async throws {
+        if let workspaceID {
+            guard let remote = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            try await remoteWorkspaces.ensureScratchDirectory(path: path, in: remote)
+        } else {
+            try LocalACPWorkspaceProvisioner.ensureScratchDirectory(at: URL(fileURLWithPath: path), in: URL(fileURLWithPath: workspaceRoot))
+        }
+    }
+
+    func prepareUngroupedLaunch(conversation: WorkspaceConversationRecord, firstMessage: String) async throws {
+        guard conversation.folderID == nil, let store = dashboardStore,
+              let current = try await store.database.sessionExecutionRoot(id: conversation.id) else { return }
+        guard current.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+            throw WorkspaceToolError.invalid("This chat belongs to another execution workspace.")
+        }
+        let existing = try await store.database.sessionScratchDirectory(id: conversation.id)
+        if existing?.rootPath == current.rootPath { return }
+        if existing == nil, !(try await store.database.canChooseSessionFolder(id: conversation.id)) { return }
+        let base = try defaultToolWorkingDirectory(workspaceID: conversation.remoteWorkspaceID)
+        // A scheduled task may retain a project root after its UI folder was removed.
+        if existing == nil, current.rootPath != base { return }
+        let scratch = try await store.database.reserveSessionScratchDirectory(id: conversation.id,
+            workspaceID: current.workspaceID, workspaceRoot: base, firstMessage: firstMessage)
+        try await ensureChatScratchDirectory(scratch.rootPath, workspaceID: conversation.remoteWorkspaceID, workspaceRoot: base)
+        if current.rootPath != scratch.rootPath {
+            if conversation.localRuntimeKind == .opencode {
+                guard let native = openCodeModel(for: conversation.id) else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                try await native.moveDraftWorkspace(conversationID: conversation.id, root: URL(fileURLWithPath: scratch.rootPath))
+            } else { try await store.discardDraftSession(conversationID: conversation.id) }
+            try await store.database.bindSessionScratchDirectory(id: conversation.id)
+            localACPSessionMetadata[conversation.id] = localACPSessionMetadata[conversation.id]?
+                .withWorkingDirectory(scratch.rootPath)
         }
     }
 }

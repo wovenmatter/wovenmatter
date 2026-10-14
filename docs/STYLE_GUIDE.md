@@ -62,7 +62,10 @@ when an intentional design change is accepted.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16`) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep agent/harness logos in their original colors. Shared controls use the sidebar foreground environment only inside the rails.
 - **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
-  styling quiet. Shared controls distinguish enabled hover, press, selection,
+  styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
+  for a neutral border without a colored focus ring. Clicking noninteractive
+  content inside a form releases text focus without closing it.
+  Shared controls distinguish enabled hover, press, selection,
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.

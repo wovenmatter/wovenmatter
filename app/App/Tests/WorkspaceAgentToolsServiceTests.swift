@@ -13,13 +13,17 @@ struct WorkspaceAgentToolsServiceTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let local = try await database.createFolder(name: "Caller folder")
-        let elsewhere = try await database.createFolder(name: "Other folder")
+        let local = try await database.createFolder(name: "Caller folder", location: .init(workspaceID: "device:test", rootPath: root.path + "/Caller", managed: false))
+        let elsewhere = try await database.createFolder(name: "Other folder", location: .init(workspaceID: "device:test", rootPath: root.path + "/Other", managed: false))
         let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        let target = try await database.createLocalACPSession(runtimeKind: .pi, title: "Relevant work", ownerDeviceID: UUID())
+        let target = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Relevant work", ownerDeviceID: UUID())
+        for id in [caller, target] {
+            try await database.saveSessionExecutionRoot(id: id, folderID: nil,
+                location: .init(workspaceID: "device:test", rootPath: root.path, managed: false), defaultPath: root.path)
+        }
         _ = try await database.moveConversation(id: caller, toFolderID: local)
         _ = try await database.moveConversation(id: target, toFolderID: elsewhere)
-        try await database.recordHistory(.init(id: "actual-result", conversationID: target, harness: "pi",
+        try await database.recordHistory(.init(id: "actual-result", conversationID: target, harness: "claude_code",
             kind: "wire.in", payload: "rare-search-phrase in the other folder"))
         let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
@@ -114,7 +118,7 @@ extension WorkspaceAgentToolsServiceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
-        let historian = try await database.createLocalACPSession(runtimeKind: .pi, title: "Historian", ownerDeviceID: UUID())
+        let historian = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Historian", ownerDeviceID: UUID())
         try await database.setSessionTools(.init(enabled: [.history]), sessionID: historian)
         let model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
@@ -625,7 +629,7 @@ private struct ToolSnapshotFixture {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        target = try await database.createLocalACPSession(runtimeKind: .pi, title: "Target", ownerDeviceID: UUID())
+        target = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Target", ownerDeviceID: UUID())
         model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },

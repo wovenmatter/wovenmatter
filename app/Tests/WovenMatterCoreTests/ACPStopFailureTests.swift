@@ -54,7 +54,7 @@ struct ACPStopFailureTests {
             self.state = state
             coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
                 LocalACPSessionDriver(
-                    initializeSession: { _, existing, _ in
+                    initializeSession: { _, existing, _, _ in
                         LocalACPInitializedSession(sessionID: existing ?? "fixture-native", loadedExistingSession: existing != nil,
                             configuration: LocalACPSessionConfiguration())
                     },
@@ -68,7 +68,7 @@ struct ACPStopFailureTests {
         func prepare() async throws {
             _ = try await coordinator.configuration(conversationID: id,
                 launch: .init(runtimeKind: .codex, executableURL: URL(filePath: "/nonexistent-stop-fixture"), arguments: []),
-                workspace: .init(rootURL: directory, repositoriesURL: directory))
+                workspace: .init(rootURL: directory))
         }
         func cleanUp() { try? FileManager.default.removeItem(at: directory) }
     }

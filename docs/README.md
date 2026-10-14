@@ -18,7 +18,7 @@ work across sessions, and organize your conversations, notes, and data.
 - [Executor apps](guide/executor.md) — shared app capabilities, scoped Execute, approvals, and Pi code mode.
 - [Remote workspaces](guide/remote-workspaces.md) — work with agents on other Linux machines.
 - [Notes and data](guide/notes-and-data.md) — work beside a note and use spreadsheets, HTML, and database folders.
-- [Scheduled work and usage](guide/schedules-and-usage.md) — follow Cron Jobs, Calendar events, and provider usage.
+- [Scheduled work and usage](guide/schedules-and-usage.md) — follow Calendar events, scheduled tasks, and provider usage.
 - [Troubleshooting](guide/troubleshooting.md) — resolve setup, connection, and data problems.
 
 These guides follow the code on `main`. See the
@@ -33,8 +33,7 @@ in your installed version.
 - [Remote database limits](reference/REMOTE_DATABASES.md)
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
 - [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
-- [Hermes integration](integrations/HERMES_GATEWAY.md)
-- [OpenClaw integration](OPENCLAW_2026_9_2_UPGRADE.md)
+- [Native Woven instructions](NATIVE_INSTRUCTIONS.md)
 
 ## Build and contribute
 

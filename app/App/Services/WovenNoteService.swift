@@ -230,7 +230,7 @@ enum WovenNoteCommandLine {
       table set-cell --table-id ID --row N --column N --text TEXT [--revision REVISION]
       table add-row|remove-row|add-column|remove-column ... [--revision REVISION]
       set-html --html HTML | --file PATH [--revision REVISION]
-      link --source-id ID --database-id ID --path PATH [--query SQL] [--table-id ID] [--revision REVISION]
+      link --source-id ID --database-id ID --query SQL [--table-id ID] [--revision REVISION]
       unlink [--table-id ID] [--revision REVISION]
       apply --json OPERATIONS_JSON | --file PATH [--revision REVISION]
 
@@ -313,8 +313,8 @@ enum WovenNoteCommandLine {
             let link = DatabaseArtifactLink(
                 sourceID: try parser.requiredValue(for: "--source-id"),
                 databaseID: try parser.requiredValue(for: "--database-id"),
-                relativePath: try parser.requiredValue(for: "--path"),
-                sqliteQuery: parser.value(for: "--query")
+                relativePath: "data.sqlite",
+                sqliteQuery: try parser.requiredValue(for: "--query")
             )
             let operation: NoteEditOperation = if let tableID = parser.value(for: "--table-id") {
                 .setTableDatabaseLink(tableID: tableID, link: link)

@@ -39,17 +39,9 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
   case cursor
   case opencode
 
-  public static let presentationOrder: [Self] = [
-    .defaultAgent,
-    .codex,
-    .claudeCode,
-    .grokBuild,
-    .cursor,
-    .openclaw,
-    .hermes,
-    .opencode,
-    .pi,
-  ]
+  // Retired identities above remain decodable for archived history only.
+  public static let allCases: [Self] = [.defaultAgent, .codex, .claudeCode, .grokBuild, .opencode]
+  public static let presentationOrder: [Self] = allCases
 
   public var presentationRank: Int {
     Self.presentationOrder.firstIndex(of: self) ?? Self.presentationOrder.count

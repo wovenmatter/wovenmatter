@@ -15,10 +15,6 @@ enum BackendRuntimeCommand: Codable, Sendable {
     case setShown(AgentRuntimeKind, Bool)
     case setCredentialAccess(AgentRuntimeKind, Bool)
     case setUpWorkspace(URL)
-    case repositories(URL?)
-    case databases(URL?)
-    case confirmFolderChange(Bool)
-    case cancelFolderChange
     case titleEnabled(Bool)
     case titleModel(String)
     case titleThinking(String)
@@ -44,11 +40,6 @@ struct BackendRuntimeSnapshot: Codable, Sendable {
     var installingKinds: Set<AgentRuntimeKind>
     var installPreview: LocalACPInstallerPreview?
     var workspace: LocalACPWorkspaceAvailability
-    var pendingFolder: LocalACPWorkspaceFolder?
-    var pendingDestination: URL?
-    var folderError: String?
-    var folderInProgress: Bool
-    var folderRecovery: LocalACPWorkspaceFolderChangeResult?
     var runError: String?
     var signInStatuses: [AgentSignInStatus]
     var checkingSignIn: Bool

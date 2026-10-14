@@ -50,9 +50,7 @@ Settled outcomes expire active records; older records cannot affect a later run.
 | --- | --- |
 | Pi Durable (direct) | Native prompt, compaction, authentication wait, child conversations and durable settlement, including attached child reports and archive completion. Child IDs are `children/<native conversation id>`. |
 | Codex and Claude Code | Existing ACP prompt/settlement and permission/interaction callbacks. |
-| Pi RPC | Existing settled-event fence, compaction/retry events and extension decision callbacks. |
-| Cursor, Grok Build, Hermes | Existing common coordinator settlement and decision callbacks, with their native transports preserved. |
-| OpenClaw ACP / Gateway | Common ACP lifecycle or confirmed Gateway outcome, plus native approval requests and resolutions. |
+| Grok Build | Native ACP coordinator settlement and decision callbacks. |
 | OpenCode | Native full-session active/permission/form snapshots. Individual assistant message completion cannot end an active session; unresolved submissions retain uncertainty. |
 
 Remote ACP and Durable bridges carry the same structured updates. No screen text,

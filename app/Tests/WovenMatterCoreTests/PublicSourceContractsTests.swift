@@ -404,8 +404,7 @@ struct PublicSourceContractsTests {
 
     #expect(document.schemaVersion == 4)
     #expect(document.harnesses.map(\.id) == [
-      .codex, .claudeCode, .grokBuild, .hermes,
-      .cursor, .opencode, .pi, .openclaw,
+      .codex, .claudeCode, .grokBuild, .opencode,
     ])
     #expect(document.harnesses.allSatisfy { harness in
       !harness.capabilities.isEmpty

@@ -80,8 +80,7 @@ public struct UsageConnectionChoice: Codable, Equatable, Identifiable, Sendable 
     case .grok: [("xai", "Grok"), ("xai-api", "API key")]
     case .openRouter: [("openrouter", "API key")]
     case .openCodeGo: [("opencode-go", "API key")]
-    case .cursor: [("cursor", "Cursor")]
-    case .unknown: []
+    case .cursor, .unknown: []
     }
   }
 
@@ -187,8 +186,6 @@ public actor LocalUsageService {
   private var openRouterCredentialRevision: UInt64
   private var openRouterStatus: UsageSourceStatus = .unavailable
   private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
-  private var cursorAccountStatus: UsageSourceStatus = .unavailable
-  private var cursorAccountDetail = "Cursor account usage has not been checked yet."
 
   public init(
     homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -514,20 +511,6 @@ public actor LocalUsageService {
         try $0.setMetadataDate(now, for: "usage.openrouter-attempt-at")
       }
     }
-    if enabledProviders.contains(.cursor),
-       await shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
-      guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      await importCursorAccountActivity(
-        store: store,
-        cutoff: now.addingTimeInterval(-Self.retention),
-        generation: generation,
-        now: now
-      )
-      guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? await store.write(validating: { try generation.check() }) {
-        try $0.setMetadataDate(now, for: "usage.cursor-attempt-at")
-      }
-    }
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
     let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
       enabledProviders.contains($0.provider)
@@ -682,69 +665,6 @@ public actor LocalUsageService {
     }
   }
 
-  private func shouldImportCursorAccount(
-    store: AsyncUsageStore,
-    reason: UsageRefreshReason,
-    now: Date
-  ) async -> Bool {
-    let lastAttempt = try? await store.metadataDate("usage.cursor-attempt-at")
-    switch reason {
-    case .rangeChanged, .runCompleted:
-      return false
-    case .manual, .credentialChanged:
-      return true
-    case .startup, .viewAppeared, .periodic:
-      return lastAttempt.map { now.timeIntervalSince($0) >= Self.remoteRefreshInterval } ?? true
-    }
-  }
-
-  private func importCursorAccountActivity(
-    store: AsyncUsageStore,
-    cutoff: Date,
-    generation: UsageRefreshOwnership,
-    now: Date
-  ) async {
-    do {
-      let activity = try await CursorAccountClient(homeDirectory: homeDirectory)
-        .activity(since: cutoff, until: now)
-      guard isCurrentAnalytics(generation) else { return }
-      let retainedInterval = DateInterval(
-        start: now.addingTimeInterval(-Self.retention),
-        end: now
-      )
-      let retained = (try? await store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
-      guard isCurrentAnalytics(generation) else { return }
-      var samplesByEvent = Dictionary(
-        uniqueKeysWithValues: retained.map { ($0.sourceEventID, $0) }
-      )
-      for sample in activity.samples {
-        samplesByEvent[sample.sourceEventID] = sample
-      }
-      try await store.replace(
-        sourceID: "cursor:account",
-        sourceName: "Cursor account activity",
-        location: "Cursor Usage API",
-        provider: .cursor,
-        harness: "Cursor",
-        fingerprint: "cursor-account:\(now.timeIntervalSince1970)",
-        samples: Array(samplesByEvent.values),
-        importedAt: now,
-        validating: { try generation.check() }
-      )
-      guard isCurrentAnalytics(generation) else { return }
-      cursorAccountStatus = .available
-      cursorAccountDetail = "Account-wide usage from Cursor's dashboard API, authenticated by Cursor.app's local sign-in."
-    } catch CursorAccountClientError.notSignedIn {
-      guard isCurrentAnalytics(generation) else { return }
-      cursorAccountStatus = .unavailable
-      cursorAccountDetail = "Sign in to Cursor.app to import account-wide usage from all devices."
-    } catch {
-      guard isCurrentAnalytics(generation) else { return }
-      cursorAccountStatus = .partial
-      cursorAccountDetail = "Cursor account refresh failed: \(error.localizedDescription) Persisted history remains available."
-    }
-  }
-
   private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
     enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date) async -> Bool {
     let home = homeDirectory
@@ -858,57 +778,6 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
     )) }
-    if !enabledProviders.isEmpty { await sources.append(sourceCoverage(
-      id: "pi",
-      prefix: "pi:file:",
-      sourceName: "Pi",
-      provider: .unknown,
-      harness: "Pi",
-      location: homeDirectory.appending(path: ".pi/agent/sessions"),
-      store: store,
-      interval: interval,
-      detail: "Exact assistant-call tokens with model, provider route, cache, reasoning, and thinking-level metadata."
-    ))
-    await sources.append(sourceCoverage(
-      id: "openclaw",
-      prefix: "openclaw:file:",
-      sourceName: "OpenClaw",
-      provider: .unknown,
-      harness: "OpenClaw",
-      location: homeDirectory.appending(path: ".openclaw/agents"),
-      store: store,
-      interval: interval,
-      detail: "Exact assistant-call tokens from active local OpenClaw session histories; trajectory and reset copies are excluded."
-    ))
-    var hermes = await sourceCoverage(
-      id: "hermes",
-      prefix: "hermes:database",
-      sourceName: "Hermes",
-      provider: .unknown,
-      harness: "Hermes",
-      location: homeDirectory.appending(path: ".hermes/state.db"),
-      store: store,
-      interval: interval,
-      detail: "Per-session, per-model ledger totals. Historical tokens are assigned to the row's last-seen time because Hermes does not retain call-level timestamps."
-    )
-    if hermes.status == .available {
-      hermes = UsageSourceCoverage(
-        id: hermes.id,
-        sourceName: hermes.sourceName,
-        provider: hermes.provider,
-        harness: hermes.harness,
-        status: .partial,
-        location: hermes.location,
-        discoveredSessions: hermes.discoveredSessions,
-        attributedSamples: hermes.attributedSamples,
-        detail: hermes.detail
-      )
-    }
-    sources.append(hermes) }
-    if enabledProviders.contains(.cursor) {
-      await sources.append(cursorCoverage(store: store, interval: interval))
-    }
-
     if enabledProviders.contains(.openRouter) {
       let openRouterStats = try? await store.statistics(
         sourceIDPrefix: "openrouter:activity:",
@@ -1001,43 +870,6 @@ public actor LocalUsageService {
       discoveredSessions: stats?.sessions ?? 0,
       attributedSamples: stats?.events ?? 0,
       detail: completeDetail
-    )
-  }
-
-  private func cursorCoverage(
-    store: AsyncUsageStore,
-    interval: DateInterval
-  ) async -> UsageSourceCoverage {
-    let acpRoot = homeDirectory.appending(path: ".cursor/acp-sessions")
-    let transcriptRoot = homeDirectory.appending(path: ".cursor/projects")
-    let acpSessions = files(
-      root: acpRoot,
-      cutoff: interval.start,
-      predicate: { $0.lastPathComponent == "meta.json" }
-    ).count
-    let transcripts = files(
-      root: transcriptRoot,
-      cutoff: interval.start,
-      predicate: { $0.pathExtension == "jsonl" && $0.path.contains("/agent-transcripts/") }
-    ).count
-    let stats = try? await store.statistics(sourceID: "cursor:account", in: interval)
-    let discovered = max(max(acpSessions, transcripts), stats?.sessions ?? 0)
-    let found = fileManager.fileExists(atPath: acpRoot.path)
-      || fileManager.fileExists(atPath: transcriptRoot.path)
-    return UsageSourceCoverage(
-      id: "cursor",
-      sourceName: "Cursor",
-      provider: .cursor,
-      harness: "Cursor",
-      status: cursorAccountStatus == .available
-        ? .available
-        : ((stats?.events ?? 0) > 0 || found ? .partial : cursorAccountStatus),
-      location: "Cursor Usage API and local Cursor session metadata",
-      discoveredSessions: discovered,
-      attributedSamples: stats?.events ?? 0,
-      detail: cursorAccountDetail + (found
-        ? " Local Cursor sessions are also discoverable, but only the account API supplies their token totals and models."
-        : "")
     )
   }
 

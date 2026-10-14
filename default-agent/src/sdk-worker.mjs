@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 let service;
 const send = message => { if (process.connected) process.send?.(message, () => {}); };
 process.on('error', () => {});
@@ -7,6 +7,7 @@ const allowed = new Set(['configure', 'invoke', 'poll', 'status', 'cancelActive'
 process.on('message', async message => {
   try {
     if (message.method === 'initialize') {
+      process.env.WOVENMATTER_INSTRUCTIONS_FILE = fileURLToPath(new URL('../../harnesses/woven-instructions.txt', import.meta.url));
       const { createDefaultAgentService } = await import(pathToFileURL(join(message.root, 'src/service.mjs')).href);
       service = createDefaultAgentService({ cwd: message.cwd, directory: message.directory, attachmentState: message.attachmentState });
       send({ id: message.id, result: true }); return;

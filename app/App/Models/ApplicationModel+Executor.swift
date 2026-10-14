@@ -113,7 +113,7 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let client = try await executorClient()
         let value = try await client.call(.object(["operation": .string("inventory")]))
-        let apps = try JSONDecoder().decode([ExecutorAppProfile].self, from: JSONEncoder().encode(value))
+        let apps = try JSONDecoder().decode([ExecutorAppTarget].self, from: JSONEncoder().encode(value))
         try await database.updateExecutor(apps: apps)
     }
 
@@ -131,7 +131,7 @@ extension ApplicationModel {
         var runtime = workspaceOverview?.conversations.first { $0.id == session }?.localRuntimeKind
         if runtime == nil { runtime = try? await database.localACPSession(conversationID: session).runtimeKind }
         guard let runtime else { return .ask }
-        let metadata = openCodeModel(for: session)?.metadata(session) ?? openClawGatewaySessionMetadata[session] ?? localACPSessionMetadata[session]
+        let metadata = openCodeModel(for: session)?.metadata(session) ?? localACPSessionMetadata[session]
         // Unconfirmed, inherited and native smart modes retain manual review.
         return .resolve(runtime: runtime, mode: metadata?.permission,
             confirmed: !updatingLocalACPSessionIDs.contains(session))

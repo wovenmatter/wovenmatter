@@ -4,39 +4,36 @@ import AppKit
 import WovenMatterCore
 
 struct ExecutorAppsList: View {
-    let profiles: [ExecutorAppProfile]
+    let targets: [ExecutorAppTarget]
     let selection: Set<String>
     let change: (Set<String>) -> Void
-    private var apps: [ExecutorAppProfile] {
+    private var apps: [ExecutorAppTarget] {
         var seen = Set<String>()
-        return profiles.filter { seen.insert($0.app).inserted }
-    }
-    private func set(_ app: ExecutorAppProfile, profileID: String?) {
-        var next = selection.subtracting(profiles.filter { $0.app == app.app }.map(\.id))
-        if let profileID { next.insert(profileID) }
-        change(next)
+        return targets.filter { seen.insert($0.app).inserted }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack {
-                Button("Select all") { change(Set(apps.map(\.id))) }
+                Button("Select all") { change(Set(targets.map(\.id))) }
                 Button("Deselect all") { change([]) }
             }.buttonStyle(SettingsQuietButtonStyle())
             ForEach(apps) { app in
-                let choices = profiles.filter { $0.app == app.app }
-                let selected = choices.first { selection.contains($0.id) }
+                let choices = targets.filter { $0.app == app.app }
+                let ids = Set(choices.map(\.id))
                 VStack(alignment: .leading, spacing: 6) {
-                    Toggle(app.name, isOn: Binding(get: { selected != nil }, set: { set(app, profileID: $0 ? app.id : nil) }))
-                    if choices.count > 1, let selected {
-                        Picker("Profile", selection: Binding(get: { selected.id }, set: { set(app, profileID: $0) })) {
-                            ForEach(choices) { Text($0.profileName).tag($0.id) }
+                    Toggle(app.name, isOn: Binding(get: { !selection.isDisjoint(with: ids) }, set: { enabled in
+                        change(enabled ? selection.union(ids) : selection.subtracting(ids))
+                    }))
+                    if choices.contains(where: { $0.account != nil }) {
+                        ForEach(choices) { target in
+                            Toggle(target.targetName, isOn: Binding(get: { selection.contains(target.id) }, set: { enabled in
+                                change(enabled ? selection.union([target.id]) : selection.subtracting([target.id]))
+                            }))
                         }.padding(.leading, 28)
-                    } else if let selected {
-                        Text(selected.profileName).font(.system(size: 11)).foregroundStyle(.secondary).padding(.leading, 28)
                     }
                 }
             }
-            if apps.isEmpty { Text("Add apps and configure their profiles in the Executor dashboard, then refresh.").font(.callout).foregroundStyle(.secondary) }
+            if apps.isEmpty { Text("Add apps and link their accounts in the Executor dashboard, then refresh.").font(.callout).foregroundStyle(.secondary) }
         }
     }
 }
@@ -118,7 +115,7 @@ struct ExecutorConnectionsCard: View {
                 Text("Accounts are connected in Executor’s dashboard. Full access accepts action approvals; requested input still appears in the conversation. App selection remains enforced in every permission mode.")
                     .font(.callout).foregroundStyle(.secondary)
                 DisclosureGroup("Default apps for new conversations") {
-                    ExecutorAppsList(profiles: config.apps, selection: config.defaultProfiles) { selected in
+                    ExecutorAppsList(targets: config.apps, selection: config.defaultProfiles) { selected in
                         var settings = tools.settings; settings.executor?.defaultProfiles = selected
                         tools.saveSettingsFromUI(settings)
                     }.padding(.top, 8)
@@ -169,7 +166,7 @@ struct ExecutorConversationApps: View {
                 Text("Executor apps").fontWeight(.semibold)
             }
             if let config = tools.settings.executor {
-                ExecutorAppsList(profiles: config.apps, selection: tools.policy(for: sessionID).executorProfiles ?? []) { selection in
+                ExecutorAppsList(targets: config.apps, selection: tools.policy(for: sessionID).executorProfiles ?? []) { selection in
                     Task { do { try await tools.controlExecutor(.selection(session: sessionID, profiles: selection)); error = nil }
                         catch { self.error = error.localizedDescription } }
                 }

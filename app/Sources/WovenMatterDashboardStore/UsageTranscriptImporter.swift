@@ -113,56 +113,6 @@ actor UsageTranscriptImporter {
       }
     }
 
-    if !enabledProviders.isEmpty {
-      let piRoot = homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory)
-      importOutcomes["pi:file:"] = try await importHarnessFiles(
-        root: piRoot,
-        prefix: "pi:file:",
-        harness: "Pi",
-        enabledProviders: enabledProviders,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      )
-
-      let openClawRoot = homeDirectory.appending(
-        path: ".openclaw/agents",
-        directoryHint: .isDirectory
-      )
-      importOutcomes["openclaw:file:"] = try await importHarnessFiles(
-        root: openClawRoot,
-        prefix: "openclaw:file:",
-        harness: "OpenClaw",
-        enabledProviders: enabledProviders,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        url.path.contains("/sessions/")
-          && url.lastPathComponent.hasSuffix(".jsonl")
-          && !url.lastPathComponent.hasSuffix(".trajectory.jsonl")
-      }
-
-      let hermesDatabase = homeDirectory.appending(path: ".hermes/state.db")
-      importOutcomes["hermes:database"] = try await importDatabase(
-        databaseURL: hermesDatabase,
-        sourceID: "hermes:database",
-        sourceName: "Hermes usage ledger",
-        provider: .unknown,
-        harness: "Hermes",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { indexedAfter, check in
-        try HermesUsageDatabase(databaseURL: hermesDatabase)
-          .samples(cutoff: indexedAfter, now: now, check: check)
-          .filter { enabledProviders.contains($0.provider) }
-      }
-    }
-
     if enabledProviders.contains(.grok) {
       let grokRoot = homeDirectory.appending(path: ".grok/sessions", directoryHint: .isDirectory)
       importOutcomes["grok:file:"] = try await importGrok(
@@ -271,53 +221,6 @@ actor UsageTranscriptImporter {
           provider: provider, harness: harness, fingerprint: prepared.fingerprint,
           samples: prepared.samples, importedAt: now, indexedAfter: prepared.indexedAfter, transactional: false)
       }
-    }
-  }
-
-  private func importHarnessFiles(
-    root: URL,
-    prefix: String,
-    harness: String,
-    enabledProviders: Set<ProviderKind>,
-    providerFilterSignature: String,
-    store: AsyncUsageStore,
-    cutoff: Date,
-    now: Date,
-    predicate: @escaping @Sendable (URL) -> Bool = { $0.pathExtension == "jsonl" }
-  ) async throws -> Outcome {
-    try await importTranscriptFiles(
-      root: root,
-      prefix: prefix,
-      sourceName: "\(harness) session",
-      provider: .unknown,
-      harness: harness,
-      providerFilterSignature: providerFilterSignature,
-      store: store,
-      cutoff: cutoff,
-      now: now,
-      predicate: predicate
-    ) { url, check in
-      var state = HarnessUsageScanState()
-      var records: [UsageSample] = []
-      let usageMarker = Data("\"usage\"".utf8)
-      let modelMarker = Data("\"model_change\"".utf8)
-      let thinkingMarker = Data("\"thinking_level_change\"".utf8)
-      let sessionMarker = Data("\"session\"".utf8)
-      try Self.forEachLineData(in: url, check: check) { data, lineNumber in
-        guard data.range(of: usageMarker) != nil
-                || data.range(of: modelMarker) != nil
-                || data.range(of: thinkingMarker) != nil
-                || data.range(of: sessionMarker) != nil else { return }
-        if let parsed = LocalUsageTranscriptParser.parseHarness(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber,
-          harness: harness,
-          state: &state
-        ) {
-          records.append(parsed)
-        }
-      }
-      return records.filter { enabledProviders.contains($0.provider) }
     }
   }
 
