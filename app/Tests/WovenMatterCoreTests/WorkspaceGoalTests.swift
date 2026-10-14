@@ -51,8 +51,15 @@ struct WorkspaceGoalTests {
         let first = try #require(await db.mutateGoal(sessionID: session, mutation: mutation, callerID: session, requestID: request))
         let duplicate = try #require(await db.mutateGoal(sessionID: session, mutation: mutation, callerID: session, requestID: request))
         #expect(first.id == duplicate.id)
+        try await run(db, session: session, id: "achieved-goal-run")
+        try await db.recordGoalUsage(runID: "achieved-goal-run", tokens: 50)
         _ = try await db.mutateGoal(sessionID: session, mutation: .complete(id: first.id, evidence: "Fixture passed"))
         let replacement = try await create(db, session)
+        #expect(replacement.tokensUsed == nil && replacement.completedTurns == 0)
+        let retained = try await db.read { connection in
+            try connection.historyRowsUnlocked("SELECT 1 FROM workspace_goal_runs WHERE goal_id=? UNION ALL SELECT 1 FROM workspace_goal_usage WHERE goal_id=?", values: [first.id, first.id])
+        }
+        #expect(retained.isEmpty)
         await #expect(throws: (any Error).self) {
             try await db.mutateGoal(sessionID: session, mutation: .clear(id: first.id))
         }

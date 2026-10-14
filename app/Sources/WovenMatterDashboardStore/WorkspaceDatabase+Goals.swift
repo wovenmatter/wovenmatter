@@ -91,6 +91,11 @@ extension WorkspaceDatabaseConnection {
                     guard WorkspaceGoal.supports(kind) else { throw WorkspaceToolError.invalid("Goals require Pi Durable, Codex, Claude Code, Grok Build or OpenCode.") }
                     guard goal == nil || goal?.status == .complete else { throw WorkspaceToolError.invalid("A goal already exists. Edit or clear it before setting another.") }
                     try WorkspaceGoal.validate(objective: objective, tokenBudget: tokens, turnBudget: turns)
+                    if goal != nil {
+                        // Replacing an achieved goal starts fresh accounting. Deleting
+                        // its row also removes the previous run and usage membership.
+                        try toolsExecuteUnlocked("DELETE FROM workspace_session_goals WHERE session_id=?", [sessionID])
+                    }
                     // Include an in-flight turn which explicitly created the goal.
                     let rows = try historyRowsUnlocked("SELECT rowid AS sequence,status FROM dashboard_runs WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1", values: [sessionID])
                     let sequence = rows.first?.objectValue?["sequence"]?.goalInteger ?? 0
