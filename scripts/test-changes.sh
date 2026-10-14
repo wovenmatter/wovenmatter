@@ -44,6 +44,7 @@ run_package_tests() {
   local process_suites=(
     ACPSessionPermissionTests
     ACPSessionRoutingTests
+    ClosedLidProtectionTests
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
     WorkspaceAgentToolsServiceTests
