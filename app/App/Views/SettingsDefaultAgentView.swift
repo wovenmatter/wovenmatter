@@ -289,7 +289,7 @@ private struct SettingsAgentModelsView: View {
                 .accessibilityLabel("Choose default model")
                 .accessibilityValue(defaultLabel)
                 .popover(isPresented: $choosingDefault, arrowEdge: .bottom) {
-                    SettingsAgentDefaultModelChooser(
+                    SettingsAgentDefaultModelChooser(agent: agent,
                         index: index, selection: agent.configuration.defaultModel,
                         browsingAllModels: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                         loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels
@@ -315,9 +315,9 @@ private struct SettingsAgentModelsView: View {
             }
             Text(showingAllModels
                  ? "Your default model is always available in the composer. Turn on any other models you want to include."
-                 : "Your default model is always available in the composer. Browse all models to add more.")
+                 : "Your default model is always available in the composer. Browse provider models to add more.")
                 .font(.callout).foregroundStyle(.secondary)
-            SettingsAgentCatalogBrowseControls(
+            SettingsAgentCatalogBrowseControls(agent: agent,
                 requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                 loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
             if showingAllModels {
@@ -433,6 +433,7 @@ private struct SettingsAgentModelsView: View {
 /// Loading the full inventory is always an explicit user action, including when
 /// the default chooser is open. Existing enabled model controls remain usable.
 private struct SettingsAgentCatalogBrowseControls: View {
+    @Bindable var agent: DefaultAgentSettingsModel
     let requested: Bool
     let includesAllModels: Bool
     let loading: Bool
@@ -441,8 +442,17 @@ private struct SettingsAgentCatalogBrowseControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Picker("Provider", selection: Binding(get: { agent.browsingProvider }, set: {
+                agent.browsingProvider = $0
+                setBrowsingAllModels(true)
+            })) {
+                ForEach(agent.configuration.providers, id: \.self) { provider in
+                    Text(ProviderConnectionID.allCases.first { $0.id == provider }?.name ?? provider).tag(provider)
+                }
+            }.frame(maxWidth: 360)
             HStack(spacing: 8) {
                 if requested {
+                    Button("Refresh models") { agent.refreshCatalog() }.disabled(loading)
                     Button("Show enabled models") { setBrowsingAllModels(false) }
                     if !includesAllModels {
                         if loading {
@@ -453,7 +463,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
                         }
                     }
                 } else {
-                    Button("Browse all models") { setBrowsingAllModels(true) }.disabled(loading)
+                    Button("Browse provider models") { setBrowsingAllModels(true) }.disabled(loading)
                 }
             }.buttonStyle(SettingsQuietButtonStyle())
             if requested && !includesAllModels && !loading, let error {
@@ -483,6 +493,7 @@ private struct SettingsAgentCatalogPageControls: View {
 /// Created only when the user opens the selector. Search covers the entire index,
 /// but the native list receives one bounded page and retains keyboard selection.
 private struct SettingsAgentDefaultModelChooser: View {
+    @Bindable var agent: DefaultAgentSettingsModel
     @Environment(\.dismiss) private var dismiss
     let index: SettingsAgentCatalogIndex
     let selection: String?
@@ -503,7 +514,7 @@ private struct SettingsAgentDefaultModelChooser: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Default model").font(.headline)
             Button("Use first available model") { select(nil) }.buttonStyle(SettingsQuietButtonStyle())
-            SettingsAgentCatalogBrowseControls(
+            SettingsAgentCatalogBrowseControls(agent: agent,
                 requested: browsingAllModels, includesAllModels: includesAllModels,
                 loading: loading, error: error, setBrowsingAllModels: setBrowsingAllModels)
             if browsingAllModels && includesAllModels {
@@ -578,13 +589,16 @@ struct SettingsSignInStatusCard: View {
             ForEach(statuses) { status in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(status.displayName).font(.callout)
+                        Text(status.displayName).font(.system(size: 13, weight: .medium))
                         Spacer()
                         if ProviderConnectionID(rawValue: status.id) != nil || status.id.hasPrefix("local-server-") {
                             ConnectionsLink(title: status.label, scope: scope)
-                        } else { Text(status.label).font(.caption).foregroundStyle(.secondary) }
+                        } else { Text(status.label).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
                     }
-                    Text(status.detail).font(.caption).foregroundStyle(.secondary)
+                    Text(status.detail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
                 }.padding(.vertical, 4)
             }
         }

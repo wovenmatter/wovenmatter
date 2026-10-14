@@ -12,11 +12,15 @@ const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
 export const claudeProviders = ['claude-subscription', 'anthropic'];
 export const isClaude = reference => claudeProviders.includes(reference?.split('/')[0]);
-export const defaultClaudeModels = [
-  { value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] },
-  { value: 'opus', displayName: 'Claude Opus', supportedEffortLevels: ['low', 'medium', 'high'] },
-  { value: 'haiku', displayName: 'Claude Haiku', supportedEffortLevels: [] },
-];
+function validModels(models) {
+  return Array.isArray(models) && models.length > 0 && models.length <= 256
+    && Buffer.byteLength(JSON.stringify(models)) <= 262144
+    && new Set(models.map(m => m?.value)).size === models.length
+    && models.every(m => typeof m?.value === 'string' && m.value.length > 0 && m.value.length <= 512
+      && typeof m.displayName === 'string' && m.displayName.length > 0 && m.displayName.length <= 512
+      && (m.supportedEffortLevels === undefined || Array.isArray(m.supportedEffortLevels)
+        && m.supportedEffortLevels.every(level => ['low', 'medium', 'high', 'xhigh', 'max'].includes(level))));
+}
 
 export function claudeExecutable(platform = process.platform, arch = process.arch) {
   return join(dirname(require.resolve(`@anthropic-ai/claude-agent-sdk-${platform}-${arch}/package.json`)), 'claude');
@@ -72,7 +76,7 @@ export function claudeEnvironment(paths, apiKey, source = process.env) {
 export class ClaudeRuntime {
   constructor(directory, { executeCommand = execute, query, directories = claudeDirectories } = {}) {
     this.directory = directory; this.executeCommand = executeCommand; this.query = query; this.directories = directories;
-    this.models = defaultClaudeModels;
+    this.models = [];
     this.profileContext = new AsyncLocalStorage();
   }
   withProfile(profile, operation) { return this.profileContext.run(profile, operation); }
@@ -86,11 +90,14 @@ export class ClaudeRuntime {
     return (await readJSON(new URL('../node_modules/@anthropic-ai/claude-agent-sdk/package.json', import.meta.url))).version;
   }
   async loadModels() {
-    const saved = await readJSON(join(this.directory, 'claude-models.json'), {});
+    let saved;
+    try {
+      const file = join(this.directory, 'claude-models.json');
+      if ((await lstat(file)).size > 262144) return;
+      saved = await readJSON(file, {});
+    } catch { return; }
     const version = await this.sdkVersion();
-    // Legacy unversioned catalogs can resolve aliases to an older Claude model.
-    // Keep safe aliases until the user explicitly refreshes connection metadata.
-    if (saved.runtimeVersion === version && Array.isArray(saved.models) && saved.models.length && saved.models.every(m => typeof m.value === 'string' && typeof m.displayName === 'string')) this.models = saved.models;
+    if (saved.runtimeVersion === version && validModels(saved.models)) this.models = saved.models;
   }
   async status(profile, { signal } = {}) {
     signal?.throwIfAborted();
@@ -135,12 +142,23 @@ export class ClaudeRuntime {
         extraArgs: { 'disable-slash-commands': null },
         persistSession: false, abortController: controller } });
       signal?.throwIfAborted();
-      const models = await session.supportedModels();
+      let cancel;
+      const models = await Promise.race([session.supportedModels(), new Promise((_, reject) => {
+        cancel = () => reject(controller.signal.reason);
+        controller.signal.addEventListener('abort', cancel, { once: true });
+        if (controller.signal.aborted) cancel();
+      })]).finally(() => controller.signal.removeEventListener('abort', cancel));
+      controller.signal.throwIfAborted();
       signal?.throwIfAborted();
+      if (!validModels(models)) throw new DefaultAgentError('Claude did not return a valid model list. Refresh models to retry.');
       if (models.length) {
         this.models = models;
         await writePrivateJSON(join(this.directory, 'claude-models.json'), { runtimeVersion: await this.sdkVersion(), models });
       }
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (!this.models.length) throw new DefaultAgentError('Claude models are unavailable. Refresh models to retry.');
+      // Retain the last valid SDK-discovered inventory while offline.
     } finally {
       signal?.removeEventListener('abort', abort);
       clearTimeout(timer); controller.abort(); session?.close();

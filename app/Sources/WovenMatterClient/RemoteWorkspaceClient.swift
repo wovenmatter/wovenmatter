@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import WovenMatterCore
+import WovenMatterCompanion
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
 public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
@@ -148,7 +149,6 @@ public enum RemoteHarnessLaunchResolver {
         var harnessArgumentsStartIndex = command.count
         let supportsDurableRelay = harness.map {
             ["acp", "agent-stdio", "acp-and-gateway"].contains($0.transport)
-                || (runtimeKind == .pi && $0.transport == "rpc")
         } ?? false
         let usesDurableRelay = configuration.backgroundExecutionEnabled
             && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
@@ -197,11 +197,7 @@ public enum RemoteHarnessLaunchResolver {
             ),
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
-                repositoriesURL: workspaceRoot.appending(
-                    path: "repos",
-                    directoryHint: .isDirectory
-                ),
-                databasesURL: workspaceRoot.appending(path: "databases", directoryHint: .isDirectory)
+                databasesURL: URL(fileURLWithPath: "/home/.local/share/wovenmatter/databases", isDirectory: true)
             )
         )
     }
@@ -375,28 +371,6 @@ public struct RemoteWorkspaceHealth: Codable, Equatable, Sendable {
     public let version: String
     public let workspaceRoot: String
     public let harnessCount: Int
-}
-
-public struct RemoteOpenClawGatewayStatus: Codable, Equatable, Sendable {
-    public let desired: Bool
-    public let state: String
-    public let pid: Int?
-    public let restarts: Int
-    public let lastError: String?
-    public let socketPath: String
-}
-
-public struct RemoteOpenClawGatewayConnection: Sendable {
-    public let endpoint: OpenClawGatewayEndpoint
-    public let requestHeaders: [String: String]
-
-    public init(
-        endpoint: OpenClawGatewayEndpoint,
-        requestHeaders: [String: String]
-    ) {
-        self.endpoint = endpoint
-        self.requestHeaders = requestHeaders
-    }
 }
 
 public struct RemoteHarnessOperation: Codable, Equatable, Identifiable, Sendable {
@@ -584,6 +558,19 @@ public actor RemoteWorkspaceSSHClient {
                 arguments: ["inspect"]
             )
         )
+    }
+
+    /// Enables a private HTTPS proxy to an existing loopback-only workspace.
+    /// It does not start a container, enroll a device, or change another route.
+    public func exposeExecution(configuration: RemoteWorkspaceConfiguration, httpsPort: Int = 8443) throws -> URL {
+        struct Result: Decodable { let endpoint: URL }
+        let result = try decode(Result.self, from: runScript(
+            hostName: configuration.hostName, userName: configuration.userName,
+            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
+        guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace did not return a private Tailscale endpoint.")
+        }
+        return result.endpoint
     }
 
     public func prepareHost(
@@ -1069,6 +1056,34 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         self.session = session
     }
 
+    public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
+                                         deviceID: String, name: String, workspaceName: String, endpoint: URL,
+                                         scopes: [String] = ["execution", "inference"]) async throws -> CompanionExecutionCredential {
+        struct Payload: Encodable {
+            let libraryID: String; let workspaceID: String; let ownerDeviceID: String
+            let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL; let scopes: [String]
+        }
+        let payload = Payload(libraryID: libraryID, workspaceID: workspaceID, ownerDeviceID: ownerDeviceID,
+                              deviceID: deviceID, name: name, workspaceName: workspaceName, endpoint: endpoint, scopes: scopes)
+        return try await request(path: "v1/execution/devices", method: "POST", body: JSONEncoder().encode(payload))
+    }
+
+    public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/publisher", method: "GET", body: nil)
+    }
+    public func configureExecutionPublisher(_ grant: CompanionWorkspacePublisherGrant) async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
+    }
+
+    public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
+        try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
+    }
+
+    public func revokeExecutionDevice(deviceID: String) async throws {
+        guard UUID(uuidString: deviceID) != nil else { throw RemoteWorkspaceClientError.invalidResponse("Invalid client device identity.") }
+        let _: [String: Bool] = try await request(path: "v1/execution/devices/" + deviceID.lowercased(), method: "DELETE", body: nil)
+    }
+
     public func publishTaskGatewaySchedules(_ publication: RemoteTaskGatewayPublication) async throws -> RemoteTaskGatewayStatus {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in
@@ -1106,11 +1121,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: name, preference: preference)))
     }
 
-    public func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String) async throws -> RemoteAgentDatabase {
-        try await request(path: "v1/databases/preference", method: "PATCH", body: JSONEncoder().encode(
-            RemoteDatabaseRequest(databaseID: databaseID, preference: preference)))
-    }
-
     public func databaseData(for link: DatabaseArtifactLink) async throws -> RemoteDatabaseData {
         try await request(path: "v1/databases/data", method: "POST", body: JSONEncoder().encode(
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
@@ -1128,10 +1138,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             body: nil
         )
         return document.harnesses
-    }
-
-    public func hermesResults(offset: Int) async throws -> [HermesScheduledResult] {
-        try await request(path: "v1/workspace-instances/hermes/results", method:"GET", body:nil, queryItems:[URLQueryItem(name:"offset",value:String(offset))])
     }
 
     public func workspaceInstance(
@@ -1252,30 +1258,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(
             path: "v1/operations/\(id.uuidString)",
             method: "GET",
-            body: nil
-        )
-    }
-
-    public func openClawGatewayStatus() async throws -> RemoteOpenClawGatewayStatus {
-        try await request(
-            path: "v1/openclaw/gateway",
-            method: "GET",
-            body: nil
-        )
-    }
-
-    public func startOpenClawGateway() async throws -> RemoteOpenClawGatewayStatus {
-        try await request(
-            path: "v1/openclaw/gateway/start",
-            method: "POST",
-            body: nil
-        )
-    }
-
-    public func restartOpenClawGateway() async throws -> RemoteOpenClawGatewayStatus {
-        try await request(
-            path: "v1/openclaw/gateway/restart",
-            method: "POST",
             body: nil
         )
     }
@@ -1585,5 +1567,39 @@ enum RemoteWorkspaceProcess {
             data: data,
             status: process.terminationStatus
         )
+    }
+}
+
+
+public struct RemoteProjectDirectory: Codable, Sendable { public let path: String }
+
+extension RemoteWorkspaceServiceClient {
+    public func ensureScratchDirectory(path: String) async throws -> RemoteProjectDirectory {
+        try await request(path: "v1/scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
+    }
+    public func createProject(name: String, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
+        struct Request: Encodable { let name: String; let reuseExisting: Bool }
+        return try await request(path: "v1/projects", method: "POST", body: JSONEncoder().encode(Request(name: name, reuseExisting: reuseExisting)))
+    }
+}
+
+
+extension RemoteWorkspaceServiceClient {
+    public func managedDatabaseOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
+                                         snapshot: ManagedDatabaseSnapshot? = nil) async throws -> GatewayJSONValue {
+        struct Request: Encodable { let databaseID: String?; let sql: String?; let name: String?; let snapshot: ManagedDatabaseSnapshot? }
+        return try await request(path: "v1/databases/" + action, method: "POST",
+            body: JSONEncoder().encode(Request(databaseID: id, sql: sql, name: name, snapshot: snapshot)))
+    }
+    public func databaseSnapshot(id: String) async throws -> ManagedDatabaseSnapshot {
+        struct Request: Encodable { let databaseID: String }
+        return try await request(path: "v1/databases/snapshot", method: "POST", body: JSONEncoder().encode(Request(databaseID: id)))
+    }
+}
+
+
+extension RemoteWorkspaceServiceClient {
+    public func deleteProject(path: String) async throws -> RemoteProjectDirectory {
+        try await request(path: "v1/projects/delete", method: "POST", body: JSONEncoder().encode(["path": path]))
     }
 }

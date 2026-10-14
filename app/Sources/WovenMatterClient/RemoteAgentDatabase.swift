@@ -5,6 +5,9 @@ public struct RemoteAgentDatabase: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let name: String
     public let preference: AgentDatabasePreference
+    public let revision: Int64
+    public let updatedAt: String
+    public let owner: String
 }
 
 public struct RemoteDatabaseData: Codable, Sendable {

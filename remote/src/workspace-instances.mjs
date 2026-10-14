@@ -16,7 +16,7 @@ const delay = (ms) => new Promise((done) => setTimeout(done, ms))
 // Each service is already bound to exactly one configured remote workspace.
 // The registration and credentials stay on that host, never in API responses.
 export function createWorkspaceInstances(options) {
-  const { workspaceRoot, gateway } = options
+  const { workspaceRoot } = options
   const environment = options.environment ?? (() => process.env)
   const launch = options.spawn ?? spawn
   const fetchRequest = options.fetch ?? fetch
@@ -72,13 +72,7 @@ export function createWorkspaceInstances(options) {
     return result
   }
   async function status(kind) {
-    if (kind === 'openclaw') {
-      const current = gateway.status()
-      return { kind, state: current.state, pid: current.pid ?? null, version: null,
-        endpointPath: '/v1/openclaw/gateway/socket',
-        // The legacy gateway captures stderr which can contain credentials.
-        lastError: current.lastError ? 'Gateway reported an error. Inspect the gateway logs on this workspace host.' : null }
-    }
+    if (kind !== 'opencode') throw fail(404, 'workspace_instance_not_found')
     const base = { kind: 'opencode', state: operation ? 'starting' : 'stopped', pid: null,
       version: null, endpointPath: `${prefix}/api`, lastError }
     try {
@@ -151,14 +145,12 @@ export function createWorkspaceInstances(options) {
     throw fail(503, 'opencode_stop_pending')
   }
   async function action(kind, verb) {
+    if (kind !== 'opencode') throw fail(404, 'workspace_instance_not_found')
     if (operation) throw fail(409, 'workspace_instance_operation_in_progress')
     // Set the lock before any asynchronous registration, enablement or health checks.
     operation = { kind, verb }
     try {
-      if (kind === 'openclaw') {
-        if (verb === 'start' && !await isEnabled('openclaw')) throw fail(409, 'runtime_disabled')
-        await gateway[verb]()
-      } else await (verb === 'start' ? start() : stop())
+      await (verb === 'start' ? start() : stop())
       lastError = null
     } catch (error) { lastError = publicError(error); throw fail(error.statusCode ?? 503, lastError) }
     finally { operation = null }
@@ -207,7 +199,7 @@ export function createWorkspaceInstances(options) {
   }
   async function handle(request, response, url) {
     if (url.pathname.startsWith(`${prefix}/api/`)) { await proxy(request, response, url); return true }
-    const match = url.pathname.match(/^\/v1\/workspace-instances\/(opencode|openclaw)(?:\/(start|stop))?$/)
+    const match = url.pathname.match(/^\/v1\/workspace-instances\/(opencode)(?:\/(start|stop))?$/)
     if (!match) return false
     const [, kind, verb] = match
     if ((!verb && request.method !== 'GET') || (verb && request.method !== 'POST')) throw fail(405, 'method_not_allowed')
@@ -217,7 +209,6 @@ export function createWorkspaceInstances(options) {
     return true
   }
   async function hasActiveRuntime(id) {
-    if (id === 'openclaw') return Boolean(gateway.status().pid) || operation?.kind === 'openclaw'
     if (id !== 'opencode') return false
     if (operation?.kind === 'opencode' || (launched && launched.exitCode === null)) return true
     try { const info = await registration(); return Boolean(info && alive(info.pid)) }

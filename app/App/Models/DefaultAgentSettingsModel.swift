@@ -101,6 +101,8 @@ final class DefaultAgentSettingsModel {
     private var metadataTask: Task<Void, Never>?
     private var metadataGeneration = UUID()
     private var catalogRemote: RemoteWorkspaceConfiguration?
+    var browsingProvider = ""
+    private var forceCatalogRefresh = false
     private var requestedAllModels = false
     private var publishedCatalogKey: String?
     init() {
@@ -210,7 +212,7 @@ final class DefaultAgentSettingsModel {
             resolvedDefaultModelID = value.resolvedDefaultModelID
         }
         searchConfigured = value.searchConfigured; accounts = value.accounts
-        cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
+        signInProvider = value.signInProvider
         signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
         signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
@@ -260,7 +262,6 @@ final class DefaultAgentSettingsModel {
     private func invalidateConnection(_ provider: String) {
         providers.removeAll { $0.id == provider }
     }
-    var cursorAccountStatus = "Refresh to check Cursor sign-in"
     var signInProvider: String?
     var signInOutcome: SignInOutcome?
     var accounts: [String: [ProviderConnectionAccounts.Account]] = [:]
@@ -493,93 +494,6 @@ final class DefaultAgentSettingsModel {
         enableProvider("claude-subscription")
         refresh(remote: remote, login: "claude-subscription")
     }
-    func refreshCursorStatus() async {
-        if forward(.init(action: "cursorStatus")) { return }
-        guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
-            ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
-            cursorAccountStatus = "Cursor CLI is not installed"
-            return
-        }
-        let status = await Task.detached { () -> String in
-            let child = Process()
-            child.executableURL = executable
-            child.arguments = ["status", "--format", "json"]
-            let output = Pipe()
-            child.standardOutput = output
-            child.standardError = FileHandle.nullDevice
-            child.standardInput = FileHandle.nullDevice
-            do {
-                try child.run()
-                DispatchQueue.global().asyncAfter(deadline: .now() + 15) { if child.isRunning { child.terminate() } }
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                child.waitUntilExit()
-                guard child.terminationStatus == 0,
-                    let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "Could not check Cursor sign-in" }
-                guard value["isAuthenticated"] as? Bool == true else { return "Connect account" }
-                let user = value["userInfo"] as? [String: Any]
-                return user?["email"] as? String ?? "Credentials present"
-            } catch { return "Could not check Cursor sign-in" }
-        }.value
-        cursorAccountStatus = status
-    }
-    func signInCursor() {
-        if forward(.init(action: "cursorSignIn")) { return }
-        cancel()
-        signInProvider = "cursor"
-        signInOutcome = nil
-        error = nil
-        notice = "Preparing Cursor sign-in…"
-        guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
-            ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
-            error = "Install Cursor’s agent CLI to connect this account."
-            completeSignInPresentation()
-            return
-        }
-        busy = true
-        let runID = generation
-        let child = Process()
-        child.executableURL = executable
-        child.arguments = ["login"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["NO_OPEN_BROWSER"] = "1"
-        child.environment = environment
-        let output = Pipe()
-        child.standardOutput = output
-        child.standardError = output
-        child.standardInput = FileHandle.nullDevice
-        outputBuffer = Data()
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil; return }
-            Task { @MainActor in
-                guard let self, self.generation == runID else { return }
-                self.outputBuffer.append(data)
-                if self.outputBuffer.count > 32768 { self.outputBuffer = self.outputBuffer.suffix(32768) }
-                let text = String(decoding: self.outputBuffer, as: UTF8.self)
-                let expression = try? NSRegularExpression(pattern: #"https://[^\s<>"\x1b]+"#)
-                for match in expression?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
-                    guard let range = Range(match.range, in: text), let url = URL(string: String(text[range])),
-                        let host = url.host, host == "cursor.com" || host.hasSuffix(".cursor.com") || host == "cursor.sh" || host.hasSuffix(".cursor.sh") else { continue }
-                    self.signInURL = url
-                    self.notice = "Open this link to complete Cursor sign-in."
-                }
-            }
-        }
-        child.terminationHandler = { [weak self] child in
-            Task { @MainActor in
-                guard let self, self.generation == runID else { return }
-                self.notice = nil
-                if child.terminationStatus == 0 {
-                    await self.refreshCursorStatus()
-                    guard self.generation == runID else { return }
-                    self.notice = self.cursorAccountStatus
-                } else { self.error = "Cursor sign-in did not complete. Try again." }
-                self.completeSignInPresentation()
-            }
-        }
-        do { try child.run(); process = child }
-        catch { self.error = "Could not start Cursor sign-in."; completeSignInPresentation() }
-    }
     func move(_ id: String, by offset: Int) {
         var value = configuration
         var order = orderedModels.map(\.id)
@@ -704,13 +618,16 @@ final class DefaultAgentSettingsModel {
     }
     private var catalogConfiguration: DefaultAgentSettings {
         var value = DefaultAgentSettings()
-        value.providers = configuration.providers
+        value.providers = requestedAllModels ? [browsingProvider].filter { configuration.providers.contains($0) } : configuration.providers
         value.customServers = LocalModelServerStore.servers
         return value
     }
     /// Entry and ordinary preference changes use metadata only. Starting the
-    /// helper is reserved for an explicit request to browse every model.
-    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil, includeAllModels: Bool = false) {
+    /// helper is reserved for an explicit request to browse one provider.
+    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil, includeAllModels: Bool = false, provider: String? = nil, force: Bool = false) {
+        forceCatalogRefresh = force
+        if let provider { browsingProvider = provider }
+        if !configuration.providers.contains(browsingProvider) { browsingProvider = configuration.providers.first ?? "" }
         let hasOtherOperation = busy && !catalogOnly
         let cacheKey = catalogKey(remote: remote)
         if publishedCatalogKey != cacheKey {
@@ -728,7 +645,7 @@ final class DefaultAgentSettingsModel {
             busy = true
             error = nil
         }
-        if forward(.init(action: "catalog", flag: includeAllModels, remote: remote)) { return }
+        if forward(.init(action: "catalog", provider: browsingProvider, value: force ? "refresh" : nil, flag: includeAllModels, remote: remote)) { return }
         let config = catalogConfiguration
         if !includeAllModels {
             hydrateEnabledMetadata(remote: remote)
@@ -738,12 +655,7 @@ final class DefaultAgentSettingsModel {
         // Coalesce only a real, matching in-flight discovery request.
         if catalogOnly, error == nil, catalogRequestKey == cacheKey,
            catalogRequestConfiguration == config, activeRemote == remote { return }
-        if let value = catalogCache[cacheKey], value.configuration == config {
-            publishCatalog()
-            if !hasOtherOperation { busy = false }
-            loadAccounts()
-            return
-        }
+        publishCatalog()
         // Browsing must not replace an in-progress connection/sign-in operation.
         // Its status result can supply the full catalog; otherwise Browse retries
         // once that operation has finished.
@@ -751,6 +663,7 @@ final class DefaultAgentSettingsModel {
         refresh(remote: remote, action: "catalog")
         loadAccounts()
     }
+    func refreshCatalog() { loadCatalog(remote: catalogRemote, includeAllModels: true, force: true) }
     func waitForEnabledMetadata() async {
         await metadataTask?.value
         await accountsTask?.value
@@ -833,12 +746,8 @@ final class DefaultAgentSettingsModel {
         // Frontend snapshots already hold the exact projection. Preference edits
         // must not collapse an open full browser while waiting for the backend.
         let full = cachedFull ?? (isFrontend && catalogIncludesAllModels && publishedCatalogKey == key ? catalog : nil)
-        if let full {
-            let available = availableModelProviderIDs
-            resolvedDefaultModelID = configuration.defaultModel.flatMap { id in
-                full.contains { $0.id == id && isProviderEnabled(for: id) } ? id : nil
-            } ?? full.first { isProviderEnabled(for: $0.id) && available.contains($0.provider) }?.id
-                ?? full.first { isProviderEnabled(for: $0.id) }?.id
+        if full != nil {
+            resolvedDefaultModelID = configuration.defaultModel ?? stored?.defaultModel
         } else if stored?.configuration == catalogConfiguration,
                   stored?.selectedDefault == configuration.defaultModel,
                   stored?.connectedProviders == availableModelProviderIDs {
@@ -912,14 +821,6 @@ final class DefaultAgentSettingsModel {
             await self.accountsTask?.value
             guard !Task.isCancelled, self.metadataGeneration == requestID,
                   self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
-            // Never use local SDK metadata to claim a remote runtime's version.
-            guard remote == nil, !self.enabledModelIDs.isEmpty else { return }
-            let ids = self.enabledModelIDs
-            let names = await DefaultAgentEnabledModelMetadata.names(for: ids, resources: nil, local: true)
-            guard !Task.isCancelled, self.metadataGeneration == requestID,
-                  self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
-            self.applyEnabledNames(names)
-            self.publishCatalog()
         }
     }
     private func applyEnabledNames(_ names: [String: String]) {
@@ -986,6 +887,7 @@ final class DefaultAgentSettingsModel {
                     catalogRequestConfiguration = launched
                 }
                 var body = try JSONSerialization.jsonObject(with: prepared.data()) as! [String: Any]
+                if catalogOnly { body["force"] = forceCatalogRefresh }
                 body["action"] = action ?? (login == nil ? "status" : "login")
                 if let login {
                     body["provider"] = login

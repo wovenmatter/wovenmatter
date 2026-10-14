@@ -1,3 +1,4 @@
+@testable import WovenMatterAppFacade
 import Foundation
 import Testing
 import WovenMatterCore

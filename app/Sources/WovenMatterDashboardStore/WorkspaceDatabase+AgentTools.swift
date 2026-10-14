@@ -627,7 +627,7 @@ extension WorkspaceDatabase {
       try connection.saveToolSettings(current.applyingChanges(from: base, to: settings))
     }
   }
-  public func updateExecutor(configuration: ExecutorConfiguration? = nil, apps: [ExecutorAppProfile]? = nil,
+  public func updateExecutor(configuration: ExecutorConfiguration? = nil, apps: [ExecutorAppTarget]? = nil,
                              setup: ExecutorSetupState? = nil, clearSetup: Bool = false) async throws {
     try await write { connection in
       var value = try connection.toolSettings()

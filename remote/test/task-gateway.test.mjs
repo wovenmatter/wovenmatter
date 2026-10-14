@@ -1,7 +1,7 @@
 import { fsyncSync } from 'node:fs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp,rm,readFile,writeFile } from 'node:fs/promises'
+import { mkdtemp,rm,readFile,writeFile,readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createTaskGateway,occurrenceDate,latestOccurrence } from '../src/task-gateway.mjs'
@@ -117,44 +117,7 @@ test('ACP executor confirms settings, binds recurring session before one prompt,
  assert.equal(messages.find(m=>m.method==='session/prompt').params.prompt[0].text,task().task.prompt)
 })
 
-test('scheduled Cursor retains owning todo notifications and publishes full native replace/merge/clear payloads',async()=>{
- const {EventEmitter}=await import('node:events')
- const {PassThrough,Writable}=await import('node:stream')
- const {createTaskExecutor}=await import('../src/task-gateway-runner.mjs')
- const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
- child.kill=()=>{queueMicrotask(()=>child.emit('exit',0));return true}
- const reply=message=>child.stdout.write(JSON.stringify(message)+'\n')
- const todos=Array.from({length:140},(_,index)=>({id:`todo-${index}`,content:'Same label',status:'pending'}))
- const params={sessionId:'native',toolCallId:'first',merge:false,todos}
- const notifications=[params,{...params,toolCallId:'merge',merge:true,todos:[{id:'todo-0',content:'Same label',status:'completed'}]},
-   {...params,toolCallId:'clear',todos:[]}]
- child.stdin=new Writable({write(bytes,_encoding,done){
-   const message=JSON.parse(String(bytes))
-   queueMicrotask(()=>{
-     if(message.method==='initialize')reply({id:message.id,result:{protocolVersion:1}})
-     if(message.method==='session/new'){
-       reply({method:'cursor/update_todos',params}) // Setup history is not this task's progress.
-       reply({id:message.id,result:{sessionId:'native'}})
-     }
-     if(message.method==='session/prompt'){
-       reply({method:'cursor/update_todos',params:{...params,sessionId:'child'}})
-       reply({method:'cursor/update_todos',params:{...params,sessionId:undefined}})
-       for(const params of notifications)reply({method:'cursor/update_todos',params})
-       reply({id:message.id,result:{stopReason:'end_turn'}})
-       reply({method:'cursor/update_todos',params}) // Late native event remains archived only.
-     }
-   });done()
- }})
- const updates=[]
- const execute=createTaskExecutor({catalog:new Map([['cursor',{id:'cursor',transport:'acp',command:'fixture',arguments:[]}]]),workspaceRoot:'/tmp',environment:()=>({}),launch:()=>child})
- await execute({run:{id:'run',title:'Fixture',task:{prompt:'fixture',configuration:{runtimeKind:'cursor'}}},
-   signal:new AbortController().signal,publish:update=>updates.push(update),bindSession:()=>{}})
- const projected=updates.filter(update=>update.sessionUpdate==='woven_cursor_todos')
- assert.deepEqual(projected.map(update=>update.payload),notifications)
- assert.ok(projected.every(update=>update.nativeSessionID==='native'))
- const records=updates.flatMap(update=>update.recordBatch?.records??[]).filter(record=>record.kind==='cursor/update_todos')
- assert.deepEqual(records.map(record=>JSON.parse(record.payload)),[...notifications,params].map(params=>({method:'cursor/update_todos',params})))
-})
+
 
 test('re-enabling cannot run stale schedules until a fresh publication fences local edits',async t=>{
  let count=0
@@ -346,4 +309,94 @@ test('restart retains complete output before a torn final append without replayi
   assert.equal(restarted.status().activeRuns, 0)
   assert.equal(restarted.results().entries[0].run.status, 'uncertain')
   assert.deepEqual(restarted.results().entries[0].updates, [complete])
+})
+
+
+test('Ungrouped scheduled chats bind their own scratch folder across recurrence, reconnect and restart', async t => {
+  let clock = Date.parse('2026-01-04T15:00:00Z'), calls = []
+  const root = await mkdtemp(resolve(tmpdir(), 'wm-task-scratch-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const schedule = task()
+  schedule.task.configuration.nativeWorkingDirectory = root
+  const capture = async options => { calls.push(options.run); options.bindSession('native-one'); return {} }
+  const { directory, gateway } = await fixture(t, { workspaceRoot: root, now: () => clock, execute: capture })
+  gateway.publish({ publicationID: 'scratch-one', schedules: [schedule], knownRuns: [] })
+  gateway.tick(); await settled(gateway)
+  const path = calls[0].task.configuration.nativeWorkingDirectory
+  assert.ok(path.startsWith(root + '/scratch/2026-01-04-hello-'))
+  gateway.publish({ publicationID: 'scratch-two', schedules: [schedule], knownRuns: [] })
+  clock = Date.parse('2026-01-05T15:00:00Z'); gateway.tick(); await settled(gateway)
+  assert.equal(calls[1].task.configuration.nativeWorkingDirectory, path)
+  assert.equal(calls[1].sessionID, calls[0].sessionID)
+  await gateway.close()
+  const restored = createTaskGateway({ directory, workspaceRoot: root, now: () => clock, execute: capture })
+  clock = Date.parse('2026-01-06T15:00:00Z'); restored.tick(); await settled(restored)
+  assert.equal(calls[2].task.configuration.nativeWorkingDirectory, path)
+  assert.equal(restored.results().entries.at(-1).run.task.configuration.nativeWorkingDirectory, path)
+  const independent = structuredClone(schedule)
+  independent.id = 'another-chat'; independent.task.sessionMode = 'new'
+  restored.publish({ publicationID: 'scratch-three', schedules: [independent], knownRuns: [] })
+  restored.tick(); await settled(restored)
+  assert.notEqual(calls[3].task.configuration.nativeWorkingDirectory, path)
+  await restored.close()
+})
+
+
+test('a deferred new-chat launch reuses its thread, native session and scratch directory', async t => {
+  let clock = Date.parse('2026-01-04T15:00:00Z'), calls = []
+  const schedule = task()
+  schedule.task.sessionMode = 'new'
+  schedule.task.configuration.nativeWorkingDirectory = '/home/.woven-matter'
+  const execute = async options => {
+      calls.push(options)
+      if (calls.length === 1) {
+        options.bindSession('created-before-deferral')
+        throw Object.assign(new Error('Not ready yet'), { beforePrompt: true, deferred: true })
+      }
+      return {}
+  }
+  const { directory, gateway } = await fixture(t, { workspaceRoot: '/home/.woven-matter', now: () => clock, execute })
+  gateway.publish({ publicationID: 'deferred-scratch', schedules: [schedule], knownRuns: [] })
+  gateway.tick(); await settled(gateway)
+  await gateway.close()
+  const restored = createTaskGateway({ directory, workspaceRoot: '/home/.woven-matter', now: () => clock, execute })
+  clock += 61000; restored.tick(); await settled(restored)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].run.sessionID, calls[1].run.sessionID)
+  assert.equal(calls[1].nativeSessionID, 'created-before-deferral')
+  assert.equal(calls[0].run.task.configuration.nativeWorkingDirectory, calls[1].run.task.configuration.nativeWorkingDirectory)
+  await restored.close()
+})
+
+
+test('offline execution prepares the bound directory before starting Pi Durable', async t => {
+  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
+  const root = await mkdtemp(resolve(tmpdir(), 'wm-offline-chat-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const opened = []
+  const defaultAgent = {
+    status: async () => ({ locked: false }),
+    invoke: async message => {
+      if (message.method === 'session/new') {
+        opened.push(message.params.cwd)
+        assert.deepEqual(await readdir(message.params.cwd), [])
+        return { result: { sessionId: 'synthetic-native' }, attachmentToken: 'synthetic-attachment' }
+      }
+      return { operationID: 'synthetic-operation' }
+    },
+    poll: async () => ({ updates: [], done: true, result: { stopReason: 'end_turn' } }),
+  }
+  const execute = createTaskExecutor({ catalog: new Map(), workspaceRoot: root, environment: () => ({}), defaultAgent })
+  const { gateway } = await fixture(t, { workspaceRoot: root, now: () => Date.parse('2026-01-04T15:00:00Z'), execute })
+  const schedule = task()
+  schedule.task.configuration.runtimeKind = 'default_agent'
+  schedule.task.configuration.nativeWorkingDirectory = root
+  gateway.publish({ publicationID: 'offline-execute', schedules: [schedule], knownRuns: [] })
+  gateway.tick(); await settled(gateway)
+  assert.equal(opened.length, 1)
+  assert.ok(opened[0].startsWith(root + '/scratch/'))
+  const receipt = gateway.results().entries[0]
+  assert.equal(receipt.run.task.configuration.nativeWorkingDirectory, opened[0])
+  assert.equal(receipt.run.status, 'accepted')
+  await gateway.close()
 })

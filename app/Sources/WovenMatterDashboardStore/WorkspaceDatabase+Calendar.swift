@@ -51,6 +51,7 @@ extension WorkspaceDatabaseConnection {
           id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, payload_json TEXT NOT NULL);
 
         """)
+      try migrateCalendarReplicas()
       let runColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_calendar_runs)", values: [])
         .compactMap { $0.objectValue?["name"]?.stringValue })
       if !runColumns.contains("hidden_at") {
@@ -104,12 +105,12 @@ extension WorkspaceDatabaseConnection {
   public func saveCalendarEvent(id: String = UUID().uuidString.lowercased(), draft: WorkspaceCalendarDraft,
       creating: Bool, expectedRevision: Int? = nil, detaching occurrence: Int? = nil,
       callerID: String? = nil, requestID: String? = nil, requestInput: String? = nil,
-      now: Date = Date()) throws -> String {
+      now: Date = Date(), _transaction: Bool = true) throws -> String {
     let draft = try draft.validated()
     guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("An event ID must be a UUID.") }
-    return try transaction {
+    let operation = { [self] () throws -> String in
       if let callerID {
-        try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
+        try self.requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
         if draft.task != nil { try requireToolUnlocked(.sessions, sessionID: callerID) }
       }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -188,6 +189,7 @@ extension WorkspaceDatabaseConnection {
         return id
       }.result
     }
+    return try _transaction ? transaction(operation) : operation()
   }
 
   private func writeCalendarEventUnlocked(id: String, draft: WorkspaceCalendarDraft,
@@ -225,8 +227,8 @@ extension WorkspaceDatabaseConnection {
   }
 
   public func deleteCalendarEvent(id: String, occurrence: Int? = nil, expectedRevision: Int? = nil,
-      callerID: String? = nil, requestID: String? = nil, requestInput: String? = nil, now: Date = Date()) throws {
-    try transaction {
+      callerID: String? = nil, requestID: String? = nil, requestInput: String? = nil, now: Date = Date(), _transaction: Bool = true) throws {
+    let operation = { [self] () throws -> Void in
       if let callerID { try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true) }
       _ = try performToolMutationUnlocked(callerID: callerID, requestID: requestID, operation: "calendar.remove",
         input: requestInput ?? [id, occurrence.map(String.init) ?? "", expectedRevision.map(String.init) ?? ""].joined(separator: ":")) {
@@ -250,6 +252,7 @@ extension WorkspaceDatabaseConnection {
         return id
       }
     }
+    try _transaction ? transaction(operation) : operation()
   }
 
   private func cancelCalendarRunsUnlocked(eventID: String, scheduledAt: Date? = nil) throws {
@@ -263,7 +266,9 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func calendarRuns() throws -> [WorkspaceCalendarRun] { try withLock { try calendarRunsUnlocked(visibleOnly: true) } }
+  public func calendarRuns() throws -> [WorkspaceCalendarRun] {
+    try withLock { try calendarRunsUnlocked(visibleOnly: true) + replicaCalendarRuns() }
+  }
 
   public func queryCalendarRuns(eventID: String, after: Int = 0, limit: Int = 100) throws -> GatewayJSONValue {
     try withLock {
@@ -311,8 +316,9 @@ extension WorkspaceDatabaseConnection {
       let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL",
         values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
       let delegated = try remoteCalendarWorkspaceIDsUnlocked()
+      let clientOwned = try calendarForeignExecutionEventIDs()
       let events = dueIDs.isEmpty ? [] : try calendarItemsUnlocked().filter {
-        dueIDs.contains($0.id) && !delegated.contains($0.calendar.task?.configuration.workspaceID?.uuidString.lowercased() ?? "")
+        dueIDs.contains($0.id) && !clientOwned.contains($0.id) && !delegated.contains($0.calendar.task?.configuration.workspaceID?.uuidString.lowercased() ?? "")
       }
       for event in events {
         guard let task = event.calendar.task, let start = event.startDate else { continue }
@@ -352,7 +358,7 @@ extension WorkspaceDatabaseConnection {
         WHERE r.status='pending' AND (r.retry_after IS NULL OR r.retry_after<=?)
           AND (d.retry_after IS NULL OR d.retry_after<=?)
         """, values: [String(now.timeIntervalSince1970), String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
-      return eligible.isEmpty ? [] : try calendarRunsUnlocked(unfinishedOnly: true).filter { $0.isPending && eligible.contains($0.id) && !delegated.contains($0.task.configuration.workspaceID?.uuidString.lowercased() ?? "") }
+      return eligible.isEmpty ? [] : try calendarRunsUnlocked(unfinishedOnly: true).filter { $0.isPending && eligible.contains($0.id) && !clientOwned.contains($0.eventID) && !delegated.contains($0.task.configuration.workspaceID?.uuidString.lowercased() ?? "") }
     }
   }
 
@@ -367,6 +373,8 @@ extension WorkspaceDatabaseConnection {
     !(try historyRowsUnlocked("""
       SELECT 1 FROM workspace_calendar_runs r JOIN dashboard_calendar_items e ON e.id=r.event_id
       WHERE r.id=? AND r.status='pending' AND e.deleted_at IS NULL AND json_extract(e.calendar_json,'$.task') IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM companion_calendar_execution_conflicts c WHERE c.event_id=e.id)
+        AND NOT EXISTS(SELECT 1 FROM companion_calendar_owners c WHERE c.event_id=e.id AND c.device_id != COALESCE((SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1), ''))
       AND NOT EXISTS(SELECT 1 FROM workspace_calendar_remote_ownership o
         WHERE o.workspace_id=lower(json_extract(e.calendar_json,'$.task.configuration.workspaceID')))
       """, values: [id])).isEmpty
@@ -583,6 +591,28 @@ extension WorkspaceDatabaseConnection {
           openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
           requestedConversationID: conversationID, allowMissingCalendarFolder: true)
       }
+      guard let path = configuration.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
+        throw WorkspaceToolError.invalid("The scheduled session has no captured execution directory.")
+      }
+      let location = WorkspaceFolderLocation(workspaceID: "remote:" + workspaceID.uuidString.lowercased(), rootPath: path, managed: false)
+      let directory = URL(fileURLWithPath: path)
+      if configuration.folderID == nil, directory.deletingLastPathComponent().lastPathComponent == "scratch" {
+        let base = directory.deletingLastPathComponent().deletingLastPathComponent().path
+        if let scratch = try sessionScratchDirectory(id: run.sessionID) {
+          guard scratch == location else { throw WorkspaceToolError.invalid("Remote scratch directory changed.") }
+        } else {
+          try toolsExecuteUnlocked("INSERT INTO session_scratch_directories(session_id,workspace_id,workspace_root,root_path) VALUES(?,?,?,?)",
+            [run.sessionID,location.workspaceID,base,path])
+        }
+      }
+      if let saved = try sessionExecutionRoot(id: run.sessionID) {
+        guard saved.workspaceID == location.workspaceID, saved.rootPath == path else { throw WorkspaceToolError.invalid("Scheduled session execution directory changed.") }
+      } else {
+        // The remote owner's saved configuration is authoritative even when its
+        // UI folder was removed while the Mac was disconnected.
+        try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path,folder_locked) VALUES(?,?,?,1)", [run.sessionID,location.workspaceID,path])
+      }
+      try toolsExecuteUnlocked("UPDATE session_execution_roots SET folder_locked=1 WHERE conversation_id=?", [run.sessionID])
       if let recordedNativeID = existing?["acp_session_id"]?.stringValue,
          let nativeSessionID, recordedNativeID != nativeSessionID {
         throw WorkspaceToolError.invalid("Remote result belongs to a different native session.")
@@ -660,7 +690,7 @@ extension WorkspaceDatabaseConnection {
                   let payload = object["payload"] else { return }
             if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
               let native = try HermesValue.decode(JSONEncoder().encode(payload))
-              if let checklist = HermesGatewayClient.checklistUpdate(native),
+              if let checklist = HermesSessionArchive.checklistUpdate(native),
                  let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
                 hermesChecklistRevision = revision
                 activity = checklist

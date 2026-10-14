@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { connect, createServer as createNetServer } from 'node:net'
+import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { authenticationInput, authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
@@ -193,8 +193,7 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   const harnesses = (await response.json()).harnesses
   assert.deepEqual(harnesses.map((value) => value.id), [
     'default_agent',
-    'codex', 'claude_code', 'grok_build', 'hermes',
-    'cursor', 'opencode', 'pi', 'openclaw',
+    'codex', 'claude_code', 'grok_build', 'opencode',
   ])
   assert.ok(harnesses.every((value) =>
     Array.isArray(value.setupMethods) && (['opencode', 'default_agent'].includes(value.id) || value.setupMethods.length > 0)
@@ -420,9 +419,6 @@ test('harness readiness requires a real bounded transport handshake', async (con
   const broken = resolve(bin, 'broken-acp')
   await writeFile(broken, '#!/bin/sh\nexit 0\n')
   await chmod(broken, 0o700)
-  const pi = resolve(bin, 'working-pi')
-  await writeFile(pi, fakePiRPCExecutable())
-  await chmod(pi, 0o700)
 
   const harness = (id, displayName, command) => ({
     id,
@@ -445,7 +441,6 @@ test('harness readiness requires a real bounded transport handshake', async (con
     harnesses: [
       harness('codex', 'Working ACP', 'working-acp'),
       harness('claude_code', 'Broken ACP', 'broken-acp'),
-      { ...harness('pi', 'Working Pi RPC', 'working-pi'), transport: 'rpc' },
     ],
   }))
 
@@ -467,73 +462,6 @@ test('harness readiness requires a real bounded transport handshake', async (con
   assert.equal(statuses[1].state, 'transport_unavailable')
   assert.equal(statuses[1].transportStatus, 'unavailable')
   assert.match(statuses[1].transportError, /before readiness/)
-  assert.equal(statuses[2].state, 'ready')
-  assert.equal(statuses[2].transportStatus, 'ready')
-})
-
-test('Pi authentication locates its owning package from a nested npm bin target', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-pi-auth-')
-  const home = resolve(fixture, 'home')
-  const bin = resolve(home, '.local/bin')
-  const packageRoot = resolve(home, '.local/lib/node_modules/@earendil-works/pi-coding-agent')
-  const cli = resolve(packageRoot, 'dist/bundle/cli.js')
-  const providerModule = resolve(
-    packageRoot,
-    'node_modules/@earendil-works/pi-ai/dist/providers/all.js'
-  )
-  const storageModule = resolve(packageRoot, 'dist/core/auth-storage.js')
-  const resultPath = resolve(fixture, 'credential.json')
-  await mkdir(bin, { recursive: true })
-  await mkdir(resolve(packageRoot, 'dist/bundle'), { recursive: true })
-  await mkdir(resolve(packageRoot, 'dist/core'), { recursive: true })
-  await mkdir(resolve(packageRoot, 'node_modules/@earendil-works/pi-ai/dist/providers'), {
-    recursive: true,
-  })
-  await writeFile(resolve(packageRoot, 'package.json'), JSON.stringify({
-    name: '@earendil-works/pi-coding-agent',
-    type: 'module',
-    bin: { pi: 'dist/bundle/cli.js' },
-  }))
-  await writeFile(cli, '#!/bin/sh\nexit 0\n')
-  await chmod(cli, 0o700)
-  await symlink(cli, resolve(bin, 'pi'))
-  await writeFile(providerModule, `
-    export function builtinProviders() {
-      return [{ id: 'openai', name: 'OpenAI', auth: { apiKey: {} } }]
-    }
-  `)
-  await writeFile(storageModule, `
-    import { writeFile } from 'node:fs/promises'
-    export class AuthStorage {
-      static create() { return new AuthStorage() }
-      async modify(provider, update) {
-        const credential = await update(undefined)
-        await writeFile(process.env.WOVENMATTER_PI_AUTH_TEST_RESULT, JSON.stringify({
-          provider,
-          credential,
-        }))
-      }
-    }
-  `)
-
-  const result = await runProcess(
-    process.execPath,
-    [resolve(repositoryRoot, 'remote/src/pi-auth.mjs'), 'api-key', 'openai'],
-    {
-      cwd: repositoryRoot,
-      env: {
-        ...await fixtureEnvironment(home),
-        WOVENMATTER_PI_AUTH_TEST_RESULT: resultPath,
-      },
-      input: 'fixture-key\n',
-    }
-  )
-  assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /API key stored/)
-  assert.deepEqual(JSON.parse(await readFile(resultPath, 'utf8')), {
-    provider: 'openai',
-    credential: { type: 'api_key', key: 'fixture-key' },
-  })
 })
 
 test('installation uses latest adapter and fails unless actual components verify', async (context) => {
@@ -553,15 +481,15 @@ test('installation uses latest adapter and fails unless actual components verify
   await chmod(npm, 0o700)
 
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
-  const pi = catalog.harnesses.find((value) => value.id === 'pi')
+  const opencode = catalog.harnesses.find((value) => value.id === 'opencode')
   const testCatalog = resolve(fixture, 'catalog.json')
   await writeFile(testCatalog, JSON.stringify({
     schemaVersion: 4,
     harnesses: [{
-      ...pi,
-      adapterPackage: '@example/pi-rpc-adapter',
+      ...opencode,
+      adapterPackage: '@example/opencode-adapter',
       minimumAdapterVersion: '1.2.3',
-      command: 'pi-rpc-adapter',
+      command: 'opencode-adapter',
       transportCheckCommand: null,
     }],
   }))
@@ -577,10 +505,10 @@ test('installation uses latest adapter and fails unless actual components verify
     authorization: 'Bearer install-token',
     'content-type': 'application/json',
   }
-  const response = await fetch(`${service.url}/v1/harnesses/pi/install`, {
+  const response = await fetch(`${service.url}/v1/harnesses/opencode/install`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ confirmed: true, packageSpec: "@earendil-works/pi-coding-agent@1.1.0" }),
+    body: JSON.stringify({ confirmed: true, packageSpec: "@opencode/cli@2.1.0" }),
   })
   assert.equal(response.status, 202)
   const operation = await waitFor(
@@ -591,203 +519,8 @@ test('installation uses latest adapter and fails unless actual components verify
   assert.equal(operation.status, 'failed')
   assert.match(operation.error, /could not be verified/)
   const argumentsValue = await readFile(npmArguments, 'utf8')
-  assert.match(argumentsValue, /@earendil-works\/pi-coding-agent/)
-  assert.match(argumentsValue, /@example\/pi-rpc-adapter@latest/)
-})
-
-test('Gateway upgrades refuse unrelated listeners and never forward the API token', async (context) => {
-  let upstreamRequest = ''
-  const upstream = createNetServer((socket) => {
-    socket.on('data', (data) => {
-      upstreamRequest += data.toString('utf8')
-      if (upstreamRequest.includes('\r\n\r\n')) {
-        socket.write(
-          'HTTP/1.1 101 Switching Protocols\r\n'
-          + 'Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n'
-        )
-      }
-    })
-  })
-  await listen(upstream)
-  context.after(() => upstream.close())
-  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-')
-  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
-  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({openclaw:{enabled:true}}))
-  const service = await startService({
-    workspace: fixture,
-    home: fixture,
-    catalog: catalogPath,
-    token: 'gateway-token',
-    gatewayPort: upstream.address().port,
-  })
-  context.after(() => service.child.kill('SIGTERM'))
-
-  const socket = connect({ host: '127.0.0.1', port: service.port })
-  context.after(() => socket.destroy())
-  socket.write(
-    'GET /v1/openclaw/gateway/socket HTTP/1.1\r\n'
-    + `Host: 127.0.0.1:${service.port}\r\n`
-    + 'Connection: Upgrade\r\nUpgrade: websocket\r\n'
-    + 'Sec-WebSocket-Version: 13\r\n'
-    + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
-    + 'Authorization: Bearer gateway-token\r\n\r\n'
-  )
-  assert.match(await socketText(socket), /^HTTP\/1\.1 503 Service Unavailable/)
-  assert.doesNotMatch(upstreamRequest, /authorization:|gateway-token/i)
-  const start = await fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers: { authorization: 'Bearer gateway-token' } })
-  assert.equal(start.status, 409)
-  assert.equal((await start.json()).error, 'openclaw_gateway_port_in_use')
-})
-
-test('Gateway start reports running only after its listener accepts connections', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-ready-')
-  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
-  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({openclaw:{enabled:true}}))
-  const home = resolve(fixture, 'home')
-  const bin = resolve(home, '.local/bin')
-  const gatewayPort = await unusedPort()
-  await mkdir(bin, { recursive: true })
-  const openclaw = resolve(bin, 'openclaw')
-  await writeFile(openclaw, `#!/usr/bin/env node
-if (process.argv[2] === 'config') { console.log('{}'); process.exit(0) }
-const { createServer } = require('node:net')
-const port = Number(process.argv[process.argv.indexOf('--port') + 1])
-const server = createServer((socket) => {
-  let request = ''
-  socket.on('data', data => {
-    request += data.toString()
-    if (!request.includes('\\r\\n\\r\\n')) return
-    socket.end('HTTP/1.1 101 Switching Protocols\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\nX-Request: '
-      + Buffer.from(request).toString('base64') + '\\r\\n\\r\\n')
-  })
-})
-setTimeout(() => server.listen(port, '127.0.0.1'), 200)
-process.on('SIGTERM', () => server.close(() => process.exit(0)))
-`)
-  await chmod(openclaw, 0o700)
-
-  const service = await startService({
-    workspace: fixture,
-    home,
-    catalog: catalogPath,
-    token: 'gateway-ready-token',
-    gatewayPort,
-  })
-  context.after(() => service.child.kill('SIGTERM'))
-  const response = await fetch(`${service.url}/v1/openclaw/gateway/start`, {
-    method: 'POST',
-    headers: { authorization: 'Bearer gateway-ready-token' },
-  })
-  assert.equal(response.status, 202)
-  const status = await response.json()
-  context.after(() => {
-    try { process.kill(status.pid, 'SIGTERM') } catch {}
-  })
-  assert.equal(status.state, 'running')
-  assert.equal(await canConnect(gatewayPort), true)
-  const socket = connect({ host: '127.0.0.1', port: service.port })
-  context.after(() => socket.destroy())
-  socket.write('GET /v1/openclaw/gateway/socket HTTP/1.1\r\n'
-    + `Host: 127.0.0.1:${service.port}\r\n`
-    + 'Connection: Upgrade\r\nUpgrade: websocket\r\n'
-    + 'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
-    + 'Sec-WebSocket-Protocol: fixture\r\n'
-    + 'Authorization: Bearer gateway-ready-token\r\nCookie: secret=cookie\r\n'
-    + 'Origin: https://untrusted.example\r\nX-Forwarded-For: 127.0.0.1\r\n\r\n')
-  const handshake = await socketText(socket)
-  assert.match(handshake, /^HTTP\/1\.1 101/)
-  const forwarded = Buffer.from(handshake.match(/X-Request: ([^\r]+)/)[1], 'base64').toString()
-  assert.match(forwarded, /^GET \/ HTTP\/1\.1/)
-  assert.match(forwarded, new RegExp(`Host: 127.0.0.1:${gatewayPort}`))
-  assert.match(forwarded, /sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==/i)
-  assert.match(forwarded, /sec-websocket-version: 13/i)
-  assert.match(forwarded, /sec-websocket-protocol: fixture/i)
-  assert.doesNotMatch(forwarded, /authorization:|gateway-ready-token|cookie:|origin:|x-forwarded-for:/i)
-
-  assert.equal(JSON.parse(await readFile(resolve(fixture, '.wovenmatter/openclaw-desired.json'))).running, true)
-  service.child.kill('SIGTERM')
-  await new Promise(done => service.child.once('exit', done))
-  const restarted = await startService({ workspace: fixture, home, catalog: catalogPath,
-    token: 'gateway-ready-token', gatewayPort })
-  context.after(() => restarted.child.kill('SIGTERM'))
-  const headers = { authorization: 'Bearer gateway-ready-token' }
-  const recovered = await waitFor(`${restarted.url}/v1/openclaw/gateway`, headers, value => value.state === 'running')
-  assert.notEqual(recovered.pid, status.pid)
-  const stopped = await fetch(`${restarted.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
-  assert.equal(stopped.status, 200)
-  assert.equal(JSON.parse(await readFile(resolve(fixture, '.wovenmatter/openclaw-desired.json'))).running, false)
-})
-
-test('Stopping a gateway during crash backoff cancels its pending restart', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-stop-')
-  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
-  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ openclaw: { enabled: true } }))
-  const home = resolve(fixture, 'home')
-  const bin = resolve(home, '.local/bin')
-  const launches = resolve(fixture, 'launches')
-  await mkdir(bin, { recursive: true })
-  await writeFile(resolve(bin, 'openclaw'), `#!/usr/bin/env node
-if (process.argv[2] === 'config') { console.log('{}'); process.exit(0) }
-require('node:fs').appendFileSync(${JSON.stringify(launches)}, 'started\\n')
-const server = require('node:net').createServer(socket => socket.destroy())
-server.listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1')
-process.on('SIGTERM', () => server.close(() => process.exit(0)))
-`)
-  await chmod(resolve(bin, 'openclaw'), 0o700)
-  const service = await startService({ workspace: fixture, home, catalog: catalogPath, token: 'stop-token' })
-  const headers = { authorization: 'Bearer stop-token' }
-  context.after(async () => {
-    const status = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
-    if (status.pid) { try { process.kill(status.pid, 'SIGTERM') } catch {} }
-    service.child.kill('SIGTERM')
-  })
-  const response = await fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers })
-  assert.equal(response.status, 202)
-  const started = await response.json()
-  process.kill(started.pid, 'SIGKILL')
-  await waitFor(`${service.url}/v1/openclaw/gateway`, headers, value => value.state === 'reconnecting')
-  const stopped = await fetch(`${service.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
-  assert.equal(stopped.status, 200)
-  assert.equal((await stopped.json()).state, 'stopped')
-  await new Promise(done => setTimeout(done, 1250))
-  const current = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
-  assert.equal(current.state, 'stopped')
-  assert.equal(await readFile(launches, 'utf8'), 'started\n')
-})
-
-test('Stopping a gateway fences a start suspended while acquiring its host lock', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-pending-')
-  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
-  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ openclaw: { enabled: true } }))
-  const home = resolve(fixture, 'home')
-  const service = await startService({ workspace: fixture, home, catalog: catalogPath, token: 'pending-token' })
-  context.after(() => service.child.kill('SIGTERM'))
-  const waiting = resolve(fixture, 'waiting'), release = resolve(fixture, 'release')
-  await writeFile(resolve(home, '.fixture-bin/flock'), `#!/usr/bin/env node
-const fs = require('node:fs')
-fs.writeFileSync(${JSON.stringify(waiting)}, '')
-const timer = setInterval(() => {
-  if (!fs.existsSync(${JSON.stringify(release)})) return
-  clearInterval(timer)
-  const child = require('node:child_process').spawn(process.argv[5], process.argv.slice(6), { stdio: 'inherit' })
-  child.on('exit', code => process.exit(code ?? 1))
-}, 10)
-`)
-  const headers = { authorization: 'Bearer pending-token' }
-  const pending = fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers })
-  for (let attempts = 0; ; attempts++) {
-    try { await readFile(waiting); break } catch { assert.ok(attempts < 100, 'start should reach host lock') }
-    await new Promise(done => setTimeout(done, 10))
-  }
-  const stopped = await fetch(`${service.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
-  assert.equal(stopped.status, 200)
-  await writeFile(release, '')
-  const result = await pending
-  assert.equal(result.status, 409)
-  assert.equal((await result.json()).error, 'openclaw_gateway_start_cancelled')
-  const current = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
-  assert.equal(current.state, 'stopped')
-  assert.equal(current.pid, null)
+  assert.match(argumentsValue, /@opencode\/cli/)
+  assert.match(argumentsValue, /@example\/opencode-adapter@latest/)
 })
 
 async function temporaryFixture(context, prefix) {
@@ -796,11 +529,10 @@ async function temporaryFixture(context, prefix) {
   return directory
 }
 
-test('database routes require authentication and ignore client-supplied workspace roots', async context => {
+test('database routes require authentication and keep managed data outside project roots', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-database-api-')
   const home = resolve(root, 'home')
   await mkdir(home)
-  await mkdir(resolve(root, 'databases'))
   const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token' })
   context.after(() => service.child.kill('SIGTERM'))
   const request = (path, method = 'GET', body, token = 'database-token') => fetch(service.url + path, {
@@ -808,17 +540,40 @@ test('database routes require authentication and ignore client-supplied workspac
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   assert.equal((await request('/v1/databases', 'GET', undefined, 'wrong')).status, 401)
-  assert.equal((await request('/v1/databases', 'POST', { databaseID: 'Denied', preference: 'none' }, 'wrong')).status, 401)
-  const created = await request('/v1/databases', 'POST', { databaseID: 'Sales', preference: 'json', root: '/tmp/ignored', action: 'list' })
+  assert.equal((await request('/v1/databases', 'POST', { name: 'Denied' }, 'wrong')).status, 401)
+  const created = await request('/v1/databases', 'POST', { name: 'Sales', root: '/tmp/ignored', action: 'list' })
   assert.equal(created.status, 200)
-  assert.equal((await created.json()).id, 'Sales')
-  await writeFile(resolve(root, 'databases/Sales/data.json'), '[1,2,3]')
-  const read = await request('/v1/databases/data', 'POST', { databaseID: 'Sales', relativePath: 'data.json' })
-  assert.equal(Buffer.from((await read.json()).jsonBase64, 'base64').toString(), '[1,2,3]')
-  assert.equal((await request('/v1/databases/preference', 'PATCH', { databaseID: 'Sales', preference: 'sqlite' })).status, 200)
+  const row = await created.json()
+  assert.match(row.id, /^[0-9a-f-]{36}$/)
+  assert.equal(row.name, 'Sales')
+  assert.equal(row.preference, 'sqlite')
+  assert.equal(row.url, new URL('file://' + resolve(home, '.local/share/wovenmatter/databases', row.id + '.sqlite')).href)
+  const committed = await request('/v1/databases/execute', 'POST', {
+    databaseID: row.id, sql: 'CREATE TABLE sales(value); INSERT INTO sales VALUES(42)', root: '/tmp/ignored' })
+  assert.equal(committed.status, 200)
+  assert.equal((await committed.json()).revision, 2)
+  const read = await request('/v1/databases/data', 'POST', { databaseID: row.id, sqliteQuery: 'SELECT value FROM sales' })
+  assert.deepEqual((await read.json()).query.rows, [['42']])
+  const snapshotResponse = await request('/v1/databases/snapshot', 'POST', { databaseID: row.id })
+  const snapshot = await snapshotResponse.json()
+  const copiedResponse = await request('/v1/databases/copy', 'POST', { name: 'Sales copy', snapshot })
+  assert.equal(copiedResponse.status, 200)
+  const copy = await copiedResponse.json()
+  assert.notEqual(copy.id, row.id)
   const listed = await (await request('/v1/databases')).json()
-  assert.deepEqual(listed.databases, [{ id: 'Sales', name: 'Sales', preference: 'sqlite' }])
-  assert.equal((await request('/v1/databases/data', 'POST', { databaseID: '../Sales', relativePath: 'data.json' })).status, 400)
+  assert.deepEqual(listed.databases.map(value => value.name), ['Sales', 'Sales copy'])
+  const largeWrite = await request('/v1/databases/execute', 'POST', {
+    databaseID: row.id, sql: 'CREATE TABLE payload(value); INSERT INTO payload VALUES(zeroblob(900000))' })
+  assert.equal(largeWrite.status, 200)
+  const largeSnapshot = await (await request('/v1/databases/snapshot', 'POST', { databaseID: row.id })).json()
+  assert.ok(Buffer.byteLength(JSON.stringify(largeSnapshot)) > 1_048_576)
+  const largeCopy = await request('/v1/databases/copy', 'POST', { name: 'Large copy', snapshot: largeSnapshot })
+  assert.equal(largeCopy.status, 200)
+  const copiedID = (await largeCopy.json()).id
+  assert.deepEqual((await (await request('/v1/databases/query', 'POST', {
+    databaseID: copiedID, sql: 'SELECT length(value) AS bytes FROM payload' })).json()).query.rows, [['900000']])
+  assert.equal((await request('/v1/databases/execute', 'POST', { databaseID: '../Sales', sql: 'DELETE FROM sales' })).status, 400)
+  assert.equal((await request('/v1/databases/data', 'POST', { databaseID: row.id, sqliteQuery: 'DELETE FROM sales' })).status, 400)
 })
 
 test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
@@ -872,7 +627,7 @@ test('task gateway routes are authenticated, default enabled, and persist explic
   assert.notEqual((await request('/v1/durable-acp/attach','POST',{channelID:'no-start',harnessID:'codex'})).status,200)
 })
 
-async function startService({ workspace, home, catalog, token, gatewayPort }) {
+async function startService({ workspace, home, catalog, token }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)
   const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
@@ -884,7 +639,6 @@ async function startService({ workspace, home, catalog, token, gatewayPort }) {
       WOVENMATTER_LISTEN_PORT: String(port),
       WOVENMATTER_WORKSPACE: workspace,
       WOVENMATTER_HARNESS_CATALOG: catalog,
-      WOVENMATTER_GATEWAY_PORT: String(gatewayPort ?? await unusedPort()),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -968,34 +722,6 @@ function listen(server) {
   })
 }
 
-function canConnect(port) {
-  return new Promise((resolvePromise) => {
-    const socket = connect({ host: '127.0.0.1', port })
-    const finish = (ready) => {
-      socket.removeAllListeners()
-      socket.destroy()
-      resolvePromise(ready)
-    }
-    socket.setTimeout(1_000, () => finish(false))
-    socket.once('connect', () => finish(true))
-    socket.once('error', () => finish(false))
-  })
-}
-
-function socketText(socket) {
-  return new Promise((resolvePromise, reject) => {
-    let value = ''
-    const timeout = setTimeout(() => reject(new Error('socket response timed out')), 5_000)
-    socket.on('error', reject)
-    socket.on('data', (data) => {
-      value += data.toString('utf8')
-      if (!value.includes('\r\n\r\n')) return
-      clearTimeout(timeout)
-      resolvePromise(value)
-    })
-  })
-}
-
 function installerResponse(chunks, { status = 200, url = '', headers = {} } = {}) {
   let chunkIndex = 0
   let pullCount = 0
@@ -1041,19 +767,27 @@ process.stdin.on('end', () => {
 })
 `
 }
-
-function fakePiRPCExecutable() {
-  return `#!/usr/bin/env node
-let input = ''
-process.stdin.on('data', (data) => { input += data.toString('utf8') })
-process.stdin.on('end', () => {
-  const request = JSON.parse(input.trim())
-  process.stdout.write(JSON.stringify({
-    type: 'response',
-    id: request.id,
-    success: true,
-    data: { sessionId: 'fixture' },
-  }) + '\\n')
+test('direct client grants expose only execution routes and enforce revocation', async context => {
+  const fixture=await temporaryFixture(context,'wovenmatter-direct-client-')
+  const catalog=resolve(fixture,'catalog.json')
+  await writeFile(catalog,JSON.stringify({schemaVersion:4,harnesses:[]}))
+  const service=await startService({workspace:fixture,home:fixture,catalog,token:'fixture-admin-token'})
+  context.after(()=>service.child.kill('SIGTERM'))
+  const id=()=>globalThis.crypto.randomUUID()
+  const body={libraryID:id(),workspaceID:id(),ownerDeviceID:id(),deviceID:id(),scopes:['execution']}
+  const enrolled=await fetch(service.url+'/v1/execution/devices',{method:'POST',headers:{authorization:'Bearer fixture-admin-token','content-type':'application/json'},body:JSON.stringify(body)})
+  assert.equal(enrolled.status,201)
+  const grant=await enrolled.json(),headers={authorization:'Bearer '+grant.token,'content-type':'application/json'}
+  const descriptor=await fetch(service.url+'/v1/execution',{headers})
+  assert.equal(descriptor.status,200)
+  assert.equal((await descriptor.json()).id,body.workspaceID)
+  assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
+  assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
+  assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
+  assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
+  const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
+  assert.equal(foreign.status,400)
+  const revoked=await fetch(service.url+'/v1/execution/devices/'+body.deviceID,{method:'DELETE',headers:{authorization:'Bearer fixture-admin-token'}})
+  assert.equal(revoked.status,200)
+  assert.equal((await fetch(service.url+'/v1/execution',{headers})).status,401)
 })
-`
-}

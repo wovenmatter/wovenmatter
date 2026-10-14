@@ -1,0 +1,231 @@
+import SwiftUI
+import CompanionClient
+import WovenMatterCompanion
+
+struct CalendarPane: View {
+  @Bindable var model: CompanionModel
+  @State private var month = Date()
+  @State private var events: [CompanionCalendarEvent] = []
+  @State private var selected: CompanionCalendarEvent?
+  @State private var creating = false
+  @State private var loading = false
+  @State private var loadGeneration = 0
+  @State private var failure: String?
+  @State private var conflicts: [String: MobileCalendarConflict] = [:]
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Button { shift(-1) } label: { DashboardLucideIcon(glyph: .arrowLeft, size: 20).frame(width: 44, height: 44) }.accessibilityLabel("Previous month")
+        Spacer()
+        Text(month, format: .dateTime.month(.wide).year()).font(.headline)
+        Spacer()
+        Button { shift(1) } label: { DashboardLucideIcon(glyph: .arrowRight, size: 20).frame(width: 44, height: 44) }.accessibilityLabel("Next month")
+      }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 24).padding(.bottom)
+      List {
+        if loading { ProgressView() }
+        if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
+        if !conflicts.isEmpty {
+          Section("Conflicts") {
+            ForEach(conflicts.keys.sorted(), id: \.self) { id in
+              if let conflict = conflicts[id] {
+                NavigationLink(conflict.local.event.draft.title) { CalendarConflictPane(model: model, id: id, conflict: conflict) }
+              }
+            }
+          }
+        }
+        ForEach(events, id: \.occurrenceID) { event in
+          Button { selected = event } label: {
+            VStack(alignment: .leading, spacing: 6) {
+              Label {
+                Text(event.draft.title)
+              } icon: {
+                DashboardLucideIcon(glyph: event.draft.task == nil ? .calendarDays : .calendarClock, size: 20)
+                  .foregroundStyle(eventColor(event))
+              }
+              Text(event.startsAt, format: event.draft.allDay ? .dateTime.weekday().month().day() : .dateTime.weekday().month().day().hour().minute()).font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+              if let status = event.status { Text(status).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+            }.padding(.vertical, 4)
+          }.buttonStyle(.plain)
+        }
+        if events.isEmpty && !loading && failure == nil { Text("No events this month.").foregroundStyle(DashboardPalette.mutedForeground) }
+      }.listStyle(.plain).scrollContentBackground(.hidden).scrollIndicators(.never).refreshable { await load() }
+    }.navigationTitle("Calendar").navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button { creating = true } label: { DashboardLucideIcon(glyph: .plus, size: 20) }
+            .accessibilityLabel("New calendar event")
+        }
+      }
+      .task(id: month) { await load() }.onChange(of: model.online) { Task { await load() } }
+      .onChange(of: model.calendarRevision) { Task { await load() } }
+      .onChange(of: creating) { if !creating { Task { await load() } } }
+      .onChange(of: selected) { if selected == nil { Task { await load() } } }
+      .navigationDestination(isPresented: $creating) {
+        CalendarEventSheet(model: model, event: nil)
+      }
+      .navigationDestination(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
+        if let selected { CalendarEventSheet(model: model, event: selected) }
+      }
+  }
+  private func eventColor(_ event: CompanionCalendarEvent) -> Color {
+    if event.draft.task != nil {
+      return event.draft.recurrenceUnit == nil ? DashboardPalette.calendarTask : DashboardPalette.calendarRecurringTask
+    }
+    return event.draft.recurrenceUnit == nil ? DashboardPalette.calendarEvent : DashboardPalette.calendarRecurringEvent
+  }
+  private func shift(_ step: Int) { month = Calendar.current.date(byAdding: .month, value: step, to: month) ?? month }
+  private func load() async {
+    guard let interval = Calendar.current.dateInterval(of: .month, for: month) else { return }
+    loadGeneration += 1; let generation = loadGeneration
+    loading = true; failure = nil
+    defer { if generation == loadGeneration { loading = false } }
+    do {
+      guard case .calendar(let values) = try await model.workspace(.calendar(from: interval.start, to: interval.end)) else { throw MobileConnectionError.invalidResponse }
+      let savedConflicts = await model.store?.calendar.conflicts() ?? [:]
+      if !Task.isCancelled, generation == loadGeneration { events = values; conflicts = savedConflicts }
+    } catch { if !Task.isCancelled, generation == loadGeneration { failure = error.localizedDescription } }
+  }
+}
+
+struct CalendarEventSheet: View {
+  @Bindable var model: CompanionModel
+  let event: CompanionCalendarEvent?
+  @State private var draft: CompanionCalendarDraft
+  @State private var eventID: String
+  @State private var busy = false
+  @State private var confirmDelete = false
+  @Environment(\.dismiss) private var dismiss
+  init(model: CompanionModel, event: CompanionCalendarEvent?, newTask: Bool = false) {
+    self.model = model; self.event = event
+    _draft = State(initialValue: event?.draft ?? .init(startsAt: Date().addingTimeInterval(3_600), task: newTask ? .init(runtime: "default_agent", workspaceID: model.deviceWorkspaceID) : nil, showsOnCalendar: newTask ? false : true))
+    _eventID = State(initialValue: event?.id ?? UUID().uuidString.lowercased())
+  }
+  private var recurrence: Binding<String> { Binding(get: { draft.recurrenceUnit ?? "" }, set: { draft.recurrenceUnit = $0.isEmpty ? nil : $0 }) }
+  private var scheduled: Binding<Bool> { Binding(get: { draft.task != nil }, set: { draft.task = $0 ? .init(runtime: "default_agent", workspaceID: model.deviceWorkspaceID) : nil }) }
+  var body: some View {
+      Form {
+        if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
+        if busy { ProgressView("Saving…") }
+        Section("Event") {
+          TextField("Title", text: $draft.title)
+          TextField("Details", text: $draft.details, axis: .vertical).lineLimit(3...8)
+          Toggle("All day", isOn: $draft.allDay)
+          DatePicker("Starts", selection: $draft.startsAt, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
+          Toggle("End time", isOn: Binding(get: { draft.endsAt != nil }, set: { draft.endsAt = $0 ? draft.startsAt.addingTimeInterval(3_600) : nil }))
+          if draft.endsAt != nil {
+            DatePicker("Ends", selection: Binding(get: { draft.endsAt ?? draft.startsAt }, set: { draft.endsAt = $0 }), displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
+          }
+          Text("Time zone: \(draft.timeZoneID)").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Picker("Repeat", selection: recurrence) {
+            Text("Never").tag(""); Text("Daily").tag("day"); Text("Weekly").tag("week"); Text("Monthly").tag("month")
+          }
+          if draft.recurrenceUnit != nil { Stepper("Every \(draft.recurrenceInterval)", value: $draft.recurrenceInterval, in: 1...365) }
+          if event?.draft.recurrenceUnit != nil { Text("Changes apply to the series. The start above is the series’ original start.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+        }
+        Section("Scheduled task") {
+          Toggle("Send a prompt to an agent", isOn: scheduled)
+          if draft.task != nil { taskFields }
+        }
+        if let event {
+          if let status = event.status { Section("Last run") { Text(status) } }
+          if let id = event.sessionID {
+            Button("Open task conversation") { dismiss(); Task { await model.selectConversation(id) } }
+          }
+          Section { Button("Delete event", role: .destructive) { confirmDelete = true } }
+        }
+      }.scrollIndicators(.never).scrollContentBackground(.hidden).environment(\.timeZone, TimeZone(identifier: draft.timeZoneID) ?? .current)
+        .disabled(busy)
+        .navigationTitle(draft.task == nil ? (event == nil ? "New event" : "Edit event") : (event == nil ? "New task" : "Edit task"))
+        .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
+        .toolbar {
+          ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(busy || draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+        }
+        .confirmationDialog("Delete this calendar event?", isPresented: $confirmDelete, titleVisibility: .visible) {
+          if let event {
+            if event.draft.recurrenceUnit != nil { Button("Delete this occurrence", role: .destructive) { Task { await delete(occurrence: event.occurrence) } } }
+            Button(event.draft.recurrenceUnit == nil ? "Delete event" : "Delete entire series", role: .destructive) { Task { await delete(occurrence: nil) } }
+          }
+        }
+  }
+  @ViewBuilder private var taskFields: some View {
+    if draft.task != nil {
+      Toggle("Show on calendar", isOn: Binding(get: { draft.showsOnCalendar ?? true }, set: { draft.showsOnCalendar = $0 }))
+      Picker("Agent and workspace", selection: Binding(get: { selectedRoute }, set: { selectRoute($0) })) {
+        ForEach(routeChoices) { Text($0.label).tag($0.id) }
+      }
+      TextField("Prompt", text: Binding(get: { draft.task?.prompt ?? "" }, set: { draft.task?.prompt = $0 }), axis: .vertical).lineLimit(4...12)
+      Picker("Session folder", selection: Binding(get: { draft.task?.folderID ?? "" }, set: { draft.task?.folderID = $0.isEmpty ? nil : $0 })) {
+        Text("No folder").tag("")
+        ForEach(model.folders) { Text($0.name).tag($0.id) }
+      }
+      if draft.recurrenceUnit != nil { Toggle("New session each time", isOn: Binding(get: { draft.task?.newSessionEachTime ?? false }, set: { draft.task?.newSessionEachTime = $0 })) }
+    }
+  }
+  private var selectedRoute: String {
+    guard let task = draft.task else { return "local:default_agent" }
+    if task.workspaceID == model.deviceWorkspaceID { return "device" }
+    return task.workspaceID.map { "remote:\($0):\(task.runtime)" } ?? "local:\(task.runtime)"
+  }
+  private var routeChoices: [CompanionSelection] {
+    var values = [CompanionSelection(id: "device", label: "Pi Durable · " + model.deviceWorkspaceName)] + model.providers.filter { $0.id.hasPrefix("local:") || $0.id.hasPrefix("remote:") }
+      .map { CompanionSelection(id: $0.id, label: "\($0.displayName) · \($0.routeName)") }
+    if !values.contains(where: { $0.id == selectedRoute }) {
+      values.append(.init(id: selectedRoute, label: "Saved agent and workspace"))
+    }
+    return values
+  }
+  private func selectRoute(_ id: String) {
+    if id == "device" {
+      draft.task?.runtime = "default_agent"; draft.task?.workspaceID = model.deviceWorkspaceID
+      draft.task?.model = nil; draft.task?.thinking = nil; draft.task?.permission = nil
+      return
+    }
+    guard let provider = model.providers.first(where: { $0.id == id }) else { return }
+    draft.task?.runtime = provider.runtimeKind
+    draft.task?.workspaceID = id.hasPrefix("remote:") ? String(id.split(separator: ":")[1]) : nil
+    draft.task?.model = nil; draft.task?.thinking = nil; draft.task?.permission = nil
+  }
+  private func save() async {
+    busy = true; defer { busy = false }
+    if await model.perform(.saveCalendar(id: eventID, revision: event?.revision, draft: draft)) { dismiss() }
+  }
+  private func delete(occurrence: Int?) async {
+    guard let event else { return }; busy = true; defer { busy = false }
+    if await model.perform(.deleteCalendar(id: event.id, revision: event.revision, occurrence: occurrence)) { dismiss() }
+  }
+}
+
+
+private struct CalendarConflictPane: View {
+  @Bindable var model: CompanionModel
+  let id: String
+  let conflict: MobileCalendarConflict
+  @State private var busy = false
+  @State private var copyID = UUID().uuidString.lowercased()
+  @Environment(\.dismiss) private var dismiss
+  var body: some View {
+    List {
+      Section("This device") { details(conflict.local) }
+      Section("Central Mac") {
+        if let remote = conflict.remote, !remote.deleted { details(remote) }
+        else { Text("Deleted") }
+      }
+      Section {
+        Button(conflict.remote?.deleted == true ? "Save this device’s version as a new event" : "Keep this device’s version") { resolve(true) }
+        Button("Use the central Mac’s version") { resolve(false) }
+      }
+      if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger) }
+    }.disabled(busy).listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never)
+      .navigationTitle("Calendar conflict").navigationBarTitleDisplayMode(.inline).mobilePageSurface()
+  }
+  @ViewBuilder private func details(_ record: CompanionCalendarRecord) -> some View {
+    Text(record.event.draft.title).font(.headline)
+    Text(record.event.draft.startsAt, format: .dateTime.month().day().year().hour().minute())
+    if !record.event.draft.details.isEmpty { Text(record.event.draft.details) }
+    if let task = record.event.draft.task { Text(task.prompt) }
+  }
+  private func resolve(_ keepLocal: Bool) {
+    busy = true
+    Task { if await model.resolveCalendarConflict(id, keepLocal: keepLocal, copyID: copyID) { dismiss() }; busy = false }
+  }
+}

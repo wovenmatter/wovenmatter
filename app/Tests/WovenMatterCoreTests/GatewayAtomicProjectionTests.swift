@@ -11,7 +11,7 @@ struct GatewayAtomicProjectionTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .openclaw,
+    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
       title: "Atomic", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Hello")
     let raw = #"{"event":"agent","payload":{"runId":"run","seq":1}}"#
@@ -68,7 +68,7 @@ struct GatewayAtomicProjectionTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("workspace.sqlite")
     let database = try await WorkspaceDatabase(url: url)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .openclaw,
+    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
       title: "Replay", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Hello")
     let sameInstant = Date(timeIntervalSince1970: 100)

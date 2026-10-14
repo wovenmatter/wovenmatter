@@ -21,12 +21,8 @@ command output, account data, paths, or credentials.
 | --- | --- | --- |
 | Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. Adapter minimum is 1.13.1; it is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
 | Claude Code | `claude-agent-acp`, bundled `@anthropic-ai/claude-agent-sdk` and its platform-native Claude engine (legacy `cli.js` also supported), standalone `claude` sign-in CLI; inherited executable override is reported | Official npm adapter release; `claude update` for an outdated standalone CLI. |
-| Pi | `pi --mode rpc`, not ACP | Official `@earendil-works/pi-coding-agent` npm releases on stable 1.x; the newest compatible release is resolved for each install/update. |
 | OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Newest stable `@opencode/cli` 2.x release; each install/update resolves a fresh compatible release even if upstream `latest` advances to a new major. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
-| OpenClaw | Local `openclaw` CLI and separately linked gateways | Official npm `openclaw` release, managed CLI update. Does not update/restart gateways or install their provider runtimes. |
-| Cursor | Native `cursor-agent acp` | Version embedded in official Cursor installer; `cursor-agent update`. Same-date release hashes cannot be ordered and are not asserted to be newer. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
-| Hermes | `hermes serve --isolated`, native server version, and verified `serve --help` support | Official installer for missing CLI. `hermes update --check` reports current/available/unknown. Update verifies a clean source checkout, requires an idle plan and no active Hermes processes, then runs `hermes update --yes` with a 600-second limit. Completion requires a current update check and successful native Gateway validation. |
 
 ## Local installation
 
@@ -56,12 +52,10 @@ Disable/Hide choices survive service restarts; unreadable preferences fail close
 Remote adapter inventories show upstream bundled-package versions separately
 from the compatible update target resolved using the adapter's dependency range.
 Updates refresh that dependency within the declared range and verify the result;
-unknown compatibility does not produce an update claim. Hermes uses the same
-bounded direct updater and verification on the selected host. It preserves
-modified source checkouts by refusing to update until those changes are saved.
+unknown compatibility does not produce an update claim.
 
 Remote maintenance takes an exclusive lock in the workspace container. Remote conversation processes
-and managed OpenCode/OpenClaw servers hold shared locks for their lifetime, so an
+and managed OpenCode servers hold shared locks for their lifetime, so an
 update cannot replace their runtime while they are using it. A busy workspace requires
 the user to finish conversations or stop its server before retrying maintenance.
 Installer timeouts terminate the process group before permitting another attempt.
@@ -76,13 +70,6 @@ native client uses the workspace bearer credential over a loopback SSH tunnel;
 no public OpenCode listener or remote browser credential URL is created. Local
 OpenCode retains its existing registered service and explicit lifecycle controls.
 
-OpenClaw settings open workspace-specific gateway controls and the actual agent
-name/gateway settings. The remote service proxies only a gateway process it owns,
-and rejects an unrelated listener on the configured port. Starting, stopping and
-configuration belong to the selected workspace; local controls do not operate on
-remote gateways. Installing a CLI does not install provider runtimes or
-upgrade independently linked gateways.
-
 ## Upstream reference snapshot — September 11, 2026
 
 The versions below record the earlier source review. For the app's declared
@@ -96,14 +83,7 @@ and [remote maintenance](../remote/src/runtime-maintenance.mjs).
 - [Claude adapter](https://github.com/agentclientprotocol/claude-agent-acp) and
   [npm metadata](https://registry.npmjs.org/@agentclientprotocol%2fclaude-agent-acp/latest):
   0.76.0 declares SDK 0.3.257.
-- [Pi package](https://registry.npmjs.org/@earendil-works%2fpi-coding-agent/latest).
 - [OpenCode package](https://registry.npmjs.org/@opencode%2fcli/latest): the current
   stable v2 release; each install/update resolves this tag afresh.
-- [Cursor installation/update](https://docs.cursor.com/en/cli/installation) and
-  [official installer](https://cursor.com/install).
 - [Grok CLI reference](https://docs.x.ai/build/cli/reference) and
   [official installer](https://x.ai/cli/install.sh).
-- [OpenClaw updates](https://docs.openclaw.ai/install/updating).
-- [Hermes updates](https://nousresearch.github.io/hermes-agent/docs/getting-started/updating/).
-  Direct update behavior follows its [updater implementation](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/subcommands/update.py)
-  and [service inventory](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/update_inventory.py).

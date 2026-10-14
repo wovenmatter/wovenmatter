@@ -33,7 +33,7 @@ extension WorkspaceDatabaseConnection {
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
       let operatorID = try localMutationOperatorIDUnlocked()
       var rows = try historyRowsUnlocked(
-        "SELECT id,name,position FROM folders WHERE user_id=? ORDER BY position,id LIMIT ? OFFSET ?",
+        "SELECT folders.id,name,position,workspace_id AS execution_workspace_id,root_path,reference_paths FROM folders LEFT JOIN folder_execution_roots ON folder_id=folders.id WHERE user_id=? ORDER BY position,folders.id LIMIT ? OFFSET ?",
         values: [operatorID, String(limit + 1), String(after)])
       let more = rows.count > limit
       if more { rows.removeLast() }

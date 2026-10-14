@@ -1,0 +1,42 @@
+[
+  {
+    "file": "Pyodide-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/pyodide/pyodide/314.0.7/LICENSE",
+    "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  },
+  {
+    "file": "Python-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.14.2/LICENSE",
+    "sha256": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231"
+  },
+  {
+    "file": "Python-third-party-notices.rst",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.14.2/Doc/license.rst",
+    "sha256": "c695d550b135e53e38807e76496d1db17d22c40e461d1f3f354c86188d3305dd"
+  },
+  {
+    "file": "libffi-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/libffi/libffi/f08493d249d2067c8b3207ba46693dd858f95db3/LICENSE",
+    "sha256": "2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388"
+  },
+  {
+    "file": "hiwire-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/pyodide/hiwire/6a1e67280a15d929ebeceee54a6358c9c8d5f697/LICENSE",
+    "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+  },
+  {
+    "file": "xz-COPYING.txt",
+    "url": "https://raw.githubusercontent.com/tukaani-project/xz/v5.2.2/COPYING",
+    "sha256": "c4f8e14fafe458d84808a4cd8b69f94673ebe2bf8fc992291629a69ac12218f8"
+  },
+  {
+    "file": "zstd-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/python/cpython-source-deps/zstd-1.5.7/LICENSE",
+    "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+  },
+  {
+    "file": "Emscripten-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/emscripten-core/emscripten/5.0.3/LICENSE",
+    "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86"
+  }
+]

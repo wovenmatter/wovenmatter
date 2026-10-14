@@ -288,8 +288,11 @@ struct DashboardDatabaseLinkControl: View {
     private var links: [DatabaseArtifactLink] {
         var result = document.databaseLink.map { [$0] } ?? []
         for block in document.blocks {
-            if case .table(let table) = block, let link = table.databaseLink {
-                result.append(link)
+            switch block {
+            case .table(let table):
+                if let link = table.databaseLink { result.append(link) }
+            case .richText(let text):
+                result.append(contentsOf: text.runs.compactMap(\.databaseLink))
             }
         }
         return result
@@ -321,7 +324,7 @@ private struct DashboardDatabaseLinkPopover: View {
     let onClose: () -> Void
     @State private var sourceID = ""
     @State private var databaseID = ""
-    @State private var relativePath = ""
+    @State private var targetTableID = ""
     @State private var sqliteQuery = ""
 
     private var sources: [DashboardDatabaseSource] {
@@ -332,27 +335,79 @@ private struct DashboardDatabaseLinkPopover: View {
         sources.first { $0.id == sourceID }?.databases ?? []
     }
 
+    private var selectedDatabase: DashboardAgentDatabase? {
+        databases.first { $0.databaseID == databaseID }
+    }
+
+    private var tables: [NoteTableBlock] {
+        document.blocks.compactMap { block in
+            guard case .table(let table) = block else { return nil }
+            return table
+        }
+    }
+
+    private var linkedValues: [NoteTextRun] {
+        var seen = Set<String>()
+        return document.blocks.flatMap { block -> [NoteTextRun] in
+            guard case .richText(let text) = block else { return [] }
+            return text.runs.filter {
+                guard $0.databaseLink != nil, let id = $0.databaseValueID else { return false }
+                return seen.insert(id).inserted
+            }
+        }
+    }
+
     private var canSave: Bool {
-        !sourceID.isEmpty && !databaseID.isEmpty
-            && !relativePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        selectedDatabase != nil
+            && !sqliteQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Database Link").font(.system(size: 14, weight: .semibold))
+            if sources.isEmpty {
+                Text("Create a database in Databases, then link a query here.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            if document.kind == .note {
+                Picker("Display in", selection: $targetTableID) {
+                    Text("New linked table").tag("")
+                    ForEach(Array(tables.enumerated()), id: \.element.id) { index, table in
+                        Text("Table \(index + 1)").tag(table.id)
+                    }
+                    ForEach(linkedValues, id: \.databaseValueID) { run in
+                        Text("Inline value: \(run.text.isEmpty ? "(empty)" : String(run.text.prefix(24)))")
+                            .tag("value:\(run.databaseValueID ?? "")")
+                    }
+                    if document.databaseLink != nil {
+                        Text("All unlinked tables").tag("document")
+                    }
+                }
+            }
             Picker("Workspace", selection: $sourceID) {
                 ForEach(sources) { Text($0.name).tag($0.id) }
             }
             Picker("Database", selection: $databaseID) {
                 ForEach(databases) { Text($0.name).tag($0.databaseID) }
             }
-            TextField("Relative data path, for example data.json", text: $relativePath)
-                .textFieldStyle(.roundedBorder)
-            if usesSQLite {
-                TextField("Read-only SQL query", text: $sqliteQuery, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(2...5)
+            if let selectedDatabase {
+                Text(DashboardDatabaseFreshness.description(selectedDatabase))
+                    .font(.system(size: 11))
+                    .foregroundStyle(selectedDatabase.offline
+                        ? DashboardPalette.warning : DashboardPalette.mutedForeground)
             }
+            TextField("SQL query, for example SELECT * FROM sales", text: $sqliteQuery, axis: .vertical)
+                .dashboardQuietTextInput(font: .system(size: 12, design: .monospaced))
+                .lineLimit(2...5)
+            Text(document.kind == .html
+                ? "Results are available as window.wovenMatterData. Your HTML refreshes when committed data changes."
+                : targetTableID.hasPrefix("value:")
+                    ? "Inline values need one row and one column. They update in place; editing their text removes the link."
+                    : "Results stay linked to the database. Existing note text and other tables are preserved.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Remove link", role: .destructive) { removeLink() }
                     .disabled(existingLink() == nil)
@@ -365,7 +420,15 @@ private struct DashboardDatabaseLinkPopover: View {
         }
         .padding(16)
         .frame(width: 380)
-        .onAppear { loadSelectedTargetLink() }
+        .onAppear {
+            if document.kind == .note {
+                targetTableID = tables.first { $0.databaseLink != nil }?.id
+                    ?? linkedValues.first.flatMap(\.databaseValueID).map { "value:\($0)" }
+                    ?? (document.databaseLink == nil ? "" : "document")
+            }
+            loadSelectedTargetLink()
+        }
+        .onChange(of: targetTableID) { _, _ in loadSelectedTargetLink() }
         .onChange(of: sourceID) { _, _ in
             if !databases.contains(where: { $0.databaseID == databaseID }) {
                 databaseID = databases.first?.databaseID ?? ""
@@ -373,36 +436,34 @@ private struct DashboardDatabaseLinkPopover: View {
         }
     }
 
-    private var usesSQLite: Bool {
-        let fileExtension = URL(fileURLWithPath: relativePath).pathExtension.lowercased()
-        if ["db", "sqlite", "sqlite3"].contains(fileExtension) { return true }
-        if fileExtension == "json" { return false }
-        return databases.first(where: { $0.databaseID == databaseID })?.preference == .sqlite
-    }
-
     private func loadSelectedTargetLink() {
         if let link = existingLink() {
             sourceID = link.sourceID
             databaseID = link.databaseID
-            relativePath = link.relativePath
             sqliteQuery = link.sqliteQuery ?? ""
         } else {
             sourceID = sources.first?.id ?? ""
             databaseID = databases.first?.databaseID ?? ""
-            relativePath = ""
             sqliteQuery = ""
         }
     }
 
     private func existingLink() -> DatabaseArtifactLink? {
-        document.databaseLink
+        if document.kind == .note && targetTableID != "document" {
+            if targetTableID.hasPrefix("value:") {
+                let id = String(targetTableID.dropFirst("value:".count))
+                return linkedValues.first { $0.databaseValueID == id }?.databaseLink
+            }
+            return tables.first { $0.id == targetTableID }?.databaseLink
+        }
+        return document.databaseLink
     }
 
     private func save() {
         let link = DatabaseArtifactLink(
             sourceID: sourceID,
             databaseID: databaseID,
-            relativePath: relativePath.trimmingCharacters(in: .whitespacesAndNewlines),
+            relativePath: "data.sqlite",
             sqliteQuery: sqliteQuery.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         )
         apply(link)
@@ -415,7 +476,31 @@ private struct DashboardDatabaseLinkPopover: View {
     }
 
     private func apply(_ link: DatabaseArtifactLink?) {
-        document.databaseLink = link
+        guard document.kind == .note, targetTableID != "document" else {
+            document.databaseLink = link
+            return
+        }
+        if targetTableID.hasPrefix("value:") {
+            let id = String(targetTableID.dropFirst("value:".count))
+            for index in document.blocks.indices {
+                guard case .richText(var text) = document.blocks[index] else { continue }
+                for run in text.runs.indices where text.runs[run].databaseValueID == id {
+                    text.runs[run].databaseLink = link
+                    if link == nil { text.runs[run].databaseValueID = nil }
+                }
+                document.blocks[index] = .richText(text)
+            }
+            return
+        }
+        if let index = document.blocks.firstIndex(where: { $0.id == targetTableID }),
+           case .table(var table) = document.blocks[index] {
+            table.databaseLink = link
+            document.blocks[index] = .table(table)
+        } else if let link {
+            var table = NoteTableBlock(rows: 1, columns: 1, headerRow: true)
+            table.databaseLink = link
+            document.blocks.append(.table(table))
+        }
     }
 }
 

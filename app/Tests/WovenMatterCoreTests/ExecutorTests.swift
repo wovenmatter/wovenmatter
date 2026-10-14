@@ -20,18 +20,25 @@ struct ExecutorTests {
         #expect(!after.enabled.contains(.library))
         #expect(after.executorProfiles == ["app:profile"])
     }
+    @Test func cachedInventoryRemainsReadableAndAccountTargetsPersist() throws {
+        let cached = Data(#"{"id":"app:old-profile","app":"app","name":"App","profile":"old-profile","profileName":"Saved label"}"#.utf8)
+        let old = try JSONDecoder().decode(ExecutorAppTarget.self, from: cached)
+        #expect(old.targetName == "Saved label")
+        #expect(old.account == nil)
+        let selected = ExecutorAppTarget(id: "app:account:id", app: "app", name: "App", account: "id", targetName: "Work")
+        #expect(try JSONDecoder().decode(ExecutorAppTarget.self, from: JSONEncoder().encode(selected)) == selected)
+    }
     @Test func confirmedHarnessModesPreserveTheirMeaning() {
-        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.cursor, "auto"), (.cursor, "force"), (.opencode, "allow"), (.opencode, "full"), (.hermes, "full"), (.openclaw, "full")]
+        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.opencode, "allow"), (.opencode, "full")]
         for (runtime, mode) in full {
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .full)
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode, confirmed: false) == .ask)
         }
-        for (runtime, mode) in [(AgentRuntimeKind.claudeCode, "auto"), (.claudeCode, "acceptEdits"), (.grokBuild, "auto"), (.grokBuild, "acceptEdits"), (.codex, "agent"), (.hermes, "default"), (.openclaw, "workspace"), (.opencode, "acceptEdits"), (.pi, "full")] {
+        for (runtime, mode) in [(AgentRuntimeKind.claudeCode, "auto"), (.claudeCode, "acceptEdits"), (.grokBuild, "auto"), (.grokBuild, "acceptEdits"), (.codex, "agent"), (.opencode, "acceptEdits")] {
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .ask)
         }
         #expect(ExecutorApprovalPolicy.resolve(runtime: .claudeCode, mode: "dontAsk") == .deny)
         #expect(ExecutorApprovalPolicy.resolve(runtime: .codex, mode: "read-only") == .ask)
-        #expect(ExecutorApprovalPolicy.resolve(runtime: .openclaw, mode: "read-only") == .deny)
     }
     @Test func legacyPreferencesDecodeWithoutEnablingExecutor() throws {
         let old = Data(#"{"enabledByDefault":["notes","library"],"calendarAccess":"full","maximumManagedSessions":4,"maximumRunningSessions":16}"#.utf8)
@@ -55,7 +62,7 @@ struct ExecutorTests {
         var config = ExecutorConfiguration(); config.defaultProfiles = ["a:profile"]
         settings.executor = config; settings.enabledByDefault.insert(.executor)
         try await database.saveToolSettings(settings)
-        let first = try await database.createLocalACPSession(runtimeKind: .hermes, title: "First", ownerDeviceID: UUID())
+        let first = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "First", ownerDeviceID: UUID())
         #expect(try await database.sessionTools(existing).executorProfiles == [])
         #expect(try await database.sessionTools(first).executorProfiles == ["a:profile"])
         settings.executor?.defaultProfiles = ["b:profile"]
@@ -65,7 +72,7 @@ struct ExecutorTests {
         try await database.setSessionTools(policy, sessionID: first)
         try await database.applyInitialSessionTools(.init(enabled: [.executor], executorProfiles: ["b:profile"]), sessionID: first)
         #expect(try await database.sessionTools(first).executorProfiles == [])
-        let second = try await database.createLocalACPSession(runtimeKind: .pi, title: "Second", ownerDeviceID: UUID())
+        let second = try await database.createLocalACPSession(runtimeKind: .codex, title: "Second", ownerDeviceID: UUID())
         #expect(try await database.sessionTools(second).executorProfiles == ["b:profile"])
     }
     @Test func executorCLIHasNoAuthorityOrResumeOptions() throws {
@@ -81,8 +88,8 @@ struct ExecutorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         var config = ExecutorConfiguration()
-        let first = ExecutorAppProfile(id: "first:p", app: "first", name: "First", profile: "p", profileName: "Default")
-        let second = ExecutorAppProfile(id: "second:p", app: "second", name: "Second", profile: "p", profileName: "Default")
+        let first = ExecutorAppTarget(id: "first:p", app: "first", name: "First", targetName: "App")
+        let second = ExecutorAppTarget(id: "second:p", app: "second", name: "Second", targetName: "App")
         config.apps = [first]
         try await database.updateExecutor(configuration: config)
         let base = try await database.toolSettings()

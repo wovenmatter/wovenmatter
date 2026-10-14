@@ -283,122 +283,6 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func cursorExecutionModesAreNotPermissionModes() async throws {
-        try await withClient(kind: .cursor, state: [
-            "modes": ["currentModeId": "agent", "availableModes": [["id": "agent", "name": "Agent"]]],
-            "configOptions": [["id": "mode", "category": "mode", "currentValue": "agent", "options": [["value": "agent"], ["value": "ask"], ["value": "plan"]]]],
-        ]) { client, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == "native-default")
-            #expect(initialized.configuration.permissionOptions == ["native-default", "force"])
-            #expect(initialized.configuration.permissionOptionMetadata["force"]?.name == "Full access")
-            do {
-                _ = try await client.setSessionPermission("agent")
-                Issue.record("Cursor execution mode was treated as a permission policy")
-            } catch LocalACPClientError.invalidConfigurationValue { }
-            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
-        }
-    }
-
-    @Test(arguments: ["--force", "--yolo", "-f"])
-    func cursorExplicitNativeFlagsProjectFullAccess(flag: String) throws {
-        let local = LocalACPRuntimeLaunchConfiguration(runtimeKind: .cursor,
-            executableURL: URL(filePath: "/fixture/cursor"), arguments: [flag])
-        #expect(try LocalACPSessionPermissions.prepareLaunch(local).explicitPermission == "force")
-        let wrapped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .cursor,
-            executableURL: URL(filePath: "/usr/bin/ssh"), arguments: ["-T", "fixture.invalid", "unused"],
-            wrappedCommand: .init(argumentIndex: 2, command: ["/fixture/cursor", flag], harnessArgumentsStartIndex: 1))
-        #expect(try LocalACPSessionPermissions.prepareLaunch(wrapped).explicitPermission == "force")
-    }
-
-    @Test(arguments: ["force", "native-default"])
-    func cursorNativePolicyUsesLaunchFlagAndRequiresRestart(permission: String) async throws {
-        try await withClient(kind: .cursor, state: [:], handlers: [
-            "session/prompt": permissionRequest() + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: permission) { client, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == permission)
-            #expect(try fixture.launchArguments() == (permission == "force" ? ["--force"] : []))
-            let calls = PermissionHandlerCalls()
-            _ = try await client.prompt("fixture", onPermission: { _ in await calls.append("manual"); return "reject-this-request" })
-            #expect(await calls.count() == 1)
-            do {
-                _ = try await client.setSessionPermission(permission == "force" ? "native-default" : "force")
-                Issue.record("A native process policy changed without restarting Cursor")
-            } catch LocalACPClientError.permissionChangeRequiresRestart { }
-            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
-        }
-    }
-
-    @Test(arguments: [String?.none, "child-session", "permission-session"])
-    func cursorNativeRequestsRemainSessionFenced(session: String?) async throws {
-        // The parent's request omits allow_once; the child advertises it but
-        // belongs elsewhere; the missing-session request is kept manual.
-        let offersOnce = session != "permission-session"
-        try await withClient(kind: .cursor, state: [:], handlers: [
-            "session/prompt": permissionRequest(session: session, offersOnce: offersOnce)
-                + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: "force") { client, fixture, _ async throws in
-            let manual = PermissionHandlerCalls()
-            _ = try await client.prompt("fixture", onPermission: { request in
-                await manual.append(request.title)
-                return "reject-this-request"
-            })
-            #expect(await manual.count() == (session == "child-session" ? 0 : 1))
-            let result = try fixture.responses().first?["result"] as? [String: Any]
-            let outcome = result?["outcome"] as? [String: Any]
-            #expect(outcome?["outcome"] as? String == (session == "child-session" ? "cancelled" : "selected"))
-            #expect(outcome?["optionId"] as? String != "always-id")
-            #expect(outcome?["optionId"] as? String != "native-once-id")
-        }
-    }
-
-    @Test func cursorFullAccessLeavesUserQuestionsInteractive() async throws {
-        let question: [String: Any] = ["jsonrpc": "2.0", "id": 101, "method": "cursor/ask_question", "params": [
-            "sessionId": "permission-session", "toolCallId": "question-tool", "questions": [
-                ["id": "color", "prompt": "Choose a color", "options": [["id": "blue", "label": "Blue"]]],
-            ],
-        ]]
-        try await withClient(kind: .cursor, state: [:], handlers: [
-            "session/prompt": receiveResponse(to: question) + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: "force") { client, fixture, _ async throws in
-            let calls = PermissionHandlerCalls()
-            _ = try await client.prompt("fixture", onInteraction: { request in
-                if case .questions(let value) = request {
-                    await calls.append(value.questions[0].prompt)
-                }
-                return .cancelled
-            })
-            #expect(await calls.count() == 1)
-            #expect(try fixture.responses().count == 1)
-        }
-    }
-
-    @Test(arguments: [true, false])
-    func cursorFullAccessNeverAnswersPermissionFallbackQuestions(knownMarker: Bool) async throws {
-        var options = [["optionId": "blue", "name": "Blue", "kind": "allow_once"]]
-        if knownMarker {
-            options.append(["optionId": "__ask_question_skip__", "name": "Skip", "kind": "reject_once"])
-        } else {
-            options.append(["optionId": "green", "name": "Green", "kind": "allow_once"])
-        }
-        let frame: [String: Any] = ["jsonrpc": "2.0", "id": 102, "method": "session/request_permission", "params": [
-            "sessionId": "permission-session", "toolCall": ["toolCallId": "ask_fixture_q0", "title": "Choose a color", "kind": "other"], "options": options,
-        ]]
-        try await withClient(kind: .cursor, state: [:], handlers: [
-            "session/prompt": receiveResponse(to: frame) + "\n" + respond(["stopReason": "end_turn"]),
-        ], requestedPermission: "force") { client, fixture, _ async throws in
-            let manual = PermissionHandlerCalls()
-            _ = try await client.prompt("fixture", onPermission: { request in
-                await manual.append(request.title)
-                return nil
-            })
-            #expect(await manual.count() == 1)
-            let result = try fixture.responses().first?["result"] as? [String: Any]
-            let outcome = result?["outcome"] as? [String: Any]
-            #expect(outcome?["optionId"] as? String != "blue")
-            #expect(outcome?["optionId"] as? String != "green")
-        }
-    }
-
     @Test(arguments: [String?.none, "default", "auto", "bypassPermissions"])
     func grokLaunchPolicyRequiresReconnectAndPreservesNativeSession(permission: String?) async throws {
         try await withClient(kind: .grokBuild, state: configuration(permission: "unused"),
@@ -441,9 +325,7 @@ struct ACPSessionPermissionTests {
             ["--permission-mode", "default", "--no-auto-update", "agent", "--no-leader", "stdio"])
         #expect(try LocalACPSessionPermissions.launchArguments(["--permission-mode", "auto", "agent", "--no-leader", "stdio"], runtimeKind: .grokBuild, permission: "dontAsk") ==
             ["--permission-mode", "dontAsk", "agent", "--no-leader", "stdio"])
-        #expect(throws: LocalACPClientError.self) {
-            try LocalACPSessionPermissions.launchArguments(arguments, runtimeKind: .cursor, permission: "normal")
-        }
+        #expect(try LocalACPSessionPermissions.launchArguments(arguments, runtimeKind: .codex, permission: "normal") == arguments)
         #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["agent", "--always-approve", "stdio"]) == "bypassPermissions")
         #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["--permission-mode", "auto", "agent", "stdio"]) == "auto")
         #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["--permission-mode=default", "agent", "stdio"]) == "default")
@@ -625,7 +507,7 @@ private struct PermissionFixture {
             *'"method":"session/new"'*|*'"method":"session/load"'*)
               \(sessionPrelude)
               respond "$id" \(Self.quotedJSON(session)) ;;
-            *'"method":"authenticate"'*|*'"method":"cursor/list_available_models"'*) respond "$id" '{}' ;;
+            *'"method":"authenticate"'*) respond "$id" '{}' ;;
             \(cases)
             *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Unexpected fixture method"}}\\n' "$id" ;;
           esac

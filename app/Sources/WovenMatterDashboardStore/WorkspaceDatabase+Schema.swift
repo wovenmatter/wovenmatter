@@ -36,6 +36,21 @@ extension WorkspaceDatabaseConnection {
         is_pinned INTEGER NOT NULL DEFAULT 0, origin_device_id TEXT,
         created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS folder_execution_roots (
+        folder_id TEXT PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL, root_path TEXT NOT NULL,
+        managed INTEGER NOT NULL, reference_paths TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE IF NOT EXISTS session_scratch_directories (
+        session_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        workspace_root TEXT NOT NULL, root_path TEXT NOT NULL,
+        UNIQUE(workspace_id, root_path)
+      );
+      CREATE TABLE IF NOT EXISTS execution_workspace_defaults (workspace_id TEXT PRIMARY KEY, default_path TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_execution_roots (
+        conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        root_path TEXT NOT NULL, folder_locked INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE IF NOT EXISTS notes (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT '', folder_id TEXT,
         title TEXT NOT NULL DEFAULT 'Untitled Note', content TEXT NOT NULL DEFAULT '',
@@ -356,6 +371,9 @@ extension WorkspaceDatabaseConnection {
       try createWorkspaceCacheTablesUnlocked()
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
+      try createCompanionSchemaUnlocked()
+      // Prior sessions stay in history but have no supported execution root.
+      try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE desktop_owned=1 AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations WHERE id=dashboard_conversations.id)")
     }
   }
 
@@ -415,6 +433,8 @@ extension WorkspaceDatabaseConnection {
       """)
     for table in [
       "folders",
+      "folder_execution_roots",
+      "session_execution_roots",
       "surface_profiles",
       "dashboard_agents",
       "dashboard_conversations",

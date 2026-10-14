@@ -187,7 +187,7 @@ struct WorkspaceHistoryTests {
   @Test func historyDateBoundsCompareInstantsInsteadOfDateSpellings() async throws {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
-    let caller = try await db.createLocalACPSession(runtimeKind: .pi, title: "Dates", ownerDeviceID: UUID())
+    let caller = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Dates", ownerDeviceID: UUID())
     try await db.recordHistory(.init(id: "dated", conversationID: caller, harness: "pi", kind: "wire.in", payload: "dated event"))
     try await db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked("UPDATE workspace_history_events SET recorded_at=? WHERE id=?", ["2026-09-21T12:00:00.000Z", "dated"])
@@ -218,7 +218,7 @@ struct WorkspaceHistoryTests {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
     let conversation = try await db.createLocalACPSession(
-      runtimeKind: .pi, title: "Pi", ownerDeviceID: UUID())
+      runtimeKind: .claudeCode, title: "Pi", ownerDeviceID: UUID())
     let run = try await db.beginLocalACPRun(conversationID: conversation, content: "research")
     let raw =
       #"{"type":"tool_execution_end","result":{"text":"unique needle","futureField":[1,2]}}"#
@@ -293,7 +293,8 @@ struct WorkspaceHistoryTests {
       let current = try await db.readNoteForEditing(id: note)
       for n in 0..<10 {
         _ = try await db.persistNoteDraft(
-          id: note, title: "Draft \(n)", content: try #require(current.document).encoded())
+          id: note, title: "Draft \(n)", content: try #require(current.document).encoded(),
+          expectedRevision: try await db.readNoteForEditing(id: note).revision)
       }
       #expect(try await db.noteAssetVersions(id: note).count == 1)
       try await db.checkpointNote(id: note)
@@ -340,7 +341,7 @@ struct WorkspaceHistoryTests {
           command: .apply, noteID: note, expectedRevision: previous,
           operations: [.setHTML("<p>\(n) \(body)</p>")]))
       let revision = try #require(response.revision)
-      #expect(revision > previous)
+      #expect(try #require(Int64(revision)) > #require(Int64(previous)))
       previous = revision
     }
     let versions = try await db.noteAssetVersions(id: note)
@@ -357,7 +358,7 @@ struct WorkspaceHistoryTests {
     let a = try await db.createLocalACPSession(
       runtimeKind: .codex, title: "Research", ownerDeviceID: UUID())
     let b = try await db.createLocalACPSession(
-      runtimeKind: .hermes, title: "Writer", ownerDeviceID: UUID())
+      runtimeKind: .claudeCode, title: "Writer", ownerDeviceID: UUID())
     let id = UUID().uuidString
     #expect(
       try await db.reserveToolDelivery(sourceID: a, targetID: b, text: "Findings", requestID: id).status == "queued"

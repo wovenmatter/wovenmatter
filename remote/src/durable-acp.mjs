@@ -20,12 +20,6 @@ function newSnapshot(history) {
   for (const item of history) updateSnapshot(state, item)
   return state
 }
-function finishPiRuns(state) {
-  for (const run of new Set(state.runs.values())) if (run.runID) state.recoveredRuns.push({
-    runID: run.runID, content: run.content, ...(run.error ? { error: run.error } : {}),
-  })
-  state.runs.clear()
-}
 function resumeRun(state, runID, sessionID) {
   const index = runID ? state.recoveredRuns.findIndex(run => run.runID === runID) : -1
   const previous = index < 0 ? undefined : state.recoveredRuns.splice(index, 1)[0]
@@ -33,51 +27,6 @@ function resumeRun(state, runID, sessionID) {
   // one cumulative recovery record for the logical run across that gap.
   return { runID, sessionID, content: previous?.content ?? '', completed: previous?.content ?? '', error: previous?.error,
     nextInputSequence: 0, completedInputSequence: -1 }
-}
-function updatePiSnapshot(state, item) {
-  const message = item.message
-  if (item.type === 'accepted') {
-    if (message.type === 'extension_ui_response') state.callbacks.delete(message.id)
-    else if (message.id !== undefined) {
-      state.requests.set(message.id, message)
-      if (message.type === 'prompt') {
-        const runID = message._meta?.wovenRunID
-        const existing = runID && [...state.runs.values()].find(run => run.runID === runID)
-        state.runs.set(message.id, existing ?? resumeRun(state, runID))
-      }
-    }
-  } else if (item.type === 'output') {
-    if (message.type === 'extension_ui_request') state.callbacks.set(message.id, message)
-    if (message.type === 'response') {
-      const request = state.requests.get(message.id)
-      if (request?.type === 'get_state' && message.success) {
-        state.piState = message.data
-        if (message.data?.isStreaming === false && message.data?.isCompacting === false && message.data?.pendingMessageCount === 0
-          && ![...state.requests.values()].some(request => request.type === 'prompt')) finishPiRuns(state)
-      }
-      if (request?.type === 'prompt' && message.success === false) {
-        const run = state.runs.get(message.id)
-        state.runs.delete(message.id)
-        if (run?.runID && ![...state.runs.values()].includes(run)) state.recoveredRuns.push({ runID: run.runID, content: run.content, error: message.error ?? 'Pi rejected the task' })
-      }
-      state.requests.delete(message.id)
-    }
-    for (const run of new Set(state.runs.values())) {
-      if (message.type === 'message_update' && message.assistantMessageEvent?.type === 'text_delta') {
-        run.content += message.assistantMessageEvent.delta ?? ''
-      }
-      if (message.type === 'message_end' && message.message?.role === 'assistant') {
-        const content = message.message.content ?? []
-        const text = Array.isArray(content) ? content.filter(block => block.type === 'text').map(block => block.text ?? '').join('') : ''
-        run.completed += text
-        run.content = run.completed
-        run.error = message.message.stopReason === 'error' ? message.message.errorMessage ?? 'Pi task failed' : null
-      }
-    }
-    if (message.type === 'agent_settled' && ![...state.requests.values()].some(request => request.type === 'prompt' && request.streamingBehavior === 'steer')) finishPiRuns(state)
-  }
-  state.busy = state.runs.size > 0
-  state.pendingRequests = [...state.callbacks.values()]
 }
 function finishACPInput(state, id, error, ownsCompletion = true) {
   const run = state.runs.get(id)
@@ -101,12 +50,11 @@ function updateSnapshot(state, item) {
     return
   }
   if (item.type === 'recovered') {
-    state.initialized = null; state.session = null; state.piState = null
+    state.initialized = null; state.session = null
     return
   }
   const message = item.message
   if (!message) return
-  if (message.type) { updatePiSnapshot(state, item); return }
   if (item.type === 'accepted') {
     if (message.method && message.id !== undefined) {
       const status = state.codexStatuses.get(message.params?.sessionId)
@@ -253,7 +201,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     if (metadata && harnessID && metadata.harnessID !== harnessID) throw new Error('Channel belongs to another harness')
     const selected = metadata?.harnessID ?? harnessID
     const harness = catalog.get(selected)
-    if (!harness || !(['acp', 'agent-stdio', 'acp-and-gateway'].includes(harness.transport) || (selected === 'pi' && harness.transport === 'rpc'))) throw new Error('Unknown ACP harness')
+    if (!harness || !['acp', 'agent-stdio'].includes(harness.transport)) throw new Error('Unknown ACP harness')
     if (permission && metadata && metadata.permission !== permission) throw new Error('Permission changed; start a new remote session')
     const channel = { id, harnessID: selected, permission: metadata?.permission ?? permission, path, events: history.filter(item => item.type === 'output'),
       journalBytes: Buffer.byteLength(history.map(JSON.stringify).join('\n')), snapshot: newSnapshot(history), accepted: new Set(history.filter(item => item.type === 'accepted').map(item => item.deliveryID)),
@@ -266,7 +214,6 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     const workingDirectory = await realpath(cwd ?? metadata?.cwd ?? workspaceRoot)
     if (workingDirectory !== base && !workingDirectory.startsWith(base + sep)) throw new Error('Working directory is outside this workspace')
     let args = [...(harness.arguments ?? [])]
-    if (selected === 'pi' && nativeSessionID) { identifier(nativeSessionID); args.push('--session', nativeSessionID) }
     if (selected === 'grok_build' && permission) {
       if (!['default', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk'].includes(permission)) throw new Error('Invalid Grok permission')
       const index = args.indexOf('--permission-mode')
@@ -285,10 +232,10 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       channel.state = 'stopped'
       throw new Error('Background execution or harness is disabled')
     }
-    const wrapped = ['codex', 'claude_code', 'cursor', 'grok_build', 'pi'].includes(selected);
+    const wrapped = ['codex', 'claude_code', 'grok_build'].includes(selected);
     const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped
       ? [fileURLToPath(harnessResource('cli/adapter.mjs')), selected, harness.command, ...args] : args, {
-      cwd: workingDirectory, env: { ...environment(harness), ...(selected === 'pi' ? { WOVENMATTER_LOCAL_PI: '1' } : {}) }, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: workingDirectory, env: environment(harness), stdio: ['pipe', 'pipe', 'pipe'],
     })
     channel.process = child
     channel.state = 'running'
@@ -344,9 +291,11 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     const operation = path.slice('/v1/durable-acp/'.length)
     const result = await serialize(async () => {
       if (!await isEnabled()) throw new Error('Background execution is disabled')
-      if (!['attach', 'message', 'poll', 'recover', 'cli'].includes(operation)) throw new Error('Unknown relay operation')
+      if (!['attach', 'adopt', 'message', 'poll', 'recover', 'cli'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
-      if (['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
+      if (operation === 'adopt' && (channel.state !== 'running' || channel.snapshot.busy || channel.snapshot.pendingRequests.length)) throw new Error('This session is not idle; client ownership was not changed')
+      if (operation === 'adopt' && (typeof body.expectedNativeSessionID !== 'string' || (channel.snapshot.piState?.sessionId ?? channel.snapshot.session?.sessionId) !== body.expectedNativeSessionID)) throw new Error('The durable channel belongs to a different native session; client ownership was not changed')
+      if (['attach', 'adopt', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
         // This shares the native admission queue: earlier requests are already
         // accounted for, while delayed requests from the old relay cannot admit.
         channel.attachmentToken = randomUUID()
@@ -363,9 +312,9 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
           throw new Error('This session attachment was replaced. Reconnect before sending another message.')
         }
         identifier(body.deliveryID)
-        if (!body.message || (channel.harnessID === 'pi' ? typeof body.message.type !== 'string' : body.message.jsonrpc !== '2.0')) throw new Error('Invalid ACP message')
+        if (!body.message || body.message.jsonrpc !== '2.0') throw new Error('Invalid ACP message')
         if (channel.accepted.has(body.deliveryID)) return { accepted: true, duplicate: true }
-        if ((!body.message.method && !body.message.type || body.message.type === 'extension_ui_response') && body.message.id !== undefined && !channel.snapshot.callbacks.has(body.message.id)) return { accepted: true, duplicate: true }
+        if (!body.message.method && body.message.id !== undefined && !channel.snapshot.callbacks.has(body.message.id)) return { accepted: true, duplicate: true }
         if (!channel.process || channel.state !== 'running') throw new Error('Session interrupted; explicit recovery is required')
         const sameRunSteering = body.message.method === 'session/prompt'
           && typeof body.message.params?._meta?.wovenRunID === 'string'
@@ -377,15 +326,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
           throw new Error('Steering input belongs to another remote task')
         }
         if (channel.snapshot.busy && !sameRunSteering && ['session/prompt', 'session/load', 'session/new', 'session/set_model', 'session/set_mode', 'session/set_config_option'].includes(body.message.method)) throw new Error('Remote task is still running; reconnect after it finishes')
-        const samePiRunSteering = body.message.type === 'prompt' && body.message.streamingBehavior === 'steer'
-          && typeof body.message._meta?.wovenRunID === 'string'
-          && [...channel.snapshot.runs.values()].some(run => run.runID === body.message._meta.wovenRunID)
-        if (channel.snapshot.busy && channel.harnessID === 'pi' && !samePiRunSteering && !['get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands', 'abort', 'steer', 'follow_up', 'extension_ui_response'].includes(body.message.type)) throw new Error('Remote task is still running; reconnect after it finishes')
         const outgoing = { ...body.message }
-        if (channel.harnessID === 'pi' && outgoing._meta) {
-          if (outgoing._meta.wovenTools) outgoing._meta = { wovenTools: outgoing._meta.wovenTools };
-          else delete outgoing._meta
-        }
         const line = JSON.stringify(outgoing) + '\n'
         if (Buffer.byteLength(line) > 8 * 1024 * 1024) throw new Error('ACP message is too large')
         const accepted = { type: 'accepted', deliveryID: body.deliveryID, message: body.message }
@@ -393,31 +334,17 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         updateSnapshot(channel.snapshot, accepted)
         channel.accepted.add(body.deliveryID)
         channel.process.stdin.write(line)
-        const stoppedPreflight = channel.harnessID === 'pi' && body.message.type === 'abort'
-          && body.message._meta?.wovenStopPreflight === true
-        // Pi aborts the active loop, but an extension preflight can otherwise
-        // finish later and start another loop. Explicit Stop retires this
-        // service-owned process just as local cancellation retires local Pi.
-        if (stoppedPreflight) {
-          channel.state = 'stopped'
-          const child = channel.process
-          await new Promise(resolve => {
-            const timer = setTimeout(() => { if (channel.process === child) child.kill('SIGKILL') }, 1500)
-            child.once('close', () => { clearTimeout(timer); resolve() })
-            child.kill('SIGTERM')
-          })
-        }
-        return { accepted: true, ...(stoppedPreflight ? { stoppedPreflight: true } : {}) }
+        return { accepted: true }
       }
       const after = body.after ?? 0
       if (!Number.isSafeInteger(after) || after < 0) throw new Error('Invalid output cursor')
-      const publicSnapshot = { initialized: channel.snapshot.initialized, piState: channel.snapshot.piState, session: channel.snapshot.session,
+      const publicSnapshot = { initialized: channel.snapshot.initialized, session: channel.snapshot.session,
         busy: channel.snapshot.busy, pendingRequests: channel.snapshot.pendingRequests,
         recoveryComplete: !!channel.attachmentToken && body.attachmentToken === channel.attachmentToken
           && !channel.snapshot.busy && !channel.failure && channel.state === 'running',
-        ...((['attach', 'recover'].includes(operation) || body.includeRecovery) ? { recoveredRuns: channel.snapshot.recoveredRuns } : {}) }
+        ...((['attach', 'adopt', 'recover'].includes(operation) || body.includeRecovery) ? { recoveredRuns: channel.snapshot.recoveredRuns } : {}) }
       return { channelID: channel.id, state: channel.state, failure: channel.failure,
-        ...(['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1 ? { attachmentToken: channel.attachmentToken } : {}),
+        ...(['attach', 'adopt', 'recover'].includes(operation) && body.attachmentProtocol === 1 ? { attachmentToken: channel.attachmentToken } : {}),
         snapshot: publicSnapshot, events: channel.events.slice(after, after + 256) }
     })
     if (operation === 'poll' && body.waitMs != null) {

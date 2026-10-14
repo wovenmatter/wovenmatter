@@ -4,8 +4,8 @@ Match the existing app and reuse its shared components. Keep this guide current
 when an intentional design change is accepted.
 
 - **Colors and geometry:** use `DashboardTheme`, `DashboardPalette`,
-  `DashboardMetrics`, and `DashboardShapes` in
-  [DashboardDesign.swift](../app/App/Views/DashboardDesign.swift). Preserve the
+  `DashboardMetrics` in [DashboardStyle.swift](../app/App/Views/DashboardStyle.swift),
+  and desktop `DashboardShapes` in `DashboardDesign.swift`. Preserve the
   Green and Cognac themes; keep spacing, radii, and surface treatments consistent
   with adjacent screens. Keep exact values in code.
 - **Typography:** use the macOS system font and the existing size/weight
@@ -23,7 +23,8 @@ when an intentional design change is accepted.
   such as Auto and Auto Accept into the same text. Popouts retain full labels
   and descriptions.
 - **Components:** reuse the shared cards, selectors, search fields, and button
-  styles in `DashboardDesign.swift`, and the page/row patterns in
+  styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
+  patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
@@ -62,10 +63,21 @@ when an intentional design change is accepted.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16`) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep agent/harness logos in their original colors. Shared controls use the sidebar foreground environment only inside the rails.
 - **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
-  styling quiet. Shared controls distinguish enabled hover, press, selection,
+  styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
+  for a neutral border without a colored focus ring. Clicking noninteractive
+  content inside a form releases text focus without closing it.
+  Shared controls distinguish enabled hover, press, selection,
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
+- **Text inputs:** use `DashboardSearchField` for search, `.dashboardInput()` for
+  new text/secure fields, and `.settingsInput()` in desktop settings. These use
+  plain native editing on the theme-whisper surface, matching sidebar chat search.
+  Never use `.textFieldStyle(.roundedBorder)`, native blue focus outlines, or a
+  custom bright focus border on app forms. Do not disable focus or keyboard
+  navigation to hide a ring. Inspect both focused and unfocused states in Green
+  and Cognac, including secure fields and pairing dialogs. Native system dialogs
+  and document content are outside this rule.
 - **Notes:** keep the header controls in this order from left to right: Undo,
   Redo, Version history, Database, Format note, Microphone. Use the same compact
   icon button style and frames for the microphone and adjacent controls, without
@@ -83,3 +95,18 @@ when an intentional design change is accepted.
 
 Compare rendered changes with the existing screen or supplied design reference.
 Code cleanup alone should not alter appearance or interaction.
+
+## iPhone and iPad
+
+Both Xcode targets compile `app/App/Views/DashboardStyle.swift` and bundle
+`app/App/SharedAssets.xcassets`. These are the canonical Lucide glyphs, harness
+logos, Green/Cognac palettes, radii, search field, segmented selectors, and
+primary/quiet/icon buttons.
+Do not copy the icon catalog or introduce a parallel mobile palette. Desktop
+runtime metadata and window-specific controls remain in `DashboardDesign.swift`.
+
+The companion keeps Dynamic Type and a 44-point minimum for shared touch controls;
+desktop sizing is unchanged. Dark appearance uses the shared palette's iOS contrast
+variants. Native sheets, pickers, switches, QR scanning and share controls retain
+iOS behavior. SF Symbols used by desktop for spreadsheet/HTML/file kinds, text
+formatting, and status controls remain deliberate exceptions to Lucide.

@@ -10,7 +10,8 @@ struct WorkspaceGoalTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let db = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try await db.createLocalACPSession(runtimeKind: kind, title: "Goal test", ownerDeviceID: UUID())
+        let id = try await db.createLocalACPSession(runtimeKind: kind, title: "Goal test", ownerDeviceID: UUID(),
+            executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: directory.path, managed: false), defaultPath: directory.path))
         return (db, directory, id)
     }
 
@@ -41,6 +42,50 @@ struct WorkspaceGoalTests {
         #expect(retry.id == first.id)
         #expect(try await db.claimToolDelivery(id: first.id) != nil)
         #expect(try await reopened.claimToolDelivery(id: first.id) == nil)
+    }
+
+    @Test func ownershipTransferPausesAndFencesThePreviousOwner() async throws {
+        let (db, directory, _) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let identity = try await db.companionLibraryIdentity(), workspaceID = UUID()
+        let owner = CompanionExecutionWorkspace(id: workspaceID.uuidString.lowercased(), libraryID: identity.libraryID,
+            ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Independent Linux")
+        _ = try await db.registerCompanionExecutionWorkspace(.init(workspace: owner), deviceID: identity.hostDeviceID)
+        let session = try await db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: workspaceID,
+            remoteWorkspaceName: owner.name, title: "Transferred goal", ownerDeviceID: UUID(),
+            executionRoot: .init(folderID: nil, location: .init(workspaceID: "remote:" + owner.id, rootPath: directory.path, managed: false), defaultPath: "/workspace"))
+        try await db.write { try $0.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id='native-fixture' WHERE conversation_id=?", [session]) }
+        let goal = try await create(db, session)
+        let delivery = try #require(try await db.dueGoalDeliveries(running: []).first)
+        #expect(try await db.claimToolDelivery(id: delivery.id) != nil)
+        let adoption = try await db.prepareCompanionExecutionAdoption(conversationID: session, workspaceID: owner.id, deviceID: identity.hostDeviceID)
+        #expect(adoption.goal?.id == goal.id && adoption.goal?.status == .paused)
+        #expect(adoption.goal?.pendingDeliveryID == nil)
+        #expect(try await db.toolDelivery(id: delivery.id)?.status == "cancelled")
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        await #expect(throws: (any Error).self) { try await db.validateClaimedToolDelivery(id: delivery.id) }
+        await #expect(throws: (any Error).self) { try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id)) }
+        let retry = try await db.prepareCompanionExecutionAdoption(conversationID: session, workspaceID: owner.id, deviceID: identity.hostDeviceID)
+        #expect(retry == adoption)
+    }
+
+    @Test func archivedChatsCannotStartOrResumeAndReadOnlyProjectionCannotMutate() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session)
+        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
+        let projection = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+        #expect(try await projection.sessionGoals().first?.id == goal.id)
+        await #expect(throws: (any Error).self) {
+            try await projection.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
+        }
+        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [session]) }
+        await #expect(throws: (any Error).self) {
+            try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
+        }
+        _ = try await db.mutateGoal(sessionID: session, mutation: .clear(id: goal.id))
+        await #expect(throws: (any Error).self) { try await create(db, session) }
+        #expect(try await db.read { try $0.goalUnlocked(session) } == nil)
     }
 
     @Test func mutationRetriesCannotReplaceANewerGoalOrTargetAnotherSession() async throws {

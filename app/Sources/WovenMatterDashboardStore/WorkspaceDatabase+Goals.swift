@@ -77,10 +77,29 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=? AND (status='queued' OR (status='sending' AND transport_started=0))", [id])
     }
 
+    private func requireGoalExecutionSessionUnlocked(_ sessionID: String) throws {
+        let row = try historyRowsUnlocked("""
+            SELECT s.runtime_kind FROM desktop_local_acp_sessions s
+            JOIN dashboard_conversations c ON c.id=s.conversation_id
+            WHERE s.conversation_id=? AND c.desktop_owned=1 AND c.is_archived=0 AND c.deleted_at IS NULL
+              AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations o WHERE o.id=c.id)
+            """, values: [sessionID]).first
+        guard let kind = row?.objectValue?["runtime_kind"]?.stringValue.flatMap(AgentRuntimeKind.init(rawValue:)) else {
+            throw WorkspaceToolError.invalid("Goals require an active chat on its desktop execution owner.")
+        }
+        guard WorkspaceGoal.supports(kind) else {
+            throw WorkspaceToolError.invalid("Goals require Pi Durable, Codex, Claude Code, Grok Build or OpenCode.")
+        }
+    }
+
     public func mutateGoal(sessionID: String, mutation: WorkspaceGoalMutation, callerID: String? = nil,
                            requestID: String? = nil, now: Date = Date()) throws -> WorkspaceGoal? {
         try transaction {
             try requireToolSessionUnlocked(sessionID)
+            switch mutation {
+            case .set, .resume: try requireGoalExecutionSessionUnlocked(sessionID)
+            default: break
+            }
             if let callerID {
                 guard callerID == sessionID else { throw WorkspaceToolError.invalid("An agent can only change its own goal.") }
                 try requireToolUnlocked(.goals, sessionID: callerID)
@@ -89,9 +108,6 @@ extension WorkspaceDatabaseConnection {
                 var goal = try goalUnlocked(sessionID)
                 if case let .set(objective, tokens, turns) = mutation {
                     try requireToolUnlocked(.goals, sessionID: sessionID)
-                    let kind = try historyRowsUnlocked("SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [sessionID])
-                        .first?.objectValue?["runtime_kind"]?.stringValue.flatMap(AgentRuntimeKind.init(rawValue:))
-                    guard WorkspaceGoal.supports(kind) else { throw WorkspaceToolError.invalid("Goals require Pi Durable, Codex, Claude Code, Grok Build or OpenCode.") }
                     guard goal == nil || goal?.status == .complete else { throw WorkspaceToolError.invalid("A goal already exists. Edit or clear it before setting another.") }
                     try WorkspaceGoal.validate(objective: objective, tokenBudget: tokens, turnBudget: turns)
                     if goal != nil {
@@ -214,6 +230,10 @@ extension WorkspaceDatabaseConnection {
         try transaction {
             var deliveries: [WorkspaceSessionDelivery] = []
             for var goal in try sessionGoals() where goal.status == .active {
+                do { try requireGoalExecutionSessionUnlocked(goal.sessionID) } catch {
+                    goal.status = .paused; goal.evidence = "Execution ownership changed or this chat is archived."
+                    try cancelQueuedGoalDeliveryUnlocked(goal); try saveGoalUnlocked(goal); continue
+                }
                 let original = goal
                 try captureGoalRunsUnlocked(&goal)
                 if goal != original { try saveGoalUnlocked(goal) }
@@ -305,6 +325,7 @@ extension WorkspaceDatabaseConnection {
     }
 
     func goalDeliveryAuthorizedUnlocked(sessionID: String, deliveryID: String) throws -> Bool {
+        do { try requireGoalExecutionSessionUnlocked(sessionID) } catch { return false }
         guard let goal = try goalUnlocked(sessionID) else { return false }
         guard goal.status == .active, goal.pendingDeliveryID == deliveryID else { return false }
         return try sessionToolsUnlocked(sessionID).enabled.contains(.goals)

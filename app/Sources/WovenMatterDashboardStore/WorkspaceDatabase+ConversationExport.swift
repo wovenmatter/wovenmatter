@@ -22,7 +22,11 @@ extension WorkspaceDatabaseConnection {
     guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked(),
       let conversation = try historyRowsUnlocked("""
         SELECT * FROM dashboard_conversations WHERE id=? AND (user_id=? OR desktop_owned=1)
-          AND deleted_at IS NULL AND is_archived=0 AND governing_plane='wovenmatter_macos'
+          AND deleted_at IS NULL
+          AND (is_archived=0 OR (desktop_owned=1
+            AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+              WHERE conversation_id=dashboard_conversations.id)))
+          AND governing_plane='wovenmatter_macos'
         """, values: [id, operatorID]).first else { throw WorkspaceConversationActionError.unavailable }
     guard FileManager.default.createFile(atPath: temporaryURL.path, contents: nil,
       attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
@@ -71,7 +75,11 @@ extension WorkspaceDatabaseConnection {
       guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked(),
             let _ = try historyRowsUnlocked("""
               SELECT id FROM dashboard_conversations WHERE id = ? AND (user_id = ? OR desktop_owned = 1)
-                AND deleted_at IS NULL AND is_archived = 0 AND governing_plane = 'wovenmatter_macos'
+                AND deleted_at IS NULL
+                AND (is_archived = 0 OR (desktop_owned = 1
+                  AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+                    WHERE conversation_id = dashboard_conversations.id)))
+                AND governing_plane = 'wovenmatter_macos'
               """, values: [id, operatorID]).first else { throw WorkspaceConversationActionError.unavailable }
       var budget = budget
       try checkConversationExportBudget(id: id, format: format, budget: &budget)

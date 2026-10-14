@@ -52,10 +52,11 @@ extension OpenCodeValue: ExpressibleByDictionaryLiteral {
 }
 
 public enum OpenCodeError: LocalizedError, Equatable, Sendable {
-    case message(String), http(Int), incompatible(String), malformedStream, uncertain(String)
+    case message(String), http(Int), incompatible(String), malformedStream, uncertain(String), executionRootMismatch
     public var errorDescription: String? {
         switch self {
         case .message(let text): text
+        case .executionRootMismatch: "OpenCode's current directory does not match this chat's saved folder. Choose the folder again before sending, or start a new chat."
         case .http(401): "OpenCode rejected the credentials. Reconnect with the service's current credentials."
         case .http(404): "This OpenCode resource no longer exists on the connected service."
         case .http(let code): "OpenCode returned HTTP \(code)."

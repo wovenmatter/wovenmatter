@@ -21,6 +21,16 @@ extension ApplicationModel {
         switch mutation { case .pause, .clear, .edit: stops = true; default: stops = false }
         let result: Result<WorkspaceGoal?, any Error>
         if stops {
+            let expectedID: String
+            switch mutation {
+            case .pause(let id), .clear(let id), .edit(let id, _, _, _): expectedID = id
+            default: throw WorkspaceToolError.invalid("Unsupported goal control.")
+            }
+            guard let current = try await database.sessionGoals().first(where: { $0.sessionID == id }), current.id == expectedID else {
+                throw WorkspaceToolError.invalid("This goal has changed. Refresh before updating it.")
+            }
+            if case .pause = mutation, current.status == .complete { throw WorkspaceToolError.invalid("This goal is complete. Set a new goal.") }
+
             // Install the barrier before any await, and keep the mutation inside
             // it so a later Resume or user input observes the whole operation.
             let outcome = GoalMutationOutcome()

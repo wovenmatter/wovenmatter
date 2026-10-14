@@ -63,7 +63,7 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
 }
 
 public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
-    public let workingDirectory: String?
+    public private(set) var workingDirectory: String?
     public let sessionKey: String
     public let model: String?
     public let thinking: String?
@@ -108,6 +108,15 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
         self.workingDirectory = workingDirectory
+    }
+
+    /// Folder selection changes a draft's execution root, not its confirmed
+    /// model, thinking, permission, or catalog. Reconnect the native session
+    /// lazily while retaining these controls in the frontend projection.
+    public func withWorkingDirectory(_ path: String) -> Self {
+        var copy = self
+        copy.workingDirectory = path
+        return copy
     }
 
     public var selectableModels: [String] {
@@ -157,13 +166,12 @@ public struct LocalACPSessionMetadataTaskIdentity: Hashable, Sendable {
     private let launchAvailable: Bool?
 
     public init?(conversationID: String, runtimeKind: AgentRuntimeKind?,
-                 usesOpenClawGateway: Bool, launchAvailable: @autoclosure () -> Bool) {
-        guard let runtimeKind else { return nil }
+                 launchAvailable: @autoclosure () -> Bool) {
+        guard let runtimeKind, AgentRuntimeKind.allCases.contains(runtimeKind) else { return nil }
         self.conversationID = conversationID
         self.runtimeKind = runtimeKind
-        // These paths watch an existing native session or gateway connection.
-        // Do not observe unrelated CLI launch state for either one.
-        self.launchAvailable = runtimeKind == .opencode || usesOpenClawGateway
+        // OpenCode watches its existing native service connection.
+        self.launchAvailable = runtimeKind == .opencode
             ? nil : launchAvailable()
     }
 }

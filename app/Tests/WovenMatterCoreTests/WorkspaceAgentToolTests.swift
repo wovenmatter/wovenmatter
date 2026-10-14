@@ -208,7 +208,7 @@ struct WorkspaceAgentToolTests {
   @Test func editBatchesCannotExceedDocumentLimitsBetweenOperations() async throws {
     let document = NoteDocument(blocks: [.richText(.init(id: "left")), .richText(.init(id: "right"))])
     var left = NoteTableBlock(rows: 100, columns: 100); left.id = "left"
-    var right = left; right.id = "right"
+    var right = NoteTableBlock(rows: 100, columns: 100); right.id = "right"
     let operations: [NoteEditOperation] = [.replaceBlock(id: "left", block: .table(left)),
       .replaceBlock(id: "right", block: .table(right)), .deleteBlock(id: "right")]
     #expect(throws: RemoteNoteEditError.operationTooLarge) {
@@ -431,7 +431,11 @@ struct WorkspaceAgentToolTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let a = try await db.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let b = try await db.createLocalACPSession(runtimeKind: .pi, title: "Destination", ownerDeviceID: UUID())
+    let b = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Destination", ownerDeviceID: UUID())
+    for id in [a, b] {
+      try await db.saveSessionExecutionRoot(id: id, folderID: nil,
+        location: .init(workspaceID: "device:test", rootPath: dir.path, managed: false), defaultPath: dir.path)
+    }
     return (db, dir, a, b)
   }
 
@@ -458,7 +462,7 @@ struct WorkspaceAgentToolTests {
     let request = UUID().uuidString.lowercased()
     let reserved = try await db.reserveToolSessionCreation(sourceID: a, requestID: request, arguments: ["sessions", "create"], purpose: "Build", managed: true)
     let target = try #require(reserved.objectValue?["target_id"]?.stringValue)
-    _ = try await db.createLocalACPSession(runtimeKind: .pi, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    _ = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.requireTranscriptAccess(sourceID: a, targetID: target) }
     await #expect(throws: (any Error).self) { try await db.completeToolSessionCreation(requestID: request, sourceID: b) }
     try await db.completeToolSessionCreation(requestID: request, sourceID: a)
@@ -538,7 +542,7 @@ struct WorkspaceAgentToolTests {
     let (db, dir, a, b) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
     try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: a)
-    let c = try await db.createLocalACPSession(runtimeKind: .pi, title: "Unattached", ownerDeviceID: UUID())
+    let c = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Unattached", ownerDeviceID: UUID())
     await #expect(throws: WorkspaceToolError.accessRequired(b)) { try await db.requireTranscriptAccess(sourceID: a, targetID: b) }
     try await db.attachConversationReference(sourceID: a, targetID: b)
     try await db.requireTranscriptAccess(sourceID: a, targetID: b)
@@ -553,7 +557,7 @@ struct WorkspaceAgentToolTests {
     let (db, dir, a, b) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
     let run = try await db.beginLocalACPRun(conversationID: b, content: "Private content")
-    try await db.recordHistory(.init(id: "event", conversationID: b, runID: run.runID, harness: "pi", kind: "wire.in", payload: "Private event"))
+    try await db.recordHistory(.init(id: "event", conversationID: b, runID: run.runID, harness: "claude_code", kind: "wire.in", payload: "Private event"))
     try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: a)
     for query in [WorkspaceHistoryQuery(command: "event", id: "event"), .init(command: "trace", id: run.runID),
                   .init(command: "message", id: run.userMessageID), .init(command: "runs", conversationID: b)] {
@@ -600,7 +604,7 @@ struct WorkspaceAgentToolTests {
   @Test func onlyOneCoordinatorWinsCompetingRequests() async throws {
     let (db, dir, a, b) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let c = try await db.createLocalACPSession(runtimeKind: .pi, title: "Other", ownerDeviceID: UUID())
+    let c = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
     let winners = await withTaskGroup(of: String?.self) { group in
       for source in [a, c] { group.addTask {
         do { try await db.beginCoordination(sourceID: source, targetID: b, purpose: "Manage"); return source }
@@ -626,7 +630,7 @@ struct WorkspaceAgentToolTests {
     try await db.saveToolSettings(settings)
     try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Manage")
     try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Update intent")
-    let c = try await db.createLocalACPSession(runtimeKind: .pi, title: "Other", ownerDeviceID: UUID())
+    let c = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
     await #expect(throws: WorkspaceToolError.managedLimit(1)) { try await db.beginCoordination(sourceID: a, targetID: c, purpose: "Over limit") }
     #expect(try await db.sessionRelationship(c).coordinatorID == nil)
     await #expect(throws: (any Error).self) { try await db.beginCoordination(sourceID: b, targetID: a, purpose: "Cycle") }
@@ -681,10 +685,10 @@ struct WorkspaceAgentToolTests {
   @Test func folderSearchBroadensOnlyWhenNoLocalMatchExists() async throws {
     let (db, dir, a, b) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let folder = try await db.createFolder(name: "Project")
+    let folder = try await db.createFolder(name: "Project", location: .init(workspaceID: "device:test", rootPath: dir.path + "/Project", managed: false))
     _ = try await db.moveConversation(id: a, toFolderID: folder)
     try await db.recordHistory(.init(id: "local", conversationID: a, harness: "codex", kind: "wire.in", payload: "needle"))
-    try await db.recordHistory(.init(id: "outside", conversationID: b, harness: "pi", kind: "wire.in", payload: "needle external-only"))
+    try await db.recordHistory(.init(id: "outside", conversationID: b, harness: "claude_code", kind: "wire.in", payload: "needle external-only"))
     let local = try await db.queryAgentHistory(.init(command: "search", search: "needle"), callerID: a)
     #expect(local.objectValue?["scope"]?.stringValue == "folder")
     #expect(local.objectValue?["rows"]?.arrayValue?.map { $0.objectValue?["id"]?.stringValue } == ["local"])
@@ -700,7 +704,7 @@ struct WorkspaceAgentToolTests {
     let id = UUID().uuidString.lowercased()
     let first = try await db.reserveToolDelivery(sourceID: a, targetID: b, text: "Do the work", requestID: id)
     #expect(first.sourceTitle == "Coordinator" && first.targetTitle == "Destination")
-    #expect(first.sourceHarness == "codex" && first.targetHarness == "pi")
+    #expect(first.sourceHarness == "codex" && first.targetHarness == "claude_code")
     _ = try await db.reserveToolDelivery(sourceID: a, targetID: b, text: "Do the work", requestID: id)
     let claims = try await withThrowingTaskGroup(of: Bool.self) { group in
       for _ in 0..<5 { group.addTask { try await db.claimToolDelivery(id: id) != nil } }
@@ -806,7 +810,7 @@ struct WorkspaceAgentToolTests {
     #expect(retry.objectValue?["status"]?.stringValue == "planned")
     let target = try #require(retry.objectValue?["target_id"]?.stringValue)
     #expect(first.objectValue?["target_id"]?.stringValue == target)
-    let created = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    let created = try await reopened.createLocalACPSession(runtimeKind: .claudeCode, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     #expect(created == target)
     #expect(try await reopened.sessionRelationship(target).createdBy == source)
     #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes])
@@ -1012,8 +1016,9 @@ extension WorkspaceAgentToolTests {
   func creationConfigurationSurvivesReopenAndKeepsResolvedDefaults(remote: Bool, emptyTools: Bool) async throws {
     let (db, dir, source, other) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let folder = try await db.createFolder(name: "Original folder")
-    let laterFolder = try await db.createFolder(name: "Later folder")
+    let owner = remote ? "remote:test" : "device:test"
+    let folder = try await db.createFolder(name: "Original folder", location: .init(workspaceID: owner, rootPath: "/workspace/original", managed: false))
+    let laterFolder = try await db.createFolder(name: "Later folder", location: .init(workspaceID: owner, rootPath: "/workspace/later", managed: false))
     try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: source)
     let requestID = UUID().uuidString
     let args = ["sessions", "create", "--title", "Planned title"]
@@ -1053,6 +1058,8 @@ extension WorkspaceAgentToolTests {
       _ = try await reopened.createLocalACPSession(runtimeKind: saved.runtimeKind, title: "Provider default",
         ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     }
+    try await reopened.saveSessionExecutionRoot(id: target, folderID: folder,
+      location: .init(workspaceID: owner, rootPath: "/workspace/original", managed: false), defaultPath: "/workspace/default")
     let inserted = try await #require(reopened.workspaceOverview().conversations.first { $0.id == target })
     #expect(inserted.title == saved.title && inserted.folderID == folder && inserted.remoteWorkspaceID == saved.workspaceID)
     #expect(try await reopened.sessionTools(target) == saved.tools)
@@ -1086,15 +1093,15 @@ extension WorkspaceAgentToolTests {
       arguments: ["sessions", "create"], purpose: "Work", managed: true)
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
     _ = try await db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source,
-      configuration: .init(runtimeKind: .pi, title: "Planned"))
+      configuration: .init(runtimeKind: .claudeCode, title: "Planned"))
     try await db.setSessionTools(.init(enabled: []), sessionID: source)
     await #expect(throws: WorkspaceToolError.disabled(.sessions)) {
-      try await db.createLocalACPSession(runtimeKind: .pi, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+      try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     }
     #expect(try await !db.workspaceOverview().conversations.contains { $0.id == target })
     #expect(try await db.sessionRelationship(target).createdBy == nil)
     try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
-    _ = try await db.createLocalACPSession(runtimeKind: .pi, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    _ = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     #expect(try await db.workspaceOverview().conversations.first { $0.id == target }?.title == "Planned")
   }
 }
@@ -1154,8 +1161,8 @@ extension WorkspaceAgentToolTests {
       arguments: arguments, purpose: "Work", managed: true)
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
     _ = try await db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source,
-      configuration: .init(runtimeKind: .pi, title: "Created", model: "original"))
-    _ = try await db.createLocalACPSession(runtimeKind: .pi, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+      configuration: .init(runtimeKind: .claudeCode, title: "Created", model: "original"))
+    _ = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     try await db.markToolSessionCreationConfigured(requestID: requestID, sourceID: source)
     try await db.beginCoordination(sourceID: competing, targetID: target, purpose: "User reassigned")
     await #expect(throws: WorkspaceToolError.coordinationConflict(competing)) {

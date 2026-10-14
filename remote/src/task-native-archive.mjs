@@ -44,11 +44,6 @@ export async function createTaskNativeArchive({sourceID, nativeSessionID, runID,
   }
 }
 
-export const piRunEvent = type => typeof type === 'string'
-  && (type === 'extension_ui_request' || ['agent_', 'message_', 'tool_', 'turn_', 'auto_compaction_', 'auto_retry_'].some(prefix => type.startsWith(prefix)))
-export const hermesRunEvent = type => typeof type === 'string'
-  && !['config.', 'auth.', 'credential.', 'secret.', 'sudo.'].some(prefix => type.startsWith(prefix))
-
 const textKeys = ['message', 'content', 'text', 'thinking', 'reasoning', 'summary', 'output', 'result', 'result_text', 'payload', 'assistantMessageEvent', 'delta', 'arguments', 'args', 'input']
 function searchableText(value, remaining = {characters: 256 * 1024}) {
   if (!remaining.characters) return undefined

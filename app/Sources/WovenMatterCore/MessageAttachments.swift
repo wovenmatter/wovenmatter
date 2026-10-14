@@ -116,11 +116,14 @@ public struct AgentCLIContext: Codable, Equatable, Sendable {
   public let executablePath: String
   public let socketPath: String?
   public let captureID: String
+  /// Stable app conversation identity; no tool capability or credential.
+  public let sessionID: String?
 
-  public init(executablePath: String, socketPath: String?, captureID: String) {
+  public init(executablePath: String, socketPath: String?, captureID: String, sessionID: String? = nil) {
     self.executablePath = executablePath
     self.socketPath = socketPath
     self.captureID = captureID
+    self.sessionID = sessionID
   }
 }
 
@@ -193,7 +196,7 @@ public struct AgentMessageInput: Codable, Equatable, Sendable {
     for reference in references {
       let label = reference.kind == .note ? "Note" : "Conversation"
       sections.append("""
-        <wovenmatter-reference type="\(label.lowercased())" id="\(reference.resourceID)" title="\(reference.titleSnapshot)">
+        <wovenmatter-reference type="\(label.lowercased())" id="\(reference.resourceID)" revision="\(reference.revisionSnapshot)" title="\(reference.titleSnapshot)">
         \(reference.kind == .conversation ? "Read this attached session with wovenmatter history conversation " + reference.resourceID + ". This attachment grants read-only access to this session." : reference.contentSnapshot)
         </wovenmatter-reference>
         """)

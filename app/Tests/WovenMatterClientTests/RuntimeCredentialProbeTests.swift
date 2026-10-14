@@ -5,7 +5,7 @@ import WovenMatterCore
 
 @Suite("Runtime credential probe policy")
 struct RuntimeCredentialProbeTests {
-  private static let kinds: [AgentRuntimeKind] = [.codex, .claudeCode, .cursor, .pi, .hermes, .grokBuild, .openclaw]
+  private static let kinds: [AgentRuntimeKind] = [.codex, .claudeCode, .grokBuild]
 
   @Test("passive discovery preserves chat launch without starting provider sessions", arguments: Self.kinds)
   func passiveDiscovery(kind: AgentRuntimeKind) async throws {
@@ -46,11 +46,11 @@ struct RuntimeCredentialProbeTests {
 
   @Test("passive discovery retains the last credential failure without retrying")
   func preservesPreviousAccountCheck() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .cursor))
-    let discovered = resolution(.cursor)
+    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
+    let discovered = resolution(.codex)
     let prior = LocalACPRuntimeResolution(
-      availability: .init(runtimeKind: .cursor, displayName: "Cursor", state: .authenticationRequired,
-                          detail: "Previous account check needs access", executablePath: "/fixture/cursor"),
+      availability: .init(runtimeKind: .codex, displayName: "Codex", state: .authenticationRequired,
+                          detail: "Previous account check needs access", executablePath: "/fixture/codex"),
       launchConfiguration: nil
     )
     let result = await LocalACPRuntimeVerifier.refresh(
@@ -64,11 +64,11 @@ struct RuntimeCredentialProbeTests {
 
   @Test("changed or missing executables invalidate cached readiness")
   func invalidatesStaleInstallation() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .cursor))
-    let prior = resolution(.cursor)
-    let moved = resolution(.cursor, path: "/new-fixture/cursor")
+    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
+    let prior = resolution(.codex)
+    let moved = resolution(.codex, path: "/new-fixture/codex")
     let missing = LocalACPRuntimeResolution(
-      availability: .init(runtimeKind: .cursor, displayName: "Cursor", state: .cliMissing,
+      availability: .init(runtimeKind: .codex, displayName: "Codex", state: .cliMissing,
                           detail: "Not installed", executablePath: nil),
       launchConfiguration: nil
     )
@@ -84,13 +84,13 @@ struct RuntimeCredentialProbeTests {
 
   @Test("a canceled explicit check does not start a provider")
   func cancellationDoesNotProbe() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .cursor))
-    let discovered = resolution(.cursor)
+    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
+    let discovered = resolution(.codex)
     let task = Task {
       withUnsafeCurrentTask { $0?.cancel() }
       return await LocalACPRuntimeVerifier.refresh(
         definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), credentialCheckRuntimeKinds: [.cursor],
+        workingDirectory: URL(fileURLWithPath: "/fixture"), credentialCheckRuntimeKinds: [.codex],
         verification: { _, _, _ in Issue.record("Canceled check must not start a provider"); return discovered }
       )
     }

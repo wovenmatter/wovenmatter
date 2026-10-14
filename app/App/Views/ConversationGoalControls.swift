@@ -3,12 +3,22 @@ import WovenMatterCore
 
 struct ConversationGoalControls: View {
     @Environment(\.dashboardTheme) private var theme
-    @Bindable var tools: WorkspaceAgentToolsModel
+    private let currentGoal: () -> WorkspaceGoal?
     let sessionID: String
+    let update: (WorkspaceGoalMutation) async throws -> Void
+
+    init(tools: WorkspaceAgentToolsModel, sessionID: String) {
+        self.sessionID = sessionID
+        currentGoal = { tools.goals[sessionID] }
+        update = { try await tools.mutateGoalFromUI(sessionID: sessionID, mutation: $0) }
+    }
+    init(goal: WorkspaceGoal?, sessionID: String, update: @escaping (WorkspaceGoalMutation) async throws -> Void) {
+        self.sessionID = sessionID; currentGoal = { goal }; self.update = update
+    }
     @State private var editing = false
     @State private var error: String?
     @State private var busy = false
-    private var goal: WorkspaceGoal? { tools.goals[sessionID] }
+    private var goal: WorkspaceGoal? { currentGoal() }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -43,7 +53,7 @@ struct ConversationGoalControls: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(theme.palette.themeWhisper, in: DashboardShapes.card)
         .sheet(isPresented: $editing) {
-            ConversationGoalEditor(goal: goal, sessionID: sessionID, tools: tools)
+            ConversationGoalEditor(goal: goal, update: update)
         }
         .alert("Unable to update goal", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) { error = nil }
@@ -54,7 +64,7 @@ struct ConversationGoalControls: View {
         busy = true
         Task {
             defer { busy = false }
-            do { try await tools.mutateGoalFromUI(sessionID: sessionID, mutation: mutation) }
+            do { try await update(mutation) }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -63,16 +73,15 @@ struct ConversationGoalControls: View {
 private struct ConversationGoalEditor: View {
     @Environment(\.dismiss) private var dismiss
     let goal: WorkspaceGoal?
-    let sessionID: String
-    let tools: WorkspaceAgentToolsModel
+    let update: (WorkspaceGoalMutation) async throws -> Void
     @State private var objective: String
     @State private var tokens: String
     @State private var turns: String
     @State private var error: String?
     @State private var saving = false
 
-    init(goal: WorkspaceGoal?, sessionID: String, tools: WorkspaceAgentToolsModel) {
-        self.goal = goal; self.sessionID = sessionID; self.tools = tools
+    init(goal: WorkspaceGoal?, update: @escaping (WorkspaceGoalMutation) async throws -> Void) {
+        self.goal = goal; self.update = update
         _objective = State(initialValue: goal?.status == .complete ? "" : goal?.objective ?? "")
         _tokens = State(initialValue: goal?.tokenBudget.map(String.init) ?? "")
         _turns = State(initialValue: goal?.turnBudget.map(String.init) ?? "")
@@ -118,7 +127,7 @@ private struct ConversationGoalEditor: View {
                 if let goal, goal.status != .complete {
                     mutation = .edit(id: goal.id, objective: objective, tokenBudget: tokenBudget, turnBudget: turnBudget)
                 } else { mutation = .set(objective: objective, tokenBudget: tokenBudget, turnBudget: turnBudget) }
-                try await tools.mutateGoalFromUI(sessionID: sessionID, mutation: mutation)
+                try await update(mutation)
                 dismiss()
             } catch { self.error = error.localizedDescription }
         }

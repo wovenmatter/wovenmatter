@@ -124,7 +124,7 @@ struct ActivitySummaryPersistenceTests {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .openclaw,
+    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
       title: "Reconcile", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
     for id in ["keep", "obsolete"] {
@@ -210,7 +210,7 @@ struct ActivitySummaryPersistenceTests {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .openclaw,
+    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
       title: "Rollback", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
     try await database.upsertDeviceOwnedRunActivity(runID: run.runID,

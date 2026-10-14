@@ -98,6 +98,8 @@ extension NoteDocument {
       for run in runs {
         try budget.consume(run.text); try budget.consume(run.link); try budget.consume(run.fontFamily)
         try budget.consume(run.foregroundHex); try budget.consume(run.highlightHex)
+        try budget.consume(run.databaseValueID)
+        try link(run.databaseLink, budget: &budget)
       }
     }
     try link(databaseLink, budget: &budget)

@@ -1,0 +1,511 @@
+import Foundation
+import WovenMatterClient
+import WovenMatterCore
+import WovenMatterDashboardStore
+
+/// The same Mac-owned routing, concurrency and note-binding path used by desktop UI.
+/// Request tasks only await this service; they never own or cancel provider tasks.
+@MainActor
+final class CompanionCommandService: CompanionCommandServing {
+    enum CommandError: LocalizedError {
+        case unavailable, invalidCommand, unknownProvider, unknownConversation
+        case noteRevisionChanged, activeNoteBindingUnsupported, interactionResolved
+        case creationFailed(String)
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: "The Mac workspace is not ready."
+            case .invalidCommand: "This command is missing a valid ID, target, or response."
+            case .unknownProvider: "This agent route is unavailable. Configure it on the Mac."
+            case .unknownConversation: "This conversation no longer exists. Refresh the workspace."
+            case .noteRevisionChanged: "The note changed on the Mac. Sync and review it before starting this run."
+            case .activeNoteBindingUnsupported: "Wait for this run to finish before binding a note on this route."
+            case .interactionResolved: "This request was already answered, ended, or the response is invalid."
+            case .creationFailed(let message): message
+            }
+        }
+    }
+    private struct HistoryCursor: Codable { let createdAt: String; let messageID: String }
+    unowned let model: ApplicationModel
+    private var commandDispatcher: CompanionCommandDispatcher?
+    private var toolDispatcher: CompanionToolDispatcher?
+
+    init(model: ApplicationModel) { self.model = model }
+
+    func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
+        guard let database = model.dashboardStore?.database, let tools = model.agentTools else {
+            throw CommandError.unavailable
+        }
+        try await requireToolExecutionAccess(request.request, callerID: request.conversationID, deviceID: deviceID)
+        if toolDispatcher == nil { toolDispatcher = CompanionToolDispatcher(database: database) }
+        return try await toolDispatcher!.execute(request, deviceID: deviceID) { [self] request, callerID in
+            // Reservation awaits SQLite; a device policy may change before the
+            // accepted operation actually reaches the provider/executor.
+            do { try await requireToolExecutionAccess(request, callerID: callerID, deviceID: deviceID) }
+            catch let error as CompanionAPIError {
+                return .init(success: false, error: error.message, code: error.code, requestID: request.requestID)
+            } catch {
+                return .init(success: false, error: error.localizedDescription, code: "execution_authorization_failed", requestID: request.requestID)
+            }
+            return await tools.handle(request, callerID: callerID)
+        }
+    }
+
+    func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant, device: CompanionPairedDevice) async throws -> CompanionExecutionWorkspace {
+        try await model.companionHost.registerExecutionManagement(grant, device: device)
+    }
+
+    func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
+        try await model.companionHost.provisionExecutionWorkspace(id: id, device: device)
+    }
+
+    func send(
+        conversation: WorkspaceConversationRecord,
+        input: AgentMessageInput,
+        note: WorkspaceNoteRecord? = nil,
+        expectedRunID: String? = nil,
+        requiresIdle: Bool = false,
+        expectedNoteRevision: String? = nil
+    ) async throws -> LocalACPRunIdentifiers? {
+        try await model.acceptCanonicalAgentMessage(
+            conversation: conversation, input: input, note: note,
+            expectedRunID: expectedRunID, requiresIdle: requiresIdle,
+            expectedNoteRevision: expectedNoteRevision
+        )
+    }
+
+    func stop(conversationID: String, runID: String) async throws {
+        try await model.cancelCanonicalRun(conversationID: conversationID, runID: runID)
+    }
+
+    func providers() -> [CompanionProvider] {
+        let catalog = (try? HarnessCatalog.loadBundled().harnesses) ?? []
+        func provider(_ runtime: AgentRuntimeKind, id: String, name: String, route: String, available: Bool) -> CompanionProvider {
+            let definition = catalog.first { $0.id == runtime }
+            return CompanionProvider(
+                id: id, runtimeKind: runtime.rawValue, displayName: name, routeName: route,
+                available: available, canStart: available,
+                canResume: definition?.capabilities.contains("resume") == true,
+                canSteer: false, canStop: available,
+                supportsApprovals: true, supportsQuestions: runtime == .claudeCode,
+                activeInputMode: "notNegotiated",
+                unavailableReason: available ? nil : "Enable and configure this agent on the Mac."
+            )
+        }
+        var result = AgentRuntimeKind.allCases.map { runtime in
+            provider(runtime, id: "local:\(runtime.rawValue)", name: runtime.displayName,
+                     route: "This Mac", available: model.canStartCanonicalLocalSession(runtime))
+        }
+        for workspace in model.remoteWorkspaces.workspaces {
+            for runtime in AgentRuntimeKind.allCases {
+                result.append(provider(runtime,
+                    id: "remote:\(workspace.id.uuidString.lowercased()):\(runtime.rawValue)",
+                    name: runtime.displayName, route: workspace.name,
+                    available: model.remoteWorkspaces.isHarnessReady(runtime, in: workspace)))
+            }
+        }
+        return result
+    }
+
+    /// Reads already negotiated state; never starts a provider just to display controls.
+    func sessionCapabilities(conversationID: String) async throws -> CompanionProvider {
+        let conversation = try await conversation(conversationID)
+        if try await model.dashboardStore?.database.companionExecutionOwner(conversationID: conversationID) != nil {
+            let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
+            guard var capability = snapshot.capability else { throw CommandError.unavailable }
+            capability.available = snapshot.online
+            return capability
+        }
+        guard let runtime = conversation.localRuntimeKind else { throw CommandError.unknownProvider }
+        let routeID: String
+        if let workspaceID = conversation.remoteWorkspaceID {
+            routeID = "remote:\(workspaceID.uuidString.lowercased()):\(runtime.rawValue)"
+        } else {
+            routeID = "local:\(runtime.rawValue)"
+        }
+        guard var capability = providers().first(where: { $0.id == routeID }) else { throw CommandError.unknownProvider }
+        let active = await model.canonicalActiveRunID(conversationID: conversationID) != nil
+        if runtime == .opencode {
+            capability.activeInputMode = "unsupported"
+            capability.canSteer = false
+        } else if let mode = await model.dashboardStore?.localACPActiveInputCapability(conversationID: conversationID) {
+            capability.activeInputMode = mode == .grokInterjection ? "grokInterjectionWithConcurrentFallback" : mode.rawValue
+            capability.canSteer = active && mode != .unsupported
+        }
+        capability.canStop = active
+        return capability
+    }
+
+    func pendingInteractions() async -> [CompanionPendingInteraction] {
+        var result = model.pendingLocalACPPermissions.map { pending in
+            CompanionPendingInteraction(
+                id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
+                runID: pending.runID, kind: .approval, title: pending.title,
+                options: pending.options.map { .init(id: $0.id, label: $0.name, detail: $0.kind) }
+            )
+        }
+        result += model.pendingLocalACPInteractions.map { pending in
+            switch pending.request {
+            case .form(let request):
+                CompanionPendingInteraction(
+                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
+                    runID: pending.runID, kind: .question, title: request.message,
+                    questions: request.fields.map { field in
+                        let options: [CompanionInteractionOption] = field.kind == .boolean
+                            ? [.init(id: "true", label: "Yes"), .init(id: "false", label: "No")]
+                            : field.options.map { .init(id: $0.id, label: $0.label, detail: $0.detail) }
+                        var hints = [field.title]
+                        if !field.required { hints.append("Optional") }
+                        if let detail = field.detail { hints.append(detail) }
+                        if field.kind == .number || field.kind == .integer {
+                            hints.append(field.kind == .integer ? "Enter a whole number." : "Enter a number.")
+                            if let value = field.minimum { hints.append("Minimum: \(value)") }
+                            if let value = field.maximum { hints.append("Maximum: \(value)") }
+                        }
+                        if let value = field.minimumLength { hints.append("Minimum length: \(value)") }
+                        if let value = field.maximumLength { hints.append("Maximum length: \(value)") }
+                        return .init(id: field.id, prompt: hints.joined(separator: "\n"), options: options,
+                            allowsMultiple: field.kind == .multipleChoice,
+                            allowsFreeText: [.text, .number, .integer].contains(field.kind), required: field.required)
+                    })
+            case .questions(let request):
+                CompanionPendingInteraction(
+                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
+                    runID: pending.runID, kind: .question, title: request.title ?? "Agent question",
+                    questions: request.questions.map { question in
+                        .init(id: question.id, prompt: question.prompt,
+                              options: question.options.map { .init(id: $0.id, label: $0.label) },
+                              allowsMultiple: question.allowsMultiple, allowsFreeText: true)
+                    }
+                )
+            case .secret:
+                CompanionPendingInteraction(
+                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
+                    runID: pending.runID, kind: .approval, title: "Continue on your Mac",
+                    detail: "This agent needs a secret. Enter it in Woven Matter on your Mac.")
+            case .plan(let request):
+                CompanionPendingInteraction(
+                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
+                    runID: pending.runID, kind: .approval, title: request.name ?? "Review agent plan",
+                    detail: request.markdown, options: [
+                        .init(id: "accept", label: "Accept plan"),
+                        .init(id: "decline", label: "Decline plan")
+                    ]
+                )
+            }
+        }
+        if let client = model.federatedExecutionClient {
+            result += client.pending.values.flatMap { $0 }
+        }
+        return result + (await pendingNativeInteractions())
+    }
+
+    func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt {
+        guard command.deviceID == deviceID, UUID(uuidString: command.commandID) != nil,
+              (command.text?.utf8.count ?? 0) <= 256 * 1_024 else { throw CommandError.invalidCommand }
+        if command.kind == .respond {
+            guard nativeInteractionResponseIsSafeToJournal(command) else { throw CommandError.invalidCommand }
+            if let rawID = command.interactionID, let id = UUID(uuidString: rawID),
+               let pending = model.pendingLocalACPInteractions.first(where: { $0.id == id }),
+               case .secret = pending.request {
+                guard let response = command.response, response.cancelled,
+                      response.optionID == nil, response.answers.isEmpty else { throw CommandError.invalidCommand }
+            }
+        }
+        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        try await requireExecutionAccess(command, deviceID: deviceID)
+        return try await dispatcher(for: store).execute(command) { [self] original in
+            try await requireExecutionAccess(command, deviceID: deviceID)
+            var receipt = original
+            try await dispatch(command, receipt: &receipt)
+            return receipt
+        }
+    }
+
+    /// Map CLI execution to the same authority boundary as UI commands. Shared
+    /// library tools and read-only session inspection do not require execution
+    /// access. Existing session destinations always come from stored ownership.
+    private func requireToolExecutionAccess(_ request: WovenMatterToolRequest, callerID: String, deviceID: String) async throws {
+        let tool = try WovenMatterToolCommand(request.arguments)
+        guard !tool.wantsHelp else { return }
+        let command: CompanionCommand
+        switch (tool.group, tool.action) {
+        case (.sessions, "create"):
+            let workspace: String
+            if let explicit = tool.options["workspace"] { workspace = explicit }
+            else { workspace = try await conversation(callerID).remoteWorkspaceID?.uuidString.lowercased() ?? "local" }
+            let route: String
+            if workspace == "local" { route = "local:" }
+            else {
+                guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
+                route = "remote:\(id.uuidString.lowercased()):"
+            }
+            command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
+        case (.goals, "set"), (.goals, "resume"):
+            // A goal starts native work through the continuation loop. It needs
+            // the same workspace execution permission as an ordinary send.
+            command = .init(deviceID: deviceID, kind: .send, conversationID: callerID)
+        case (.sessions, "send"), (.sessions, "manage"), (.sessions, "release"), (.sessions, "notifications"):
+            command = .init(deviceID: deviceID, kind: .send,
+                conversationID: try tool.required("id", allowPositional: true))
+        case (.calendar, "create"), (.calendar, "update"), (.calendar, "copy"), (.calendar, "detach"):
+            // Ordinary calendar edits stay shared. A scheduled task is an
+            // execution request even when this edit only changes its time.
+            guard tool.options["regular-event"] == nil else { return }
+            var existing: WorkspaceCalendarTask?
+            if tool.action != "create" {
+                guard let database = model.dashboardStore?.database else { throw CommandError.unavailable }
+                existing = try await database.calendarEvent(id: tool.required("id", allowPositional: true), callerID: callerID).calendar.task
+            }
+            guard existing != nil || tool.options["prompt"] != nil else { return }
+            let workspace: String
+            if let explicit = tool.options["workspace"] { workspace = explicit }
+            else if let existing { workspace = existing.configuration.workspaceID?.uuidString.lowercased() ?? "local" }
+            else { workspace = try await conversation(callerID).remoteWorkspaceID?.uuidString.lowercased() ?? "local" }
+            let route: String
+            if workspace == "local" { route = "local:" }
+            else {
+                guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
+                route = "remote:\(id.uuidString.lowercased()):"
+            }
+            command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
+        case (.executor, "execute"), (.executor, "cancel"):
+            command = .init(deviceID: deviceID, kind: .createSession, providerID: "local:")
+        default: return
+        }
+        try await requireExecutionAccess(command, deviceID: deviceID)
+    }
+
+    /// Execution policy applies equally to direct grants and the legacy central
+    /// command route. Resolve existing sessions from stored ownership, never from
+    /// a workspace identifier supplied by the requesting client.
+    private func requireExecutionAccess(_ command: CompanionCommand, deviceID: String) async throws {
+        guard let database = model.dashboardStore?.database else { throw CommandError.unavailable }
+        let denied = Set(try await database.companionWorkspaceAccessPolicies()
+            .filter { $0.deviceID == deviceID && !$0.enabled }.map(\.workspaceID))
+        guard !denied.isEmpty else { return }
+        var conversationID = command.conversationID
+        if command.kind == .workspace {
+            switch command.workspaceAction {
+            case .goal(let id, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
+            case .saveCalendar(_, _, let draft):
+                guard let task = draft.task else { return }
+                let route: String
+                if let workspace = task.workspaceID {
+                    guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
+                    route = "remote:\(id.uuidString.lowercased()):"
+                } else { route = "local:" }
+                try await requireExecutionAccess(.init(deviceID: deviceID, kind: .createSession, providerID: route), deviceID: deviceID)
+                return
+            default: return // Library edits remain shared independently of execution.
+            }
+        }
+        let identity = try await database.companionLibraryIdentity()
+        let localID = try await database.companionExecutionWorkspaces().first {
+            $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID && !$0.deleted
+        }?.id
+        var target = localID
+        if command.kind == .createSession {
+            let route = command.providerID ?? command.routeID ?? ""
+            if route.hasPrefix("remote:") { target = route.split(separator: ":").dropFirst().first.map(String.init) }
+        } else if let conversationID {
+            if let owner = try await database.companionExecutionOwner(conversationID: conversationID) { target = owner }
+            else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
+        }
+        if let target, denied.contains(target) {
+            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Device Connections on the central Mac.")
+        }
+    }
+
+    func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? {
+        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        return try await dispatcher(for: store).receipt(commandID: commandID, deviceID: deviceID)
+    }
+
+    private func dispatcher(for store: DashboardStore) -> CompanionCommandDispatcher {
+        if let commandDispatcher, commandDispatcher.database === store.database { return commandDispatcher }
+        let dispatcher = CompanionCommandDispatcher(database: store.database)
+        commandDispatcher = dispatcher
+        return dispatcher
+    }
+
+    private func dispatch(_ command: CompanionCommand, receipt: inout CompanionCommandReceipt) async throws {
+        switch command.kind {
+        case .workspace:
+            guard let action = command.workspaceAction else { throw CommandError.invalidCommand }
+            try await performWorkspaceAction(action)
+        case .createSession:
+            guard command.text == nil, command.noteID == nil, command.noteRevision == nil else {
+                throw CommandError.invalidCommand
+            }
+            guard let requestedID = command.conversationID, UUID(uuidString: requestedID) != nil,
+                  let providerID = command.providerID ?? command.routeID,
+                  let provider = providers().first(where: { $0.id == providerID }), provider.available,
+                  let runtime = AgentRuntimeKind(rawValue: provider.runtimeKind)
+            else { throw CommandError.unknownProvider }
+            let id: String?
+            if providerID.hasPrefix("local:") {
+                id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
+            } else if let target = model.remoteWorkspaces.readyChatTargets.first(where: {
+                "remote:\($0.configuration.id.uuidString.lowercased()):\($0.harness.id.rawValue)" == providerID
+            }) {
+                id = await model.createRemoteACPSession(target: target, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
+            } else { throw CommandError.unknownProvider }
+            guard let id else { throw CommandError.creationFailed(model.localRunError ?? "The Mac could not create this conversation.") }
+            receipt.conversationID = id
+        case .send, .steer:
+            guard let id = command.conversationID, let text = command.text,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CommandError.invalidCommand }
+            if command.kind == .steer && command.runID == nil { throw CommandError.invalidCommand }
+            if command.kind == .send && command.runID != nil { throw CommandError.invalidCommand }
+            let conversation = try await conversation(id)
+            let note: WorkspaceNoteRecord?
+            let input: AgentMessageInput
+            if let noteID = command.noteID {
+                guard let revision = command.noteRevision, await model.flushNoteDrafts(),
+                      let raw = try await model.dashboardStore?.database.companionNote(id: noteID),
+                      raw.revision == revision,
+                      let canonical = try await model.dashboardStore?.database.workspaceOverview().notes.first(where: { $0.id == noteID })
+                else { throw CommandError.noteRevisionChanged }
+                let reference = AgentMessageReferenceDraft(
+                    kind: .note, resourceID: noteID, titleSnapshot: raw.title,
+                    contentSnapshot: raw.content, revisionSnapshot: String(raw.revision),
+                    folderIDSnapshot: raw.folderID
+                )
+                input = AgentMessageInput(text: text, attachments: [.reference(reference)])
+                // A future document can be referenced losslessly; only known editable
+                // documents receive a mediated/CLI editing grant for the current run.
+                let supportsEditing = (try? NoteDocument.editableDocument(from: raw.content)) != nil
+                // Native OpenCode and steering retain their existing tool policy;
+                // neither accepts a new transactional note binding. The explicit
+                // attachment still carries the phone's exact content and revision.
+                let acceptsBinding = command.kind == .send && conversation.localRuntimeKind != .opencode
+                note = supportsEditing && acceptsBinding ? canonical : nil
+            } else {
+                guard command.noteRevision == nil else { throw CommandError.invalidCommand }
+                note = nil
+                input = AgentMessageInput(text: text)
+            }
+            let ids = try await send(
+                conversation: conversation, input: input, note: note,
+                expectedRunID: command.kind == .steer ? command.runID : nil,
+                requiresIdle: command.kind == .send,
+                expectedNoteRevision: command.noteRevision.map(String.init)
+            )
+            receipt.conversationID = id; receipt.runID = ids?.runID
+        case .stop:
+            guard let id = command.conversationID, let runID = command.runID else { throw CommandError.invalidCommand }
+            try await stop(conversationID: id, runID: runID)
+            receipt.conversationID = id; receipt.runID = runID
+        case .respond:
+            try await respond(command)
+            receipt.conversationID = command.conversationID; receipt.runID = command.runID
+        }
+    }
+
+    private func respond(_ command: CompanionCommand) async throws {
+        if let conversationID = command.conversationID,
+           try await model.dashboardStore?.database.companionExecutionOwner(conversationID: conversationID) != nil {
+            let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
+            guard let response = command.response,
+                  let interaction = snapshot.interactions.first(where: { $0.id == command.interactionID && $0.runID == command.runID }) else { throw CommandError.interactionResolved }
+            _ = try await model.performFederatedExecution(.respond(interaction, response))
+            return
+        }
+        if try await respondToNativeInteraction(command) { return }
+        guard let rawID = command.interactionID, let id = UUID(uuidString: rawID),
+              let response = command.response else { throw CommandError.invalidCommand }
+        if let pending = model.pendingLocalACPPermissions.first(where: { $0.id == id }) {
+            guard pending.conversationID == command.conversationID, pending.runID == command.runID,
+                  response.answers.isEmpty,
+                  response.cancelled ? response.optionID == nil : response.optionID != nil,
+                  model.resolveLocalACPPermission(id: id, optionID: response.cancelled ? nil : response.optionID)
+            else { throw CommandError.interactionResolved }
+            return
+        }
+        guard let pending = model.pendingLocalACPInteractions.first(where: { $0.id == id }),
+              pending.conversationID == command.conversationID, pending.runID == command.runID
+        else { throw CommandError.interactionResolved }
+        let resolution: LocalACPInteractionResponse
+        if response.cancelled {
+            guard response.optionID == nil && response.answers.isEmpty else { throw CommandError.invalidCommand }
+            resolution = .cancelled
+        } else {
+            switch pending.request {
+            case .secret:
+                // Secret values must not enter the durable phone command journal.
+                throw CommandError.invalidCommand
+            case .plan:
+                guard response.answers.isEmpty, let optionID = response.optionID,
+                      ["accept", "decline"].contains(optionID) else { throw CommandError.invalidCommand }
+                resolution = .planAccepted(response.optionID == "accept")
+            case .form(let request):
+                guard response.optionID == nil, Set(response.answers.keys).isSubset(of: Set(request.fields.map(\.id))) else {
+                    throw CommandError.invalidCommand
+                }
+                var values: [String: LocalACPFormValue] = [:]
+                for field in request.fields {
+                    let submitted = response.answers[field.id] ?? []
+                    if submitted.isEmpty && !field.required { continue }
+                    if field.kind == .multipleChoice { values[field.id] = .strings(submitted); continue }
+                    guard submitted.count == 1, let text = submitted.first else { throw CommandError.invalidCommand }
+                    switch field.kind {
+                    case .text, .singleChoice: values[field.id] = .string(text)
+                    case .number, .integer:
+                        guard let number = Double(text), number.isFinite else { throw CommandError.invalidCommand }
+                        values[field.id] = .number(number)
+                    case .boolean:
+                        guard text == "true" || text == "false" else { throw CommandError.invalidCommand }
+                        values[field.id] = .boolean(text == "true")
+                    case .multipleChoice: break
+                    }
+                }
+                guard request.accepts(values) else { throw CommandError.invalidCommand }
+                resolution = .formValues(values)
+            case .questions(let request):
+                guard response.optionID == nil, Set(response.answers.keys) == Set(request.questions.map(\.id)) else { throw CommandError.invalidCommand }
+                var answers: [String: LocalACPQuestionAnswer] = [:]
+                for question in request.questions {
+                    let values = response.answers[question.id] ?? []
+                    guard !values.isEmpty, question.allowsMultiple || values.count == 1 else { throw CommandError.invalidCommand }
+                    // Wire selections are option IDs; providers receive the same labels as desktop.
+                    let labels = values.map { value in question.options.first(where: { $0.id == value })?.label ?? value }
+                    answers[question.id] = labels.count == 1 ? .single(labels[0]) : .multiple(labels)
+                }
+                resolution = .answers(answers)
+            }
+        }
+        guard model.resolveLocalACPInteraction(id: id, response: resolution) else { throw CommandError.interactionResolved }
+    }
+
+    func conversation(_ id: String) async throws -> WorkspaceConversationRecord {
+        guard let store = model.dashboardStore,
+              let record = try await store.database.workspaceOverview().conversations.first(where: { $0.id == id })
+        else { throw CommandError.unknownConversation }
+        return record
+    }
+
+    func transcript(conversationID: String, before: String? = nil) async throws -> CompanionTranscript {
+        _ = try await conversation(conversationID)
+        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        let cursor: WorkspaceConversationHistoryCursor?
+        if let before {
+            guard before.utf8.count <= 2_048, let data = Data(base64Encoded: before),
+                  let decoded = try? JSONDecoder().decode(HistoryCursor.self, from: data)
+            else { throw CommandError.invalidCommand }
+            cursor = .init(createdAt: decoded.createdAt, messageID: decoded.messageID)
+        } else { cursor = nil }
+        let page = try await store.conversationHistoryPage(id: conversationID, before: cursor, limit: 80)
+        let olderCursor = try page.hasOlderMessages ? page.oldestMessageCursor.map {
+            try JSONEncoder().encode(HistoryCursor(createdAt: $0.createdAt, messageID: $0.messageID)).base64EncodedString()
+        } : nil
+        return CompanionTranscript(
+            conversationID: conversationID,
+            messages: page.messages.map { .init(id: $0.id, conversationID: $0.conversationID, runID: $0.runID,
+                role: $0.role, content: $0.role == "user" ? ($0.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt($0.content)) : $0.content, status: $0.status, createdAt: $0.createdAt) },
+            activities: page.activities.map { .init(id: $0.id, runID: $0.runID,
+                title: $0.activity.title ?? $0.activity.kind.rawValue,
+                detail: $0.activity.detail ?? $0.activity.content, status: $0.activity.status ?? "") },
+            activeRunID: await model.canonicalActiveRunID(conversationID: conversationID), olderCursor: olderCursor
+        )
+    }
+}

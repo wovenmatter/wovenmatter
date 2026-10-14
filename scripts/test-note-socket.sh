@@ -10,16 +10,24 @@ fi
 cache_root="${WOVENMATTER_SOCKET_TEST_CACHE_DIR:-/private/tmp/wovenmatter-functional-note-socket}"
 mkdir -p "$cache_root/ModuleCache"
 xcrun swiftc \
+  -swift-version 6 -parse-as-library -emit-library -emit-module -module-name WovenMatterCompanion \
+  -module-cache-path "$cache_root/ModuleCache" \
+  -emit-module-path "$cache_root/WovenMatterCompanion.swiftmodule" \
+  "$repo_root"/shared/Sources/WovenMatterCompanion/*.swift \
+  -o "$cache_root/libWovenMatterCompanion.dylib"
+xcrun swiftc \
   -swift-version 6 -parse-as-library -emit-library -emit-module -module-name WovenMatterCore \
   -module-cache-path "$cache_root/ModuleCache" \
   -emit-module-path "$cache_root/WovenMatterCore.swiftmodule" \
+  -I "$cache_root" -L "$cache_root" -lWovenMatterCompanion \
+  -Xlinker -rpath -Xlinker "$cache_root" \
   "$repo_root/app/Sources/WovenMatterCore/Database.swift" \
   "$repo_root/app/Sources/WovenMatterCore/NoteDocument.swift" \
   "$repo_root/app/Sources/WovenMatterCore/NoteEditingProtocol.swift" \
   -o "$cache_root/libWovenMatterCore.dylib"
 xcrun swiftc \
   -swift-version 6 -parse-as-library -module-cache-path "$cache_root/ModuleCache" \
-  -I "$cache_root" -L "$cache_root" -lWovenMatterCore \
+  -I "$cache_root" -L "$cache_root" -lWovenMatterCore -lWovenMatterCompanion \
   -Xlinker -rpath -Xlinker "$cache_root" \
   "$repo_root/app/App/Services/WovenNoteService.swift" \
   "$repo_root/scripts/test-support/WovenNoteSocketTests.swift" \

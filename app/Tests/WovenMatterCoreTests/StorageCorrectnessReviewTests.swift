@@ -122,42 +122,44 @@ struct StorageCorrectnessReviewTests {
   }
 
   @Test(arguments: [false, true])
-  func hermesHistoryUsesOnlyPairedSuccessfulOwningWrites(clear: Bool) async throws {
+  func hermesArchiveDTOAndPersistedChecklistRemainReadable(clear: Bool) async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let db = try await WorkspaceDatabase(url: fixture.databaseURL)
     let todos: HermesValue = .array([["id": "a", "content": "Same label", "status": "completed"],
       ["id": "b", "content": "Same label", "status": "pending"]])
     let args: HermesValue = ["todos": .array([["id": "a", "status": "completed"]]), "merge": .bool(true)]
-    var calls: [HermesValue] = [], results: [HermesValue] = []
-    for (index, name) in ["valid", "read", "failed", "malformed", "child", "stale", "clear"].enumerated() {
-      calls.append(["id": .string(name), "function": ["name": "todo_list", "arguments": .string((name == "read" ? HermesValue.object([:]) : args).json)]])
-      var result: HermesValue = ["revision": .number(Double(index + 1)), "todos": todos]
-      if name == "malformed" { result["todos"] = .array([["id": "invalid"]]) }
-      if name == "stale" { result["revision"] = .number(1) }
-      if name == "clear" { result["todos"] = .array([]) }
-      var row: HermesValue = ["id": .number(Double(index + 2)), "role": "tool", "tool_call_id": .string(name), "content": .string(result.json)]
-      if name == "failed" { row["is_error"] = .bool(true) }
-      if name == "child" { row["session_id"] = "child-session" }
-      if name != "clear" || clear { results.append(row) }
-    }
-    // An unpaired result cannot clear the parent's checklist.
-    results.append(["id": .number(20), "role": "tool", "tool_call_id": "unpaired", "name": "todo_list",
-      "content": .string(HermesValue.object(["revision": .number(100), "todos": .array([])]).json)])
-    let child: HermesValue = ["id": .number(21), "role": "tool", "tool_call_id": "valid", "session_id": "child-session",
-      "content": .string(HermesValue.object(["revision": .number(100), "todos": .array([])]).json)]
-    let rows: [HermesValue] = [["id": .number(1), "role": "assistant", "tool_calls": .array(calls)], child] + results
-    let imported = HermesSessionImport(identity: HermesGatewayClient.identity(home: "/tmp/fixture", storedID: "parent", imported: true),
+    let result: HermesValue = ["revision": .number(2), "todos": clear ? .array([]) : todos]
+    let plan = try #require(HermesSessionArchive.checklistUpdate(["name": "todo_list", "args": args, "result": result]))
+    #expect(HermesSessionArchive.checklistUpdate(["name": "todo_list", "args": args,
+      "result": ["revision": .number(3), "todos": .array([["id": "invalid"]])]]) == nil)
+    let rows: [HermesValue] = [["id": .number(1), "role": "assistant", "content": "Retained Hermes work"],
+      ["id": .number(2), "role": "tool", "tool_call_id": "old-todo", "content": .string(result.json)]]
+    let archived = HermesSessionImport(identity: HermesSessionArchive.identity(home: "/tmp/fixture", storedID: "parent", imported: true),
       title: "History", createdAt: Date(), messages: rows)
-    let conversation = try await db.createLocalACPSession(runtimeKind: .hermes, title: "History", ownerDeviceID: UUID(), hermesImport: imported)
-    let full = try await db.conversationHistoryPage(id: conversation, limit: 20)
-    let plan = try #require(full.activities.first { $0.activity.kind == .plan }?.activity)
-    #expect(full.activities.filter { $0.activity.kind == .plan }.count == 1)
-    #expect(plan.planOperation == (clear ? "clear" : "replace"))
-    #expect(plan.planEntries.map(\.nativeID) == (clear ? [] : ["a", "b"]))
-    assertSummaryParity(try await db.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true), full)
-    let captures = try await db.read { try $0.historyRowsUnlocked(
+    // Seed the rows an older build already saved; no retired runtime is created or resumed.
+    let conversation = try await db.createLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
+    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Retained history")
+    try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: plan)
+    try await db.completeLocalACPRun(runID: run.runID)
+    try await db.recordNativeRunRecords(archived.nativeArchiveBatch(), conversationID: conversation, harness: "hermes")
+    for row in rows {
+      try await db.recordHistory(.init(conversationID: conversation, harness: "hermes", kind: "import.message", payload: row.json, completeness: "native-export"))
+    }
+    try await db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET runtime_kind='hermes',acp_session_id=? WHERE conversation_id=?", [archived.identity,conversation])
+      try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [conversation])
+    } }
+    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let full = try await reopened.conversationHistoryPage(id: conversation, limit: 20)
+    let retained = try #require(full.activities.first { $0.activity.kind == .plan }?.activity)
+    #expect(retained.planOperation == (clear ? "clear" : "replace"))
+    #expect(retained.planEntries.map(\.nativeID) == (clear ? [] : ["a", "b"]))
+    assertSummaryParity(try await reopened.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true), full)
+    let captures = try await reopened.read { try $0.historyRowsUnlocked(
       "SELECT payload FROM workspace_history_events WHERE conversation_id=? AND kind='import.message' ORDER BY sequence", values: [conversation]) }
     #expect(captures.compactMap { $0.objectValue?["payload"]?.stringValue } == rows.map(\.json))
+    #expect(String(decoding: try await reopened.conversationExport(id: conversation, format: .fullRun), as: UTF8.self).contains("Retained Hermes work"))
+    await #expect(throws: (any Error).self) { try await reopened.lockSessionFolder(id: conversation) }
   }
 }

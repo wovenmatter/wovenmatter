@@ -1,24 +1,31 @@
 import SwiftUI
+#if os(macOS)
 import WovenMatterClient
 import WovenMatterCore
+#endif
 
 private struct ConversationArchiveConversationKey: EnvironmentKey {
     static let defaultValue = ""
 }
 
+#if os(macOS)
 private struct ConversationSubagentHistoryKey: EnvironmentKey {
     static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue)? = nil
 }
+
+#endif
 
 extension EnvironmentValues {
     var conversationArchiveConversationID: String {
         get { self[ConversationArchiveConversationKey.self] }
         set { self[ConversationArchiveConversationKey.self] = newValue }
     }
+    #if os(macOS)
     var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue)? {
         get { self[ConversationSubagentHistoryKey.self] }
         set { self[ConversationSubagentHistoryKey.self] = newValue }
     }
+    #endif
 }
 
 struct ConversationSubagentRow: View {
@@ -41,12 +48,14 @@ struct ConversationSubagentRow: View {
                 if let result = child.result?.nonempty { textBlock("Result", result) }
                 if let activity = child.activity, !activity.isEmpty { entries("Activity", activity) }
                 if let history = child.history, !history.isEmpty { entries("Recent Messages", history) }
+                #if os(macOS)
                 if let sourceID = child.sourceID,
                    let nativeSessionID = child.nativeSessionID,
                    let nativeConversationID = child.nativeConversationID {
                     ConversationSubagentHistory(sourceID: sourceID, nativeSessionID: nativeSessionID,
                         nativeConversationID: nativeConversationID)
                 }
+                #endif
             }
             .padding(.top, 6)
             .padding(.leading, 4)
@@ -111,6 +120,7 @@ struct ConversationSubagentRow: View {
     }
 }
 
+#if os(macOS)
 private struct ConversationSubagentHistory: View {
     let sourceID: String
     let nativeSessionID: String
@@ -215,6 +225,8 @@ private struct ConversationSubagentArchiveEvent: View {
         } catch { self.error = error.localizedDescription }
     }
 }
+
+#endif
 
 private extension String {
     var nonempty: String? {

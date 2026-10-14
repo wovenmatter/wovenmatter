@@ -234,7 +234,9 @@ export function nativeContextBridge(record, engine, background) {
       // The native output and its receipt commit together. A retained task
       // invocation can complete from that output without repeating compaction.
       if (saved.nativeCompaction?.taskID === api.taskId) return { decline: true };
-      const model = engine.resolveModel(`${originalRoute.provider}/${originalRoute.modelID}`);
+      const selected = record.session?.model;
+      const model = selected?.provider === originalRoute.provider && selected?.id === originalRoute.modelID
+        ? selected : engine.resolveModel(`${originalRoute.provider}/${originalRoute.modelID}`);
       const route = await resolveRoute(originalRoute, model, ctx.abortSignal);
       const full = await canonical(saved, compaction.messages, route);
       const prior = sameRoute(saved.active?.route, route) ? saved.active.continuation : undefined;
@@ -257,7 +259,9 @@ export function nativeContextBridge(record, engine, background) {
       return { decline: true };
     },
     async prepare(messages, originalRoute, taskID, ctx) {
-      const model = engine.resolveModel(`${originalRoute.provider}/${originalRoute.modelID}`);
+      const selected = record.session?.model;
+      const model = selected?.provider === originalRoute.provider && selected?.id === originalRoute.modelID
+        ? selected : engine.resolveModel(`${originalRoute.provider}/${originalRoute.modelID}`);
       const route = await resolveRoute(originalRoute, model, ctx.abortSignal), state = await snapshot();
       const canonicalMessages = await canonical(state, messages, route);
       let continuation = sameRoute(state.active?.route, route) ? state.active.continuation : undefined;

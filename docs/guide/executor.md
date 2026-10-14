@@ -3,14 +3,15 @@
 Woven Matter connects every supported agent to one managed
 [Executor v2](https://v2.executor.sh/docs) runtime through its session-bound CLI.
 An Executor **app** supplies capabilities backed by an API, one or more MCP
-servers, or code. A saved **profile** chooses the accounts and configuration an
+servers, or code. Accounts linked in the Executor dashboard supply the credentials an
 app uses. An app and an MCP server are not necessarily one-to-one.
 
 ## Setup
 
 Open **Settings → Connections → Executor**. Choose **On this Mac**, then
-**Install and start Executor**. Woven resolves the newest compatible Executor 2 release (stable when available,
-otherwise V2 beta), downloads the unchanged runtime and runs it alongside its background service.
+**Install and start Executor**. Woven resolves the current published Executor runtime,
+downloads it unchanged and runs it alongside its background service.
+Install or deploy again to update; there is no upper version limit.
 Node is bundled; a separate Pi or Executor CLI installation is unnecessary.
 Executor data and manager credentials live in Woven's private support directory,
 separately from the workspace database. Installation progress and failures stay
@@ -36,9 +37,9 @@ approve account consent yourself. The remote callback reaches the selected
 Linux server's HTTPS origin; no headless account sign-in is required. Individual
 providers may require that callback origin in their OAuth application settings.
 
-Add apps and saved profiles in the dashboard, then **Refresh apps** in Woven.
-Woven creates an explicit account-free profile for apps that require no account.
-Apps requiring accounts become selectable after their profiles are configured.
+Add apps and saved accounts in the dashboard, then **Refresh apps** in Woven.
+Apps without user accounts use Executor’s app target.
+Apps requiring accounts become selectable after their accounts are configured.
 Executor's bundled server-administration app is excluded: exposing it would let
 an agent change its own app scope. Other Executor clients can connect separately
 through the same dashboard; their scopes are independent of Woven conversations.
@@ -51,14 +52,15 @@ snapshots both settings. Changing defaults or adding apps does not grant them to
 existing conversations.
 
 In a conversation's composer, open **Tools → Executor** to turn access on or
-off. Open **Apps** beside it to select apps, choose a saved profile when an app
-has several, select all or deselect all, refresh the inventory, or open the
+off. Open **Apps** beside it to select apps and linked accounts,
+select all or deselect all, refresh the inventory, or open the
 dashboard. Changes persist for that conversation and can be made between
-messages. One saved profile per app is selected in this UI.
+messages. Choose each app and the linked accounts it may use; apps with
+multiple account requirements can grant more than one account.
 
 Whenever Executor is on, the agent can use its raw **Execute**, scoped tool
 search and skills through the Woven CLI. Execute and search use only the selected
-app profiles. Executor enforces the scope on each invocation, including guessed
+apps and accounts. Executor enforces the scope on each invocation, including guessed
 or dynamically constructed tool names and actions resumed after approval. Full
 access keeps the same scope. Turning Executor off blocks new CLI calls and
 requests cancellation of active programs. Removing an app blocks subsequent
@@ -147,7 +149,7 @@ bound CLI identity, every harness's permission mapping, code mode's nested tool
 approvals, manager receipts, typed input, and deterministic deployment fixtures.
 CI additionally builds the standalone Linux image and runs
 `scripts/test-support/test-executor-runtime.mjs` against its unchanged published
-Executor binary. The fixture uses synthetic account-free apps and no provider
+Executor binary. The fixture uses synthetic apps and disposable accounts with no provider
 services. The same test runs on macOS with a published Executor entrypoint:
 
 ```sh

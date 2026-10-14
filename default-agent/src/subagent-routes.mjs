@@ -70,6 +70,17 @@ export async function catalogSubagentRoutes(engine, { parentRoute } = {}) {
     requiresUserInstruction: parent ? !sameConnection(route, parent) : true }));
 }
 
+export async function pinnedSubagentRoute(engine, pin, record) {
+  const model = await engine.ensureModel(`${pin.provider}/${pin.modelId}`, pin.selectedModel);
+  if (!engine.isModelEnabled(model) || !availableThinking(engine, model).includes(pin.thinking)) {
+    throw new DefaultAgentError('The child\'s pinned model or thinking level is no longer enabled. It will not change models or connections.');
+  }
+  const account = await validatePinnedSubagentAccount(engine, model, pin, record);
+  return { provider: model.provider, modelId: model.id, modelName: safeLabel(model.name, model.id), model, account,
+    accountID: account.id, thinking: pin.thinking, supportedThinking: availableThinking(engine, model),
+    connection: publicConnection(engine, model.provider, account) };
+}
+
 function normalizedParent(parent) {
   if (!parent) return undefined;
   const provider = parent.provider ?? parent.model?.provider;

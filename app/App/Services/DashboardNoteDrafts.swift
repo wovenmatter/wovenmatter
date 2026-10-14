@@ -3,7 +3,7 @@ import Foundation
 import WovenMatterCore
 
 struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     let version: Int
     let writerSessionID: String?
@@ -14,6 +14,9 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
     let revision: UInt64
     let folderID: String?
     let createdAt: String?
+    let expectedRevision: String?
+    let baseContent: String?
+    let baseTitle: String?
 
     init(
         writerSessionID: String? = nil,
@@ -23,7 +26,10 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
         content: String,
         revision: UInt64,
         folderID: String? = nil,
-        createdAt: String? = nil
+        createdAt: String? = nil,
+        expectedRevision: String? = nil,
+        baseContent: String? = nil,
+        baseTitle: String? = nil
     ) {
         version = Self.currentVersion
         self.writerSessionID = writerSessionID
@@ -34,11 +40,14 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
         self.revision = revision
         self.folderID = folderID
         self.createdAt = createdAt
+        self.expectedRevision = expectedRevision
+        self.baseContent = baseContent
+        self.baseTitle = baseTitle
     }
 
     private enum CodingKeys: String, CodingKey {
         case version, writerSessionID, mutationID
-        case noteID, title, content, revision, folderID, createdAt
+        case noteID, title, content, revision, folderID, createdAt, expectedRevision, baseContent, baseTitle
     }
 
     init(from decoder: any Decoder) throws {
@@ -52,6 +61,18 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
         revision = try values.decode(UInt64.self, forKey: .revision)
         folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
         createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
+        expectedRevision = try values.decodeIfPresent(String.self, forKey: .expectedRevision)
+        baseContent = try values.decodeIfPresent(String.self, forKey: .baseContent)
+        baseTitle = try values.decodeIfPresent(String.self, forKey: .baseTitle)
+    }
+
+    func rebased(revision: String, content: String, title: String) -> DashboardNoteJournalEntry {
+        DashboardNoteJournalEntry(
+            writerSessionID: writerSessionID, mutationID: mutationID ?? UUID().uuidString.lowercased(),
+            noteID: noteID, title: self.title, content: self.content, revision: self.revision,
+            folderID: folderID, createdAt: createdAt,
+            expectedRevision: revision, baseContent: content, baseTitle: title
+        )
     }
 
     func identified(by writerSessionID: String) -> DashboardNoteJournalEntry {
@@ -63,7 +84,10 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
             content: content,
             revision: revision,
             folderID: folderID,
-            createdAt: createdAt
+            createdAt: createdAt,
+            expectedRevision: expectedRevision,
+            baseContent: baseContent,
+            baseTitle: baseTitle
         )
     }
 }
@@ -296,7 +320,11 @@ enum DashboardNoteJournalError: Error, LocalizedError {
 
 final class DashboardNoteWriteBehind: @unchecked Sendable {
     typealias Update = @Sendable (DashboardNoteJournalEntry) async throws -> Void
-    typealias Completion = @Sendable (DashboardNoteJournalEntry, Result<Void, any Error>) -> Void
+    typealias CommittedRevision = @Sendable (DashboardNoteJournalEntry) async throws -> String?
+    typealias Completion = @Sendable (
+        DashboardNoteJournalEntry,
+        Result<Void, any Error>
+    ) -> Void
 
     private struct Batch {
         let entries: [DashboardNoteJournalEntry]
@@ -306,6 +334,14 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
     private let journal: DashboardNoteDraftJournal
     private let update: Update
     private let completion: Completion
+    private let committedRevision: CommittedRevision
+    private struct AcknowledgedChain {
+        var bases: Set<String>
+        var revision: String
+        var content: String
+        var title: String
+    }
+    private var acknowledgedChains: [String: AcknowledgedChain] = [:]
     private let queue = DispatchQueue(label: "com.wovenmatter.note-write-behind")
     private let coalescingDelay: DispatchTimeInterval
     private let writerSessionID: String
@@ -317,14 +353,19 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
     private var batches: [Batch] = []
     private var processing = false
 
-    init(journal: DashboardNoteDraftJournal,
-         coalescingDelay: DispatchTimeInterval = .milliseconds(700),
-         writerSessionID: String = UUID().uuidString.lowercased(),
-         update: @escaping Update, completion: @escaping Completion) {
+    init(
+        journal: DashboardNoteDraftJournal,
+        coalescingDelay: DispatchTimeInterval = .milliseconds(700),
+        writerSessionID: String = UUID().uuidString.lowercased(),
+        update: @escaping Update,
+        committedRevision: @escaping CommittedRevision = { _ in nil },
+        completion: @escaping Completion
+    ) {
         self.journal = journal
         self.coalescingDelay = coalescingDelay
         self.writerSessionID = writerSessionID
         self.update = update
+        self.committedRevision = committedRevision
         self.completion = completion
     }
 
@@ -355,6 +396,30 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
                 batches.append(Batch(entries: takePending(), journaled: false, continuation: continuation))
                 startNextBatch()
             }
+        }
+    }
+
+    /// Called only after an explicit recovery-copy action has durably saved
+    /// this exact title and content under a new canonical identity.
+    func discardRecoveredDraft(noteID: String, content: String, title: String) throws {
+        try queue.sync {
+            scheduledGeneration &+= 1
+            if let entry = pending[noteID], entry.content == content, entry.title == title {
+                pending.removeValue(forKey: noteID)
+                order.removeAll { $0 == noteID }
+            }
+            let represented = try journal.entries().filter {
+                $0.noteID == noteID && $0.content == content && $0.title == title
+            }
+            for entry in represented { try journal.acknowledge(entry) }
+            acknowledgedChains = acknowledgedChains.filter { !$0.key.hasSuffix("/" + noteID) }
+            if !pending.isEmpty { scheduleDrain() }
+        }
+    }
+
+    func recoverableEntries() throws -> [DashboardNoteJournalEntry] {
+        try queue.sync {
+            latestNoteJournalEntries(from: try journal.entries() + order.compactMap { pending[$0] })
         }
     }
 
@@ -419,7 +484,7 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
             if !processing, !pending.isEmpty { scheduleDrain() }
             return
         }
-        let entry = batch.entries[index]
+        let entry = rebasedOverAcknowledgedPredecessor(batch.entries[index])
         if !batch.journaled {
             do { try journal.append(entry) }
             catch {
@@ -435,13 +500,16 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
             }
         }
         Task { [self] in
-            let result: Result<Void, any Error>
-            do { try await update(entry); result = .success(()) }
+            let result: Result<String?, any Error>
+            do {
+                try await update(entry)
+                result = .success(try await committedRevision(entry))
+            }
             catch { result = .failure(error) }
             queue.async { [self] in
                 let acknowledged: Result<Void, any Error>
                 do {
-                    try result.get()
+                    if let revision = try result.get() { rememberAcknowledged(entry, revision: revision) }
                     try journal.acknowledge(entry)
                     acknowledged = .success(())
                 } catch {
@@ -458,6 +526,29 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
             }
         }
     }
+    private func chainKey(_ entry: DashboardNoteJournalEntry) -> String {
+        "\(entry.writerSessionID ?? "legacy")/\(entry.noteID)"
+    }
+
+    private func rebasedOverAcknowledgedPredecessor(_ entry: DashboardNoteJournalEntry) -> DashboardNoteJournalEntry {
+        guard let base = entry.expectedRevision,
+              let chain = acknowledgedChains[chainKey(entry)],
+              chain.bases.contains(base) else { return entry }
+        return entry.rebased(revision: chain.revision, content: chain.content, title: chain.title)
+    }
+
+    private func rememberAcknowledged(_ entry: DashboardNoteJournalEntry, revision: String) {
+        let key = chainKey(entry)
+        var bases: Set<String> = [revision]
+        if let base = entry.expectedRevision {
+            bases.insert(base)
+            if let prior = acknowledgedChains[key], prior.bases.contains(base) {
+                bases.formUnion(prior.bases)
+            }
+        }
+        acknowledgedChains[key] = AcknowledgedChain(bases: bases, revision: revision, content: entry.content, title: entry.title)
+    }
+
 }
 
 enum DashboardNoteDraftSaveState: Equatable {
@@ -473,6 +564,9 @@ struct DashboardNoteDraft: Equatable {
     var editRevision: UInt64
     var persistedRevision: UInt64
     var sourceUpdatedAt: String?
+    var sourceRevision: String? = nil
+    var sourceContent: String? = nil
+    var sourceTitle: String? = nil
 
     static func initial(for note: WorkspaceNoteRecord) -> DashboardNoteDraft {
         DashboardNoteDraft(
@@ -481,7 +575,10 @@ struct DashboardNoteDraft: Equatable {
             saveState: .saved,
             editRevision: 0,
             persistedRevision: 0,
-            sourceUpdatedAt: note.updatedAt
+            sourceUpdatedAt: note.updatedAt,
+            sourceRevision: note.revision,
+            sourceContent: note.content,
+            sourceTitle: note.title
         )
     }
 
@@ -495,7 +592,10 @@ struct DashboardNoteDraft: Equatable {
             saveState: .saving,
             editRevision: entry.revision,
             persistedRevision: 0,
-            sourceUpdatedAt: note?.updatedAt
+            sourceUpdatedAt: note?.updatedAt,
+            sourceRevision: entry.expectedRevision,
+            sourceContent: entry.baseContent,
+            sourceTitle: entry.baseTitle
         )
     }
 
@@ -505,13 +605,16 @@ struct DashboardNoteDraft: Equatable {
         } else if note.title == title, note.content == content {
             saveState = .saved
             sourceUpdatedAt = note.updatedAt
+            sourceRevision = note.revision
+            sourceContent = note.content
+            sourceTitle = note.title
             if persistedRevision >= editRevision {
                 editRevision = 0
                 persistedRevision = 0
             }
         } else if persistedRevision < editRevision {
             // A local write is still pending. A refresh cannot supersede it.
-        } else if note.updatedAt == sourceUpdatedAt {
+        } else if (note.revision ?? note.updatedAt) == (sourceRevision ?? sourceUpdatedAt) {
             // A pane can reopen before the post-write snapshot refresh arrives.
             // Keep both the newer draft and its current save result.
         } else {
@@ -538,6 +641,9 @@ struct DashboardNoteDraft: Equatable {
         editRevision = 0
         persistedRevision = 0
         sourceUpdatedAt = note.updatedAt
+        sourceRevision = note.revision
+        sourceContent = note.content
+        sourceTitle = note.title
     }
 }
 

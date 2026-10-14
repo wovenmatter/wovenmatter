@@ -10,6 +10,8 @@ private extension NSAttributedString.Key {
     static let noteRowID = Self("wovenmatter.note.row-id")
     static let noteColumnID = Self("wovenmatter.note.column-id")
     static let noteCellID = Self("wovenmatter.note.cell-id")
+    static let noteDatabaseLink = Self("wovenmatter.note.database-link")
+    static let noteDatabaseValueID = Self("wovenmatter.note.database-value-id")
 }
 
 struct DashboardNoteTextStatistics: Equatable {
@@ -540,13 +542,13 @@ struct DashboardNoteEditor: NSViewRepresentable {
                 controller.replaceDocument(previous, action: "Agent Edit")
             }
             textView.undoManager?.setActionName("Agent Edit")
-            let selection = textView.selectedRange()
-            textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
+            let rendered = NoteAttributedDocument.render(document)
+            let selection = NoteAttributedDocument.selectionAfterRefreshingValues(
+                textView.selectedRange(), from: textView.attributedString(), to: rendered
+            )
+            textView.textStorage?.setAttributedString(rendered)
             textView.needsDisplay = true
-            textView.setSelectedRange(NSRange(
-                location: min(selection.location, textView.string.utf16.count),
-                length: 0
-            ))
+            textView.setSelectedRange(selection)
             restoreTypingAttributes(in: textView)
             lastDocument = document
             parent.controller.adopt(document)
@@ -569,6 +571,31 @@ struct DashboardNoteEditor: NSViewRepresentable {
         func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
             guard !applying, textView.isEditable, !textView.hasMarkedText(), let replacementString else { return true }
             let string = textView.string as NSString
+            // Direct text edits detach that value, while native formatting keeps
+            // its metadata. Undo restores the text and link together.
+            if textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true,
+               let storage = textView.textStorage {
+                let touchedIDs = NoteAttributedDocument.valueIDs(touchedBy: range, in: storage)
+                if !touchedIDs.isEmpty {
+                    parent.controller.performEdit(action: "Edit Linked Value") {
+                        applying = true
+                        var linkedRanges: [NSRange] = []
+                        storage.enumerateAttribute(.noteDatabaseValueID, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                            if let id = value as? String, touchedIDs.contains(id) { linkedRanges.append(range) }
+                        }
+                        for linkedRange in linkedRanges {
+                            storage.removeAttribute(.noteDatabaseLink, range: linkedRange)
+                            storage.removeAttribute(.noteDatabaseValueID, range: linkedRange)
+                        }
+                        textView.typingAttributes.removeValue(forKey: .noteDatabaseLink)
+                        textView.typingAttributes.removeValue(forKey: .noteDatabaseValueID)
+                        textView.insertText(replacementString, replacementRange: range)
+                        applying = false
+                        emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
+                    }
+                    return false
+                }
+            }
             if replacementString.isEmpty, range == NSRange(location: 0, length: string.length), string.length > 0,
                textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true,
                let attributes = textView.textStorage?.attributes(at: 0, effectiveRange: nil),
@@ -639,7 +666,10 @@ struct DashboardNoteEditor: NSViewRepresentable {
             guard selection.length == 0, selection.location <= storage.length else { return }
             let paragraph = (textView.string as NSString).paragraphRange(for: selection)
             let location = min(storage.length - 1, selection.location > paragraph.location ? selection.location - 1 : selection.location)
-            textView.typingAttributes = storage.attributes(at: location, effectiveRange: nil)
+            var attributes = storage.attributes(at: location, effectiveRange: nil)
+            attributes.removeValue(forKey: .noteDatabaseLink)
+            attributes.removeValue(forKey: .noteDatabaseValueID)
+            textView.typingAttributes = attributes
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -653,6 +683,23 @@ private final class NoteTextView: NSTextView {
     // editors must not become targets of these toolbar actions.
     private let noteUndoManager = UndoManager()
     override var undoManager: UndoManager? { noteUndoManager }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard let attributed = insertString as? NSAttributedString else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+        // Pasted live values are independent locations, even in the same note.
+        let copy = NSMutableAttributedString(attributedString: attributed)
+        var identities: [String: String] = [:]
+        attributed.enumerateAttribute(.noteDatabaseValueID, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
+            guard let original = value as? String else { return }
+            let identity = identities[original] ?? UUID().uuidString.lowercased()
+            identities[original] = identity
+            copy.addAttribute(.noteDatabaseValueID, value: identity, range: range)
+        }
+        super.insertText(copy, replacementRange: replacementRange)
+    }
 
     @objc func undo(_ sender: Any?) {
         guard isEditable, noteUndoManager.canUndo else { return }
@@ -881,7 +928,8 @@ private enum NoteAttributedDocument {
             return
         }
         for run in block.runs {
-            result.append(NSAttributedString(string: run.text, attributes: attributes(for: run, style: block.style).merging(base) { first, _ in first }))
+            let text = run.text.isEmpty && run.databaseLink != nil ? "\u{200B}" : run.text
+            result.append(NSAttributedString(string: text, attributes: attributes(for: run, style: block.style).merging(base) { first, _ in first }))
         }
         result.append(NSAttributedString(string: "\n", attributes: base.merging(defaultAttributes) { first, _ in first }))
     }
@@ -947,6 +995,10 @@ private enum NoteAttributedDocument {
         if run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
         if let color = color(from: run.highlightHex) { attributes[.backgroundColor] = color }
         if let link = run.link.flatMap(URL.init(string:)) { attributes[.link] = link }
+        if let link = run.databaseLink, let encoded = try? JSONEncoder().encode(link) {
+            attributes[.noteDatabaseLink] = encoded
+            attributes[.noteDatabaseValueID] = run.databaseValueID
+        }
         return attributes
     }
 
@@ -956,7 +1008,10 @@ private enum NoteAttributedDocument {
         attributed.enumerateAttributes(in: range) { attributes, subrange, _ in
             let raw = (attributed.string as NSString).substring(with: subrange)
                 .replacingOccurrences(of: "\u{200B}", with: "")
-            guard !raw.isEmpty else { return }
+            let databaseLink = (attributes[.noteDatabaseLink] as? Data).flatMap {
+                try? JSONDecoder().decode(DatabaseArtifactLink.self, from: $0)
+            }
+            guard !raw.isEmpty || databaseLink != nil else { return }
             let font = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 14)
             let traits = NSFontManager.shared.traits(of: font)
             result.append(NoteTextRun(
@@ -969,10 +1024,70 @@ private enum NoteAttributedDocument {
                 foregroundHex: colorHex(attributes[.foregroundColor] as? NSColor),
                 highlightHex: colorHex(attributes[.backgroundColor] as? NSColor),
                 link: (attributes[.link] as? URL)?.absoluteString
-                    ?? attributes[.link] as? String
+                    ?? attributes[.link] as? String,
+                databaseLink: databaseLink,
+                databaseValueID: attributes[.noteDatabaseValueID] as? String
             ))
         }
         return result
+    }
+
+    static func valueIDs(touchedBy range: NSRange, in text: NSAttributedString) -> Set<String> {
+        guard text.length > 0, range.location <= text.length,
+              NSMaxRange(range) <= text.length else { return [] }
+        if range.length == 0 {
+            guard range.location > 0, range.location < text.length,
+                  let left = text.attribute(.noteDatabaseValueID, at: range.location - 1, effectiveRange: nil) as? String,
+                  text.attribute(.noteDatabaseValueID, at: range.location, effectiveRange: nil) as? String == left else { return [] }
+            return [left]
+        }
+        var result = Set<String>()
+        text.enumerateAttribute(.noteDatabaseValueID, in: range) { value, _, _ in
+            if let id = value as? String { result.insert(id) }
+        }
+        return result
+    }
+
+    /// Anchor selection in its paragraph/cell, then account for preceding values
+    /// changing width. A selection inside a value remains inside that value.
+    static func selectionAfterRefreshingValues(
+        _ selection: NSRange, from old: NSAttributedString, to new: NSAttributedString
+    ) -> NSRange {
+        func range(for key: NSAttributedString.Key, id: String, in text: NSAttributedString, scope: NSRange? = nil) -> NSRange? {
+            var result: NSRange?
+            text.enumerateAttribute(key, in: scope ?? NSRange(location: 0, length: text.length)) { value, candidate, stop in
+                guard value as? String == id else { return }
+                result = candidate
+                stop.pointee = true
+            }
+            return result
+        }
+        func map(_ position: Int) -> Int {
+            guard old.length > 0, new.length > 0 else { return min(position, new.length) }
+            let probe = min(position, old.length - 1)
+            let attributes = old.attributes(at: probe, effectiveRange: nil)
+            let key: NSAttributedString.Key = attributes[.noteCellID] == nil ? .noteBlockID : .noteCellID
+            guard let id = attributes[key] as? String,
+                  let before = range(for: key, id: id, in: old),
+                  let after = range(for: key, id: id, in: new) else { return min(position, new.length) }
+            var offset = position - before.location
+            var inside: Int?
+            old.enumerateAttribute(.noteDatabaseValueID, in: before) { value, valueRange, stop in
+                guard let id = value as? String,
+                      let updated = range(for: .noteDatabaseValueID, id: id, in: new, scope: after) else { return }
+                if position <= valueRange.location { stop.pointee = true; return }
+                if position < NSMaxRange(valueRange) {
+                    inside = updated.location + min(position - valueRange.location, updated.length)
+                    stop.pointee = true
+                } else {
+                    offset += updated.length - valueRange.length
+                }
+            }
+            return inside ?? after.location + min(max(0, offset), after.length)
+        }
+        let start = min(max(0, map(selection.location)), new.length)
+        let end = min(max(start, map(NSMaxRange(selection))), new.length)
+        return NSRange(location: start, length: end - start)
     }
 
     private static func trailingNewlineLength(in string: NSString, range: NSRange) -> Int {
