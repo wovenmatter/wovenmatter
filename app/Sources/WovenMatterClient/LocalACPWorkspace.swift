@@ -46,7 +46,7 @@ public struct LocalACPWorkspaceResolution: Sendable {
 public enum LocalACPWorkspaceProvisioner {
     public static let rootDirectoryName = ".woven-matter"
 
-    public static func createProject(named rawName: String, in root: URL) throws -> URL {
+    public static func createProject(named rawName: String, in root: URL, reuseExisting: Bool = false) throws -> URL {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != ".", name != "..", name.lowercased() != "scratch", !name.hasPrefix("."),
               !name.contains("/"), !name.contains("\\"), !name.contains(":"),
@@ -55,10 +55,16 @@ public enum LocalACPWorkspaceProvisioner {
             throw LocalACPWorkspaceError.invalidProjectName
         }
         let path = root.appendingPathComponent(name, isDirectory: true)
-        guard !FileManager.default.fileExists(atPath: path.path) else {
-            throw LocalACPWorkspaceError.projectAlreadyExists
+        if FileManager.default.fileExists(atPath: path.path) {
+            guard reuseExisting else { throw LocalACPWorkspaceError.projectAlreadyExists }
+        } else {
+            do { try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false) }
+            catch {
+                guard reuseExisting, FileManager.default.fileExists(atPath: path.path) else { throw error }
+            }
         }
-        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+        let info = try path.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard info.isDirectory == true, info.isSymbolicLink != true else { throw LocalACPWorkspaceError.invalidProjectName }
         return path
     }
 

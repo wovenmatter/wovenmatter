@@ -58,3 +58,18 @@ test('chat scratch creation is empty, concurrent and retry-safe, and cannot esca
   }
   assert.equal(await readFile(join(path, 'report.txt'), 'utf8'), 'Keep this file')
 })
+
+
+test('legacy folder adoption is retry-safe and preserves files without following links', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'legacy-projects-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const project = await createProject(root, 'Existing folder', { reuseExisting: true })
+  await writeFile(join(project.path, 'AGENTS.md'), 'Keep my rules')
+  assert.deepEqual(await createProject(root, 'Existing folder', { reuseExisting: true }), project)
+  assert.equal(await readFile(join(project.path, 'AGENTS.md'), 'utf8'), 'Keep my rules')
+  await symlink(project.path, join(root, 'Link'))
+  await writeFile(join(root, 'File'), 'Keep my file')
+  for (const name of ['Link', 'File', '../escape', 'scratch', ' ..', ' .hidden', ' . ']) {
+    await assert.rejects(createProject(root, name, { reuseExisting: true }))
+  }
+})

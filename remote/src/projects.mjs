@@ -1,12 +1,16 @@
 import { mkdir, realpath, lstat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export async function createProject(root, name) {
-  if (typeof name !== 'string' || !name.trim() || name.trim().toLowerCase() === 'scratch' || name.startsWith('.') || /[\\/:\x00-\x1f\x7f]/.test(name) || Buffer.byteLength(name) > 255) {
-    throw Object.assign(new Error('Use a directory name without slashes or a leading period. Scratch is reserved for Ungrouped chats.'), { statusCode: 400 });
+export async function createProject(root, name, { reuseExisting = false } = {}) {
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  if (!cleanName || cleanName.toLowerCase() === 'scratch' || cleanName.startsWith('.') || /[\\/:\x00-\x1f\x7f]/.test(cleanName) || Buffer.byteLength(cleanName) > 255) {
+    throw Object.assign(new Error('Use a directory name without slashes or a leading period. Scratch is reserved for chats in All Workspaces.'), { statusCode: 400 });
   }
-  const path = join(await realpath(root), name.trim());
-  await mkdir(path); // No recursive creation, normalization, or project instructions.
+  const path = join(await realpath(root), cleanName);
+  try { await mkdir(path); } // No recursive creation, normalization, or project instructions.
+  catch (error) { if (!reuseExisting || error.code !== 'EEXIST') throw error; }
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw Object.assign(new Error('Project roots must be ordinary directories.'), { statusCode: 400 });
   return { path };
 }
 

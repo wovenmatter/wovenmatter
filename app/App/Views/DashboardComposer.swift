@@ -58,6 +58,7 @@ struct DashboardComposer: View {
     var folderLabel: String? = nil
     var availableFolders: [WorkspaceFolderRecord] = []
     var selectedFolderID: String? = nil
+    var folderWorkspaceID: String? = nil
     var folderSelectionDisabled = true
     var onSelectFolder: ((String?) -> Void)? = nil
     @Environment(\.dashboardTheme) private var theme
@@ -86,11 +87,12 @@ struct DashboardComposer: View {
             if let folderLabel {
                 HStack(spacing: 6) {
                     Menu {
-                        Button("Ungrouped") { onSelectFolder?(nil) }
+                        Button("All Workspaces") { onSelectFolder?(nil) }
                             .disabled(selectedFolderID == nil)
                         ForEach(availableFolders) { folder in
                             Button(folder.name) { onSelectFolder?(folder.id) }
-                                .disabled(selectedFolderID == folder.id)
+                                .disabled(selectedFolderID == folder.id
+                                    || (folder.executionWorkspaceID != nil && folder.executionWorkspaceID != folderWorkspaceID))
                         }
                     } label: {
                         Label(folderLabel, systemImage: "folder")

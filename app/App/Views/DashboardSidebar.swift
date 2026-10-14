@@ -88,6 +88,8 @@ struct DashboardSidebarActions {
     let onShowNavigation: () -> Void
     let onUtility: (DashboardDestination) -> Void
     let onSelectAgent: (UUID) -> Void
+    let onCreateAgentChat: (UUID) -> Void
+    let onSelectRemoteAgent: (RemoteHarnessChatTarget) -> Void
     let onStartRemoteChat: (RemoteHarnessChatTarget) -> Void
     let onSelectFolder: (String?) -> Void
     let onSelectConversation: (String) -> Void
@@ -101,7 +103,7 @@ struct DashboardSidebarActions {
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
     let onDeleteFolder: (String, Bool) -> Void
     let onSetFolderReferencePaths: (String, [String]) -> Void
-    let onCreateChatInFolder: (String) -> Void
+    let onCreateChatInFolder: (String?) -> Void
     let onShowTrash: () -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
@@ -172,6 +174,8 @@ struct DashboardSidebarRail: View {
             onMove: style == .split ? nil : actions.onMoveSingleRail,
             onUtility: actions.onUtility,
             onSelectAgent: actions.onSelectAgent,
+            onCreateAgentChat: actions.onCreateAgentChat,
+            onSelectRemoteAgent: actions.onSelectRemoteAgent,
             onStartRemoteChat: actions.onStartRemoteChat,
             onSelectFolder: actions.onSelectFolder,
             onSelectConversation: actions.onSelectConversation,
@@ -258,6 +262,8 @@ struct DashboardSidebarNavigationPage: View {
     let onMove: (() -> Void)?
     let onUtility: (DashboardDestination) -> Void
     let onSelectAgent: (UUID) -> Void
+    let onCreateAgentChat: (UUID) -> Void
+    let onSelectRemoteAgent: (RemoteHarnessChatTarget) -> Void
     let onStartRemoteChat: (RemoteHarnessChatTarget) -> Void
     let onSelectFolder: (String?) -> Void
     let onSelectConversation: (String) -> Void
@@ -271,7 +277,7 @@ struct DashboardSidebarNavigationPage: View {
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
     let onDeleteFolder: (String, Bool) -> Void
     let onSetFolderReferencePaths: (String, [String]) -> Void
-    let onCreateChatInFolder: (String) -> Void
+    let onCreateChatInFolder: (String?) -> Void
     let onShowTrash: () -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
@@ -596,20 +602,26 @@ struct DashboardSidebarNavigationPage: View {
             } else {
                 ForEach(visibleTargets) { target in
                     let agent = remoteAgent(for: target)
-                    DashboardRailRow(
-                        icon: .container,
-                        harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
-                        title: target.harness.presentationName,
-                        hoverID: "remote-harness:\(target.id)",
-                        selected: agent.map {
-                            destination == .workspace && selectedAgentID == $0.id
-                        } ?? false
-                    ) {
-                        if let agent {
-                            onSelectAgent(agent.id)
-                        } else {
+                    HStack(spacing: 0) {
+                        DashboardRailRow(
+                            icon: .container,
+                            harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
+                            title: target.harness.presentationName,
+                            hoverID: "remote-harness:\(target.id)",
+                            selected: agent.map {
+                                destination == .workspace && selectedAgentID == $0.id
+                            } ?? false
+                        ) {
+                            if let agent {
+                                onSelectAgent(agent.id)
+                            } else {
+                                onSelectRemoteAgent(target)
+                            }
+                        }
+                        newChatButton(label: "New chat with \(target.harness.presentationName) in \(workspace.configuration.name)") {
                             onStartRemoteChat(target)
                         }
+                        .disabled(!canCreateChat(workspaceID: "remote:" + target.configuration.id.uuidString.lowercased()))
                     }
                     .padding(.leading, 16)
                 }
@@ -701,34 +713,54 @@ struct DashboardSidebarNavigationPage: View {
             direction: .down,
             presentIDs: presentIDs
         )
-        return DashboardRailRow(
-            icon: dashboardAgentGlyph(agent, iconKey: presentation.iconKey),
-            harnessLogo: DashboardHarnessLogo(runtimeKind: agent.runtimeKind),
-            title: presentation.displayName,
-            hoverID: "agent:\(agent.id.uuidString)",
-            trailing: agent.runtimeStatus == .running ? "Running" : nil,
-            showsPin: isPinned,
-            selected: destination == .workspace && selectedAgentID == agent.id,
-            pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
-            onTogglePin: {
-                DashboardPinnedAgentsStore.toggle(
-                    id: agent.id,
-                    in: &pinnedAgentIDsRaw
-                )
-            },
-            moveUpTitle: "Move up",
-            moveUpEnabled: canMoveUp,
-            onMoveUp: {
-                moveAgent(agent.id, in: moveScope, direction: .up, presentIDs: presentIDs)
-            },
-            moveDownTitle: "Move down",
-            moveDownEnabled: canMoveDown,
-            onMoveDown: {
-                moveAgent(agent.id, in: moveScope, direction: .down, presentIDs: presentIDs)
+        return HStack(spacing: 0) {
+            DashboardRailRow(
+                icon: dashboardAgentGlyph(agent, iconKey: presentation.iconKey),
+                harnessLogo: DashboardHarnessLogo(runtimeKind: agent.runtimeKind),
+                title: presentation.displayName,
+                hoverID: "agent:\(agent.id.uuidString)",
+                trailing: agent.runtimeStatus == .running ? "Running" : nil,
+                showsPin: isPinned,
+                selected: destination == .workspace && selectedAgentID == agent.id,
+                pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
+                onTogglePin: {
+                    DashboardPinnedAgentsStore.toggle(
+                        id: agent.id,
+                        in: &pinnedAgentIDsRaw
+                    )
+                },
+                moveUpTitle: "Move up",
+                moveUpEnabled: canMoveUp,
+                onMoveUp: {
+                    moveAgent(agent.id, in: moveScope, direction: .up, presentIDs: presentIDs)
+                },
+                moveDownTitle: "Move down",
+                moveDownEnabled: canMoveDown,
+                onMoveDown: {
+                    moveAgent(agent.id, in: moveScope, direction: .down, presentIDs: presentIDs)
+                }
+            ) {
+                onSelectAgent(agent.id)
             }
-        ) {
-            onSelectAgent(agent.id)
+            newChatButton(label: "New chat with \(presentation.displayName)") { onCreateAgentChat(agent.id) }
+                .disabled(!canCreateChat(workspaceID: agent.governingPlane == .remoteWorkspace
+                    ? agent.runtimeDeviceID.map { "remote:" + $0.uuidString.lowercased() } : localExecutionWorkspaceID))
         }
+    }
+
+    private func canCreateChat(workspaceID: String?) -> Bool {
+        let owner = folders.first { $0.id == selectedFolderID }?.executionWorkspaceID
+        return owner == nil || owner == workspaceID
+    }
+
+    private func newChatButton(label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            DashboardLucideIcon(glyph: .plus, size: 12)
+                .frame(width: 24, height: DashboardMetrics.rowHeight)
+        }
+        .buttonStyle(DashboardIconButtonStyle())
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     private func moveAgent(
@@ -791,12 +823,15 @@ struct DashboardSidebarNavigationPage: View {
                         }
                     )
                 }
-                DashboardRailRow(
-                    icon: .folderOpen,
-                    title: "Workspace",
-                    hoverID: "folder:all",
-                    selected: selectedFolderID == nil
-                ) { onSelectFolder(nil) }
+                HStack(spacing: 0) {
+                    DashboardRailRow(
+                        icon: .folderOpen,
+                        title: "All Workspaces",
+                        hoverID: "folder:all",
+                        selected: selectedFolderID == nil
+                    ) { onSelectFolder(nil) }
+                    newChatButton(label: "New chat in All Workspaces") { onCreateChatInFolder(nil) }
+                }
                 ForEach(sections.pinned) { folder in
                     folderRow(
                         folder,
@@ -860,13 +895,7 @@ struct DashboardSidebarNavigationPage: View {
             ) {
                 onSelectFolder(folder.id)
             }
-            Button { onCreateChatInFolder(folder.id) } label: {
-                DashboardLucideIcon(glyph: .plus, size: 12)
-                    .frame(width: 24, height: DashboardMetrics.rowHeight)
-            }
-            .buttonStyle(DashboardIconButtonStyle())
-            .help("New chat in \(folder.name)")
-            .accessibilityLabel("New chat in \(folder.name)")
+            newChatButton(label: "New chat in \(folder.name)") { onCreateChatInFolder(folder.id) }
         }
         .popover(
             isPresented: Binding(

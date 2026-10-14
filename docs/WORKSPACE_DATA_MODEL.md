@@ -6,11 +6,11 @@ existing directory. Remote folders create a blank directory on the connected
 owner. Woven never initializes or normalizes a linked project, copies instruction
 files into it, or renames its directory when its display name changes.
 
-Draft chats can choose a folder in their agent's workspace or Ungrouped. The first
-accepted send locks the saved owner and cwd. Each Ungrouped chat launches in its
+Draft chats can choose a folder in their agent's workspace or All Workspaces. The first
+accepted send locks the saved owner and cwd. Each chat in All Workspaces launches in its
 own blank directory under its execution workspace’s `scratch` directory. Its date/message/id name is reserved durably
 before filesystem creation and retained through launch retries, resumes and title
-changes. Drafts can switch folders before sending; returning to Ungrouped reuses
+changes. Drafts can switch folders before sending; returning to All Workspaces reuses
 the chat’s reservation. Chat deletion preserves working files. Scratch is reserved
 for these chat directories. The database saves these roots for UI, orchestration,
 calendar tasks, and child sessions. A scheduled task keeps its captured root even
@@ -70,9 +70,14 @@ Trey should exercise these remaining integration checks on the PR build:
   creation, display-only rename, references, and correct delete choices.
 - Start each retained harness from the folder plus and agent sidebar; choose a
   draft folder, send, and verify locked cwd and one native Woven instruction block.
-  An agent clicked while another workspace's folder is selected starts Ungrouped;
-  a rejected first send still permits choosing a folder.
-- Start two Ungrouped chats on the Mac and on each remote workspace. Verify
+  Verify New chat opens the agent chooser, agent names open their latest chat,
+  and their separate plus buttons create in the selected folder. A plus for an
+  agent in another execution workspace is disabled. Verify All Workspaces has
+  the same folder-plus flow, and a rejected first send still permits choosing a folder.
+- Verify the composer lists All Workspaces and every sidebar folder. Existing
+  virtual folders bind once on first use, retain their root after rename, and
+  preserve existing files. Folders owned by another workspace are shown disabled.
+- Start two chats in All Workspaces on the Mac and on each remote workspace. Verify
   separate initially empty `scratch/<date>-<message>-<id>` directories, retry and
   resume reuse, stable paths after rename, and preserved files after chat deletion.
 - Read an old chat and confirm it offers no resume/send action.

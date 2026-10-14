@@ -194,7 +194,7 @@ struct WorkspaceView: View {
             model.pendingConnectionsScope = event.object as? String ?? "global"
             openUtility(.settings)
         }
-        .task(id: model.localACPWorkspaceAvailability.isReady) {
+        .task(id: model.state == .ready) {
             localExecutionWorkspaceID = try? await model.executionWorkspaceIdentity(workspaceID: nil)
         }
     }
@@ -595,6 +595,8 @@ struct WorkspaceView: View {
                 onShowNavigation: showSidebarNavigation,
                 onUtility: openUtility,
                 onSelectAgent: selectAgent,
+                onCreateAgentChat: createAgentChat,
+                onSelectRemoteAgent: selectRemoteAgent,
                 onStartRemoteChat: startRemoteChat,
                 onSelectFolder: selectFolder,
                 onSelectConversation: selectConversation,
@@ -814,6 +816,9 @@ struct WorkspaceView: View {
     }
 
     private func selectDefaults() {
+        // A successful creation may arrive before the read projection. Keep its
+        // selected ID until the next snapshot instead of restoring an older chat.
+        if selectedConversationID != nil && selectedConversation == nil { return }
         if selectedConversation?.localRuntimeKind != nil {
             selectedAgentID = selectedConversation?.agentID.flatMap { agentID in
                 allAgents.first {
@@ -847,6 +852,30 @@ struct WorkspaceView: View {
 
     private func selectAgent(_ id: UUID) {
         selectedAgentID = id
+        let latest = conversationsForSelectedAgent.max {
+            ($0.lastMessageAt ?? "", $0.id) < ($1.lastMessageAt ?? "", $1.id)
+        }
+        _ = chatPanels.replaceActiveConversation(with: latest?.id)
+        destination = .workspace
+        compactWorkspacePane = .chat
+        compactDrawer = .none
+    }
+
+    private func selectRemoteAgent(_ target: RemoteHarnessChatTarget) {
+        let latest = (model.workspaceOverview?.conversations ?? []).filter {
+            $0.remoteWorkspaceID == target.configuration.id && $0.localRuntimeKind == target.harness.id
+        }.max { ($0.lastMessageAt ?? "", $0.id) < ($1.lastMessageAt ?? "", $1.id) }
+        if let latest { selectConversation(latest.id) }
+        else {
+            _ = chatPanels.replaceActiveConversation(with: nil)
+            selectedAgentID = nil
+            destination = .workspace
+            compactWorkspacePane = .chat
+            compactDrawer = .none
+        }
+    }
+
+    private func createAgentChat(_ id: UUID) {
         if let agent = allAgents.first(where: { $0.id == id }) {
             if agent.governingPlane == .remoteWorkspace,
                let target = model.remoteWorkspaces.readyChatTargets.first(where: {
@@ -985,7 +1014,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private func createChatInFolder(_ id: String) {
+    private func createChatInFolder(_ id: String?) {
         selectFolder(id)
         showsNewNoteChooser = false
         showsNewChatChooser = true
@@ -1054,11 +1083,7 @@ struct WorkspaceView: View {
     private func createConversation() {
         showsNewNoteChooser = false
         compactDrawer = .none
-        if let selectedAgentID {
-            selectAgent(selectedAgentID)
-        } else {
-            showsNewChatChooser = true
-        }
+        showsNewChatChooser = true
     }
 
     private func startNewChat(_ target: DashboardNewChatTarget) {
@@ -1072,11 +1097,21 @@ struct WorkspaceView: View {
         }
     }
 
+    private func presentCreatedConversation(_ id: String) {
+        // A successful command can precede the next read-projection snapshot.
+        _ = chatPanels.replaceActiveConversation(with: id)
+        selectDefaults()
+        destination = .workspace
+        compactWorkspacePane = .chat
+        compactDrawer = .none
+    }
+
     private func startDirectChat(_ runtimeKind: AgentRuntimeKind) {
+        let requestedFolderID = selectedFolderID
         Task {
             let owner = try? await model.executionWorkspaceIdentity(workspaceID: nil)
             let folderID = model.workspaceOverview?.folders.first(where: {
-                $0.id == selectedFolderID && $0.executionWorkspaceID == owner
+                $0.id == requestedFolderID && ($0.executionWorkspaceID == nil || $0.executionWorkspaceID == owner)
             })?.id
             guard let conversationID = await model.createLocalACPSession(
                 runtimeKind: runtimeKind, folderID: folderID
@@ -1088,15 +1123,16 @@ struct WorkspaceView: View {
                 return
             }
             closeNewChatChooser()
-            selectConversation(conversationID)
+            presentCreatedConversation(conversationID)
         }
     }
 
     private func startRemoteChat(_ target: RemoteHarnessChatTarget) {
+        let requestedFolderID = selectedFolderID
         Task {
             let owner = "remote:" + target.configuration.id.uuidString.lowercased()
             let folderID = model.workspaceOverview?.folders.first(where: {
-                $0.id == selectedFolderID && $0.executionWorkspaceID == owner
+                $0.id == requestedFolderID && ($0.executionWorkspaceID == nil || $0.executionWorkspaceID == owner)
             })?.id
             guard let conversationID = await model.createRemoteACPSession(
                 target: target, folderID: folderID
@@ -1108,16 +1144,17 @@ struct WorkspaceView: View {
                 return
             }
             closeNewChatChooser()
-            selectConversation(conversationID)
+            presentCreatedConversation(conversationID)
         }
     }
 
     private func startBuzzWorkspaceChat(
         _ enrollment: BuzzWorkspaceAgentEnrollment
     ) {
+        let requestedFolderID = selectedFolderID
         Task {
             guard let conversationID = await model
-                .createBuzzWorkspaceLocalACPSession(enrollment: enrollment, folderID: selectedFolderID) else {
+                .createBuzzWorkspaceLocalACPSession(enrollment: enrollment, folderID: requestedFolderID) else {
                 showNotice(
                     model.localRunError
                         ?? "The linked Buzz agent chat could not be created."
@@ -1125,7 +1162,7 @@ struct WorkspaceView: View {
                 return
             }
             closeNewChatChooser()
-            selectConversation(conversationID)
+            presentCreatedConversation(conversationID)
         }
     }
 

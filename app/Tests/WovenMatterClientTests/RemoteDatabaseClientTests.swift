@@ -16,6 +16,7 @@ struct RemoteDatabaseClientTests {
         #expect(try await second.databases().isEmpty == true)
         let scratch = "/home/.woven-matter/scratch/2026-10-14-research-12345678"
         #expect(try await first.ensureScratchDirectory(path: scratch).path == scratch)
+        #expect(try await first.createProject(name: "Existing folder", reuseExisting: true).path == "/home/.woven-matter/Existing folder")
         #expect(try await first.createDatabase(name: "Sales #1", preference: .sqlite).id == Self.databaseID)
         let link = DatabaseArtifactLink(sourceID: "remote:configured-identity", databaseID: Self.databaseID, relativePath: "", sqliteQuery: "SELECT value FROM events")
         let data = try await first.databaseData(for: link)
@@ -71,6 +72,10 @@ private final class RemoteDatabaseFixtureProtocol: URLProtocol, @unchecked Senda
         } else {
             #expect(port == 42001)
             switch request.url?.path {
+            case "/v1/projects":
+                #expect(payload?["name"] as? String == "Existing folder")
+                #expect(payload?["reuseExisting"] as? Bool == true)
+                row = #"{"path":"/home/.woven-matter/Existing folder"}"#
             case "/v1/scratch":
                 #expect(request.httpMethod == "POST")
                 #expect(payload?["path"] as? String == "/home/.woven-matter/scratch/2026-10-14-research-12345678")

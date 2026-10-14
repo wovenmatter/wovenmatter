@@ -2730,9 +2730,11 @@ final class ApplicationModel {
     ) async -> String? {
         if isBackendFrontend {
             do {
-                return try await sendBackendCommand(.createSession(runtime: runtimeKind, workspaceID: nil,
+                let result = try await sendBackendCommand(.createSession(runtime: runtimeKind, workspaceID: nil,
                     conversationID: requestedConversationID ?? UUID(), workingDirectory: nativeWorkingDirectory,
-                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID)).conversationID
+                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID))
+                await refreshWorkspace()
+                return result.conversationID
             } catch { localRunError = error.localizedDescription; return nil }
         }
 
@@ -2802,9 +2804,11 @@ final class ApplicationModel {
     ) async -> String? {
         if isBackendFrontend {
             do {
-                return try await sendBackendCommand(.createSession(runtime: target.harness.id, workspaceID: target.configuration.id,
+                let result = try await sendBackendCommand(.createSession(runtime: target.harness.id, workspaceID: target.configuration.id,
                     conversationID: requestedConversationID ?? UUID(), workingDirectory: nativeWorkingDirectory,
-                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID)).conversationID
+                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID))
+                await refreshWorkspace()
+                return result.conversationID
             } catch { localRunError = error.localizedDescription; return nil }
         }
 
@@ -4939,16 +4943,33 @@ extension ApplicationModel {
         if let folderID {
             // Read the current folder projection on the execution owner.
             guard let snapshot = try await dashboardStore?.database.workspaceOverview(),
-                  let folder = snapshot.folders.first(where: { $0.id == folderID }),
-                  folder.executionWorkspaceID == owner, let path = folder.rootPath else {
-                throw WorkspaceToolError.invalid("Select a folder owned by this agent's workspace, or Ungrouped.")
+                  let folder = snapshot.folders.first(where: { $0.id == folderID }) else {
+                throw WorkspaceToolError.invalid("This folder is no longer available.")
+            }
+            if folder.executionWorkspaceID == nil {
+                guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+                let path: String
+                if let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) {
+                    path = try await remoteWorkspaces.createProject(name: folder.name, in: configuration, reuseExisting: true).path
+                } else if workspaceID == nil, let workspace = localACPWorkspaceLaunchConfiguration {
+                    path = try LocalACPWorkspaceProvisioner.createProject(named: folder.name, in: workspace.rootURL, reuseExisting: true).path
+                } else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
+                // Existing directories remain user-owned, including after a retry.
+                try await database.bindFolderExecutionRoot(id: folderID,
+                    location: .init(workspaceID: owner, rootPath: path, managed: false))
+                await refreshWorkspace()
+                return URL(fileURLWithPath: path)
+            }
+            guard folder.executionWorkspaceID == owner, let path = folder.rootPath else {
+                throw WorkspaceToolError.invalid("Select a folder owned by this agent's workspace, or All Workspaces.")
             }
             if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
             return URL(fileURLWithPath: path)
         }
         let defaultRoot = try URL(fileURLWithPath: defaultToolWorkingDirectory(workspaceID: workspaceID))
         if let explicit, explicit.standardizedFileURL != defaultRoot.standardizedFileURL {
-            throw WorkspaceToolError.invalid("Ungrouped chats use their workspace's default directory. Create or link a folder to use another root.")
+            throw WorkspaceToolError.invalid("Chats in All Workspaces use their own scratch directory. Create or link a folder to use another root.")
         }
         return defaultRoot
     }

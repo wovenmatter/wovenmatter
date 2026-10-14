@@ -1535,8 +1535,9 @@ extension RemoteWorkspaceServiceClient {
     public func ensureScratchDirectory(path: String) async throws -> RemoteProjectDirectory {
         try await request(path: "v1/scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
     }
-    public func createProject(name: String) async throws -> RemoteProjectDirectory {
-        try await request(path: "v1/projects", method: "POST", body: JSONEncoder().encode(["name": name]))
+    public func createProject(name: String, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
+        struct Request: Encodable { let name: String; let reuseExisting: Bool }
+        return try await request(path: "v1/projects", method: "POST", body: JSONEncoder().encode(Request(name: name, reuseExisting: reuseExisting)))
     }
 }
 

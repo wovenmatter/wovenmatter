@@ -574,12 +574,11 @@ struct DashboardCloudConversation: View {
                             return { model.cancelLocalACPPrompt(conversationID: current.id) }
                         },
                         folderLabel: conversation.map { current in
-                            model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "Ungrouped"
+                            model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "All Workspaces"
                         },
-                        availableFolders: model.workspaceOverview?.folders.filter {
-                            $0.executionWorkspaceID == executionWorkspaceID && executionWorkspaceID != nil
-                        } ?? [],
+                        availableFolders: model.workspaceOverview?.folders ?? [],
                         selectedFolderID: conversation?.folderID,
+                        folderWorkspaceID: executionWorkspaceID,
                         folderSelectionDisabled: !canChooseFolder || choosingFolder || sendInProgress
                             || messages.contains(where: { $0.role == "user" }),
                         onSelectFolder: { folderID in

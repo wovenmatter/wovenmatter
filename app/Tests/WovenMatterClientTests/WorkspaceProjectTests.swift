@@ -24,6 +24,21 @@ struct WorkspaceProjectTests {
     #expect(try FileManager.default.contentsOfDirectory(atPath: external.path).isEmpty)
   }
 
+  @Test func legacyProjectReusePreservesFilesAndRejectsLinksAndFiles() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = try LocalACPWorkspaceProvisioner.createProject(named: "Existing folder", in: root, reuseExisting: true)
+    try "Keep my rules".write(to: directory.appending(path: "AGENTS.md"), atomically: true, encoding: .utf8)
+    #expect(try LocalACPWorkspaceProvisioner.createProject(named: "Existing folder", in: root, reuseExisting: true) == directory)
+    #expect(try String(contentsOf: directory.appending(path: "AGENTS.md"), encoding: .utf8) == "Keep my rules")
+    try FileManager.default.createSymbolicLink(at: root.appending(path: "Link"), withDestinationURL: directory)
+    try "Keep my file".write(to: root.appending(path: "File"), atomically: true, encoding: .utf8)
+    for name in ["Link", "File", "../escape", "scratch"] {
+      #expect(throws: (any Error).self) { try LocalACPWorkspaceProvisioner.createProject(named: name, in: root, reuseExisting: true) }
+    }
+  }
+
   @Test func creationIsBlankAndExistingFilesStayUntouched() async throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "blank-projects-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

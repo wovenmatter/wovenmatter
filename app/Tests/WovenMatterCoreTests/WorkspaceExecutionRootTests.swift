@@ -24,6 +24,31 @@ struct WorkspaceExecutionRootTests {
     }
   }
 
+  @Test func legacyFoldersBecomeSelectableWithoutChangingExistingHistoryOrRoots() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let folder = try await f.db.createFolder(name: "Existing sidebar folder")
+    let draft = try await f.draft()
+    let location = f.location("Existing sidebar folder")
+    #expect(try await f.db.workspaceOverview().folders.first?.executionWorkspaceID == nil)
+    try await f.db.bindFolderExecutionRoot(id: folder, location: location)
+    #expect(try await f.db.moveConversation(id: draft, toFolderID: folder))
+    #expect(try await f.db.sessionExecutionRoot(id: draft)?.rootPath == location.rootPath)
+    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "history.sqlite"))
+    try await reopened.bindFolderExecutionRoot(id: folder, location: location)
+    _ = try await reopened.renameFolder(id: folder, name: "New display name")
+    #expect(try await reopened.workspaceOverview().folders.first?.rootPath == location.rootPath)
+    #expect(try await reopened.workspaceOverview().folders.first?.managedRoot == false)
+    await #expect(throws: (any Error).self) {
+      try await reopened.bindFolderExecutionRoot(id: folder, location: .init(workspaceID: "remote:other", rootPath: "/home/project", managed: false))
+    }
+    await #expect(throws: (any Error).self) {
+      try await reopened.bindFolderExecutionRoot(id: folder, location: f.location("Different root"))
+    }
+    await #expect(throws: (any Error).self) {
+      try await reopened.bindFolderExecutionRoot(id: "missing", location: location)
+    }
+  }
+
   @Test func scratchReservationSurvivesRetriesRenamesAndFolderChanges() async throws {
     let f = try await Fixture(); defer { f.remove() }
     let id = try await f.draft()

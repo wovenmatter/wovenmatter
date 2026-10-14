@@ -26,15 +26,21 @@ preserved. Conversations and notes remain in Woven.
 **New chat** starts a draft with the selected agent in the current folder. The
 small plus beside a folder opens its agent chooser. Before the first message,
 use the composer's folder selector to choose a folder owned by that agent's
-workspace or **Ungrouped**. Sending the first message fixes the folder and
-working directory. Clicking an agent in the sidebar starts a new chat.
+workspace or **All Workspaces**. Sending the first message fixes the folder and
+working directory. **New chat** opens the agent chooser. Clicking an agent's name
+opens its most recent chat; the separate plus starts a new chat with that agent
+in the selected folder. Folder plus buttons open the chooser for that folder;
+the **All Workspaces** plus starts the same flow without assigning a folder.
 
-Each Ungrouped chat uses its own directory under `~/.woven-matter/scratch` on
+Each chat in All Workspaces uses its own directory under `~/.woven-matter/scratch` on
 the Mac or `/home/.woven-matter/scratch` in its remote workspace. Woven creates
 the directory when the chat launches, with a date, the first words of its initial
 message, and a short chat ID. The directory starts blank. Retries, resumes and
 title changes keep the same directory; deleting the chat keeps its working files.
-Scratch is reserved for these chat directories. An unsent draft can still choose
+Scratch is reserved for these chat directories. Older sidebar folders become
+fixed to the selected execution workspace on first use, with a directory named
+for the folder. Existing files are preserved and these legacy roots are never
+marked for managed physical deletion. An unsent draft can still choose
 a project folder before its first message. Sessions
 from the former workspace layout remain readable as archived history and cannot
 be resumed; start a new chat for further work. Their existing files remain in

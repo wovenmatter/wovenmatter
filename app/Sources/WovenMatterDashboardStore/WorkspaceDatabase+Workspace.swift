@@ -862,3 +862,31 @@ extension WorkspaceDatabase {
     try await write { try $0.clearDraftNativeSession(id: id) }
   }
 }
+
+
+extension WorkspaceDatabaseConnection {
+  /// Older sidebar folders were virtual. Their first use gives them an immutable
+  /// execution owner and root without moving history or adopting file deletion.
+  public func bindFolderExecutionRoot(id: String, location: WorkspaceFolderLocation) throws {
+    try transaction {
+      try validateFolderUnlocked(id: id, operatorID: localMutationOperatorIDUnlocked())
+      guard !location.workspaceID.isEmpty, location.rootPath.hasPrefix("/"), !location.rootPath.contains("\0") else {
+        throw WorkspaceToolError.invalid("A folder needs an owning workspace and absolute root.")
+      }
+      if let saved = try historyRowsUnlocked("SELECT workspace_id,root_path FROM folder_execution_roots WHERE folder_id=?", values: [id]).first?.objectValue {
+        guard saved["workspace_id"]?.stringValue == location.workspaceID, saved["root_path"]?.stringValue == location.rootPath else {
+          throw WorkspaceToolError.invalid("This folder's execution workspace and root are fixed.")
+        }
+        return
+      }
+      try toolsExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,?)",
+        [id,location.workspaceID,location.rootPath,location.managed ? "1" : "0"])
+    }
+  }
+}
+
+extension WorkspaceDatabase {
+  public func bindFolderExecutionRoot(id: String, location: WorkspaceFolderLocation) async throws {
+    try await write { try $0.bindFolderExecutionRoot(id: id, location: location) }
+  }
+}

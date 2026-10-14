@@ -120,7 +120,8 @@ const server = createServer(async (request, response) => {
 
 
     if (request.method === 'POST' && url.pathname === '/v1/projects') {
-      return json(response, 201, await createProject(workspaceRoot, (await readJSON(request)).name))
+      const body = await readJSON(request)
+      return json(response, 201, await createProject(workspaceRoot, body.name, { reuseExisting: body.reuseExisting === true }))
     }
     if (request.method === 'POST' && url.pathname === '/v1/scratch') {
       return json(response, 200, await ensureScratchDirectory(workspaceRoot, (await readJSON(request)).path))

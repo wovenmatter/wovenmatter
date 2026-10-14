@@ -487,8 +487,8 @@ final class RemoteWorkspacesModel {
         guard result.path == path else { throw WorkspaceToolError.invalid("The remote workspace returned a different scratch directory.") }
     }
 
-    func createProject(name: String, in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteProjectDirectory {
-        try await databaseRequest(configuration) { try await $0.createProject(name: name) }
+    func createProject(name: String, in configuration: RemoteWorkspaceConfiguration, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
+        try await databaseRequest(configuration) { try await $0.createProject(name: name, reuseExisting: reuseExisting) }
     }
 
     func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
