@@ -1,6 +1,6 @@
 # Central library and distributed workspaces
 
-This is the implementation contract for the multi-client work in PR #37.
+This is the storage, execution and synchronization contract for paired clients.
 
 ## Roles
 
@@ -12,7 +12,7 @@ Tailscale carries inter-device connections. Woven Matter additionally authentica
 
 ## Storage boundary
 
-The central library consolidates notes, folders, conversations, complete exposed execution history, shared settings, and saved artifacts. Workspace files remain in their workspace: repositories, dependencies, build outputs, caches, and native runtime checkpoints are not mirrored wholesale. Saving an output to the library creates an explicitly synchronized artifact.
+The central library consolidates notes, folders, conversations, complete exposed execution history, shared settings, and saved artifacts. Project roots and managed SQLite datasets follow [the workspace data model](WORKSPACE_DATA_MODEL.md): one execution owner per root/dataset, separate from the central history database. Workspace files remain in their workspace: repositories, dependencies, build outputs, caches, and native runtime checkpoints are not mirrored wholesale. Saving an output to the library creates an explicitly synchronized artifact.
 
 A client replica is separate from native runtime persistence. Cache eviction must never remove unsynchronized changes, active runtime state, or the only copy of locally originated history. Each execution workspace retains its own durable execution records and publishes them directly to the central library. An observing client may cache a foreign workspace journal for display, but must never publish that history or its artifacts. Linux workspace publication continues independently of any viewing client, including after the workspace service restarts. Each workspace uses its own publication identity scoped to that library and workspace; provisioning ownership does not confer execution ownership.
 
@@ -49,7 +49,7 @@ deletions retain tombstones and never resurrect an old identity during replay.
 
 Notes, calendar and the library index are available offline after download.
 Recent central transcripts are cached automatically; older transcript pages and
-large saved artifacts are downloaded on demand and can be kept offline. The
+large saved artifacts are downloaded on demand. The
 immutable federation journal currently retains downloaded origin events in full;
 it is not pruned or skipped to simulate lazy transcript transfer. Cache cleanup never
 removes pending edits, conflicts, pinned content, or the only copy of locally
@@ -80,7 +80,7 @@ Accepted work and tool intent are persisted before display/dispatch. iOS backgro
 
 ## Client roles and compatibility
 
-A secondary Mac can switch explicitly to client mode after pairing. The transition flushes local writing, checks active work, and restarts with a separate ownership role. Its prior library is preserved. Every Mac retains its own local execution workspace. Its execution origin is distinct from the authority for the paired library. Creating or provisioning additional Linux workspaces remains a central-Mac operation.
+A secondary Mac switches explicitly to Node mode before pairing. The transition flushes local writing, checks active work, and restarts with a separate ownership role. Its prior library is preserved. Every Mac retains its own local execution workspace. Its execution origin is distinct from the authority for the paired library. Creating or provisioning additional Linux workspaces remains a central-Mac operation.
 
 The existing companion protocol remains compatible while new federation capabilities are negotiated explicitly. Persistent identities, pairing and unsynchronized writing survive migration. Older servers/clients receive explicit unavailable or version responses for unsupported capabilities.
 

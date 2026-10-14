@@ -220,7 +220,7 @@ struct WorkspaceNativeRunArchiveTests {
     return (try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite")), directory)
   }
   private func session(_ db: WorkspaceDatabase) async throws -> String {
-    try await db.createLocalACPSession(runtimeKind: .pi, title: "Archive", ownerDeviceID: UUID())
+    try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Archive", ownerDeviceID: UUID())
   }
   private func rows(_ result: GatewayJSONValue) -> [GatewayJSONValue] { result.objectValue?["rows"]?.arrayValue ?? [] }
 }

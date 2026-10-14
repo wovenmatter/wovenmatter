@@ -21,7 +21,7 @@ const packageRoot=path.dirname(require.resolve('pyodide/package.json'));
 const manifest=JSON.parse(await readFile(path.join(packageRoot,'package.json'),'utf8'));
 if(manifest.version!=='314.0.7') throw Error('Review runtime updates before changing the pinned Pyodide version');
 await mkdir(output,{recursive:true});
-const bundle=await build({absWorkingDir:root,entryPoints:['ios/EmbeddedRuntime/worker.js'],bundle:true,platform:'browser',format:'iife',target:'es2022',external:['node:*'],legalComments:'linked',outfile:path.join(output,'worker.js'),write:false});
+const bundle=await build({absWorkingDir:root,entryPoints:['ios/EmbeddedRuntime/worker.js'],bundle:true,platform:'browser',format:'iife',target:'es2022',minify:true,external:['node:*'],legalComments:'linked',outfile:path.join(output,'worker.js'),write:false});
 const resources={};
 for(const file of bundle.outputFiles) { await writeFile(file.path,file.contents); resources[path.basename(file.path)]=digest(file.contents); }
 for(const name of ['pyodide.asm.wasm','python_stdlib.zip']) {

@@ -37,39 +37,3 @@ test('OpenCode adoption verifies idle identity and settings retain the native po
   await assert.rejects(f.control.perform('opencode',adopted,'configure',{model:'missing/model'}),/available OpenCode model/)
   assert.ok(!f.calls.some(call=>call.path.endsWith('/prompt')))
 })
-
-function hermesFixture() {
-  const calls=[],state={model:'fixture --provider lab',reasoning:'medium',yolo:false,mode:'manual',busy:false}
-  class Socket extends EventTarget {
-    constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('open')))}
-    close(){}
-    send(bytes) {
-      const frame=JSON.parse(bytes);calls.push(frame);const p=frame.params
-      let result
-      if(frame.method==='config.get')result=p.key==='profile'?{home:'/home/.hermes'}:{value:state[p.key]}
-      else if(frame.method==='session.resume')result={session_id:'live',stored_session_id:'stored',running:state.busy}
-      else if(frame.method==='session.activate')result={session_id:'live',info:{yolo:state.yolo,approval_mode:state.mode}}
-      else if(frame.method==='model.options')result={model:'fixture',provider:'lab',providers:[{slug:'lab',models:['fixture'],capabilities:{fixture:{reasoning:true}}}]}
-      else if(frame.method==='config.set'){state[p.key]=p.key==='yolo'?p.value==='1':p.value;result={scope:'session',value:p.value}}
-      else assert.fail('Unexpected Hermes method '+frame.method)
-      queueMicrotask(()=>this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({id:frame.id,result})})))
-    }
-  }
-  const control=createNativeClientSessions({...options,hermes:{start:async()=>{}},WebSocketClass:Socket,read:async()=>JSON.stringify({port:4000,token:'fixture'})})
-  return {control,calls,state}
-}
-
-test('Hermes idle adoption validates profile and configures only per-session settings',async()=>{
-  const f=hermesFixture(),workspaceID='00000000-0000-0000-0000-000000000001',home='/remote-workspaces/'+workspaceID+'/home/.hermes'
-  const native={workspaceID,sessionID:'hermes-gateway:'+Buffer.from(home).toString('base64')+':stored'}
-  f.state.busy=true;await assert.rejects(f.control.perform('hermes',native,'adopt'),/not idle/)
-  f.state.busy=false;assert.equal((await f.control.perform('hermes',native,'adopt')).sessionID,native.sessionID)
-  const initial=await f.control.perform('hermes',native,'settings')
-  assert.equal(initial.model,'fixture --provider lab');assert.equal(initial.permission,'default')
-  const changed=await f.control.perform('hermes',native,'configure',{model:'fixture --provider lab',thinking:'high',permission:'full'})
-  assert.equal(changed.thinking,'high');assert.equal(changed.permission,'full')
-  f.state.mode='off';await assert.rejects(f.control.perform('hermes',native,'configure',{permission:'default'}),/profile forces/)
-  await assert.rejects(f.control.perform('hermes',{...native,workspaceID:'another'},'adopt'),/another workspace profile/)
-  assert.ok(f.calls.filter(call=>call.method==='config.set').every(call=>call.params.scope==='session'))
-  assert.ok(!f.calls.some(call=>call.method==='prompt.submit'))
-})

@@ -1,0 +1,3 @@
+<WovenMatter>
+This session runs in Woven Matter. Run `wovenmatter help` to discover the available app tools and their current session permissions. Use `wovenmatter context` when the user refers to an open note or asset. Use Woven tools for managed databases and database-linked artifacts. Use `wovenmatter notes folders` to discover project roots and reference locations on their recorded workspaces. Follow the user's project instructions.
+</WovenMatter>

@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ExecutorBroker, validateConfiguration } from '../src/executor/broker.mjs';
+import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion } from '../src/executor/broker.mjs';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
@@ -18,10 +18,42 @@ async function fixture(t, run) {
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
   }, connect: async () => ({ callTool: run, close: async () => {} }) }).load();
   broker.config = { id: randomUUID(), location: 'local' }; broker.server = { apiKey: 'manager-secret' }; broker.origin = 'http://127.0.0.1:4312';
-  const scope = await broker.scope('conversation-a', [{ app: 'app-a', profile: 'profile-a' }], true);
+  const scope = await broker.scope('conversation-a', [{ app: 'app-a', account: 'account-a' }], true);
   scope.grant = { token: 'scoped-secret', expires: Date.now() + 3600000 };
   return { broker, scope, calls, scopes, directory };
 }
+test('Executor updates have no beta, minor or major ceiling', async () => {
+  const metadata = version => ({ version, bin: { executor: 'bin.mjs' } });
+  const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest')
+    ? metadata(latest) : { versions: Object.fromEntries(versions.map(version => [version, metadata(version)])) }));
+  assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19'])), '2.0.0-beta.19');
+  for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '3.0.0']) {
+    assert.equal(supportsExecutorVersion(version), true);
+    assert.equal(await latestExecutorVersion(registry(version, [version])), version);
+  }
+  for (const version of ['1.6.10', 'invalid']) assert.equal(supportsExecutorVersion(version), false);
+});
+test('inventory reads linked account targets and never creates profiles or exposes the administrator app', async t => {
+  const { broker } = await fixture(t, async () => ({}));
+  const calls = [];
+  broker.request = async (path, input) => { calls.push([path, input]); return { body: {
+    apps: [
+      { id: 'admin', owner: 'executor-local', requirements: { accounts: {} } },
+      { id: 'plain', name: 'Plain', requirements: { accounts: {} } },
+      { id: 'shared', name: 'Shared', requirements: { accounts: { key: { scope: 'app' } } } },
+      { id: 'user', name: 'User', requirements: { accounts: { key: { scope: 'user' } } } },
+      { id: 'unlinked', requirements: { accounts: { key: { scope: 'user' } } } },
+    ], links: [{ app: 'user', account: 'first' }, { app: 'user', account: 'second' }, { app: 'user', account: 'missing' }],
+    accounts: [{ id: 'first', label: 'Personal' }, { id: 'second', label: 'Work' }, { id: 'unlinked', label: 'Do not grant' }],
+  } }; };
+  assert.deepEqual(await broker.inventory(), [
+    { id: 'plain:app', app: 'plain', name: 'Plain', profileName: 'App' },
+    { id: 'shared:app', app: 'shared', name: 'Shared', profileName: 'App' },
+    { id: 'user:account:first', app: 'user', name: 'User', account: 'first', profileName: 'Personal' },
+    { id: 'user:account:second', app: 'user', name: 'User', account: 'second', profileName: 'Work' },
+  ]);
+  assert.deepEqual(calls, [['/dashboard/api/overview', undefined]]);
+});
 test('Execute waits for trusted approval, deduplicates IDs and binds jobs to their conversation', async t => {
   let executions = 0;
   const { broker, scope, directory } = await fixture(t, async () => { executions++; return { structuredContent: { status: 'completed', execution: { ok: true, value: 1 } } }; });
@@ -39,12 +71,13 @@ test('Execute waits for trusted approval, deduplicates IDs and binds jobs to the
   assert.ok(!JSON.stringify(broker.publicJob(broker.jobs.get(request.id))).includes('secret'));
   assert.equal((await stat(join(directory, 'manager.json'))).mode & 0o777, 0o600);
 });
-test('scope updates group profiles by app, preserve independent scopes, and master off empties authority', async t => {
+test('scope updates group account targets by app, preserve independent scopes, and master off empties authority', async t => {
   const { broker, scopes } = await fixture(t, async () => ({}));
-  const a = await broker.scope('conversation-a', [{ app: 'one', profile: 'first' }, { app: 'one', profile: 'second' }], true);
-  const b = await broker.scope('conversation-b', [{ app: 'two', profile: 'third' }], true);
+  const a = await broker.scope('conversation-a', [{ app: 'one', account: 'first' }, { app: 'one', account: 'second' }], true);
+  const b = await broker.scope('conversation-b', [{ app: 'two' }], true);
   assert.equal(scopes.get(a.id).apps.length, 1);
-  assert.equal(scopes.get(a.id).apps[0].runsAs.length, 2);
+  assert.deepEqual(scopes.get(a.id).apps[0].runsAs, [{ kind: 'account', id: 'first' }, { kind: 'account', id: 'second' }]);
+  assert.deepEqual(scopes.get(b.id).apps[0].runsAs, [{ kind: 'app' }]);
   await broker.scope('conversation-a', [], false);
   assert.deepEqual(scopes.get(a.id).apps, []);
   assert.equal(scopes.get(b.id).apps[0].app, 'two');
@@ -260,51 +293,4 @@ test('existing remote connections never report the previous local runtime versio
   broker.runtimeVersion = '2.0.0-beta.12';
   const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' });
   assert.equal(result.version, null);
-});
-
-
-test('inventory supports exact linked accounts without creating profiles or exposing the administrator app', async t => {
-  const { broker } = await fixture(t, async () => ({}));
-  const requests = [];
-  broker.request = async path => {
-    requests.push(path);
-    return { body: {
-      apps: [
-        { id: 'admin', owner: 'executor-local', name: 'Manager' },
-        { id: 'public', name: 'Public', requirements: { accounts: {} } },
-        { id: 'app-owned', name: 'App owned', requirements: { accounts: { shared: { scope: 'app' } } } },
-        { id: 'private', name: 'Private', requirements: { accounts: { user: { scope: 'user' } } } },
-        { id: 'unconfigured', name: 'Unconfigured', requirements: { accounts: { old: {} } } },
-      ],
-      links: [{ app: 'private', account: 'selected' }, { app: 'private', account: 'selected' }, { app: 'private', account: 'missing' }],
-      accounts: [{ id: 'selected', name: 'Selected' }, { id: 'unlinked', name: 'Unlinked' }],
-    } };
-  };
-  const inventory = await broker.inventory();
-  assert.deepEqual(inventory.map(value => [value.app, value.profile]), [['public', '@app'], ['app-owned', '@app'], ['private', '@account:selected']]);
-  assert.deepEqual(requests, ['/dashboard/api/overview']);
-  broker.request = async () => ({ body: { apps: [] } });
-  await assert.rejects(broker.inventory(), /incompatible app inventory/);
-});
-
-test('current app and account selections remain exact and legacy profiles never widen to app access', async t => {
-  const { broker, scopes } = await fixture(t, async () => ({}));
-  const scope = await broker.scope('accounts', [
-    { app: 'public', profile: '@app' }, { app: 'private', profile: '@account:selected' },
-    { app: 'private', profile: '@account:selected' }, { app: 'old', profile: 'retained-profile' },
-  ], true);
-  assert.deepEqual(scopes.get(scope.id).apps.map(value => value.runsAs), [
-    [{ kind: 'app' }], [{ kind: 'account', id: 'selected' }], [{ kind: 'profile', id: 'retained-profile' }],
-  ]);
-  await broker.scope('accounts', [], false);
-  assert.deepEqual(scopes.get(scope.id).apps, []);
-  await assert.rejects(broker.scope('invalid', [{ app: 'private', profile: '@account:' }], true), /Invalid Executor account/);
-});
-
-test('legacy inventory retains configured profiles and excludes disabled profiles', async t => {
-  const { broker } = await fixture(t, async () => ({}));
-  broker.request = async () => ({ body: { apps: [{ id: 'old', name: 'Old' }], profiles: [
-    { id: 'enabled', app: 'old', name: 'Enabled' }, { id: 'disabled', app: 'old', enabled: false },
-  ] } });
-  assert.deepEqual((await broker.inventory()).map(value => value.profile), ['enabled']);
 });

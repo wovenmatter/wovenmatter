@@ -535,9 +535,11 @@ private final class FakeCommands: CompanionCommandServing {
       case .createSession:
         guard command.providerID == "local:codex" else { throw MobileConnectionError.invalidResponse }
         let requestedID = try #require(UUID(uuidString: conversationID))
+        let location = WorkspaceFolderLocation(workspaceID: "device:fixture", rootPath: "/fixture", managed: false)
+        if let folderID = command.folderID { try await database.bindFolderExecutionRoot(id: folderID, location: location) }
         _ = try await database.createLocalACPSession(runtimeKind: .codex,
             title: command.text ?? "Fixture mobile conversation", ownerDeviceID: UUID(),
-            requestedConversationID: requestedID, folderID: command.folderID)
+            requestedConversationID: requestedID, executionRoot: .init(folderID: command.folderID, location: location, defaultPath: "/fixture"))
         receipt.conversationID = conversationID
         return receipt
       case .send:

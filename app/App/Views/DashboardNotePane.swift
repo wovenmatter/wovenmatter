@@ -49,25 +49,32 @@ struct DashboardNotePane: View {
         document.wrappedValue
     }
 
-    private var hasDatabaseLinks: Bool {
-        if currentDocument.databaseLink != nil { return true }
-        return currentDocument.blocks.contains { block in
-            guard case .table(let table) = block else { return false }
-            return table.databaseLink != nil
-        }
+    private var databaseLinks: [DatabaseArtifactLink] {
+        [currentDocument.databaseLink].compactMap { $0 }
+            + currentDocument.blocks.flatMap { block -> [DatabaseArtifactLink] in
+                switch block {
+                case .table(let table): return [table.databaseLink].compactMap { $0 }
+                case .richText(let text): return text.runs.compactMap(\.databaseLink)
+                }
+            }
     }
 
+    private var hasDatabaseLinks: Bool { !databaseLinks.isEmpty }
+
     private var databaseLinkSignature: String {
-        let links = [currentDocument.databaseLink]
-            + currentDocument.blocks.map { block -> DatabaseArtifactLink? in
-                guard case .table(let table) = block else { return nil }
-                return table.databaseLink
-            }
-        return links.compactMap { link in
-            link.map {
-                "\($0.sourceID)|\($0.databaseID)|\($0.relativePath)|\($0.sqliteQuery ?? "")"
-            }
+        databaseLinks.map {
+            "\($0.sourceID)|\($0.databaseID)|\($0.sqliteQuery ?? "")"
         }.joined(separator: "\n")
+    }
+
+    private var linkedDataStatus: String {
+        var seen = Set<String>()
+        return databaseLinks.compactMap { link -> String? in
+            guard let database = model.databasesSnapshot.database(
+                sourceID: link.sourceID, databaseID: link.databaseID
+            ), seen.insert(database.id).inserted else { return nil }
+            return "\(database.name): \(DashboardDatabaseFreshness.description(database))"
+        }.joined(separator: " · ")
     }
 
     var body: some View {
@@ -183,6 +190,18 @@ struct DashboardNotePane: View {
                     }
                 }
 
+                if !linkedDataStatus.isEmpty {
+                    Text(linkedDataStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(databaseLinks.contains { link in
+                            model.databasesSnapshot.database(
+                                sourceID: link.sourceID, databaseID: link.databaseID
+                            )?.offline == true
+                        } ? DashboardPalette.warning : DashboardPalette.mutedForeground)
+                        .lineLimit(1)
+                        .help(linkedDataStatus)
+                }
+
                 if let linkedDataError {
                     HStack(spacing: 6) {
                         DashboardLucideIcon(glyph: .alertTriangle, size: 12)
@@ -257,8 +276,14 @@ struct DashboardNotePane: View {
             }
         }
         .onChange(of: note) { _, updated in model.prepareNoteDraft(updated) }
+        .onChange(of: model.databasesSnapshot) { _, _ in
+            guard hasDatabaseLinks else { return }
+            Task { await refreshLinkedData() }
+        }
         .task(id: "\(note.id):\(databaseLinkSignature)") {
             guard hasDatabaseLinks else {
+                activeLinkedDataRefreshID = nil
+                isRefreshingLinkedData = false
                 linkedDataJSON = nil
                 linkedDataError = nil
                 return
@@ -269,6 +294,7 @@ struct DashboardNotePane: View {
     }
 
     private func refreshLinkedData() async {
+        guard hasDatabaseLinks else { return }
         let refreshID = UUID()
         activeLinkedDataRefreshID = refreshID
         isRefreshingLinkedData = true
@@ -323,6 +349,42 @@ struct DashboardNotePane: View {
                           activeLinkedDataRefreshID == refreshID else { return }
                     loaded.append((table, data))
                 }
+                var values: [(blockID: String, id: String, runs: [NoteTextRun], value: String)] = []
+                var scalarQueries: [String: DatabaseTabularData] = [:]
+                var valueIDs = Set<String>()
+                for block in snapshot.blocks {
+                    guard case .richText(let text) = block else { continue }
+                    var seen = Set<String>()
+                    for run in text.runs {
+                        guard let link = run.databaseLink, let id = run.databaseValueID,
+                              seen.insert(id).inserted else { continue }
+                        let indices = text.runs.indices.filter { text.runs[$0].databaseValueID == id }
+                        let expected = indices.map { text.runs[$0] }
+                        guard valueIDs.insert(id).inserted,
+                              let first = indices.first, let last = indices.last,
+                              last - first + 1 == indices.count,
+                              expected.allSatisfy({ $0.databaseLink == link }) else {
+                            throw DashboardInlineDatabaseValueError.conflictingLinks
+                        }
+                        let key = "\(link.sourceID)|\(link.databaseID)|\(link.sqliteQuery ?? "")"
+                        let data: DatabaseTabularData
+                        if let cached = scalarQueries[key] {
+                            data = cached
+                        } else {
+                            data = try await model.linkedData(for: link)
+                            scalarQueries[key] = data
+                        }
+                        guard !Task.isCancelled, activeLinkedDataRefreshID == refreshID else { return }
+                        guard data.columns.count == 1, data.rows.count == 1, data.rows[0].count == 1 else {
+                            throw DashboardInlineDatabaseValueError.scalarRequired
+                        }
+                        let value = data.rows[0][0]
+                        guard value.rangeOfCharacter(from: .newlines) == nil else {
+                            throw DashboardInlineDatabaseValueError.multilineValue
+                        }
+                        values.append((text.id, id, expected, value))
+                    }
+                }
                 guard activeLinkedDataRefreshID == refreshID else { return }
                 var latest = currentDocument
                 var skippedChangedTable = false
@@ -334,6 +396,15 @@ struct DashboardNotePane: View {
                         continue
                     }
                     latest.blocks[index] = .table(item.data.applying(to: existing))
+                }
+                for value in values {
+                    guard let index = latest.blocks.firstIndex(where: { $0.id == value.blockID }),
+                          case .richText(var text) = latest.blocks[index],
+                          text.refreshDatabaseValue(id: value.id, expectedRuns: value.runs, value: value.value) else {
+                        skippedChangedTable = true
+                        continue
+                    }
+                    latest.blocks[index] = .richText(text)
                 }
                 if latest != currentDocument { document.wrappedValue = latest }
                 if skippedChangedTable { linkedDataError = linkedDataChangedMessage }
@@ -349,6 +420,23 @@ struct DashboardNotePane: View {
         "This note changed while data was loading. Your edits were kept. Refresh again."
     }
 
+}
+
+private enum DashboardInlineDatabaseValueError: LocalizedError {
+    case scalarRequired
+    case multilineValue
+    case conflictingLinks
+
+    var errorDescription: String? {
+        switch self {
+        case .scalarRequired:
+            "An inline value needs a query returning exactly one row and one column. Ask your agent to fix the link."
+        case .multilineValue:
+            "This linked value contains multiple lines. Ask your agent to display it in a table."
+        case .conflictingLinks:
+            "An inline value has conflicting database links. Ask your agent to fix the link."
+        }
+    }
 }
 
 struct DashboardSplitSeparator: View {

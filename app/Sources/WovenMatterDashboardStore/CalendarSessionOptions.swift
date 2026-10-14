@@ -15,7 +15,7 @@ public enum CalendarSessionOptions {
       }
       defer { timeout.cancel() }
       do {
-        var configuration = try await client.initializeSession(directory, nil, nil).configuration
+        var configuration = try await client.initializeSession(directory, nil, nil, nil).configuration
         if let model, model != configuration.model { configuration = try await client.setConfiguration(model, nil) }
         try Task.checkCancellation()
         await client.shutdown()

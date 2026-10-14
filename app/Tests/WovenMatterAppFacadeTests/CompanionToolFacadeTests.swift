@@ -21,7 +21,7 @@ struct CompanionToolFacadeTests {
                 deviceID: identity.hostDeviceID)
         }
         let localChat = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Central", ownerDeviceID: UUID())
-        let remoteChat = try await fixture.createConversation(gateway: false)
+        let remoteChat = try await fixture.createConversation()
         let deniedChat = remoteDenied ? remoteChat : localChat
         let allowedChat = remoteDenied ? localChat : remoteChat
         try await fixture.database.setCompanionWorkspaceAccess(deviceID: fixture.device,

@@ -76,13 +76,15 @@ public struct WovenMatterToolCommand: Sendable {
   public let operationArguments: [String]
   public let wantsHelp: Bool
 
+  public var isDatabaseCommand: Bool { operationArguments.first == "databases" }
+
   public var subaction: String? { group == .notes && action == "table" ? positional.first : nil }
   public var commandPath: String {
     [group?.rawValue, action == "help" ? nil : action, subaction].compactMap { $0 }.joined(separator: " ")
   }
   public var isMutation: Bool {
     switch group {
-    case .notes: return !["list", "folders", "read", "versions", "version"].contains(action)
+    case .notes: return !["database-list", "database-query", "list", "folders", "read", "versions", "version"].contains(action)
     case .history, .usage, .library: return false
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
@@ -111,7 +113,7 @@ public struct WovenMatterToolCommand: Sendable {
       self.optionIndices = [:]; self.operationArguments = arguments; self.wantsHelp = !args.isEmpty
       return
     }
-    guard let group = WorkspaceToolGroup(rawValue: domain) else {
+    guard let group = WorkspaceToolGroup(rawValue: domain == "databases" ? "notes" : domain) else {
       throw WorkspaceToolError.invalid("Unknown tool group '\(domain)'. Run wovenmatter help.")
     }
     self.group = group
@@ -119,9 +121,9 @@ public struct WovenMatterToolCommand: Sendable {
       self.action = "help"; self.wantsHelp = true
       self.positional = []; self.options = [:]; self.optionIndices = [:]; self.operationArguments = arguments; return
     }
-    self.action = args.removeFirst()
+    self.action = (domain == "databases" ? "database-" : "") + args.removeFirst()
     let allowedActions: [WorkspaceToolGroup: Set<String>] = [
-      .notes: ["list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
+      .notes: ["database-list", "database-create", "database-query", "database-execute", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
@@ -179,6 +181,9 @@ public struct WovenMatterToolCommand: Sendable {
     case (.executor, "search"): allowed = ["query", "limit"] + request; maximumPositionals = 0
     case (.executor, "skills"): allowed = request; maximumPositionals = 0
     case (.executor, "status"), (.executor, "cancel"): allowed = ["id"] + request; maximumPositionals = 1
+    case (.notes, "database-list"): allowed = []; maximumPositionals = 0
+    case (.notes, "database-create"): allowed = ["title"] + request; maximumPositionals = 0
+    case (.notes, "database-query"), (.notes, "database-execute"): allowed = ["database-id", "query"] + request; maximumPositionals = 0
     case (.notes, "list"): allowed = ["search", "folder", "sort"] + pagination; maximumPositionals = 0
     case (.notes, "folders"): allowed = pagination; maximumPositionals = 0
     case (.notes, "create"): allowed = ["title", "kind", "folder"] + request; maximumPositionals = 0
@@ -319,6 +324,7 @@ public struct WovenMatterToolCommand: Sendable {
     Use the WovenMatter CLI to access the tools below and get the most out of WovenMatter.
 
       context     Read the open asset ID captured for the message being processed
+      databases   Create, query and update this workspace's managed SQLite datasets
       notes       Discover, read and edit notes, spreadsheets and HTML; recover versions
       history     Search conversations and read observed transcripts and traces
       sessions    Create, message and coordinate ordinary Woven Matter sessions
@@ -457,6 +463,21 @@ public struct WovenMatterToolCommand: Sendable {
     """ + "\n"
 
   public static func help(for command: WovenMatterToolCommand) -> String {
+    if command.isDatabaseCommand {
+      return """
+        Usage: wovenmatter databases list
+               wovenmatter databases create --title NAME
+               wovenmatter databases query --database-id ID --query SQL
+               wovenmatter databases execute --database-id ID --query SQL
+
+        Each database has one writable workspace owner. Execute commits schema and
+        data changes together. Query is read-only. Linked artifacts refresh from
+        complete committed snapshots. A source database is independent of copies.
+        Database writes do not replay: after an uncertain response, query current
+        data before retrying a write. Notes tool permissions apply.
+        """
+    }
+
     if command.action == "context" { return contextHelp }
     guard let group = command.group, command.action != "help" else {
       return command.group.map(help) ?? usage
@@ -469,7 +490,7 @@ public struct WovenMatterToolCommand: Sendable {
     case (.notes, "table", "remove-row"): "Usage: wovenmatter notes table remove-row --note-id ID --table-id ID --row N --revision REVISION\n\nRemove row N. Row numbers start at 0. A table must retain at least one row."
     case (.notes, "table", "add-column"): "Usage: wovenmatter notes table add-column --note-id ID --table-id ID [--after N] [--revision REVISION]\n\nAppend a column, or insert one after column N. Column numbers start at 0; --after -1 inserts first.\nUsing --after requires --revision. Appending without --after does not."
     case (.notes, "table", "remove-column"): "Usage: wovenmatter notes table remove-column --note-id ID --table-id ID --column N --revision REVISION\n\nRemove column N. Column numbers start at 0. A table must retain at least one column."
-    case (.notes, "link", _): "Usage: wovenmatter notes link --note-id ID --source-id ID --database-id ID --path RELATIVE_PATH --revision REVISION [--query READ_ONLY_SQL --table-id ID]\n\nSet the note's database link, or a table's link when --table-id is supplied.\nUse notes read to obtain the current revision."
+    case (.notes, "link", _): "Usage: wovenmatter notes link --note-id ID --source-id ID --database-id ID --revision REVISION [--query READ_ONLY_SQL --table-id ID]\n\nSet the note's database link, or a table's link when --table-id is supplied.\nUse notes read to obtain the current revision."
     case (.notes, "unlink", _): "Usage: wovenmatter notes unlink --note-id ID [--table-id ID] --revision REVISION\n\nRemove the note's database link, or a table's link when --table-id is supplied.\nUse notes read to obtain the current revision."
     case (.sessions, "release", _): "Usage: wovenmatter sessions release SESSION_ID --epoch EPOCH [--request-id UUID]\n\nEnd your coordination of this session. This does not stop or delete the session.\nRead wovenmatter sessions status SESSION_ID and use its coordinationEpoch for --epoch.\nA retry can only release that assignment."
     case (.sessions, "notifications", _): "Usage: wovenmatter sessions notifications SESSION_ID --epoch EPOCH --enabled true|false [--request-id UUID]\n\nEnable or disable automatic updates from a session you coordinate.\nRead wovenmatter sessions status SESSION_ID and use its coordinationEpoch for --epoch."

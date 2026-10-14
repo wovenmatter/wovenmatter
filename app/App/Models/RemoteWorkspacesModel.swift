@@ -436,39 +436,6 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func restartHermes(for configuration: RemoteWorkspaceConfiguration, action: String = "restart") async throws {
-        let identity=try requestIdentity(configuration)
-        let client=try await serviceClient(for:configuration)
-        try requireCurrent(identity)
-        _ = try await client.workspaceInstance(.hermes,action:action)
-        try requireCurrent(identity)
-    }
-
-    func hermesResults(for configuration: RemoteWorkspaceConfiguration, offset: Int) async throws -> [HermesScheduledResult] {
-        let identity = try requestIdentity(configuration)
-        let client = try await serviceClient(for:configuration)
-        try requireCurrent(identity)
-        let results = try await client.hermesResults(offset:offset)
-        try requireCurrent(identity)
-        return results
-    }
-
-    func prepareHermesConnection(for configuration: RemoteWorkspaceConfiguration) async throws -> HermesGatewayConnection {
-        let identity = try requestIdentity(configuration)
-        guard isRuntimeEnabled(.hermes, in: configuration) else { throw RemoteWorkspaceClientError.harnessUnavailable }
-        let client = try await serviceClient(for: configuration)
-        try requireCurrent(identity)
-        let status = try await client.workspaceInstance(.hermes, action: "start")
-        try requireCurrent(identity)
-        guard status.state == "running", let port = await tunnels[configuration.id]?.localPort,
-              let token = try await credentials.token(for: configuration.id) else {
-            throw RemoteWorkspaceClientError.invalidResponse("The workspace Hermes Gateway is unavailable.")
-        }
-        try requireCurrent(identity)
-        workspaceInstances[configuration.id, default: [:]][.hermes] = status
-        return HermesGatewayConnection(home: "/home/.hermes", port: port, token: token, pid: 0, remoteWorkspaceID: configuration.id)
-    }
-
     func prepareOpenCodeConnection(for configuration: RemoteWorkspaceConfiguration, allowStart: Bool = true) async throws -> OpenCodeConnection {
         let identity = try requestIdentity(configuration)
         guard isRuntimeEnabled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
@@ -531,6 +498,15 @@ final class RemoteWorkspacesModel {
 
     // Validate both sides of every suspension so credentials or destination changes
     // cannot publish a result belonging to an obsolete workspace connection.
+    func ensureScratchDirectory(path: String, in configuration: RemoteWorkspaceConfiguration) async throws {
+        let result = try await databaseRequest(configuration) { try await $0.ensureScratchDirectory(path: path) }
+        guard result.path == path else { throw WorkspaceToolError.invalid("The remote workspace returned a different scratch directory.") }
+    }
+
+    func createProject(name: String, in configuration: RemoteWorkspaceConfiguration, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
+        try await databaseRequest(configuration) { try await $0.createProject(name: name, reuseExisting: reuseExisting) }
+    }
+
     func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
         if isBackendProjection {
             let response = try await requestBackend(.databases(configuration.id))
@@ -546,12 +522,6 @@ final class RemoteWorkspacesModel {
             guard let value = response.database else { throw BackendRPCError.remote("The background service returned no database result.") }; return value
         }
         return try await databaseRequest(configuration) { try await $0.createDatabase(name: name, preference: preference) }
-    }
-
-    func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String,
-                               in configuration: RemoteWorkspaceConfiguration) async throws {
-        if isBackendProjection { _ = try await requestBackend(.databasePreference(configuration.id, databaseID, preference)); return }
-        _ = try await databaseRequest(configuration) { try await $0.setDatabasePreference(preference, databaseID: databaseID) }
     }
 
     func databaseData(for link: DatabaseArtifactLink,
@@ -669,60 +639,6 @@ final class RemoteWorkspacesModel {
                                  workspaceEpoch: workspaceEpochs[identity.configuration.id] ?? UUID()) else {
             throw CancellationError()
         }
-    }
-
-    func prepareOpenClawGateway(
-        for configuration: RemoteWorkspaceConfiguration
-    ) async throws -> RemoteOpenClawGatewayConnection {
-        let identity = try requestIdentity(configuration)
-        guard isRuntimeEnabled(.openclaw, in: configuration),
-              runtimeMaintenance[configuration.id]?.first(where: { $0.id == .openclaw })?.operation?.status != "running" else {
-            throw RemoteWorkspaceClientError.harnessUnavailable
-        }
-        if let knownHarnesses = harnesses[configuration.id],
-           !knownHarnesses.contains(where: {
-               $0.id == .openclaw && $0.state == "ready"
-           }) {
-            throw RemoteWorkspaceClientError.harnessUnavailable
-        }
-        let client = try await serviceClient(for: configuration)
-        try requireCurrent(identity)
-        var status = try await client.startOpenClawGateway()
-        try requireCurrent(identity)
-        var attempts = 0
-        while status.state != "running", attempts < 12 {
-            try await Task.sleep(for: .milliseconds(150))
-            try requireCurrent(identity)
-            status = try await client.openClawGatewayStatus()
-            try requireCurrent(identity)
-            attempts += 1
-        }
-        guard status.state == "running" else {
-            throw RemoteWorkspaceClientError.invalidResponse(
-                status.lastError ?? "The remote OpenClaw Gateway did not become ready."
-            )
-        }
-        guard let token = try await credentials.token(for: configuration.id) else {
-            throw RemoteWorkspaceClientError.invalidResponse(
-                "The workspace API token is missing from Keychain."
-            )
-        }
-        guard let localPort = await tunnels[configuration.id]?.localPort else {
-            throw RemoteWorkspaceClientError.invalidResponse(
-                "The SSH loopback tunnel did not report a local port."
-            )
-        }
-        try requireCurrent(identity)
-        guard isRuntimeEnabled(.openclaw, in: configuration) else { throw CancellationError() }
-        return RemoteOpenClawGatewayConnection(
-            endpoint: OpenClawGatewayEndpoint(
-                url: URL(
-                    string: "ws://127.0.0.1:\(localPort)\(status.socketPath)"
-                )!,
-                authorization: .remoteWorkspace
-            ),
-            requestHeaders: ["Authorization": "Bearer \(token)"]
-        )
     }
 
     func discoverMachines() {
@@ -1093,13 +1009,6 @@ final class RemoteWorkspacesModel {
         if forwardToBackend(.prepareHarness(configuration.id, harness.id, action)) { return }
         guard action == "install" || action == "update",
               checkingRuntimeIDs[configuration.id]?.contains(harness.id) != true else { return }
-        if action == "update", harness.id == .hermes,
-           runtimeMaintenance[configuration.id]?.first(where: { $0.id == .hermes })?.installed == true {
-            performBusy(configuration, actionErrorRuntimeKind: harness.id) {
-                try await self.runRuntimeMaintenance(.hermes, action: "update", configuration: configuration)
-            }
-            return
-        }
         performBusy(configuration, actionErrorRuntimeKind: harness.id) {
             let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
@@ -1693,4 +1602,22 @@ final class RemoteWorkspacesModel {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+
+extension RemoteWorkspacesModel {
+    func datasetOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
+                          snapshot: ManagedDatabaseSnapshot? = nil, in configuration: RemoteWorkspaceConfiguration) async throws -> GatewayJSONValue {
+        try await databaseRequest(configuration) { try await $0.managedDatabaseOperation(action: action, id: id, sql: sql, name: name, snapshot: snapshot) }
+    }
+    func datasetSnapshot(id: String, in configuration: RemoteWorkspaceConfiguration) async throws -> ManagedDatabaseSnapshot {
+        try await databaseRequest(configuration) { try await $0.databaseSnapshot(id: id) }
+    }
+}
+
+
+extension RemoteWorkspacesModel {
+    func deleteProject(path: String, in configuration: RemoteWorkspaceConfiguration) async throws {
+        _ = try await databaseRequest(configuration) { try await $0.deleteProject(path: path) }
+    }
 }

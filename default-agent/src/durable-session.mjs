@@ -1,3 +1,4 @@
+import { wovenInstructions } from './woven-instructions.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
@@ -346,7 +347,7 @@ export async function openDurableSession(engine, id, requested) {
           return await withAccount(model, account, () => scope.nativeBridge.beforeCompact(compaction, route, api, ctx), scope);
         } catch (error) { if (ctx.abortSignal.aborted) throw error; scope.nativeContextFailure = safeNativeFailure(error); return undefined; }
       } } },
-    ], sections: [section('workspace', () => loader.getAgentsFiles().agentsFiles.map(f => f.content).join('\n\n'), { tag: false })] }));
+    ], sections: [section('woven', () => wovenInstructions, { tag: false }), section('workspace', () => loader.getAgentsFiles().agentsFiles.map(f => f.content).join('\n\n'), { tag: false })] }));
     record.subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener); };
     record.reportUsage = usage => { for (const listener of listeners) listener({ usage }); };
     const session = { sessionId: sessionID, thinkingLevel: options.thinking ?? 'medium', messages: [],

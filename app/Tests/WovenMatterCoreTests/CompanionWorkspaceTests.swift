@@ -296,35 +296,6 @@ struct CompanionWorkspaceTests {
     await #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try await db.readNoteForEditing(id: recoveredID) }
   }
 
-  @Test("native session association retries recheck the selected folder")
-  func nativeAssociationFolderValidation() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let folderID = try await db.createFolder(name: "Selected")
-    let localID = UUID(), remoteID = UUID(), workspaceID = UUID()
-    let remoteConnection = "remote-workspace:" + workspaceID.uuidString.lowercased()
-    #expect(try await db.createLocalACPSession(runtimeKind: .opencode, title: "Local", ownerDeviceID: UUID(),
-      openCodeAssociation: ("local", "native-local"), requestedConversationID: localID, folderID: folderID) == localID.uuidString.lowercased())
-    #expect(try await db.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: workspaceID,
-      remoteWorkspaceName: "Remote", title: "Remote", ownerDeviceID: UUID(),
-      openCodeAssociation: (remoteConnection, "native-remote"), requestedConversationID: remoteID,
-      folderID: folderID) == remoteID.uuidString.lowercased())
-    #expect(try await db.workspaceOverview().conversations.allSatisfy { $0.folderID == folderID })
-    _ = try await db.deleteFolder(id: folderID)
-    await #expect(throws: WorkspaceNoteMutationError.folderNotFound) { try await db.validateSessionFolder(folderID) }
-    await #expect(throws: WorkspaceNoteMutationError.folderNotFound) {
-      try await db.createLocalACPSession(runtimeKind: .opencode, title: "Retry", ownerDeviceID: UUID(),
-        openCodeAssociation: ("local", "native-local"), folderID: folderID)
-    }
-    await #expect(throws: WorkspaceNoteMutationError.folderNotFound) {
-      try await db.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: workspaceID,
-        remoteWorkspaceName: "Remote", title: "Retry", ownerDeviceID: UUID(),
-        openCodeAssociation: (remoteConnection, "native-remote"), folderID: folderID)
-    }
-    #expect(try await db.workspaceOverview().conversations.count == 2)
-    #expect(try await db.workspaceOverview().conversations.allSatisfy { $0.folderID == nil })
-  }
-
   @Test("current note bindings validate in run acceptance while historical snapshots stay usable")
   func boundRunChecksRevisionAtomically() async throws {
     let fixture = try CompanionFixture(); defer { fixture.remove() }

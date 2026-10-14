@@ -61,7 +61,8 @@ struct DashboardCloudConversation: View {
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onUnavailableComposerAction: (String) -> Void
     private var workspaceOpenCode: OpenCodeModel? {
-        conversation.flatMap { model.openCodeModel(for: $0.id) }
+        guard let conversation, !conversation.isArchived else { return nil }
+        return model.openCodeModel(for: conversation.id)
     }
     @State private var toolObservationToken = UUID()
     @State private var scrollState = DashboardConversationScrollState()
@@ -77,6 +78,10 @@ struct DashboardCloudConversation: View {
     @State private var libraryHighlightID: String?
     @State private var librarySourceMessageID: String?
     @State private var attachmentOpenError: String?
+    @State private var executionWorkspaceID: String?
+    @State private var canChooseFolder = false
+    @State private var choosingFolder = false
+    @State private var folderSelectionError: String?
 
     @ViewBuilder var body: some View {
         if let conversation, model.federatedExecutionOwners[conversation.id] != nil {
@@ -130,8 +135,8 @@ struct DashboardCloudConversation: View {
                                 icon: .messageSquare,
                                 title: agent.map { "New conversation with \(dashboardAgentDisplayName($0))" } ?? "Choose a conversation",
                                 detail: agent == nil
-                                    ? "Choose New chat for a direct local workspace session, or select a synced conversation."
-                                    : "Choose a synced conversation from Workspace."
+                                    ? "Choose New chat to select an agent, or open an existing conversation."
+                                    : "Choose a conversation from All Workspaces."
                             )
                         } else if timeline.isEmpty {
                             DashboardConversationEmptyState(
@@ -142,7 +147,7 @@ struct DashboardCloudConversation: View {
                                 title: conversation?.title ?? "Conversation",
                                 detail: conversation?.localRuntimeKind == nil
                                     ? "This conversation has no messages yet."
-                                    : conversation?.localRuntimeKind == .opencode ? "This session uses its workspace on the connected OpenCode host." : "This direct chat is ready in the shared ~/.woven-matter workspace."
+                                    : conversation?.localRuntimeKind == .opencode ? "This session uses its workspace on the connected OpenCode host." : "Send a message to start this chat."
                             )
                         } else {
                             if scrollState.positionedConversationID == conversation?.id,
@@ -347,7 +352,18 @@ struct DashboardCloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
-                if let conversation, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
+                if conversation?.isArchived == true {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Archived History", systemImage: "archivebox")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("This chat is readable but cannot be resumed. Start a new chat to continue.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    .frame(maxWidth: 768, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                }
+                if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
                         .frame(maxWidth: 768)
                 }
@@ -396,7 +412,7 @@ struct DashboardCloudConversation: View {
                                 help: "Remove panel",
                                 action: onClosePanel
                             )
-                        } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                        } else if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent {
                             DashboardPanelControlButton(
                                 glyph: .settings,
                                 accessibilityLabel: "Pi Durable settings",
@@ -423,37 +439,29 @@ struct DashboardCloudConversation: View {
                         agentTools: model.agentTools,
                         sessionID: conversation?.id,
                         showsSessionControls: conversation.map {
-                            model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
+                            !$0.isArchived && $0.localRuntimeKind != nil
                         } ?? false,
                         showsPermissionControl: conversation.map {
-                            model.isOpenClawGatewayConversation($0.id)
-                                || ($0.localRuntimeKind != nil && $0.localRuntimeKind != .pi)
+                            !$0.isArchived && $0.localRuntimeKind != nil
                         } ?? false,
                         sessionMetadataLoading: conversation.map {
+                            guard !$0.isArchived else { return false }
                             if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
-                            if model.isOpenClawGatewayConversation($0.id) {
-                                return model.openClawGatewaySessionMetadata[$0.id] == nil
-                            }
                             return model.loadingLocalACPSessionIDs.contains($0.id)
                                 || model.localACPSessionMetadata[$0.id] == nil
                         } ?? false,
                         sessionMetadata: conversation.flatMap {
+                            guard !$0.isArchived else { return nil }
                             if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
-                            if model.isOpenClawGatewayConversation($0.id) {
-                                return model.openClawGatewaySessionMetadata[$0.id]
-                            }
                             return model.localACPSessionMetadata[$0.id]
                         },
                         sessionControlsDisabled: conversation.map {
+                            guard !$0.isArchived else { return true }
                             if $0.localRuntimeKind == .opencode {
                                 return workspaceOpenCode?.isLocalSession($0.id) != true
                                     || workspaceOpenCode?.statuses[$0.id] != "Connected"
                                     || workspaceOpenCode?.updatingSessions.contains($0.id) == true
                                     || model.localRunningConversationIDs.contains($0.id)
-                            }
-                            if model.isOpenClawGatewayConversation($0.id) {
-                                return model.localRunningConversationIDs.contains($0.id)
-                                    || model.updatingLocalACPSessionIDs.contains($0.id)
                             }
                             if $0.localRuntimeKind != nil {
                                 return model.loadingLocalACPSessionIDs.contains($0.id)
@@ -463,6 +471,7 @@ struct DashboardCloudConversation: View {
                             return true
                         } ?? true,
                         sendDisabled: sendInProgress || (conversation.map {
+                            guard !$0.isArchived else { return true }
                             if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.isLocalSession($0.id) != true || workspaceOpenCode?.statuses[$0.id] != "Connected" }
                             guard $0.localRuntimeKind != nil else { return true }
                             return model.loadingLocalACPSessionIDs.contains($0.id)
@@ -473,16 +482,8 @@ struct DashboardCloudConversation: View {
                         focusRequestGeneration: focusRequestGeneration,
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
-                            guard let conversation else { return }
+                            guard let conversation, !conversation.isArchived else { return }
                             if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, model: selection); return }
-                            if model.isOpenClawGatewayConversation(conversation.id) {
-                                model.patchOpenClawGatewaySession(
-                                    conversationID: conversation.id,
-                                    model: selection,
-                                    thinkingLevel: nil
-                                )
-                                return
-                            }
                             if conversation.localRuntimeKind != nil {
                                 Task { await model.updateLocalACPSession(
                                     conversation: conversation, model: selection
@@ -491,16 +492,8 @@ struct DashboardCloudConversation: View {
                             }
                         },
                         onSelectThinking: { selection in
-                            guard let conversation else { return }
+                            guard let conversation, !conversation.isArchived else { return }
                             if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, thinking: selection); return }
-                            if model.isOpenClawGatewayConversation(conversation.id) {
-                                model.patchOpenClawGatewaySession(
-                                    conversationID: conversation.id,
-                                    model: nil,
-                                    thinkingLevel: selection
-                                )
-                                return
-                            }
                             if conversation.localRuntimeKind != nil {
                                 Task { await model.updateLocalACPSession(
                                     conversation: conversation, thinking: selection
@@ -509,21 +502,12 @@ struct DashboardCloudConversation: View {
                             }
                         },
                         onSelectPermission: { selection in
-                            guard let conversation else { return }
+                            guard let conversation, !conversation.isArchived else { return }
                             if conversation.localRuntimeKind == .opencode {
                                 workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
                                 return
                             }
-                            if model.isOpenClawGatewayConversation(conversation.id) {
-                                model.patchOpenClawGatewaySession(
-                                    conversationID: conversation.id,
-                                    model: nil,
-                                    thinkingLevel: nil,
-                                    permission: selection
-                                )
-                                return
-                            }
-                            if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
+                            if conversation.localRuntimeKind != nil {
                                 Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
                             }
                         },
@@ -533,10 +517,14 @@ struct DashboardCloudConversation: View {
                             openAttachment(contentHash: file.contentHash,
                                 fileName: file.fileName, mimeType: file.mimeType)
                         },
-                        onDropFiles: onDropFiles,
+                        onDropFiles: { urls in
+                            guard conversation?.isArchived != true else { return false }
+                            return onDropFiles(urls)
+                        },
                         onUnavailableAction: onUnavailableComposerAction,
                         onCommandNavigation: onCommandNavigation,
                         onSend: {
+                            guard conversation?.isArchived != true else { return }
                             transcriptOwnsScroll = false
                             isUserScrolling = false
                             scrollInteractionRevision += 1
@@ -545,10 +533,49 @@ struct DashboardCloudConversation: View {
                             onSend()
                         },
                         onStop: conversation.flatMap { current in
-                            guard model.localRunningConversationIDs.contains(current.id) else { return nil }
+                            guard !current.isArchived, model.localRunningConversationIDs.contains(current.id) else { return nil }
                             return { model.cancelLocalACPPrompt(conversationID: current.id) }
+                        },
+                        folderLabel: conversation.map { current in
+                            model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "All Workspaces"
+                        },
+                        availableFolders: model.workspaceOverview?.folders ?? [],
+                        selectedFolderID: conversation?.folderID,
+                        folderWorkspaceID: executionWorkspaceID,
+                        folderSelectionDisabled: !canChooseFolder || choosingFolder || sendInProgress
+                            || messages.contains(where: { $0.role == "user" }),
+                        onSelectFolder: { folderID in
+                            guard let conversation, !conversation.isArchived, canChooseFolder, !choosingFolder else { return }
+                            choosingFolder = true
+                            folderSelectionError = nil
+                            Task {
+                                let accepted = await model.moveConversation(id: conversation.id, toFolderID: folderID)
+                                if !accepted {
+                                    folderSelectionError = model.folderMutationError ?? "The draft folder could not be changed."
+                                }
+                                choosingFolder = false
+                            }
                         }
                     )
+                    .disabled(conversation?.isArchived == true)
+                    .task(id: "\(conversation?.id ?? ""):\(conversation?.folderID ?? ""):\(conversation?.isArchived == true):\(messages.contains(where: { $0.role == "user" })):\(sendInProgress)") {
+                        canChooseFolder = false
+                        executionWorkspaceID = nil
+                        guard let conversation, !conversation.isArchived else { return }
+                        let id = conversation.id
+                        async let owner = model.conversationExecutionWorkspaceID(id: id)
+                        async let draftIsMutable = model.canChooseConversationFolder(id: id)
+                        let values = await (owner, draftIsMutable)
+                        guard !Task.isCancelled else { return }
+                        executionWorkspaceID = values.0
+                        canChooseFolder = values.1
+                    }
+                    .alert("Folder could not be changed", isPresented: Binding(
+                        get: { folderSelectionError != nil },
+                        set: { if !$0 { folderSelectionError = nil } }
+                    )) { Button("OK") { folderSelectionError = nil } } message: {
+                        Text(folderSelectionError ?? "")
+                    }
                     Group {
                         if showsAddPanel {
                             DashboardPanelControlButton(
@@ -598,11 +625,7 @@ struct DashboardCloudConversation: View {
             Text(attachmentOpenError ?? "")
         }
         .task(id: sessionIdentity) {
-            guard let conversation else { return }
-            if model.isOpenClawGatewayConversation(conversation.id) {
-                await model.refreshOpenClawGatewaySession(conversationID: conversation.id)
-                return
-            }
+            guard let conversation, !conversation.isArchived else { return }
             if conversation.localRuntimeKind != nil {
                 await model.refreshLocalACPSession(conversation: conversation)
             }
@@ -623,11 +646,10 @@ struct DashboardCloudConversation: View {
     }
 
     private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {
-        guard let conversation else { return nil }
+        guard let conversation, !conversation.isArchived else { return nil }
         return LocalACPSessionMetadataTaskIdentity(
             conversationID: conversation.id,
             runtimeKind: conversation.localRuntimeKind,
-            usesOpenClawGateway: model.isOpenClawGatewayConversation(conversation.id),
             launchAvailable: model.isLocalACPSessionLaunchAvailable(conversation)
         )
     }
@@ -638,14 +660,14 @@ struct DashboardCloudConversation: View {
     }
 
     private var localPermission: PendingLocalACPPermission? {
-        guard let conversation else { return nil }
+        guard let conversation, !conversation.isArchived else { return nil }
         return model.pendingLocalACPPermissions.first {
             $0.conversationID == conversation.id
         }
     }
 
     private var localInteraction: PendingLocalACPInteraction? {
-        guard let conversation else { return nil }
+        guard let conversation, !conversation.isArchived else { return nil }
         return model.pendingLocalACPInteractions.first {
             $0.conversationID == conversation.id
         }
@@ -1019,7 +1041,7 @@ struct DashboardLocalPlanCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            Text(dashboardNonemptyString(request.name) ?? "Cursor proposed a plan")
+            Text(dashboardNonemptyString(request.name) ?? "The agent proposed a plan")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .textCase(.uppercase)

@@ -58,25 +58,13 @@ struct LibraryTransportTests {
     }
   }
 
-  @Test("Pi transmits pasted images natively and points document inputs at their actual host")
-  func piAttachments() throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: "library-pi-" + UUID().uuidString)
+  @Test("ACP documents point at the actual local host path")
+  func nativeFileAttachments() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "library-acp-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let url = root.appending(path: "screen.png")
-    let bytes = Data([1, 2, 3])
-    try bytes.write(to: url)
-    let image = AgentFileAttachmentDraft(
-      kind: .image, fileName: "screen.png", mimeType: "image/png", sizeBytes: 3, contentHash: "hash", localURL: url)
-    let file = AgentFileAttachmentDraft(
-      kind: .file, fileName: "report.pdf", mimeType: "application/pdf", sizeBytes: 3, contentHash: "hash",
-      localURL: url,
-      remotePath: "/home/.woven-matter/.wovenmatter/attachments/hash/report.pdf")
-    let payload = try PiRPCClient.attachmentPayload(
-      .init(text: "Review these", attachments: [.file(image), .file(file)]))
-    #expect(payload.images == [["type": "image", "data": bytes.base64EncodedString(), "mimeType": "image/png"]])
-    #expect(payload.text.contains(file.remotePath!))
-    #expect(!payload.text.contains(url.path))
+    let url = root.appending(path: "report.pdf")
+    try Data([1, 2, 3]).write(to: url)
     let acp = try LocalACPClient.promptBlocks(
       .init(
         text: "Read",

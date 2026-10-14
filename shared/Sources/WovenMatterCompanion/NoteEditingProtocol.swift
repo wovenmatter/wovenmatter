@@ -144,6 +144,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
       case .richText(let richText):
         let (nextRuns, runOverflow) = totalRuns.addingReportingOverflow(richText.runs.count)
         var blockBytes = 0
+        try Self.validate(richText.runs)
         for run in richText.runs {
           let (next, overflow) = blockBytes.addingReportingOverflow(run.text.utf8.count)
           guard !overflow else { throw RemoteNoteEditError.operationTooLarge }
@@ -167,6 +168,9 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
               cells <= Self.maximumTableCells,
               nextTotal <= Self.maximumTableCells else {
           throw RemoteNoteEditError.operationNotAllowed
+        }
+        for row in table.rows {
+          for cell in row.cells { try Self.validate(cell.runs) }
         }
         totalCells = nextTotal
       }
@@ -239,6 +243,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
               runs.count <= 4_096 else {
           throw RemoteNoteEditError.operationNotAllowed
         }
+        try Self.validate(runs)
       case .addTableRow(_, let after):
         guard after.map({ (-1..<Self.maximumTableRows).contains($0) }) ?? true else {
           throw RemoteNoteEditError.operationNotAllowed
@@ -269,6 +274,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         switch block {
         case .richText(let text):
           guard text.runs.count <= 4_096 else { throw RemoteNoteEditError.operationTooLarge }
+          try Self.validate(text.runs)
         case .table(let table):
           let (cells, overflow) = table.rows.count.multipliedReportingOverflow(by: table.columns.count)
           guard (1...Self.maximumTableRows).contains(table.rows.count),
@@ -279,9 +285,21 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
             throw RemoteNoteEditError.operationNotAllowed
           }
           try Self.validate(table.databaseLink)
+          for row in table.rows {
+            for cell in row.cells { try Self.validate(cell.runs) }
+          }
         }
       case .deleteBlock, .setParagraphStyle:
         break
+      }
+    }
+  }
+
+  private static func validate(_ runs: [NoteTextRun]) throws {
+    for run in runs {
+      try Self.validate(run.databaseLink)
+      guard (run.databaseValueID?.utf8.count ?? 0) <= 4_096 else {
+        throw RemoteNoteEditError.operationTooLarge
       }
     }
   }

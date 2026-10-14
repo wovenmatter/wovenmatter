@@ -88,13 +88,15 @@ extension WorkspaceDatabaseConnection {
           """)
       }
     }
-    // All deletion entry points have the same deterministic behavior: keep notes
-    // and conversations in the workspace root, and emit their revised records.
+    // Detach notes and unbound conversations at every deletion entry point.
+    // Rooted sessions retain their captured folder identity and execution directory.
     try executeUnlocked("""
-      CREATE TRIGGER IF NOT EXISTS companion_folder_detach BEFORE DELETE ON folders
+      DROP TRIGGER IF EXISTS companion_folder_detach;
+      CREATE TRIGGER companion_folder_detach BEFORE DELETE ON folders
       BEGIN
         UPDATE notes SET folder_id = NULL WHERE folder_id = OLD.id;
-        UPDATE dashboard_conversations SET folder_id = NULL WHERE folder_id = OLD.id;
+        UPDATE dashboard_conversations SET folder_id = NULL WHERE folder_id = OLD.id
+          AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id = dashboard_conversations.id);
       END;
       """)
   }

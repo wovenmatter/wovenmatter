@@ -57,7 +57,7 @@ struct DefaultAgentTests {
         #expect(recovered.messages.first { $0.id == run.assistantMessageID }?.content == "Finished remotely")
         try await database.recoverRemoteAgentRuns(conversationID: first, snapshots: [.init(runID: run.runID, content: "stale")])
         #expect(try await database.conversationHistoryPage(id: first, limit: 20) == recovered)
-        let external = try await database.createLocalACPSession(runtimeKind: .pi, title: "External Pi", ownerDeviceID: owner)
+        let external = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "External harness", ownerDeviceID: owner)
         await #expect(throws: (any Error).self) { try await database.recoverRemoteAgentRuns(conversationID: external, snapshots: [snapshot]) }
     }
 }

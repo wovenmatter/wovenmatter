@@ -197,7 +197,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       if(db.prepare("SELECT id FROM conversations WHERE json_extract(body,'$.conversation.runtimeKind')=? AND json_extract(body,'$.native.sessionID')=?").get(body.runtimeKind,body.nativeSessionID))throw fail(409,'This native session already belongs to another conversation.')
       for(const runID of body.knownRunIDs??[])if(db.prepare('SELECT id FROM runs WHERE id=?').get(runID))throw fail(409,'A run already belongs to another conversation.')
-      const native=await runtime.adopt({native:{sessionID:body.nativeSessionID,channelID:body.conversation.id,workspaceID:identity.id},runtimeKind:body.runtimeKind})
+      const native=await runtime.adopt({native:{sessionID:body.nativeSessionID,channelID:body.conversation.id,workspaceID:identity.id,nativeWorkingDirectory:body.nativeWorkingDirectory},runtimeKind:body.runtimeKind})
       const record={native,pending:[],conversation:{...copy(body.conversation),runtimeKind:body.runtimeKind,workspaceID:identity.id,routeID:identity.id},
         transcript:{conversationID:body.conversation.id,messages:[],activities:[]}}
       transaction(()=>{

@@ -228,7 +228,8 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     await run(process.execPath, [await installer(), 'install', '--prefix', stage, '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--save-exact', '--engine-strict', '--registry=https://registry.npmjs.org', '--userconfig=' + config, '--globalconfig=' + globalConfig, '--cache=' + join(stage, '.npm-cache')], { cwd: stage, env, timeout: 600000, signal });
     for (const pkg of definition.packages) if (await packageVersion(stage, pkg) !== selected.latestVersion) throw fail('The SDK installation did not match the requested version. The previous SDKs were kept.');
     // Imports only: no credentials, model discovery, account checks, or inference.
-    await run(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage, env, signal });
+    await run(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage,
+      env: { ...env, WOVENMATTER_INSTRUCTIONS_FILE: fileURLToPath(new URL('../../harnesses/woven-instructions.txt', import.meta.url)) }, signal });
     const claude = join(stage, 'node_modules', `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`, 'claude');
     if (process.platform === 'darwin') await run('/usr/bin/codesign', ['--verify', '--strict', claude], { cwd: stage, env, signal });
     const engineVersion = await run(claude, ['--version'], { cwd: stage, env, signal });

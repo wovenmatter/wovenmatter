@@ -70,6 +70,7 @@ struct CompanionFederationTests {
     #expect(result.cursor == 1 && result.acceptedEventIDs == [event.eventID])
     let restarted = try await WorkspaceDatabase(url: url)
     #expect(try await restarted.ingestCompanionJournal(batch, deviceID: owner) == result)
+    #expect(try await restarted.companionSnapshot().conversations.map(\.id) == [event.conversationID])
     var forged = event; forged.conversation?.title = "Conflicting replay"
     await #expect(throws: CompanionAPIError.self) { try await restarted.ingestCompanionJournal(.init(libraryID: workspace.libraryID, entries: [forged]), deviceID: owner) }
     let next = creation(workspace, sequence: 2); let gap = creation(workspace, sequence: 4)
@@ -141,6 +142,8 @@ struct CompanionFederationTests {
     _ = try await db.registerCompanionExecutionWorkspace(.init(workspace: descriptor), deviceID: identity.hostDeviceID)
     let conversationID = try await db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remoteID,
       remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID())
+    try await db.saveSessionExecutionRoot(id: conversationID, folderID: nil,
+      location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace")
     try await db.updateLocalACPSessionID(conversationID: conversationID, sessionID: "native-existing")
     let run = try await db.beginLocalACPRun(conversationID: conversationID, content: "Preserve this history")
     await #expect(throws: CompanionAPIError.self) {
@@ -153,6 +156,7 @@ struct CompanionFederationTests {
     }
     let transfer = try await db.prepareCompanionExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     #expect(transfer.nativeSessionID == "native-existing" && transfer.knownRunIDs == [run.runID])
+    #expect(transfer.nativeWorkingDirectory == "/workspace/projects/existing")
     #expect(try await db.companionExecutionOwner(conversationID: conversationID) == descriptor.id)
     await #expect(throws: CompanionAPIError.self) {
       try await db.beginLocalACPRun(conversationID: conversationID, content: "Legacy execution must stay fenced")

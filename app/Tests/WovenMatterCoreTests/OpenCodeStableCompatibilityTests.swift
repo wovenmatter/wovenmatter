@@ -104,6 +104,9 @@ struct OpenCodeStableCompatibilityTests {
         let coordinator = OpenCodeSessionCoordinator(database: database)
         try await coordinator.connect(connection)
         let conversationID = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Fixture", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, sessionID))
+        try await database.saveSessionExecutionRoot(id: conversationID, folderID: nil,
+            location: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: root.path, managed: false),
+            defaultPath: root.path)
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connection.identity, sessionID: sessionID)
         try await coordinator.refresh(link)
         let pending = try await database.openCodeSnapshot(conversationID: conversationID)

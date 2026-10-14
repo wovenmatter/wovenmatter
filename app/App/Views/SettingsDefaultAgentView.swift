@@ -589,13 +589,16 @@ struct SettingsSignInStatusCard: View {
             ForEach(statuses) { status in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text(status.displayName).font(.callout)
+                        Text(status.displayName).font(.system(size: 13, weight: .medium))
                         Spacer()
                         if ProviderConnectionID(rawValue: status.id) != nil || status.id.hasPrefix("local-server-") {
                             ConnectionsLink(title: status.label, scope: scope)
-                        } else { Text(status.label).font(.caption).foregroundStyle(.secondary) }
+                        } else { Text(status.label).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
                     }
-                    Text(status.detail).font(.caption).foregroundStyle(.secondary)
+                    Text(status.detail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
                 }.padding(.vertical, 4)
             }
         }

@@ -37,32 +37,18 @@ struct RuntimeBoundaryTests {
     #expect(restored == state)
   }
 
-  @Test("local and remote initializers produce the same workspace")
+  @Test("workspace setup creates a blank root")
   func workspaceLayout() throws {
     let fixture = try TemporaryDirectory(prefix: "wovenmatter-layout")
     defer { fixture.remove() }
     let local = fixture.url.appending(path: "local", directoryHint: .isDirectory)
-    let remote = fixture.url.appending(path: "remote", directoryHint: .isDirectory)
-
-    _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: local, repositoriesURL: nil)
-    let initializer = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-      .appending(path: "../harnesses/initialize-workspace.sh")
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/bash")
-    process.arguments = [initializer.path, remote.path]
-    try process.run()
-    process.waitUntilExit()
-
-    #expect(process.terminationStatus == 0)
-    #expect(try entries(at: local) == entries(at: remote))
-    #expect(try FileManager.default.destinationOfSymbolicLink(
-      atPath: local.appending(path: "CLAUDE.md").path
-    ) == "AGENTS.md")
+    _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: local)
+    #expect(try entries(at: local).isEmpty)
   }
 
-  @Test("workspace updates preserve personal instructions and colliding scratch files")
+  @Test("workspace setup leaves existing user files and instructions intact")
   func workspaceUpgradePreservesContent() throws {
-    let fixture = try TemporaryDirectory(prefix: "wovenmatter-upgrade")
+    let fixture = try TemporaryDirectory(prefix: "wovenmatter-existing")
     defer { fixture.remove() }
     let root = fixture.url
     for name in ["GUIDES", ".scratch", "scratch"] {
@@ -70,21 +56,13 @@ struct RuntimeBoundaryTests {
     }
     try Data("legacy".utf8).write(to: root.appending(path: ".scratch/work.py"))
     try Data("current".utf8).write(to: root.appending(path: "scratch/work.py"))
-    let personal = "Personal before\n<!-- BEGIN WOVEN MATTER MANAGED -->\nOld instructions\n<!-- END WOVEN MATTER MANAGED -->\nPersonal after\n"
+    let personal = "Personal instructions\n"
     try Data(personal.utf8).write(to: root.appending(path: "AGENTS.md"))
-    for _ in 0..<2 { _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root, repositoriesURL: nil) }
-    let names = try FileManager.default.contentsOfDirectory(atPath: root.path)
-    #expect(Set(["repos", "databases", "guides", "plans", "research", "work_logs", "outbox", "scratch", "skills"]).isSubset(of: Set(names)))
-    #expect(!names.contains(".scratch") && !names.contains("GUIDES"))
+    for _ in 0..<2 { _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root) }
+    #expect(Set(try entries(at: root)) == Set(["GUIDES", ".scratch", "scratch", "AGENTS.md"]))
+    #expect(try String(contentsOf: root.appending(path: ".scratch/work.py"), encoding: .utf8) == "legacy")
     #expect(try String(contentsOf: root.appending(path: "scratch/work.py"), encoding: .utf8) == "current")
-    #expect(try String(contentsOf: root.appending(path: "scratch/work.py.migrated-1"), encoding: .utf8) == "legacy")
-    let instructions = try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8)
-    #expect(instructions.hasPrefix("Personal before\n") && instructions.hasSuffix("Personal after\n"))
-    #expect(!instructions.contains("Old instructions"))
-    let incomplete = "Personal before\n<!-- BEGIN WOVEN MATTER MANAGED -->\nPersonal after\n"
-    try Data(incomplete.utf8).write(to: root.appending(path: "AGENTS.md"))
-    _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root, repositoriesURL: nil)
-    #expect(try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8) == incomplete)
+    #expect(try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8) == personal)
   }
 
   @Test("remote commands preserve data and reject unsafe input")
@@ -132,8 +110,7 @@ struct RuntimeBoundaryTests {
         processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
         workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
       #expect(inherited.workspace.rootURL == directory)
-      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/repos")
-      #expect(inherited.workspace.databasesURL.path == "/home/shared/databases")
+      #expect(inherited.workspace.databasesURL.path == "/home/.local/share/wovenmatter/databases")
       #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
       #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
     }
@@ -156,48 +133,6 @@ struct RuntimeBoundaryTests {
         userName: nil
       )
     }
-  }
-
-  @Test("OpenClaw Gateway hello parsing enforces the protocol")
-  func gatewayProtocol() throws {
-    let capabilities = try OpenClawGatewayClient.capabilities(from: .object([
-      "protocol": .number(4),
-      "server": .object(["version": .string("test")]),
-      "features": .object([
-        "methods": .array([.string("sessions.patch")]),
-        "events": .array([.string("chat")]),
-      ]),
-      "policy": .object(["maxPayload": .number(12_000_000)]),
-    ]))
-    #expect(capabilities.applicationVersion == "test")
-    #expect(capabilities.supports("sessions.patch"))
-    #expect(throws: OpenClawGatewayClientError.malformedFrame) {
-      _ = try OpenClawGatewayClient.capabilities(from: .object([:]))
-    }
-
-    let token = "remote-gateway-token"
-    let signedAt = 1_772_000_123_456
-    #expect(OpenClawGatewayClient.bearerToken(from: [
-      "authorization": "Bearer \(token)",
-    ]) == token)
-    #expect(OpenClawGatewayClient.deviceSignaturePayload(
-      deviceID: "device",
-      scopes: ["operator.read"],
-      signedAt: signedAt,
-      token: token,
-      nonce: "challenge"
-    ).contains("|\(signedAt)|\(token)|challenge|"))
-    let parameters = OpenClawGatewayClient.connectParameters(
-      deviceID: "device",
-      publicKey: "public-key",
-      signature: "signature",
-      signedAt: signedAt,
-      nonce: "challenge",
-      scopes: ["operator.read"],
-      token: token
-    )
-    #expect(parameters.objectValue?["auth"]?.objectValue?["token"]?.stringValue == token)
-    #expect(parameters.objectValue?["device"]?.objectValue?["signedAt"]?.intValue == signedAt)
   }
 
   @Test("local CLI install requires a reviewed digest and a matching redownload")
@@ -323,7 +258,7 @@ struct RuntimeBoundaryTests {
     #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("^1.2.3"))
 
     let cliDefinition = LocalACPRuntimeDefinition(
-      runtimeKind: .pi,
+      runtimeKind: .codex,
       displayName: "Fake CLI",
       commandName: "fake-cli",
       arguments: [],

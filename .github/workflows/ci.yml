@@ -123,7 +123,7 @@ jobs:
 
       - name: Build the standalone Executor runtime
         run: |
-          wm_executor_version="$(node --input-type=module -e 'import { latestSupportedPackage } from "./default-agent/src/package-versions.mjs"; console.log(await latestSupportedPackage("executor", { major: 2, prerelease: true, executable: "executor" }));')"
+          wm_executor_version="$(node --input-type=module -e 'import { latestExecutorVersion } from "./default-agent/src/executor/broker.mjs"; console.log(await latestExecutorVersion());')"
           docker build --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
             --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
       - name: Verify Executor native helper prerequisites

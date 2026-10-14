@@ -16,7 +16,7 @@ mkdir -p "$swift_scratch" "$derived_data"
 
 run_static_checks() {
   local file
-  for file in harnesses/initialize-workspace.sh remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
+  for file in remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
     bash -n "$file"
   done
   scripts/test-release.sh
@@ -30,12 +30,12 @@ run_static_checks() {
   python3 scripts/test-support/test_executor_deployment.py
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
   node --test scripts/test-support/native-cli.test.mjs
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_hermes_cli.py
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_owner_local_databases.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
   done
-  jq -e '.schemaVersion == 4 and (.harnesses | length == 8)' harnesses/catalog.json >/dev/null
+  jq -e '.schemaVersion == 4 and (.harnesses | length == 4)' harnesses/catalog.json >/dev/null
   scripts/scan-public-tree.sh
 }
 
@@ -44,7 +44,6 @@ run_package_tests() {
   local process_suites=(
     ACPSessionPermissionTests
     ACPSessionRoutingTests
-    WorkspaceFolderRecoveryTests
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
     WorkspaceAgentToolsServiceTests
@@ -63,8 +62,7 @@ run_package_tests() {
   # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
-  # resource-heavy suites (including continuous folder polling) so they cannot
-  # consume unrelated IPC timing budgets on
+  # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
   # toolchains that combine every test target in one parallel runner. Every
   # excluded suite runs below with its original bounds and explicit concurrency
   # tests intact, using the same compiled test artifacts.

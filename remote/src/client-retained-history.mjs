@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs'
 import { resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
-import { durableJSON } from './openclaw-results/store.mjs'
+import { durableJSON } from './durable-json.mjs'
 
 const bundled = new URL('../default-agent/src/native-journal.mjs', import.meta.url)
 const { sanitizeNativeTransportBytes } = await import(existsSync(bundled) ? bundled.href : new URL('../../default-agent/src/native-journal.mjs', import.meta.url).href)

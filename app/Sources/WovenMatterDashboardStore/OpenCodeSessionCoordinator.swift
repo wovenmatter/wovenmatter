@@ -119,6 +119,7 @@ public actor OpenCodeSessionCoordinator {
 
     public func sessionCall(_ link: OpenCodeSessionLink, suffix: String, method: String,
                             body: OpenCodeValue?) async throws -> OpenCodeValue {
+        _ = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
         if method == "POST", suffix == "/interrupt" { cancelPendingInput(conversationID: link.conversationID) }
         let fence = OpenCodePermissionHandling.requiresActiveTurn(method: method, suffix: suffix, body: body)
             ? interactionFence(link.conversationID) : nil
@@ -128,9 +129,25 @@ public actor OpenCodeSessionCoordinator {
             body: body, dispatchFence: fence)
     }
 
+    /// No native repair: a moved session must never execute under a different
+    /// directory from the folder Woven recorded for it.
+    @discardableResult
+    public func validateExecutionRoot(_ link: OpenCodeSessionLink) async throws -> WorkspaceFolderLocation {
+        let expected = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
+        let response = try await sessionCall(link, suffix: "", method: "GET", body: nil)
+        let current = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
+        guard current.workspaceID == expected.workspaceID, current.rootPath == expected.rootPath,
+              response["data"]["id"].string == link.sessionID,
+              response["data"]["location"]["directory"].string == expected.rootPath else {
+            throw OpenCodeError.executionRootMismatch
+        }
+        return current
+    }
+
     /// Native session rules are confirmed by canonical readback.
     @discardableResult
     public func setSessionPermission(conversationID: String, permission: String) async throws -> String {
+        _ = try await database.openCodeExecutionRoot(conversationID: conversationID)
         let mode = try OpenCodePermissionHandling.validate(permission)
         guard changingPermissionHandling.insert(conversationID).inserted else {
             throw OpenCodeError.message("Wait for the current approval setting change to finish.")
@@ -188,6 +205,7 @@ public actor OpenCodeSessionCoordinator {
     /// A successful write is insufficient: the service must report the requested
     /// selection before session creation or its first instruction can continue.
     public func configureSelection(_ link: OpenCodeSessionLink, selection: OpenCodeValue) async throws -> OpenCodeValue {
+        _ = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
         let path = "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
         _ = try await call(connectionID: link.connectionID, method: "POST", path: path + "/model", body: selection)
         let confirmed = try await call(connectionID: link.connectionID, path: path)
@@ -279,6 +297,7 @@ public actor OpenCodeSessionCoordinator {
         return try await client.readFile(path: path, query: query)
     }
     public func watch(_ link: OpenCodeSessionLink) async {
+        guard (try? await database.openCodeExecutionRoot(conversationID: link.conversationID)) != nil else { return }
         guard workers[link.conversationID] == nil, clients[link.connectionID] != nil else { return }
         let token = connectionTokens[link.connectionID]
         let snapshot = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
@@ -293,6 +312,7 @@ public actor OpenCodeSessionCoordinator {
         while !Task.isCancelled && generations[link.conversationID] == generation {
             let connectedAt = ContinuousClock.now
             do {
+                _ = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
                 guard var client = clients[link.connectionID] else { return }
                 guard let token = connectionTokens[link.connectionID] else { return }
                 if let registration = client.connection.registration {
@@ -328,6 +348,7 @@ public actor OpenCodeSessionCoordinator {
                 }
             } catch {
                 guard !Task.isCancelled, generations[link.conversationID] == generation else { return }
+                guard (try? await database.openCodeExecutionRoot(conversationID: link.conversationID)) != nil else { break }
                 if error is CancellationError { continue }
                 if case OpenCodeError.incompatible = error { emit(link.conversationID, status: "Unsupported version", error: error.localizedDescription); break }
                 if case OpenCodeError.http(401) = error { emit(link.conversationID, status: "Authentication required", error: error.localizedDescription); break }
@@ -356,6 +377,7 @@ public actor OpenCodeSessionCoordinator {
         scheduleEventRefresh(link, generation: generation, delay: !terminal)
     }
     func receiveLogEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) async {
+        guard (try? await database.openCodeExecutionRoot(conversationID: link.conversationID)) != nil else { return }
         if generations[link.conversationID] == nil {
             let token = connectionTokens[link.connectionID]
             let snapshot = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
@@ -386,6 +408,7 @@ public actor OpenCodeSessionCoordinator {
         }
     }
     public func refresh(_ link: OpenCodeSessionLink, generation: UUID? = nil, recoverHistory: Bool = false) async throws {
+        _ = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
         let token = connectionTokens[link.connectionID]
         let capturedGeneration = generation ?? generations[link.conversationID]
         // History loads and refreshes share a lock so neither can overwrite
@@ -502,6 +525,7 @@ public actor OpenCodeSessionCoordinator {
         emit(link.conversationID, status: "Connected")
     }
     public func loadOlder(_ link: OpenCodeSessionLink) async throws {
+        _ = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
         let token = connectionTokens[link.connectionID]
         let generation = generations[link.conversationID]
         while refreshing.contains(link.conversationID) { try await Task.sleep(for: .milliseconds(25)) }
@@ -678,10 +702,27 @@ public actor OpenCodeSessionCoordinator {
     private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?,
                         requiresIdle: Bool, dispatchFence: AgentDispatchFence?) async throws -> OpenCodeSubmissionReceipt {
         let fence = dispatchFence ?? AgentDispatchFence()
+        do {
+            return try await submitInput(link, input: input, command: command, requiresIdle: requiresIdle, fence: fence)
+        } catch {
+            // Temporary disconnection keeps timers queued for their normal retry.
+            // Cancellation and a mismatched root permanently reject unsent input.
+            if !fence.hasDispatched,
+               error is CancellationError || (error as? OpenCodeError) == .executionRootMismatch,
+               let deliveryID = input.historyDeliveryID {
+                try await database.setToolDeliveryStatus(id: deliveryID, status: "failed")
+            }
+            throw error
+        }
+    }
+    private func submitInput(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?,
+                             requiresIdle: Bool, fence: AgentDispatchFence) async throws -> OpenCodeSubmissionReceipt {
         try fence.check()
         guard sending.insert(link.conversationID).inserted else { throw OpenCodeError.message("The previous input is still being submitted.") }
         pendingDispatches[link.conversationID] = (link, fence)
         defer { sending.remove(link.conversationID); pendingDispatches.removeValue(forKey: link.conversationID) }
+        try await validateExecutionRoot(link)
+        try fence.check()
         if requiresIdle {
             try await refresh(link)
             guard snapshots[link.conversationID]?.active != true,

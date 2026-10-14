@@ -12,8 +12,10 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { writePrivateJSON } from '../config.mjs';
 
-export const supportsExecutorVersion = version => releaseVersion(version) && version.startsWith('2.');
-export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', { major: 2, prerelease: true, executable: 'executor', fetchImplementation });
+// V1 does not expose the managed app API. V2 and later have no upper version limit.
+export const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) >= 2;
+export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {
+  minimum: '2.0.0-0', prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 export function validateConfiguration(config) {
@@ -191,38 +193,18 @@ export class ExecutorBroker {
   }
   async inventory() {
     const { body } = await this.request('/dashboard/api/overview');
-    const legacyProfiles = Array.isArray(body.profiles);
-    if (!Array.isArray(body.apps) || (!legacyProfiles && (!Array.isArray(body.links) || !Array.isArray(body.accounts)))) {
-      throw new Error('Executor returned an incompatible app inventory. Existing selections were retained.');
-    }
     const result = [];
     for (const app of body.apps) {
       // The bundled management app holds the server's administrator key. Giving
       // it to a scoped agent would let the agent edit its own scope.
       if (app.owner === 'executor-local') continue;
-      // Current Executor scopes name an account-free app or exact linked user
-      // accounts. Keep the persisted selection field, but never infer a broader
-      // account grant from an old profile ID when the runtime migrates.
-      if (!legacyProfiles) {
-        const needsUser = Object.values(app.requirements?.accounts ?? {}).some(value => (value.scope ?? 'user') === 'user');
-        if (!needsUser) result.push({ id: `${app.id}:@app`, app: app.id, name: app.name ?? app.slug, profile: '@app', profileName: 'App' });
-        else for (const accountID of new Set(body.links.filter(link => link.app === app.id).map(link => link.account))) {
-          const account = body.accounts.find(value => value.id === accountID);
-          if (account) result.push({ id: `${app.id}:@account:${account.id}`, app: app.id, name: app.name ?? app.slug,
-            profile: `@account:${account.id}`, profileName: account.name ?? 'Account' });
-        }
-        continue;
+      const needsAccount = Object.values(app.requirements?.accounts ?? {}).some(requirement => requirement.scope === 'user');
+      if (!needsAccount) result.push({ id: `${app.id}:app`, app: app.id, name: app.name ?? app.slug, profileName: 'App' });
+      for (const link of body.links.filter(link => link.app === app.id)) {
+        const account = body.accounts.find(account => account.id === link.account);
+        if (account) result.push({ id: `${app.id}:account:${account.id}`, app: app.id, name: app.name ?? app.slug,
+          account: account.id, profileName: account.label });
       }
-      let profiles = body.profiles.filter(profile => profile.app === app.id && profile.enabled !== false);
-      // Explicit account-free profiles work around beta.7's undefined optional
-      // fields in structured input results. Account-bearing apps need user setup.
-      if (!profiles.length && !Object.keys(app.requirements?.accounts ?? {}).length) {
-        try {
-          const created = await this.request(`/dashboard/api/apps/${encodeURIComponent(app.id)}/profiles`, { method: 'POST', value: { name: 'Woven Matter', accounts: {}, idempotencyKey: this.config.id } });
-          profiles = [created.body];
-        } catch { /* Show setup in the dashboard; never guess an account. */ }
-      }
-      for (const profile of profiles) result.push({ id: `${app.id}:${profile.id}`, app: app.id, name: app.name ?? app.slug, profile: profile.id, profileName: profile.name ?? "Default" });
     }
     return result;
   }
@@ -250,20 +232,16 @@ export class ExecutorBroker {
     const token = await response.json();
     return { token: token.access_token, refresh: token.refresh_token, expires: Date.now() + (token.expires_in ?? 3600) * 1000 };
   }
-  async scope(session, profiles, enabled) {
-    if (!session || session.length > 256 || !Array.isArray(profiles) || profiles.length > 200) throw new Error('Invalid conversation scope.');
+  async scope(session, targets, enabled) {
+    if (!session || session.length > 256 || !Array.isArray(targets) || targets.length > 200) throw new Error('Invalid conversation scope.');
     const key = `${this.config.id}:${session}`;
     let scope = this.state.scopes[key];
     const grouped = new Map();
-    for (const profile of enabled ? profiles : []) {
-      const app = grouped.get(profile.app) ?? { app: profile.app, runsAs: [], tools: { kind: 'all' } };
-      if (typeof profile.profile !== 'string' || !profile.profile || typeof profile.app !== 'string' || !profile.app) throw new Error('Invalid Executor app selection.');
-      const target = profile.profile === '@app' ? { kind: 'app' }
-        : profile.profile.startsWith('@account:') ? { kind: 'account', id: profile.profile.slice('@account:'.length) }
-        : { kind: 'profile', id: profile.profile };
-      if ('id' in target && !target.id) throw new Error('Invalid Executor account selection.');
-      if (!app.runsAs.some(value => value.kind === target.kind && value.id === target.id)) app.runsAs.push(target);
-      grouped.set(profile.app, app);
+    for (const target of enabled ? targets : []) {
+      const app = grouped.get(target.app) ?? { app: target.app, runsAs: [], tools: { kind: 'all' } };
+      const runsAs = target.account ? { kind: 'account', id: target.account } : { kind: 'app' };
+      if (!app.runsAs.some(value => value.kind === runsAs.kind && value.id === runsAs.id)) app.runsAs.push(runsAs);
+      grouped.set(target.app, app);
     }
     const apps = [...grouped.values()];
     const encoded = JSON.stringify(apps);

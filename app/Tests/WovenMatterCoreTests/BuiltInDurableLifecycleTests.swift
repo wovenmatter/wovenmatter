@@ -22,7 +22,7 @@ struct BuiltInDurableLifecycleTests {
     let lease = ConfigurationTestProcessLease(), client = BackgroundDriverFixture()
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease,
       clientFactory: { _, _ in client.driver() })
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
     if mode == "prompt" || mode == "nextPrompt" {
       _ = try await coordinator.accept(conversationID: conversation, content: "Primary input",
         launch: launch(), workspace: workspace)
@@ -69,7 +69,7 @@ struct BuiltInDurableLifecycleTests {
       title: "Dispatch fixture", ownerDeviceID: UUID())
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      LocalACPSessionDriver(initializeSession: { _, _, _ in
+      LocalACPSessionDriver(initializeSession: { _, _, _, _ in
           .init(sessionID: "native", loadedExistingSession: false, configuration: configuration)
         }, prompt: { _, _, _, _ in throw LocalACPClientError.processExited },
         configuration: { configuration }, setConfiguration: { _, _ in configuration }, cancel: {}, shutdown: {},
@@ -79,7 +79,7 @@ struct BuiltInDurableLifecycleTests {
         })
     })
     _ = try await coordinator.accept(conversationID: conversation, content: "Committed work",
-      launch: launch(), workspace: .init(rootURL: directory, repositoriesURL: directory))
+      launch: launch(), workspace: .init(rootURL: directory))
     for _ in 0..<100 {
       if let status = try await database.conversationContent(id: conversation).runs.first?.status,
          ["failed", "uncertain"].contains(status) { break }
@@ -105,7 +105,7 @@ private actor BackgroundDriverFixture {
   var promptCount = 0
   nonisolated func driver() -> LocalACPSessionDriver {
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
-    return LocalACPSessionDriver(initializeSession: { _, existing, _ in
+    return LocalACPSessionDriver(initializeSession: { _, existing, _, _ in
         await self.initialize(existing: existing, configuration: configuration)
       }, prompt: { _, event, _, _ in try await self.prompt(event: event) },
       configuration: { configuration }, setConfiguration: { _, _ in configuration }, cancel: {},

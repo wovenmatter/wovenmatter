@@ -22,6 +22,36 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// Saved snapshots remain readable even when their native execution is retired.
+  public func openCodeExecutionRoot(conversationID: String) throws -> WorkspaceFolderLocation {
+    try withLock {
+      let statement = try prepareUnlocked("""
+        SELECT r.workspace_id, r.root_path
+        FROM session_execution_roots r
+        JOIN dashboard_conversations c ON c.id=r.conversation_id
+        JOIN desktop_opencode_sessions o ON o.conversation_id=c.id
+        WHERE c.id=? AND c.is_archived=0 AND c.deleted_at IS NULL
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(conversationID, at: 1, to: statement)
+      guard sqlite3_step(statement) == SQLITE_ROW else {
+        throw OpenCodeError.message("This saved OpenCode transcript is read-only. Start a new chat.")
+      }
+      return .init(workspaceID: try text(statement, column: 0),
+        rootPath: try text(statement, column: 1), managed: false)
+    }
+  }
+
+  public func resumableOpenCodeLinks() throws -> [OpenCodeSessionLink] {
+    try openCodeLinks().filter { (try? openCodeExecutionRoot(conversationID: $0.conversationID)) != nil }
+  }
+
+  public func archiveImportedOpenCodeSession(conversationID: String) throws {
+    try transaction {
+      try toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=? AND EXISTS(SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id=?)", [conversationID,conversationID])
+    }
+  }
+
   public func attachOpenCodeSession(_ link: OpenCodeSessionLink) throws {
     try transaction {
       let statement = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
@@ -278,6 +308,18 @@ extension WorkspaceDatabase {
 
   public func openCodeLinks() async throws -> [OpenCodeSessionLink] {
     try await read { try $0.openCodeLinks() }
+  }
+
+  public func openCodeExecutionRoot(conversationID: String) async throws -> WorkspaceFolderLocation {
+    try await read { try $0.openCodeExecutionRoot(conversationID: conversationID) }
+  }
+
+  public func resumableOpenCodeLinks() async throws -> [OpenCodeSessionLink] {
+    try await read { try $0.resumableOpenCodeLinks() }
+  }
+
+  public func archiveImportedOpenCodeSession(conversationID: String) async throws {
+    try await write { try $0.archiveImportedOpenCodeSession(conversationID: conversationID) }
   }
 
   public func attachOpenCodeSession(_ link: OpenCodeSessionLink) async throws {

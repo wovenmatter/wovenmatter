@@ -205,10 +205,12 @@ public struct CompanionExecutionAdoption: Codable, Equatable, Sendable {
   public var model: String?
   public var thinking: String?
   public var permission: String?
+  public var nativeWorkingDirectory: String?
   public var knownRunIDs: [String]?
   public init(workspaceID: String, conversation: CompanionConversation, runtimeKind: String, nativeSessionID: String,
-              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil) {
+              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil) {
     self.workspaceID = workspaceID; self.conversation = conversation; self.runtimeKind = runtimeKind
+    self.nativeWorkingDirectory = nativeWorkingDirectory
     self.knownRunIDs = knownRunIDs
     self.nativeSessionID = nativeSessionID; self.model = model; self.thinking = thinking; self.permission = permission
   }

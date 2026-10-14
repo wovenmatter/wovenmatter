@@ -17,7 +17,7 @@ public enum NativeCLIAdapter {
     public static func command(launch: LocalACPRuntimeLaunchConfiguration, arguments: [String]) -> [String] {
         let native = [launch.executableURL.path] + arguments
         guard launch.wrappedCommand == nil,
-              [.codex, .claudeCode, .cursor, .grokBuild, .pi].contains(launch.runtimeKind),
+              [.codex, .claudeCode, .grokBuild].contains(launch.runtimeKind),
               let resources = Bundle.main.resourceURL else { return native }
         let node = resources.appending(path: "default-agent/bin/node")
         let adapter = resources.appending(path: "harnesses/cli/adapter.mjs")

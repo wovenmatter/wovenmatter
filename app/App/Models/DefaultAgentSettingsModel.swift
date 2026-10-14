@@ -212,7 +212,7 @@ final class DefaultAgentSettingsModel {
             resolvedDefaultModelID = value.resolvedDefaultModelID
         }
         searchConfigured = value.searchConfigured; accounts = value.accounts
-        cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
+        signInProvider = value.signInProvider
         signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
         signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
@@ -262,7 +262,6 @@ final class DefaultAgentSettingsModel {
     private func invalidateConnection(_ provider: String) {
         providers.removeAll { $0.id == provider }
     }
-    var cursorAccountStatus = "Refresh to check Cursor sign-in"
     var signInProvider: String?
     var signInOutcome: SignInOutcome?
     var accounts: [String: [ProviderConnectionAccounts.Account]] = [:]
@@ -494,93 +493,6 @@ final class DefaultAgentSettingsModel {
         guard !inherits else { return }
         enableProvider("claude-subscription")
         refresh(remote: remote, login: "claude-subscription")
-    }
-    func refreshCursorStatus() async {
-        if forward(.init(action: "cursorStatus")) { return }
-        guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
-            ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
-            cursorAccountStatus = "Cursor CLI is not installed"
-            return
-        }
-        let status = await Task.detached { () -> String in
-            let child = Process()
-            child.executableURL = executable
-            child.arguments = ["status", "--format", "json"]
-            let output = Pipe()
-            child.standardOutput = output
-            child.standardError = FileHandle.nullDevice
-            child.standardInput = FileHandle.nullDevice
-            do {
-                try child.run()
-                DispatchQueue.global().asyncAfter(deadline: .now() + 15) { if child.isRunning { child.terminate() } }
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                child.waitUntilExit()
-                guard child.terminationStatus == 0,
-                    let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "Could not check Cursor sign-in" }
-                guard value["isAuthenticated"] as? Bool == true else { return "Connect account" }
-                let user = value["userInfo"] as? [String: Any]
-                return user?["email"] as? String ?? "Credentials present"
-            } catch { return "Could not check Cursor sign-in" }
-        }.value
-        cursorAccountStatus = status
-    }
-    func signInCursor() {
-        if forward(.init(action: "cursorSignIn")) { return }
-        cancel()
-        signInProvider = "cursor"
-        signInOutcome = nil
-        error = nil
-        notice = "Preparing Cursor sign-in…"
-        guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
-            ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
-            error = "Install Cursor’s agent CLI to connect this account."
-            completeSignInPresentation()
-            return
-        }
-        busy = true
-        let runID = generation
-        let child = Process()
-        child.executableURL = executable
-        child.arguments = ["login"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["NO_OPEN_BROWSER"] = "1"
-        child.environment = environment
-        let output = Pipe()
-        child.standardOutput = output
-        child.standardError = output
-        child.standardInput = FileHandle.nullDevice
-        outputBuffer = Data()
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil; return }
-            Task { @MainActor in
-                guard let self, self.generation == runID else { return }
-                self.outputBuffer.append(data)
-                if self.outputBuffer.count > 32768 { self.outputBuffer = self.outputBuffer.suffix(32768) }
-                let text = String(decoding: self.outputBuffer, as: UTF8.self)
-                let expression = try? NSRegularExpression(pattern: #"https://[^\s<>"\x1b]+"#)
-                for match in expression?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
-                    guard let range = Range(match.range, in: text), let url = URL(string: String(text[range])),
-                        let host = url.host, host == "cursor.com" || host.hasSuffix(".cursor.com") || host == "cursor.sh" || host.hasSuffix(".cursor.sh") else { continue }
-                    self.signInURL = url
-                    self.notice = "Open this link to complete Cursor sign-in."
-                }
-            }
-        }
-        child.terminationHandler = { [weak self] child in
-            Task { @MainActor in
-                guard let self, self.generation == runID else { return }
-                self.notice = nil
-                if child.terminationStatus == 0 {
-                    await self.refreshCursorStatus()
-                    guard self.generation == runID else { return }
-                    self.notice = self.cursorAccountStatus
-                } else { self.error = "Cursor sign-in did not complete. Try again." }
-                self.completeSignInPresentation()
-            }
-        }
-        do { try child.run(); process = child }
-        catch { self.error = "Could not start Cursor sign-in."; completeSignInPresentation() }
     }
     func move(_ id: String, by offset: Int) {
         var value = configuration

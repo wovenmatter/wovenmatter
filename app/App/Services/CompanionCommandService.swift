@@ -86,7 +86,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 available: available, canStart: available,
                 canResume: definition?.capabilities.contains("resume") == true,
                 canSteer: false, canStop: available,
-                supportsApprovals: runtime != .pi, supportsQuestions: runtime == .cursor,
+                supportsApprovals: true, supportsQuestions: runtime == .claudeCode,
                 activeInputMode: "notNegotiated",
                 unavailableReason: available ? nil : "Enable and configure this agent on the Mac."
             )
@@ -103,19 +103,6 @@ final class CompanionCommandService: CompanionCommandServing {
                     available: model.remoteWorkspaces.isHarnessReady(runtime, in: workspace)))
             }
         }
-        let agents = model.localCLIAgents + model.remoteWorkspaceAgents
-        for link in model.openClawGatewayLinks {
-            let name = agents.first(where: { $0.id == link.agentID })?.displayName ?? "OpenClaw"
-            let available = model.canStartCanonicalGatewaySession(agentID: link.agentID)
-            result.append(CompanionProvider(
-                id: "gateway:\(link.agentID.uuidString.lowercased())", runtimeKind: AgentRuntimeKind.openclaw.rawValue,
-                displayName: name, routeName: "OpenClaw Gateway", available: available,
-                canStart: available, canResume: true, canSteer: false,
-                canStop: true, supportsApprovals: true, supportsQuestions: false,
-                activeInputMode: "gatewaySend",
-                unavailableReason: available ? nil : "Enable this workspace and reconnect its Gateway on the Mac."
-            ))
-        }
         return result
     }
 
@@ -130,10 +117,7 @@ final class CompanionCommandService: CompanionCommandServing {
         }
         guard let runtime = conversation.localRuntimeKind else { throw CommandError.unknownProvider }
         let routeID: String
-        if model.isOpenClawGatewayConversation(conversationID),
-           let session = try? await model.dashboardStore?.database.openClawGatewaySession(conversationID: conversationID) {
-            routeID = "gateway:\(session.agentID.uuidString.lowercased())"
-        } else if let workspaceID = conversation.remoteWorkspaceID {
+        if let workspaceID = conversation.remoteWorkspaceID {
             routeID = "remote:\(workspaceID.uuidString.lowercased()):\(runtime.rawValue)"
         } else {
             routeID = "local:\(runtime.rawValue)"
@@ -143,9 +127,6 @@ final class CompanionCommandService: CompanionCommandServing {
         if runtime == .opencode {
             capability.activeInputMode = "unsupported"
             capability.canSteer = false
-        } else if model.isOpenClawGatewayConversation(conversationID) {
-            capability.activeInputMode = "gatewaySend"
-            capability.canSteer = active
         } else if let mode = await model.dashboardStore?.localACPActiveInputCapability(conversationID: conversationID) {
             capability.activeInputMode = mode == .grokInterjection ? "grokInterjectionWithConcurrentFallback" : mode.rawValue
             capability.canSteer = active && mode != .unsupported
@@ -322,9 +303,6 @@ final class CompanionCommandService: CompanionCommandServing {
         if command.kind == .createSession {
             let route = command.providerID ?? command.routeID ?? ""
             if route.hasPrefix("remote:") { target = route.split(separator: ":").dropFirst().first.map(String.init) }
-            if route.hasPrefix("gateway:"), let id = UUID(uuidString: String(route.dropFirst(8))) {
-                target = model.remoteWorkspaceAgents.first { $0.id == id }?.runtimeDeviceID?.uuidString.lowercased() ?? localID
-            }
         } else if let conversationID {
             if let owner = try await database.companionExecutionOwner(conversationID: conversationID) { target = owner }
             else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
@@ -361,9 +339,7 @@ final class CompanionCommandService: CompanionCommandServing {
                   let runtime = AgentRuntimeKind(rawValue: provider.runtimeKind)
             else { throw CommandError.unknownProvider }
             let id: String?
-            if providerID.hasPrefix("gateway:"), let agentID = UUID(uuidString: String(providerID.dropFirst(8))) {
-                id = try await model.createCanonicalGatewaySession(agentID: agentID, conversationID: requestedID, folderID: command.folderID)
-            } else if providerID.hasPrefix("local:") {
+            if providerID.hasPrefix("local:") {
                 id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
             } else if let target = model.remoteWorkspaces.readyChatTargets.first(where: {
                 "remote:\($0.configuration.id.uuidString.lowercased()):\($0.harness.id.rawValue)" == providerID

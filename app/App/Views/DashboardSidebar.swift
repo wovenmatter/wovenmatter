@@ -88,6 +88,8 @@ struct DashboardSidebarActions {
     let onShowNavigation: () -> Void
     let onUtility: (DashboardDestination) -> Void
     let onSelectAgent: (UUID) -> Void
+    let onCreateAgentChat: (UUID) -> Void
+    let onSelectRemoteAgent: (RemoteHarnessChatTarget) -> Void
     let onStartRemoteChat: (RemoteHarnessChatTarget) -> Void
     let onSelectFolder: (String?) -> Void
     let onSelectConversation: (String) -> Void
@@ -95,15 +97,16 @@ struct DashboardSidebarActions {
     let onCreateAgent: () -> Void
     let onCreateConversation: () -> Void
     let onCreateNote: () -> Void
-    let onCreateFolder: (String) -> Void
+    let onCreateFolder: (String, UUID?, URL?) -> Void
     let onRenameFolder: (String, String) -> Void
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
-    let onDeleteFolder: (String) -> Void
+    let onDeleteFolder: (String, Bool) -> Void
+    let onSetFolderReferencePaths: (String, [String]) -> Void
+    let onCreateChatInFolder: (String?) -> Void
     let onShowTrash: () -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
-    let onMoveConversation: (String, String?) -> Void
     let onUnavailableMutation: (String) -> Void
 }
 
@@ -115,6 +118,8 @@ struct DashboardSidebarRail: View {
     let agents: [WorkspaceAgent]
     let navigationAgents: [WorkspaceAgent]
     let remoteWorkspaces: RemoteWorkspacesModel
+    let localWorkspaceReady: Bool
+    let localExecutionWorkspaceID: String?
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -150,6 +155,8 @@ struct DashboardSidebarRail: View {
             side: side,
             agents: navigationAgents,
             remoteWorkspaces: remoteWorkspaces,
+            localWorkspaceReady: localWorkspaceReady,
+            localExecutionWorkspaceID: localExecutionWorkspaceID,
             folders: folders,
             conversations: conversations,
             notes: notes,
@@ -165,6 +172,8 @@ struct DashboardSidebarRail: View {
             onMove: style == .split ? nil : actions.onMoveSingleRail,
             onUtility: actions.onUtility,
             onSelectAgent: actions.onSelectAgent,
+            onCreateAgentChat: actions.onCreateAgentChat,
+            onSelectRemoteAgent: actions.onSelectRemoteAgent,
             onStartRemoteChat: actions.onStartRemoteChat,
             onSelectFolder: actions.onSelectFolder,
             onSelectConversation: actions.onSelectConversation,
@@ -177,10 +186,11 @@ struct DashboardSidebarRail: View {
             onSetFolderPinned: actions.onSetFolderPinned,
             onMoveFolder: actions.onMoveFolder,
             onDeleteFolder: actions.onDeleteFolder,
+            onSetFolderReferencePaths: actions.onSetFolderReferencePaths,
+            onCreateChatInFolder: actions.onCreateChatInFolder,
             onShowTrash: actions.onShowTrash,
             onConversationAction: actions.onConversationAction,
             onNoteAction: actions.onNoteAction,
-            onMoveConversation: actions.onMoveConversation,
             onUnavailableMutation: actions.onUnavailableMutation
         )
     }
@@ -209,14 +219,12 @@ struct DashboardSidebarRail: View {
             onSelectNote: actions.onSelectNote,
             onConversationAction: actions.onConversationAction,
             onNoteAction: actions.onNoteAction,
-            onMoveConversation: actions.onMoveConversation,
             onSurfaceProfileChange: onSurfaceProfileChange
         )
     }
 
     private var scopedConversations: [WorkspaceConversationRecord] {
         conversations.filter { conversation in
-            guard !conversation.isArchived else { return false }
             return selectedFolderID == nil || conversation.folderID == selectedFolderID
         }
     }
@@ -233,6 +241,8 @@ struct DashboardSidebarNavigationPage: View {
     let side: DashboardSidebarSide
     let agents: [WorkspaceAgent]
     let remoteWorkspaces: RemoteWorkspacesModel
+    let localWorkspaceReady: Bool
+    let localExecutionWorkspaceID: String?
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -248,6 +258,8 @@ struct DashboardSidebarNavigationPage: View {
     let onMove: (() -> Void)?
     let onUtility: (DashboardDestination) -> Void
     let onSelectAgent: (UUID) -> Void
+    let onCreateAgentChat: (UUID) -> Void
+    let onSelectRemoteAgent: (RemoteHarnessChatTarget) -> Void
     let onStartRemoteChat: (RemoteHarnessChatTarget) -> Void
     let onSelectFolder: (String?) -> Void
     let onSelectConversation: (String) -> Void
@@ -255,15 +267,16 @@ struct DashboardSidebarNavigationPage: View {
     let onCreateAgent: () -> Void
     let onCreateConversation: () -> Void
     let onCreateNote: () -> Void
-    let onCreateFolder: (String) -> Void
+    let onCreateFolder: (String, UUID?, URL?) -> Void
     let onRenameFolder: (String, String) -> Void
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
-    let onDeleteFolder: (String) -> Void
+    let onDeleteFolder: (String, Bool) -> Void
+    let onSetFolderReferencePaths: (String, [String]) -> Void
+    let onCreateChatInFolder: (String?) -> Void
     let onShowTrash: () -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
-    let onMoveConversation: (String, String?) -> Void
     let onUnavailableMutation: (String) -> Void
 
     @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey)
@@ -276,9 +289,10 @@ struct DashboardSidebarNavigationPage: View {
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
     @State private var showsNewFolderPopover = false
-    @State private var newFolderName = ""
     @State private var renamingFolderID: String?
     @State private var renamedFolderName = ""
+    @State private var deletingFolder: WorkspaceFolderRecord?
+    @State private var editingReferenceFolderID: String?
 
     private var pinnedAgentOrder: [UUID] {
         DashboardPinnedAgentsStore.decode(pinnedAgentIDsRaw)
@@ -546,20 +560,26 @@ struct DashboardSidebarNavigationPage: View {
             } else {
                 ForEach(visibleTargets) { target in
                     let agent = remoteAgent(for: target)
-                    DashboardRailRow(
-                        icon: .container,
-                        harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
-                        title: target.harness.presentationName,
-                        hoverID: "remote-harness:\(target.id)",
-                        selected: agent.map {
-                            destination == .workspace && selectedAgentID == $0.id
-                        } ?? false
-                    ) {
-                        if let agent {
-                            onSelectAgent(agent.id)
-                        } else {
+                    HStack(spacing: 0) {
+                        DashboardRailRow(
+                            icon: .container,
+                            harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
+                            title: target.harness.presentationName,
+                            hoverID: "remote-harness:\(target.id)",
+                            selected: agent.map {
+                                destination == .workspace && selectedAgentID == $0.id
+                            } ?? false
+                        ) {
+                            if let agent {
+                                onSelectAgent(agent.id)
+                            } else {
+                                onSelectRemoteAgent(target)
+                            }
+                        }
+                        newChatButton(label: "New chat with \(target.harness.presentationName) in \(workspace.configuration.name)") {
                             onStartRemoteChat(target)
                         }
+                        .disabled(!canCreateChat(workspaceID: "remote:" + target.configuration.id.uuidString.lowercased()))
                     }
                     .padding(.leading, 16)
                 }
@@ -619,34 +639,54 @@ struct DashboardSidebarNavigationPage: View {
             direction: .down,
             presentIDs: presentIDs
         )
-        return DashboardRailRow(
-            icon: dashboardAgentGlyph(agent, iconKey: presentation.iconKey),
-            harnessLogo: DashboardHarnessLogo(runtimeKind: agent.runtimeKind),
-            title: presentation.displayName,
-            hoverID: "agent:\(agent.id.uuidString)",
-            trailing: agent.runtimeStatus == .running ? "Running" : nil,
-            showsPin: isPinned,
-            selected: destination == .workspace && selectedAgentID == agent.id,
-            pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
-            onTogglePin: {
-                DashboardPinnedAgentsStore.toggle(
-                    id: agent.id,
-                    in: &pinnedAgentIDsRaw
-                )
-            },
-            moveUpTitle: "Move up",
-            moveUpEnabled: canMoveUp,
-            onMoveUp: {
-                moveAgent(agent.id, in: moveScope, direction: .up, presentIDs: presentIDs)
-            },
-            moveDownTitle: "Move down",
-            moveDownEnabled: canMoveDown,
-            onMoveDown: {
-                moveAgent(agent.id, in: moveScope, direction: .down, presentIDs: presentIDs)
+        return HStack(spacing: 0) {
+            DashboardRailRow(
+                icon: dashboardAgentGlyph(agent, iconKey: presentation.iconKey),
+                harnessLogo: DashboardHarnessLogo(runtimeKind: agent.runtimeKind),
+                title: presentation.displayName,
+                hoverID: "agent:\(agent.id.uuidString)",
+                trailing: agent.runtimeStatus == .running ? "Running" : nil,
+                showsPin: isPinned,
+                selected: destination == .workspace && selectedAgentID == agent.id,
+                pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
+                onTogglePin: {
+                    DashboardPinnedAgentsStore.toggle(
+                        id: agent.id,
+                        in: &pinnedAgentIDsRaw
+                    )
+                },
+                moveUpTitle: "Move up",
+                moveUpEnabled: canMoveUp,
+                onMoveUp: {
+                    moveAgent(agent.id, in: moveScope, direction: .up, presentIDs: presentIDs)
+                },
+                moveDownTitle: "Move down",
+                moveDownEnabled: canMoveDown,
+                onMoveDown: {
+                    moveAgent(agent.id, in: moveScope, direction: .down, presentIDs: presentIDs)
+                }
+            ) {
+                onSelectAgent(agent.id)
             }
-        ) {
-            onSelectAgent(agent.id)
+            newChatButton(label: "New chat with \(presentation.displayName)") { onCreateAgentChat(agent.id) }
+                .disabled(!canCreateChat(workspaceID: agent.governingPlane == .remoteWorkspace
+                    ? agent.runtimeDeviceID.map { "remote:" + $0.uuidString.lowercased() } : localExecutionWorkspaceID))
         }
+    }
+
+    private func canCreateChat(workspaceID: String?) -> Bool {
+        let owner = folders.first { $0.id == selectedFolderID }?.executionWorkspaceID
+        return owner == nil || owner == workspaceID
+    }
+
+    private func newChatButton(label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            DashboardLucideIcon(glyph: .plus, size: 12)
+                .frame(width: 24, height: DashboardMetrics.rowHeight)
+        }
+        .buttonStyle(DashboardIconButtonStyle())
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     private func moveAgent(
@@ -696,31 +736,28 @@ struct DashboardSidebarNavigationPage: View {
                 .padding(.top, 8)
             if foldersOpen {
                 DashboardRailRow(icon: .plus, title: "New folder", hoverID: "folder:create") {
-                    newFolderName = ""
                     showsNewFolderPopover = true
                 }
                 .popover(isPresented: $showsNewFolderPopover, arrowEdge: .trailing) {
-                    DashboardFolderNamePopover(
-                        title: "New folder",
-                        actionTitle: "Create",
-                        name: $newFolderName,
+                    DashboardNewFolderPopover(
+                        remoteWorkspaces: remoteWorkspaces,
+                        localWorkspaceReady: localWorkspaceReady,
                         onCancel: { showsNewFolderPopover = false },
-                        onCommit: {
-                            let name = newFolderName.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            )
-                            guard !name.isEmpty else { return }
+                        onCreate: { name, workspaceID, externalRoot in
                             showsNewFolderPopover = false
-                            onCreateFolder(name)
+                            onCreateFolder(name, workspaceID, externalRoot)
                         }
                     )
                 }
-                DashboardRailRow(
-                    icon: .folderOpen,
-                    title: "Workspace",
-                    hoverID: "folder:all",
-                    selected: selectedFolderID == nil
-                ) { onSelectFolder(nil) }
+                HStack(spacing: 0) {
+                    DashboardRailRow(
+                        icon: .folderOpen,
+                        title: "All Workspaces",
+                        hoverID: "folder:all",
+                        selected: selectedFolderID == nil
+                    ) { onSelectFolder(nil) }
+                    newChatButton(label: "New chat in All Workspaces") { onCreateChatInFolder(nil) }
+                }
                 ForEach(sections.pinned) { folder in
                     folderRow(
                         folder,
@@ -754,32 +791,37 @@ struct DashboardSidebarNavigationPage: View {
         let index = sectionFolders.firstIndex(where: { $0.id == folder.id })
         let canMoveUp = index.map { $0 > 0 } ?? false
         let canMoveDown = index.map { $0 < sectionFolders.count - 1 } ?? false
-        return DashboardRailRow(
-            icon: .folder,
-            title: folder.name,
-            hoverID: "folder:\(folder.id)",
-            trailing: "\(itemCount)",
-            showsPin: folder.isPinned,
-            selected: selectedFolderID == folder.id,
-            pinMenuTitle: folder.isPinned ? "Unpin" : "Pin",
-            onTogglePin: { onSetFolderPinned(folder.id, !folder.isPinned) },
-            moveUpTitle: "Move up",
-            moveUpEnabled: canMoveUp,
-            onMoveUp: { onMoveFolder(folder.id, .up) },
-            moveDownTitle: "Move down",
-            moveDownEnabled: canMoveDown,
-            onMoveDown: { onMoveFolder(folder.id, .down) },
-            renameMenuTitle: "Rename",
-            onRename: {
-                renamedFolderName = folder.name
-                renamingFolderID = folder.id
-            },
-            exportMenuTitle: "Export content",
-            onExport: { onUnavailableMutation("Folder export") },
-            destructiveMenuTitle: "Move to Trash",
-            onDelete: { onDeleteFolder(folder.id) }
-        ) {
-            onSelectFolder(folder.id)
+        return HStack(spacing: 0) {
+            DashboardRailRow(
+                icon: .folder,
+                title: folder.name,
+                hoverID: "folder:\(folder.id)",
+                trailing: "\(itemCount)",
+                showsPin: folder.isPinned,
+                selected: selectedFolderID == folder.id,
+                pinMenuTitle: folder.isPinned ? "Unpin" : "Pin",
+                onTogglePin: { onSetFolderPinned(folder.id, !folder.isPinned) },
+                moveUpTitle: "Move up",
+                moveUpEnabled: canMoveUp,
+                onMoveUp: { onMoveFolder(folder.id, .up) },
+                moveDownTitle: "Move down",
+                moveDownEnabled: canMoveDown,
+                onMoveDown: { onMoveFolder(folder.id, .down) },
+                renameMenuTitle: "Rename",
+                onRename: {
+                    renamedFolderName = folder.name
+                    renamingFolderID = folder.id
+                },
+                exportMenuTitle: "Export content",
+                onExport: { onUnavailableMutation("Folder export") },
+                referenceMenuTitle: "Reference locations…",
+                onManageReferences: { editingReferenceFolderID = folder.id },
+                destructiveMenuTitle: "Remove folder…",
+                onDelete: { deletingFolder = folder }
+            ) {
+                onSelectFolder(folder.id)
+            }
+            newChatButton(label: "New chat in \(folder.name)") { onCreateChatInFolder(folder.id) }
         }
         .popover(
             isPresented: Binding(
@@ -806,6 +848,43 @@ struct DashboardSidebarNavigationPage: View {
                     onRenameFolder(folder.id, name)
                 }
             )
+        }
+        .popover(isPresented: Binding(
+            get: { editingReferenceFolderID == folder.id },
+            set: { if !$0 { editingReferenceFolderID = nil } }
+        ), arrowEdge: .trailing) {
+            DashboardFolderReferencesPopover(
+                folder: folder,
+                isOnThisMac: localExecutionWorkspaceID != nil && folder.executionWorkspaceID == localExecutionWorkspaceID,
+                onClose: { editingReferenceFolderID = nil },
+                onChange: { onSetFolderReferencePaths(folder.id, $0) }
+            )
+        }
+        .confirmationDialog(
+            "Remove \(folder.name)?",
+            isPresented: Binding(
+                get: { deletingFolder?.id == folder.id },
+                set: { if !$0 { deletingFolder = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Folder Only", role: .destructive) {
+                deletingFolder = nil
+                onDeleteFolder(folder.id, false)
+            }
+            if folder.managedRoot {
+                Button("Delete Folder and Directory", role: .destructive) {
+                    deletingFolder = nil
+                    onDeleteFolder(folder.id, true)
+                }
+            }
+            Button("Cancel", role: .cancel) { deletingFolder = nil }
+        } message: {
+            if folder.managedRoot, let rootPath = folder.rootPath {
+                Text("Remove the folder from Woven, or also delete its directory and every file in it: \(rootPath). Chats and notes remain in Woven.")
+            } else {
+                Text("Remove the folder from Woven. Its directory, files, chats and notes are preserved.")
+            }
         }
     }
 
@@ -838,7 +917,6 @@ struct DashboardSidebarNavigationPage: View {
                                 conversation: conversation,
                                 folders: folders,
                                 isRunning: runningConversationIDs.contains(conversation.id),
-                                onMove: onMoveConversation,
                                 onAction: onConversationAction
                             ))
                         case .note(let note):
@@ -863,7 +941,7 @@ struct DashboardSidebarNavigationPage: View {
 
     private var folderItemCounts: [String: Int] {
         var counts: [String: Int] = [:]
-        for conversation in conversations where !conversation.isArchived {
+        for conversation in conversations {
             if let folderID = conversation.folderID {
                 counts[folderID, default: 0] += 1
             }
@@ -890,7 +968,7 @@ struct DashboardSidebarNavigationPage: View {
             }
         }
 
-        for conversation in conversations where !conversation.isArchived {
+        for conversation in conversations {
             insert(.conversation(conversation))
         }
         for note in notes {
@@ -927,6 +1005,197 @@ enum DashboardRecentItem: Identifiable {
     }
 }
 
+struct DashboardNewFolderPopover: View {
+    let remoteWorkspaces: RemoteWorkspacesModel
+    let localWorkspaceReady: Bool
+    let onCancel: () -> Void
+    let onCreate: (String, UUID?, URL?) -> Void
+    @State private var name = ""
+    @State private var workspaceID: UUID?
+    @State private var linksExistingDirectory = false
+    @State private var externalRoot: URL?
+    @FocusState private var nameFocused: Bool
+
+    private var ownerIsAvailable: Bool {
+        guard let workspaceID else { return localWorkspaceReady }
+        return remoteWorkspaces.isCredentialAccessEnabled
+            && remoteWorkspaces.statuses[workspaceID]?.running == true
+            && !remoteWorkspaces.busyWorkspaceIDs.contains(workspaceID)
+    }
+
+    private var canCreate: Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ownerIsAvailable && !trimmed.isEmpty
+            && (linksExistingDirectory ? externalRoot != nil : !trimmed.contains("/") && trimmed != "." && trimmed != "..")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New Folder").font(.system(size: 14, weight: .semibold))
+            Picker("Workspace", selection: $workspaceID) {
+                Text("This Mac").tag(nil as UUID?)
+                ForEach(remoteWorkspaces.workspaces) { workspace in
+                    Text(workspace.name).tag(Optional(workspace.id))
+                }
+            }
+            .onChange(of: workspaceID) { _, id in
+                if id != nil { linksExistingDirectory = false; externalRoot = nil }
+            }
+            if workspaceID == nil {
+                Picker("Directory", selection: $linksExistingDirectory) {
+                    Text("Create New").tag(false)
+                    Text("Link Existing").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
+            TextField("Folder name", text: $name)
+                .focused($nameFocused)
+                .dashboardQuietTextInput()
+                .onSubmit { if canCreate { create() } }
+            if linksExistingDirectory {
+                Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Woven uses this directory as the project root. Existing files are preserved.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            } else {
+                Text("Creates a blank directory in this workspace. Later renaming changes only its name in Woven.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            if !ownerIsAvailable {
+                Text("Connect this workspace before creating a folder.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.danger)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                Button(linksExistingDirectory ? "Link" : "Create", action: create)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canCreate)
+            }
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(DashboardPalette.foreground)
+        .padding(16)
+        .frame(width: 340)
+        .dashboardFormFocusDismissal { nameFocused = false }
+        .task { nameFocused = true }
+    }
+
+    private func create() {
+        guard canCreate else { return }
+        onCreate(name.trimmingCharacters(in: .whitespacesAndNewlines), workspaceID,
+            linksExistingDirectory ? externalRoot : nil)
+    }
+
+    private func chooseDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = "Link Project Directory"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            externalRoot = url
+            if name.isEmpty { name = url.lastPathComponent }
+        }
+    }
+}
+
+struct DashboardFolderReferencesPopover: View {
+    let folder: WorkspaceFolderRecord
+    let isOnThisMac: Bool
+    let onClose: () -> Void
+    let onChange: ([String]) -> Void
+    @State private var paths: [String]
+    @State private var newPath = ""
+    @FocusState private var pathFocused: Bool
+
+    init(folder: WorkspaceFolderRecord, isOnThisMac: Bool, onClose: @escaping () -> Void,
+         onChange: @escaping ([String]) -> Void) {
+        self.folder = folder; self.isOnThisMac = isOnThisMac
+        self.onClose = onClose; self.onChange = onChange
+        _paths = State(initialValue: folder.referencePaths)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Reference Locations").font(.system(size: 14, weight: .semibold))
+            if let rootPath = folder.rootPath {
+                Text("Root: \(rootPath)").font(.system(size: 11.5)).textSelection(.enabled)
+            }
+            Text("Additional locations on this workspace are available to its sessions. Linking does not read project instruction files. Unlinking does not revoke operating system permissions.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(paths, id: \.self) { path in
+                        HStack(spacing: 8) {
+                            Text(path).font(.system(size: 11.5)).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button { paths.removeAll { $0 == path } } label: {
+                                DashboardLucideIcon(glyph: .close, size: 12).frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(DashboardIconButtonStyle())
+                            .help("Unlink \(path)")
+                        }
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+            .frame(maxHeight: 160)
+            if isOnThisMac {
+                Button("Link location…", action: chooseLocations)
+            } else {
+                HStack {
+                    TextField("Absolute path in this workspace", text: $newPath)
+                        .dashboardQuietTextInput()
+                        .focused($pathFocused)
+                        .onSubmit(addPath)
+                    Button("Link", action: addPath)
+                        .disabled(!newPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/"))
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: onClose).keyboardShortcut(.cancelAction)
+                Button("Save") { onChange(paths); onClose() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
+        .dashboardFormFocusDismissal { pathFocused = false }
+    }
+
+    private func addPath() {
+        let path = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard path.hasPrefix("/") else { return }
+        if path != folder.rootPath, !paths.contains(path) { paths.append(path) }
+        newPath = ""
+    }
+
+    private func chooseLocations() {
+        let panel = NSOpenPanel()
+        panel.title = "Link Reference Locations"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+        panel.begin { response in
+            guard response == .OK else { return }
+            for url in panel.urls where url.path != folder.rootPath && !paths.contains(url.path) {
+                paths.append(url.path)
+            }
+        }
+    }
+}
+
 enum DashboardNewChatTarget {
     case acpDirect(AgentRuntimeKind)
     case remoteWorkspace(RemoteHarnessChatTarget)
@@ -948,9 +1217,17 @@ enum DashboardNewChatAvailabilitySummary {
 struct DashboardNewChatDrawer: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
+    let folderOwnerID: String?
+    let localExecutionWorkspaceID: String?
     let onClose: () -> Void
     let onSelect: (DashboardNewChatTarget) -> Void
     @State private var expandedSources = Set(DashboardNewChatSource.allCases)
+
+    private var remoteChatTargets: [RemoteHarnessChatTarget] {
+        model.remoteWorkspaces.readyChatTargets.filter {
+            folderOwnerID == nil || folderOwnerID == "remote:" + $0.configuration.id.uuidString.lowercased()
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -977,81 +1254,83 @@ struct DashboardNewChatDrawer: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    DashboardNewChatSection(
-                        source: .acpDirect,
-                        summary: DashboardNewChatAvailabilitySummary.localCLIs(
-                            readyRuntimeCount: model.localACPRuntimeAvailability
-                                .filter {
-                                    $0.runtimeKind == .opencode ? (model.openCode?.isEnabled == true && model.openCode?.canConnect == true) : $0.isReady
-                                        && model.isLocalACPAgentReady($0.runtimeKind)
-                                        && !model.checkingLocalACPRuntimeKinds
-                                            .contains($0.runtimeKind)
+                    if folderOwnerID == nil || folderOwnerID == localExecutionWorkspaceID {
+                        DashboardNewChatSection(
+                            source: .acpDirect,
+                            summary: DashboardNewChatAvailabilitySummary.localCLIs(
+                                readyRuntimeCount: model.localACPRuntimeAvailability
+                                    .filter {
+                                        $0.runtimeKind == .opencode ? (model.openCode?.isEnabled == true && model.openCode?.canConnect == true) : $0.isReady
+                                            && model.isLocalACPAgentReady($0.runtimeKind)
+                                            && !model.checkingLocalACPRuntimeKinds
+                                                .contains($0.runtimeKind)
+                                    }
+                                    .count,
+                                workspaceIsReady: model.localACPWorkspaceAvailability
+                                    .isReady || model.openCode?.isReady == true
+                            ),
+                            isExpanded: expansionBinding(for: .acpDirect)
+                        ) {
+                            ForEach(model.orderedLocalACPRuntimeDefinitions) { definition in
+                                let availability = model.localACPRuntimeAvailability
+                                    .first {
+                                        $0.runtimeKind == definition.runtimeKind
+                                    }
+                                let isChecking = model.checkingLocalACPRuntimeKinds
+                                    .contains(definition.runtimeKind)
+                                Button {
+                                    onSelect(.acpDirect(definition.runtimeKind))
+                                } label: {
+                                    DashboardNewChatOptionCard(
+                                        icon: .terminal,
+                                        harnessLogo: DashboardHarnessLogo(
+                                            runtimeKind: definition.runtimeKind
+                                        ),
+                                        title: definition.displayName,
+                                        detail: definition.runtimeKind == .opencode
+                                            ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Enable OpenCode in Settings")
+                                            : isChecking || availability == nil
+                                            ? "Checking…"
+                                            : availability?.isReady == true
+                                                && !model.isLocalACPAgentReady(definition.runtimeKind)
+                                                ? model.localACPAgentReconciliationError
+                                                    ?? "Local workspace unavailable — see Settings"
+                                            : availability?.compactDetail
+                                                ?? "Unavailable — see Settings"
+                                    )
                                 }
-                                .count,
-                            workspaceIsReady: model.localACPWorkspaceAvailability
-                                .isReady || model.openCode?.isReady == true
-                        ),
-                        isExpanded: expansionBinding(for: .acpDirect)
-                    ) {
-                        ForEach(model.orderedLocalACPRuntimeDefinitions) { definition in
-                            let availability = model.localACPRuntimeAvailability
-                                .first {
-                                    $0.runtimeKind == definition.runtimeKind
-                                }
-                            let isChecking = model.checkingLocalACPRuntimeKinds
-                                .contains(definition.runtimeKind)
-                            Button {
-                                onSelect(.acpDirect(definition.runtimeKind))
-                            } label: {
-                                DashboardNewChatOptionCard(
-                                    icon: .terminal,
-                                    harnessLogo: DashboardHarnessLogo(
-                                        runtimeKind: definition.runtimeKind
-                                    ),
-                                    title: definition.displayName,
-                                    detail: definition.runtimeKind == .opencode
-                                        ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Enable OpenCode in Settings")
-                                        : isChecking || availability == nil
-                                        ? "Checking…"
-                                        : availability?.isReady == true
-                                            && !model.isLocalACPAgentReady(definition.runtimeKind)
-                                            ? model.localACPAgentReconciliationError
-                                                ?? "Local workspace unavailable — see Settings"
-                                        : availability?.compactDetail
-                                            ?? "Unavailable — see Settings"
+                                .buttonStyle(DashboardQuietButtonStyle())
+                                .disabled(
+                                    definition.runtimeKind == .opencode ? (model.openCode?.isEnabled != true || model.openCode?.canConnect != true || model.openCode?.busy == true || !model.localACPWorkspaceAvailability.isReady) : isChecking
+                                        || availability?.isReady != true
+                                        || !model.isLocalACPAgentReady(definition.runtimeKind)
+                                        || !model.localACPWorkspaceAvailability.isReady
                                 )
                             }
-                            .buttonStyle(DashboardQuietButtonStyle())
-                            .disabled(
-                                definition.runtimeKind == .opencode ? (model.openCode?.isEnabled != true || model.openCode?.canConnect != true || model.openCode?.busy == true || !model.localACPWorkspaceAvailability.isReady) : isChecking
-                                    || availability?.isReady != true
-                                    || !model.isLocalACPAgentReady(definition.runtimeKind)
-                                    || !model.localACPWorkspaceAvailability.isReady
-                            )
+
+                            if !model.localACPWorkspaceAvailability.isReady {
+                                DashboardInlineError(
+                                    text: model.localACPWorkspaceAvailability.detail
+                                )
+                            }
                         }
 
-                        if !model.localACPWorkspaceAvailability.isReady {
-                            DashboardInlineError(
-                                text: model.localACPWorkspaceAvailability.detail
-                            )
-                        }
                     }
-
                     DashboardNewChatSection(
                         source: .remoteWorkspace,
                         summary: DashboardNewChatAvailabilitySummary.available(
-                            count: model.remoteWorkspaces.readyChatTargets.count
+                            count: remoteChatTargets.count
                         ),
                         isExpanded: expansionBinding(for: .remoteWorkspace)
                     ) {
-                        if model.remoteWorkspaces.readyChatTargets.isEmpty {
+                        if remoteChatTargets.isEmpty {
                             DashboardNewChatEmptyCard(
                                 icon: .container,
                                 title: "No remote agents ready",
                                 detail: "Set up a remote agent in Settings."
                             )
                         } else {
-                            ForEach(model.remoteWorkspaces.readyChatTargets) { target in
+                            ForEach(remoteChatTargets) { target in
                                 Button {
                                     onSelect(.remoteWorkspace(target))
                                 } label: {
@@ -1345,7 +1624,6 @@ struct DashboardSidebarWorkspacePage: View {
     let onSelectNote: (String) -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
-    let onMoveConversation: (String, String?) -> Void
     let onSurfaceProfileChange: () -> Void
 
     @State private var query = ""
@@ -1518,7 +1796,7 @@ struct DashboardSidebarWorkspacePage: View {
                 .help("Hide workspace")
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(selectedFolderName ?? "Workspace")
+                Text(selectedFolderName ?? "All Workspaces")
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text("\(conversations.count) chats · \(notes.count) notes")
@@ -1648,7 +1926,6 @@ struct DashboardSidebarWorkspacePage: View {
             isRunning: runningConversationIDs.contains(presentation.id),
             detailCardState: $conversationDetailCardState,
             folders: folders,
-            onMoveConversation: onMoveConversation,
             onConversationAction: onConversationAction
         ) {
             onSelectConversation(presentation.id)
@@ -1744,7 +2021,7 @@ struct DashboardConversationListMeta: Equatable, Sendable {
             let name = folder.name.trimmingCharacters(in: .whitespacesAndNewlines)
             folderLabel = name.isEmpty ? "Untitled folder" : name
         } else {
-            folderLabel = "Workspace"
+            folderLabel = "All Workspaces"
         }
 
         return DashboardConversationListMeta(

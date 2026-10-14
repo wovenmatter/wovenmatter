@@ -1,7 +1,8 @@
 import { readFileSync, mkdirSync, appendFileSync, openSync, fsyncSync, closeSync, readSync, fstatSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
+import { scratchFolderName } from './projects.mjs'
 import { randomUUID } from 'node:crypto'
-import { durableJSON } from './openclaw-results/store.mjs'
+import { durableJSON } from './durable-json.mjs'
 
 const fail = (code, message) => Object.assign(new Error(message), { statusCode: code })
 const read = (path, fallback) => { try { return JSON.parse(readFileSync(path, 'utf8')) } catch (e) { if (e.code === 'ENOENT') return fallback; throw e } }
@@ -64,10 +65,12 @@ function validateSchedule(value) {
   return structuredClone(value)
 }
 
-export function createTaskGateway({ directory, execute, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, syncJournal = fsyncSync }) {
+export function createTaskGateway({ directory, execute, workspaceRoot, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, syncJournal = fsyncSync }) {
   mkdirSync(directory, { recursive:true, mode:0o700 })
   const path = resolve(directory, 'state.json')
   let state = read(path, { enabled:true, schedules:[], knownRuns:[], results:[], claims:{}, publicationIDs:[] })
+  state.scratchDirectories ??= {}
+  state.deferredSessions ??= {}
   const epoch = randomUUID()
   const active = new Map()
   let timer, closed = false, disabling = false
@@ -138,8 +141,20 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     const key = stamp(schedule.id, scheduledAt)
     const id = randomUUID()
     const reuseSession = schedule.task.sessionMode === 'same' && schedule.recurrence != null
-    const sessionID = reuseSession ? schedule.taskSessionID ?? randomUUID() : randomUUID()
-    const claim = { id, eventRevision:schedule.revision, run:{ id,eventID:schedule.id,occurrenceIndex:index,scheduledAt,sessionID,task:structuredClone(schedule.task),status:'sending',title:schedule.title }, nativeSessionID:reuseSession ? schedule.nativeSessionID ?? null : null }
+    const deferredSession = state.deferredSessions[key]
+    const retry = deferredSession?.eventRevision === schedule.revision ? deferredSession : undefined
+    const sessionID = retry?.sessionID ?? (reuseSession ? schedule.taskSessionID ?? randomUUID() : randomUUID())
+    const task = structuredClone(schedule.task)
+    if (workspaceRoot && !task.configuration.folderID && (task.configuration.nativeWorkingDirectory ?? workspaceRoot) === workspaceRoot) {
+      let directory = state.scratchDirectories[sessionID]
+      if (!directory) {
+        directory = join(workspaceRoot, 'scratch', scratchFolderName(sessionID, task.prompt, iso(now())))
+        if (Object.values(state.scratchDirectories).includes(directory)) directory = join(workspaceRoot, 'scratch', scratchFolderName(sessionID, task.prompt, iso(now()), true))
+        state.scratchDirectories[sessionID] = directory
+      }
+      task.configuration.nativeWorkingDirectory = directory
+    }
+    const claim = { id, eventRevision:schedule.revision, run:{ id,eventID:schedule.id,occurrenceIndex:index,scheduledAt,sessionID,task,status:'sending',title:schedule.title }, nativeSessionID:retry?.nativeSessionID ?? (reuseSession ? schedule.nativeSessionID ?? null : null) }
     state.claims[key] = claim
     state.knownRuns.push(key)
     if (schedule.task.sessionMode === 'same' && schedule.recurrence) schedule.taskSessionID = sessionID
@@ -187,6 +202,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
       } catch (error) {
         if (error?.beforePrompt === true && error?.deferred === true) {
           deferred = true
+          state.deferredSessions[key] = { sessionID, nativeSessionID: claim.nativeSessionID, eventRevision: schedule.revision }
           const current = state.schedules.find(s=>s.id===schedule.id && s.revision===schedule.revision)
           if (current) { current.nextFireAt=previousNextFireAt;current.retryAfter=iso(now()+60000);current.waitingReason=error.message }
           state.knownRuns=state.knownRuns.filter(value=>value!==key);delete state.claims[key]
@@ -197,6 +213,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
       } finally {
         flushJournal()
         if (!deferred) {
+          delete state.deferredSessions[key]
           claim.completedAt = iso(now())
           durableJSON(resolve(directory, `result-${id}.json`), claim)
           state.results.push(id)

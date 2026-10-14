@@ -251,7 +251,6 @@ public enum DatabaseLinkedData {
     defer { sqlite3_close(connection) }
     sqlite3_limit(connection, SQLITE_LIMIT_LENGTH, Int32(maximumSQLiteCellBytes))
     sqlite3_limit(connection, SQLITE_LIMIT_SQL_LENGTH, Int32(maximumSQLiteQueryBytes))
-    sqlite3_limit(connection, SQLITE_LIMIT_COLUMN, Int32(maximumColumns))
     sqlite3_limit(connection, SQLITE_LIMIT_EXPR_DEPTH, 100)
     sqlite3_set_authorizer(connection, { _, action, _, _, _, _ in
       switch action {
@@ -285,7 +284,8 @@ public enum DatabaseLinkedData {
       throw DatabaseLinkedDataError.sqliteReadOnlyQueryRequired
     }
 
-    let count = min(Int(sqlite3_column_count(statement)), maximumColumns)
+    let count = Int(sqlite3_column_count(statement))
+    guard count <= maximumColumns else { throw DatabaseLinkedDataError.sqliteResultTooLarge }
     let rawColumns = (0..<count).map { index in
       sqlite3_column_name(statement, Int32(index)).map(String.init(cString:))
         ?? columnName(index)

@@ -8,7 +8,7 @@ public struct ExecutorConfiguration: Codable, Equatable, Sendable {
     public var host: String = ""
     public var user: String = ""
     public var origin: String = ""
-    public var apps: [ExecutorAppProfile] = []
+    public var apps: [ExecutorAppTarget] = []
     public var defaultProfiles: Set<String> = []
     public init() {}
 }
@@ -22,14 +22,16 @@ public struct ExecutorSetupState: Codable, Equatable, Sendable {
     }
 }
 
-public struct ExecutorAppProfile: Codable, Equatable, Identifiable, Sendable {
+public struct ExecutorAppTarget: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var app: String
     public var name: String
-    public var profile: String
-    public var profileName: String
-    public init(id: String, app: String, name: String, profile: String, profileName: String) {
-        self.id = id; self.app = app; self.name = name; self.profile = profile; self.profileName = profileName
+    public var account: String?
+    public var targetName: String
+    // Keep the stored display key; old cached inventory can still be read and refreshed.
+    private enum CodingKeys: String, CodingKey { case id, app, name, account; case targetName = "profileName" }
+    public init(id: String, app: String, name: String, account: String? = nil, targetName: String) {
+        self.id = id; self.app = app; self.name = name; self.account = account; self.targetName = targetName
     }
 }
 

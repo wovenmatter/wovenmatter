@@ -14,8 +14,6 @@ private enum SettingsUsageCredentialAction: Identifiable {
         switch self {
         case .enableProvider(let provider):
             switch provider {
-            case .cursor:
-                "Allow Woven Matter to read Cursor’s local account session and check usage."
             case .openRouter:
                 "Allow Woven Matter to use your saved OpenRouter key to check usage."
             default:

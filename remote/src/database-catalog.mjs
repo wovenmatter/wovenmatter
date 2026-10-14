@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const helper = fileURLToPath(new URL('./database-catalog.py', import.meta.url))
-const maximumResponseBytes = 6 * 1024 * 1024
+const maximumResponseBytes = 48 * 1024 * 1024
 let activeRequests = 0
 
 // A separate, bounded process keeps SQLite queries off the service event loop.
