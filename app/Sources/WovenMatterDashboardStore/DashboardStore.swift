@@ -205,136 +205,12 @@ public actor DashboardStore {
     localWorkspacePrepared = true
   }
 
-  public func buzzWorkspaceSnapshot() async throws -> BuzzWorkspaceSnapshot {
-    try await database.buzzWorkspaceSnapshot()
-  }
-
   public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) async throws {
     try await localSessions.setCLIConnectionProvider(provider)
   }
 
   public func sessionNativeWorkingDirectories(ids: [String]) async throws -> [String: String] {
     try await database.sessionNativeWorkingDirectories(ids: ids)
-  }
-
-  public func saveBuzzWorkspace(_ link: BuzzWorkspaceLink) async throws {
-    try await database.upsertBuzzWorkspaceLink(link)
-  }
-
-  public func deleteBuzzWorkspace(id: UUID) async throws {
-    try await prepareLocalWorkspace()
-    let deviceID = try await deviceIdentity.id()
-    for enrollment in try await database.buzzWorkspaceAgentEnrollments(
-      workspaceLinkID: id
-    ) {
-      try await database.retireBuzzWorkspaceAgent(
-        enrollmentID: enrollment.id,
-        ownerDeviceID: deviceID
-      )
-    }
-    try await database.deleteBuzzWorkspaceLink(id: id)
-  }
-
-  public func discoverBuzzWorkspaceAgents(
-    linkID: UUID
-  ) async throws -> [BuzzWorkspaceAgentCandidate] {
-    guard let link = try await database.buzzWorkspaceLinks().first(where: {
-      $0.id == linkID
-    }) else {
-      throw BuzzWorkspaceDatabaseError.workspaceNotFound
-    }
-    return try BuzzLocalAgentDiscovery().candidates(for: link)
-  }
-
-  @discardableResult
-  public func enrollBuzzWorkspaceAgent(
-    _ candidate: BuzzWorkspaceAgentCandidate
-  ) async throws -> BuzzWorkspaceAgentEnrollment {
-    try await prepareLocalWorkspace()
-    let enrollment = try await database.enrollBuzzWorkspaceAgent(candidate)
-    if try await database.buzzWorkspaceLinks().contains(where: {
-      $0.id == enrollment.workspaceLinkID
-    }), enrollment.runtimeKind != nil {
-      let resolved = try? await resolvedBuzzLaunch(
-        workspaceLinkID: enrollment.workspaceLinkID,
-        agentID: enrollment.agentID
-      )
-      let status: AgentRuntimeStatus = resolved?.launch.runtimeKind == enrollment.runtimeKind
-        ? .ready : .offline
-      try await database.reconcileBuzzWorkspaceAgent(
-        enrollment: enrollment,
-        ownerDeviceID: try await deviceIdentity.id(),
-        status: status
-      )
-    }
-    return enrollment
-  }
-
-  public func removeBuzzWorkspaceAgentEnrollment(id: UUID) async throws {
-    try await prepareLocalWorkspace()
-    let deviceID = try await deviceIdentity.id()
-    try await database.retireBuzzWorkspaceAgent(
-      enrollmentID: id,
-      ownerDeviceID: deviceID
-    )
-    try await database.removeBuzzWorkspaceAgentEnrollment(id: id)
-  }
-
-  public func reconcileBuzzWorkspaceAgents() async throws -> Set<UUID> {
-    try await prepareLocalWorkspace()
-    let deviceID = try await deviceIdentity.id()
-    let linksByID = Dictionary(
-      uniqueKeysWithValues: try await database.buzzWorkspaceLinks().map { ($0.id, $0) }
-    )
-    var launchable: Set<UUID> = []
-    for enrollment in try await database.buzzWorkspaceAgentEnrollments() {
-      guard let link = linksByID[enrollment.workspaceLinkID],
-        enrollment.runtimeKind != nil
-      else {
-        continue
-      }
-      let resolved = try? await resolvedBuzzLaunch(
-        workspaceLinkID: enrollment.workspaceLinkID,
-        agentID: enrollment.agentID
-      )
-      let isLaunchable = link.isEnabled
-        && resolved?.launch.runtimeKind == enrollment.runtimeKind
-      if isLaunchable { launchable.insert(enrollment.id) }
-      try await database.reconcileBuzzWorkspaceAgent(
-        enrollment: enrollment,
-        ownerDeviceID: deviceID,
-        status: isLaunchable ? .ready : .offline
-      )
-    }
-    return launchable
-  }
-
-  public func createBuzzWorkspaceLocalACPSession(
-    enrollmentID: UUID,
-    title: String
-  ) async throws -> String {
-    try await prepareLocalWorkspace()
-    guard let enrollment = try await database.buzzWorkspaceAgentEnrollments()
-      .first(where: { $0.id == enrollmentID }) else {
-      throw BuzzWorkspaceDatabaseError.enrollmentNotFound
-    }
-    let resolved = try await resolvedBuzzLaunch(
-      workspaceLinkID: enrollment.workspaceLinkID,
-      agentID: enrollment.agentID
-    )
-    guard resolved.launch.runtimeKind == enrollment.runtimeKind else {
-      throw BuzzWorkspaceDatabaseError.enrollmentRequiresRefresh
-    }
-    return try await database.createBuzzLocalACPSession(
-      enrollmentID: enrollmentID,
-      title: title,
-      ownerDeviceID: try await deviceIdentity.id(),
-      model: resolved.model
-    )
-  }
-
-  public func buzzBoundLocalACPConversationIDs() async throws -> Set<String> {
-    try await database.buzzBoundLocalACPConversationIDs()
   }
 
   public func start() async {
@@ -759,19 +635,6 @@ public actor DashboardStore {
     workspace: LocalACPWorkspaceLaunchConfiguration,
     systemPrompt: String?
   ) {
-    let descriptor = try await database.localACPSession(conversationID: conversationID)
-    if let workspaceLinkID = descriptor.buzzWorkspaceLinkID,
-       let buzzAgentID = descriptor.buzzAgentID {
-      let resolved = try await resolvedBuzzLaunch(
-        workspaceLinkID: workspaceLinkID,
-        agentID: buzzAgentID
-      )
-      guard let location = try await database.sessionExecutionRoot(id: conversationID) else {
-        throw WorkspaceToolError.invalid("This archived chat cannot be resumed. Start a new chat.")
-      }
-      let root = URL(fileURLWithPath: location.rootPath, isDirectory: true)
-      return (resolved.launch, .init(rootURL: root), resolved.systemPrompt)
-    }
     guard let directLaunch, directWorkspace != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
@@ -779,20 +642,6 @@ public actor DashboardStore {
       throw WorkspaceToolError.invalid("This archived chat cannot be resumed. Start a new chat.")
     }
     return (directLaunch, .init(rootURL: URL(fileURLWithPath: location.rootPath)), nil)
-  }
-
-  private func resolvedBuzzLaunch(
-    workspaceLinkID: UUID,
-    agentID: String
-  ) async throws -> BuzzLocalAgentLaunch {
-    let source = try await database.buzzLocalAgentLaunchSource(
-      workspaceLinkID: workspaceLinkID,
-      agentID: agentID
-    )
-    return try BuzzLocalAgentLaunchResolver().resolve(
-      agentID: agentID,
-      in: source.link
-    )
   }
 
   public func cancelLocalACPPrompt(conversationID: String) async {

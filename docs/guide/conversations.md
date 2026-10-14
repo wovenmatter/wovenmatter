@@ -1,14 +1,14 @@
 # Conversations
 
-Choose **New chat** to start a draft with the selected agent, or use the plus
-beside a folder to choose an agent there. Clicking an agent in the sidebar also
-starts a fresh chat. Woven groups agents by their local, remote, or linked Buzz
-workspace. Select a model and thinking level where the harness offers them.
+Choose **New chat** and select an agent. Agent names in the sidebar open their
+most recent chat; the separate plus starts a new chat with that agent in the
+selected folder. Woven groups agents by their local or remote workspace. Select
+a model and thinking level where the harness offers them.
 
-Before the first message, the composer's folder selector offers folders owned
-by the agent's execution workspace and **Ungrouped**. Ungrouped uses that
-workspace's default directory. The first message fixes the folder and working
-directory; use a new chat to work from another root.
+Before the first message, the composer's folder selector lists **All Workspaces**
+and the sidebar folders. Folders belonging to another execution workspace are
+disabled. All Workspaces gives each chat its own blank scratch directory. The
+first message fixes the folder and working directory; use a new chat for another root.
 
 ## Models, thinking, tools, and permissions
 

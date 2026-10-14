@@ -120,7 +120,6 @@ struct DashboardSidebarRail: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
-    let buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -158,7 +157,6 @@ struct DashboardSidebarRail: View {
             remoteWorkspaces: remoteWorkspaces,
             localWorkspaceReady: localWorkspaceReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
-            buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
             folders: folders,
             conversations: conversations,
             notes: notes,
@@ -204,7 +202,6 @@ struct DashboardSidebarRail: View {
             notes: scopedNotes,
             runningConversationIDs: runningConversationIDs,
             agents: agents,
-            buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
             folders: folders,
             contentRevision: contentRevision,
             contentScopeID: selectedFolderID,
@@ -246,7 +243,6 @@ struct DashboardSidebarNavigationPage: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
-    let buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -287,8 +283,6 @@ struct DashboardSidebarNavigationPage: View {
     private var showsLocalWorkspace = true
     @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
-    @AppStorage(DashboardWorkspaceSidebarVisibility.buzzWorkspaces.storageKey)
-    private var showsBuzzWorkspaces = true
 
     @State private var agentsOpen = true
     @State private var foldersOpen = true
@@ -312,26 +306,6 @@ struct DashboardSidebarNavigationPage: View {
         DashboardRemoteWorkspaceSidebarModel.links(
             workspaces: remoteWorkspaces.workspaces,
             readyTargets: remoteWorkspaces.readyChatTargets
-        )
-    }
-
-    private var buzzWorkspaceLinks: [DashboardBuzzWorkspaceSidebarLink] {
-        let customOrderByWorkspaceID = Dictionary(uniqueKeysWithValues:
-            buzzWorkspaceSnapshot.links.map { link in
-                (
-                    link.id,
-                    DashboardAgentOrderStore.order(
-                        forKey: DashboardAgentOrderStore.buzzWorkspaceKey(link.id),
-                        in: agentOrderRaw
-                    )
-                )
-            }
-        )
-        return DashboardBuzzWorkspaceSidebarModel.links(
-            snapshot: buzzWorkspaceSnapshot,
-            agents: agents,
-            pinnedIDs: pinnedAgentIDs,
-            customOrderByWorkspaceID: customOrderByWorkspaceID
         )
     }
 
@@ -517,22 +491,6 @@ struct DashboardSidebarNavigationPage: View {
                         }
                     }
                 }
-
-                if showsBuzzWorkspaces {
-                    agentDisclosureHeading(
-                        title: DashboardAgentSidebarHeading.buzzWorkspaces,
-                        key: DashboardAgentDisclosureKey.buzzWorkspaces
-                    )
-                    if agentSectionExpanded(DashboardAgentDisclosureKey.buzzWorkspaces) {
-                        if buzzWorkspaceLinks.isEmpty {
-                            agentEmptyLabel("No Buzz workspaces linked")
-                        } else {
-                            ForEach(buzzWorkspaceLinks) { workspace in
-                                buzzWorkspaceSection(workspace)
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -652,38 +610,6 @@ struct DashboardSidebarNavigationPage: View {
         guard status.running else { return "Workspace is stopped" }
         if remoteWorkspaces.harnesses[id] == nil { return "Checking agents…" }
         return "No ready agents"
-    }
-
-    @ViewBuilder
-    private func buzzWorkspaceSection(_ workspace: DashboardBuzzWorkspaceSidebarLink) -> some View {
-        let key = DashboardAgentDisclosureKey.workspace(workspace.id)
-        agentDisclosureHeading(
-            title: workspace.link.displayName,
-            key: key,
-            level: 1
-        )
-        if agentSectionExpanded(key) {
-            if workspace.agents.isEmpty {
-                agentEmptyLabel(
-                    workspace.enrollmentCount == 0
-                        ? "No agents enrolled"
-                        : "No available enrolled agents",
-                    level: 2
-                )
-            } else {
-                ForEach(workspace.agents) { agent in
-                    agentRow(
-                        agent,
-                        moveScope: .stored(
-                            DashboardAgentOrderStore.buzzWorkspaceKey(workspace.id)
-                        ),
-                        groupAgents: workspace.agents,
-                        isPinned: false
-                    )
-                    .padding(.leading, 16)
-                }
-            }
-        }
     }
 
     private func agentEmptyLabel(_ text: String, level: Int = 0) -> some View {
@@ -1267,7 +1193,6 @@ struct DashboardFolderReferencesPopover: View {
 enum DashboardNewChatTarget {
     case acpDirect(AgentRuntimeKind)
     case remoteWorkspace(RemoteHarnessChatTarget)
-    case buzzWorkspace(BuzzWorkspaceAgentEnrollment)
 }
 
 enum DashboardNewChatAvailabilitySummary {
@@ -1413,60 +1338,6 @@ struct DashboardNewChatDrawer: View {
                                     )
                                 }
                                 .buttonStyle(DashboardQuietButtonStyle())
-                            }
-                        }
-                    }
-
-                    if folderOwnerID == nil || folderOwnerID == localExecutionWorkspaceID {
-                        DashboardNewChatSection(
-                            source: .buzzWorkspace,
-                            summary: DashboardNewChatAvailabilitySummary.available(
-                                count: model.buzzWorkspaceAgentEnrollments.filter {
-                                    model.isBuzzWorkspaceAgentLaunchable($0)
-                                }.count
-                            ),
-                            isExpanded: expansionBinding(for: .buzzWorkspace)
-                        ) {
-                            if model.buzzWorkspaceAgentEnrollments.isEmpty {
-                                DashboardNewChatEmptyCard(
-                                    icon: .bot,
-                                    title: "No Buzz agents added",
-                                    detail: "Add a Buzz agent in Settings."
-                                )
-                            } else {
-                                ForEach(
-                                    model.buzzWorkspaceAgentEnrollments.sorted {
-                                        let lhsRank = $0.runtimeKind?.presentationRank ?? Int.max
-                                        let rhsRank = $1.runtimeKind?.presentationRank ?? Int.max
-                                        if lhsRank != rhsRank { return lhsRank < rhsRank }
-                                        return $0.displayNameSnapshot.localizedCaseInsensitiveCompare(
-                                            $1.displayNameSnapshot
-                                        ) == .orderedAscending
-                                    }
-                                ) { enrollment in
-                                    let context = DashboardBuzzWorkspaceAgentContext.resolve(
-                                        enrollment: enrollment,
-                                        snapshot: model.buzzWorkspaceSnapshot
-                                    )
-                                    Button {
-                                        onSelect(.buzzWorkspace(enrollment))
-                                    } label: {
-                                        DashboardNewChatOptionCard(
-                                            icon: .bot,
-                                            harnessLogo: DashboardHarnessLogo.resolve(
-                                                harnessIdentifier: enrollment.harnessIdentifier,
-                                                runtimeKind: enrollment.runtimeKind
-                                            ),
-                                            title: enrollment.displayNameSnapshot,
-                                            detail: context?.workspaceLabel
-                                                ?? "Linked Buzz workspace"
-                                        )
-                                    }
-                                    .buttonStyle(DashboardQuietButtonStyle())
-                                    .disabled(
-                                        !model.isBuzzWorkspaceAgentLaunchable(enrollment)
-                                    )
-                                }
                             }
                         }
                     }
@@ -1729,7 +1600,6 @@ struct DashboardSidebarWorkspacePage: View {
     let notes: [WorkspaceNoteRecord]
     let runningConversationIDs: Set<String>
     let agents: [WorkspaceAgent]
-    let buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot
     let folders: [WorkspaceFolderRecord]
     let contentRevision: Int64
     let contentScopeID: String?
@@ -1858,7 +1728,6 @@ struct DashboardSidebarWorkspacePage: View {
             let conversations = conversations
             let notes = notes
             let agents = agents
-            let buzzWorkspaceSnapshot = buzzWorkspaceSnapshot
             let folders = folders
             let query = query
             let readFilter = readFilter
@@ -1868,7 +1737,6 @@ struct DashboardSidebarWorkspacePage: View {
                     conversations: conversations,
                     notes: notes,
                     agents: agents,
-                    buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
                     folders: folders,
                     query: query,
                     readFilter: readFilter
@@ -1893,9 +1761,6 @@ struct DashboardSidebarWorkspacePage: View {
             revision: contentRevision,
             scopeID: contentScopeID,
             agentRevisions: agents.map { "\($0.id.uuidString):\($0.revision)" }.joined(separator: ","),
-            buzzWorkspaceRevisions: buzzWorkspaceSnapshot.enrollments.map {
-                "\($0.id.uuidString):\($0.updatedAt.timeIntervalSince1970)"
-            }.joined(separator: ","),
             folderRevisions: folders.map { "\($0.id):\($0.name)" }.joined(separator: ","),
             timeContext: DashboardListTimeContext.current,
             query: query,
@@ -2077,7 +1942,6 @@ struct DashboardRightRailContentTaskID: Hashable {
     let revision: Int64
     let scopeID: String?
     let agentRevisions: String
-    let buzzWorkspaceRevisions: String
     let folderRevisions: String
     let timeContext: String
     let query: String
@@ -2106,37 +1970,21 @@ struct DashboardConversationListMeta: Equatable, Sendable {
     /// Runtime product name when known, e.g. "Codex", "Claude Code".
     let runtimeLabel: String?
     let runtimeKind: AgentRuntimeKind?
-    /// Linked workspace is present only for Buzz workspace agents.
-    let buzzWorkspaceLabel: String?
 
     static func resolve(
         conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
-        foldersByID: [String: WorkspaceFolderRecord],
-        buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot? = nil
+        foldersByID: [String: WorkspaceFolderRecord]
     ) -> DashboardConversationListMeta {
         let agentLabel: String
         let locationLabel: String
         let locationKind: DashboardConversationLocationKind
         let runtimeLabel: String?
         let runtimeKind: AgentRuntimeKind?
-        let buzzContext = agent.flatMap { agent in
-            buzzWorkspaceSnapshot.flatMap {
-                DashboardBuzzWorkspaceAgentContext.resolve(
-                    agent: agent,
-                    snapshot: $0
-                )
-            }
-        }
-
         if let agent {
             agentLabel = dashboardAgentDisplayName(agent)
-            locationLabel = buzzContext == nil
-                ? DashboardConversationLocationKind.resolve(agent.bucket).label
-                : "Buzz workspace agent"
-            locationKind = buzzContext == nil
-                ? DashboardConversationLocationKind.resolve(agent.bucket)
-                : .workspaceAgent
+            locationLabel = DashboardConversationLocationKind.resolve(agent.bucket).label
+            locationKind = DashboardConversationLocationKind.resolve(agent.bucket)
             runtimeLabel = agent.runtimeKind.displayName
             runtimeKind = agent.runtimeKind
         } else if let runtime = conversation.localRuntimeKind {
@@ -2176,8 +2024,7 @@ struct DashboardConversationListMeta: Equatable, Sendable {
             locationLabel: locationLabel,
             locationKind: locationKind,
             runtimeLabel: runtimeLabel,
-            runtimeKind: runtimeKind,
-            buzzWorkspaceLabel: buzzContext?.workspaceLabel
+            runtimeKind: runtimeKind
         )
     }
 }
@@ -2214,32 +2061,6 @@ enum DashboardConversationLocationKind: Equatable, Sendable {
     }
 }
 
-struct DashboardBuzzWorkspaceAgentContext: Equatable, Sendable {
-    let workspaceLabel: String
-
-    static func resolve(
-        agent: WorkspaceAgent,
-        snapshot: BuzzWorkspaceSnapshot
-    ) -> DashboardBuzzWorkspaceAgentContext? {
-        guard let enrollment = snapshot.enrollments.first(where: {
-            $0.id == agent.id
-        }) else { return nil }
-        return resolve(enrollment: enrollment, snapshot: snapshot)
-    }
-
-    static func resolve(
-        enrollment: BuzzWorkspaceAgentEnrollment,
-        snapshot: BuzzWorkspaceSnapshot
-    ) -> DashboardBuzzWorkspaceAgentContext? {
-        guard let link = snapshot.links.first(where: {
-            $0.id == enrollment.workspaceLinkID
-        }) else { return nil }
-        return DashboardBuzzWorkspaceAgentContext(
-            workspaceLabel: link.displayName
-        )
-    }
-}
-
 struct DashboardConversationRowAccessibility: Equatable, Sendable {
     let label: String
     let value: String
@@ -2262,9 +2083,6 @@ struct DashboardConversationRowAccessibility: Equatable, Sendable {
             details.append("Runtime \(runtime)")
         }
         details.append("Location \(meta.locationLabel)")
-        if let workspace = meta.buzzWorkspaceLabel {
-            details.append("Workspace \(workspace)")
-        }
         if !preview.isEmpty {
             details.append("Last message \(preview)")
         }
@@ -2330,7 +2148,6 @@ final class DashboardListPresentationCache: @unchecked Sendable {
     func presentation(
         for conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
-        buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot,
         foldersByID: [String: WorkspaceFolderRecord],
         timeContext: String
     ) -> DashboardConversationRowPresentation {
@@ -2338,8 +2155,7 @@ final class DashboardListPresentationCache: @unchecked Sendable {
         let meta = DashboardConversationListMeta.resolve(
             conversation: conversation,
             agent: agent,
-            foldersByID: foldersByID,
-            buzzWorkspaceSnapshot: buzzWorkspaceSnapshot
+            foldersByID: foldersByID
         )
         if let cached = conversations.object(forKey: key)?.value,
            cached.conversation == conversation,
@@ -2428,10 +2244,6 @@ struct DashboardRightRailContent: Equatable, Sendable {
         conversations: [WorkspaceConversationRecord],
         notes: [WorkspaceNoteRecord],
         agents: [WorkspaceAgent],
-        buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot = BuzzWorkspaceSnapshot(
-            links: [],
-            enrollments: []
-        ),
         folders: [WorkspaceFolderRecord] = [],
         query: String,
         readFilter: DashboardReadFilter?
@@ -2461,8 +2273,7 @@ struct DashboardRightRailContent: Equatable, Sendable {
             let meta = DashboardConversationListMeta.resolve(
                 conversation: conversation,
                 agent: agent,
-                foldersByID: foldersByID,
-                buzzWorkspaceSnapshot: buzzWorkspaceSnapshot
+                foldersByID: foldersByID
             )
             guard query.isEmpty
                     || conversation.title.localizedCaseInsensitiveContains(query)
@@ -2474,7 +2285,6 @@ struct DashboardRightRailContent: Equatable, Sendable {
             let presentation = presentationCache.presentation(
                 for: conversation,
                 agent: agent,
-                buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
                 foldersByID: foldersByID,
                 timeContext: timeContext
             )

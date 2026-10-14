@@ -82,7 +82,3 @@ centrally saved transcripts do not synchronize them.
 
 Back up both your project files and Woven's application/service data. Keeping a
 volume across updates does not protect it from loss of the host or disk.
-
-Optional Buzz links retain existing local agent definitions. Woven-launched
-chats use their selected Mac project root or the Mac's default directory.
-Linking Buzz does not create a remote container.

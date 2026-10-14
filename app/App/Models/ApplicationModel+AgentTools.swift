@@ -28,7 +28,6 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let session = try await database.localACPSession(conversationID: conversationID)
         if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
-        if let buzz = session.buzzWorkspaceLinkID { return "buzz:" + buzz.uuidString.lowercased() }
         let root = try await database.sessionExecutionRoot(id: conversationID)
         if let scratch = try await database.sessionScratchDirectory(id: conversationID), scratch.rootPath == root?.rootPath {
             return "local:" + (try defaultToolWorkingDirectory(workspaceID: nil))
@@ -400,8 +399,7 @@ extension ApplicationModel {
             workspaceID = id
         }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let sourceSession = try await store.database.localACPSession(conversationID: source.id)
-        let sameWorkspace = workspaceID == source.remoteWorkspaceID && sourceSession.buzzWorkspaceLinkID == nil
+        let sameWorkspace = workspaceID == source.remoteWorkspaceID
         let destinationFolder: String?
         if let selected = command.options["folder"] {
             destinationFolder = ["all", "ungrouped"].contains(selected) ? nil : selected
