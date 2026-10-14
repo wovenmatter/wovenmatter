@@ -18,7 +18,7 @@ work across sessions, and organize your conversations, notes, and data.
 - [Executor apps](guide/executor.md) — shared app capabilities, scoped Execute, approvals, and Pi code mode.
 - [Remote workspaces](guide/remote-workspaces.md) — work with agents on other Linux machines.
 - [Notes and data](guide/notes-and-data.md) — work beside a note and use spreadsheets, HTML, and database folders.
-- [Scheduled work and usage](guide/schedules-and-usage.md) — follow Cron Jobs, Calendar events, and provider usage.
+- [Scheduled work and usage](guide/schedules-and-usage.md) — follow Calendar events, scheduled tasks, and provider usage.
 - [Troubleshooting](guide/troubleshooting.md) — resolve setup, connection, and data problems.
 
 These guides follow the code on `main`. See the
