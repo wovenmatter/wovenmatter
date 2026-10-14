@@ -27,6 +27,11 @@ local log driver rotates bounded files. Container updates use a rollback
 container and preserve the prior running state if the replacement does not
 become healthy.
 
+The unused base-image `node` account and its private `/home/node` directory are
+removed at image construction, before a fresh home volume is seeded. This keeps
+the dedicated home readable by its workspace owner for storage measurement;
+image construction does not modify existing persistent volumes.
+
 ## Resources and storage
 
 Docker enforces the RAM ceiling. The app treats Swap as additional to RAM and

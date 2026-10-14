@@ -11,6 +11,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
       procps python3 python3-venv ripgrep tini util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global --ignore-scripts --no-audit --no-fund npm@12.2.0 playwright@1.64.1 \
+    && userdel --remove node \
     && groupadd --gid 10001 woven \
     && useradd --no-create-home --home-dir /home --shell /bin/bash --uid 10001 --gid 10001 woven \
     && chown woven:woven /home \
