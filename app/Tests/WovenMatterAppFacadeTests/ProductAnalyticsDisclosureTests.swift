@@ -1,3 +1,4 @@
+import CompanionClient
 import Foundation
 import Testing
 import WovenMatterClient
@@ -6,6 +7,69 @@ import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 struct ProductAnalyticsDisclosureTests {
+    @Test @MainActor func secondaryMacUpdatesUseTheCentralLibraryAndRespectOfflineOptOut() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try MobileProductAnalytics(file: directory.appending(path: "analytics.json"))
+        let preference = ProductAnalyticsPreference(analyticsID: UUID().uuidString.lowercased(),
+            disclosedAt: Date().addingTimeInterval(-60))
+        try await store.apply(preference)
+        try await store.disclose(enabled: true)
+        try await store.synchronize(using: RelayedAnalyticsFixture(preference: preference))
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let model = ProductAnalyticsModel(defaults: defaults)
+        await model.configure(client: store)
+        await model.record(.updateCheckClicked)
+        await model.record(.updateDownloadCompleted, properties: ["target_version": "1.2.3"])
+        let event = ProductAnalyticsEvent(preferenceRevision: preference.revision,
+            name: .updateInstallCompleted, properties: ["target_version": "1.2.3"])
+        let receipt = ProductAnalyticsUpdateReceipt(analyticsID: preference.analyticsID,
+            version: "1.2.3", build: 4, event: event, confirmed: true)
+        let data = try JSONEncoder().encode(receipt)
+        defaults.set(data, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await model.confirmUpdateInstallation(version: "1.2.3", build: 4)
+        defaults.set(data, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await model.confirmUpdateInstallation(version: "1.2.3", build: 4)
+        let snapshot = await store.snapshot()
+        #expect(model.preference?.analyticsID == preference.analyticsID)
+        #expect(snapshot.events.count == 3)
+        #expect(snapshot.events.filter { $0.name == .updateInstallCompleted }.count == 1)
+        #expect(snapshot.events.allSatisfy { !$0.qualifying && $0.properties["platform"] != "ios" })
+        #expect(!model.disclosurePresented)
+        try await store.setEnabled(false)
+        defaults.set(data, forKey: ProductAnalyticsModel.updateReceiptKey)
+        await model.refresh()
+        await model.record(.updateDownloadClicked)
+        #expect(await store.snapshot().events.isEmpty)
+        #expect(defaults.data(forKey: ProductAnalyticsModel.updateReceiptKey) == nil)
+    }
+
+    @Test @MainActor func remoteReenableResumesFutureCollectionOnTheCentralMac() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let db = try await WorkspaceDatabase(url: directory.appending(path: "library.sqlite"))
+        let initial = try await db.productAnalyticsPreference()
+        let preference = try await db.setProductAnalyticsPreference(.init(enabled: true,
+            expectedRevision: initial.revision, acknowledgeDisclosure: true))
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        defaults.set(true, forKey: "wovenmatter.analytics.disclosed." + preference.analyticsID)
+        let model = ProductAnalyticsModel(defaults: defaults)
+        model.configure(database: db, publisher: false)
+        await model.openInterface()
+        await model.setEnabled(false)
+        let disabled = try await db.productAnalyticsPreference()
+        _ = try await model.change(.init(enabled: true, expectedRevision: disabled.revision))
+        await model.record(.messageSubmitted)
+        #expect(model.enabled)
+        #expect(try await db.productAnalyticsLog().map(\.event.name) == [.messageSubmitted])
+    }
+
     @Test @MainActor func repeatedInterfaceOpensCountOnceAndUpdatesDoNotQualify() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -225,4 +289,14 @@ private actor AnalyticsUpdateAcknowledgementFixture {
         await withCheckedContinuation { observer = $0 }
     }
     func releaseAcknowledgement() { waiter?.resume(); waiter = nil }
+}
+
+private actor RelayedAnalyticsFixture: ProductAnalyticsTransport {
+    let preference: ProductAnalyticsPreference
+    init(preference: ProductAnalyticsPreference) { self.preference = preference }
+    func analyticsPreference() -> ProductAnalyticsPreference { preference }
+    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) -> ProductAnalyticsPreference { preference }
+    func sendAnalytics(_ batch: ProductAnalyticsBatch) -> ProductAnalyticsAcknowledgement {
+        .init(acceptedEventIDs: batch.events.map(\.id), preference: preference)
+    }
 }

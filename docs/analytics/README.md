@@ -2,7 +2,9 @@
 
 This feature uses PostHog Cloud US project 659360. The public project write token
 is embedded in the apps and website; it grants event ingestion, not project
-administration. Debug apps never transmit to production PostHog. No PostHog SDK,
+administration. The Debug central publisher never transmits to production PostHog.
+Client events can still relay to a Release central publisher; use a disposable
+library with analytics disabled for development that must stay out of reports. No PostHog SDK,
 autocapture, identify/alias/group calls, replay, or person properties are used.
 
 ## Identity and activity
@@ -10,7 +12,9 @@ autocapture, identify/alias/group calls, replay, or person properties are used.
 `product_analytics_preference` owns one random analytics UUID per central SQLite
 library. It survives reopen/restore and is unrelated to operational library,
 device, workspace, provider, or account IDs. The central Mac is the only PostHog
-publisher. Secondary Macs, iPhones and iPads submit bounded events through the
+publisher. Secondary Mac settings and updater events use the connected library,
+including durable launch receipts; their execution workspace has no independent
+analytics identity in reports. Secondary Macs, iPhones and iPads submit bounded events through the
 existing authenticated, library-bound companion API. Separate libraries count
 separately; a shared library counts once. This is a user proxy, not a census of
 individual people. Opted-out usage is excluded.
@@ -187,9 +191,9 @@ See [GitHub's traffic API permissions](https://docs.github.com/en/rest/metrics/t
 
 ## Rollout and acceptance
 
-Keep this in its own PR, based on the companion architecture from PR #37. CI also
-runs for PRs targeting that branch so a stacked analytics PR is independently
-validated. Retarget the analytics PR to main after PR #37 merges.
+Keep app PR #115 and website PR #18 separate and based on current main. The
+companion architecture from PR #37 is now on main. Review the two PRs together;
+no stacked-branch CI exception is needed.
 
 Before shipping app telemetry, deploy the expanded website policy. This change
 does not authorize a release, installation, merge or deployment. Verify separately:

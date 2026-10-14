@@ -274,6 +274,7 @@ final class ProductAnalyticsModel {
     generation += 1
     let epoch = generation
     if !change.enabled {
+      defaults.removeObject(forKey: Self.updateReceiptKey)
       task?.cancel()
       task = nil
       session.invalidateAndCancel()
@@ -281,6 +282,7 @@ final class ProductAnalyticsModel {
     guard let database else { throw WorkspaceDatabaseError.corruptRow }
     let value = try await database.setProductAnalyticsPreference(change)
     if epoch == generation {
+      locallyDisabled = !value.enabled
       preference = value
       if value.collects { configure(database: database, publisher: true) }
     }
