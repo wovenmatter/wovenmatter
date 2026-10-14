@@ -1,0 +1,4 @@
+module CompanionBrowserTestBridge {
+  header "../../../Browser/WMBrowserBridge.h"
+  export *
+}

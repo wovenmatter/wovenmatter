@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 // Stub app chrome; exercise the production renderer and native view.
@@ -13,6 +17,7 @@ struct DashboardIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
+#if os(macOS)
 @main @MainActor
 struct ConversationResponseTests {
     static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -190,3 +195,5 @@ struct ConversationResponseTests {
         print("PASS: native whole-response selection/copy, rich styling, streaming/width sizing, clipped painting and viewport selection/coordinates")
     }
 }
+
+#endif

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
-import { ClaudeRuntime, defaultClaudeModels } from '../src/claude-runtime.mjs';
+import { ClaudeRuntime } from '../src/claude-runtime.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-sdk-metadata-'));
@@ -88,9 +88,9 @@ test('Claude cached aliases are accepted only for the installed SDK version', as
   const models = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'claude-opus-5' }];
   const cache = join(f.directory, 'claude-models.json');
   await writeFile(cache, JSON.stringify(models)); await runtime.loadModels();
-  assert.deepEqual(runtime.models, defaultClaudeModels);
+  assert.deepEqual(runtime.models, []);
   await writeFile(cache, JSON.stringify({ runtimeVersion: '0.3.278', models })); await runtime.loadModels();
-  assert.deepEqual(runtime.models, defaultClaudeModels);
+  assert.deepEqual(runtime.models, []);
   await writeFile(cache, JSON.stringify({ runtimeVersion: '0.3.284', models })); await runtime.loadModels();
   assert.deepEqual(runtime.models, models);
 });

@@ -124,3 +124,24 @@ for (const failure of ['receipt', 'poll', 'terminal']) test(`Built-in adapter di
   assert.equal(response.error.data?.deliveryUncertain === true, failure !== 'terminal');
   child.stdin.end();
 });
+
+test('idle adoption rotates an attachment only after the engine confirms no active work',async t=>{
+  const directory=await mkdtemp('/tmp/woven-idle-adoption-')
+  t.after(()=>rm(directory,{recursive:true,force:true}))
+  let idle=false,prompts=0
+  const service=createDefaultAgentService({cwd:directory,directory,engineFactory:async()=>({sessions:new Map(),handle:async(method,params)=>{
+    if(method==='session/prompt')prompts++
+    if(method==='woven/adopt'&&!idle)throw new Error('Session is not idle')
+    return {sessionId:params.sessionId}
+  }})})
+  const old=(await service.invoke({method:'session/load',attachmentProtocol:1,params:{sessionId:'native'}})).result._meta.attachmentToken
+  const adopt=()=>service.invoke({method:'woven/adopt',attachmentProtocol:1,params:{sessionId:'native'}})
+  await assert.rejects(adopt(),/not idle/)
+  await service.invoke({method:'woven/history',attachmentToken:old,params:{sessionId:'native'}})
+  idle=true
+  const current=(await adopt()).result._meta.attachmentToken
+  assert.notEqual(current,old)
+  await assert.rejects(service.invoke({method:'woven/history',attachmentToken:old,params:{sessionId:'native'}}),/attachment was replaced/)
+  await service.invoke({method:'woven/history',attachmentToken:current,params:{sessionId:'native'}})
+  assert.equal(prompts,0)
+})

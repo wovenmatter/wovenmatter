@@ -22,6 +22,8 @@ private enum SettingsSection: Equatable {
     case connections(String)
     case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
+    case companion
+    case workspaces
     case openCode
     case openCodeAgent(UUID?)
     case openCodeWorkspace(UUID?)
@@ -33,6 +35,9 @@ private enum SettingsSection: Equatable {
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
+    var executionOnly = false
+    var clientContext: CentralLibraryClientModel?
+    var applicationContext: ApplicationModel?
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openCode
@@ -49,11 +54,20 @@ struct SettingsView: View {
             switch section {
             case .landing:
                 landing
+            case .companion:
+                SettingsCompanionView(model: applicationContext ?? model, host: (applicationContext ?? model).companionHost,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing })
+            case .workspaces:
+                SettingsDeviceWorkspacesView(application: applicationContext ?? model, client: clientContext,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing },
+                    onLocalSettings: { section = .localWorkspace }, onRemoteSettings: { section = .remoteWorkspaces })
             case .defaultAgent(let scope, let origin):
                 SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
                 SettingsGeneralView(
-                    model: model,
+                    model: applicationContext ?? model,
+                    showsBackgroundExecution: clientContext == nil,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
@@ -151,12 +165,22 @@ struct SettingsView: View {
             reservesRailControlSpace: reservesRailControlSpace
         ) {
             VStack(spacing: 2) {
+                if !executionOnly {
                 SettingsDestinationRow(
                     title: "General",
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
                 )
+                }
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Device Connections",
+                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
+                    action: { section = .companion }
+                )
+                }
                 SettingsDestinationRow(
                     title: "Connections",
                     detail: "Shared accounts, API keys, and local model servers.",
@@ -178,12 +202,18 @@ struct SettingsView: View {
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
+                if !executionOnly {
+                SettingsDestinationRow(title: "Workspaces", detail: "Local, Mac, and Linux agent workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .panelsTopLeft, size: 15) }, action: { section = .workspaces })
+                }
+                if !executionOnly && clientContext == nil {
                 SettingsDestinationRow(
                     title: "Remote agent workspaces",
                     detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
                 )
+                }
                 SettingsDestinationRow(
                     title: "Codex",
                     detail: "Local runtime status and workspace settings.",
@@ -208,12 +238,14 @@ struct SettingsView: View {
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
+                if !executionOnly {
                 SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",
                     icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
                     action: { section = .usage }
                 )
+                }
             }
         }
     }

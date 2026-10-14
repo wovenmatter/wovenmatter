@@ -4,52 +4,6 @@ import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
-enum DashboardConversationScrollAction: Equatable {
-    case none
-    case jumpToBottom
-    case followBottom
-}
-
-struct DashboardConversationGeometry: Equatable {
-    let contentHeight: CGFloat
-    let isNearBottom: Bool
-}
-
-struct DashboardConversationScrollState: Equatable {
-    private(set) var positionedConversationID: String?
-    private(set) var isNearBottom = true
-
-    mutating func conversationChanged(to conversationID: String?) {
-        guard positionedConversationID != conversationID else { return }
-        positionedConversationID = nil
-        isNearBottom = true
-    }
-
-    mutating func contentChanged(
-        conversationID: String?,
-        hasMessages: Bool,
-        isPrependingHistory: Bool
-    ) -> DashboardConversationScrollAction {
-        guard let conversationID, hasMessages else { return .none }
-        if positionedConversationID != conversationID {
-            positionedConversationID = conversationID
-            isNearBottom = true
-            return .jumpToBottom
-        }
-        guard !isPrependingHistory, isNearBottom else { return .none }
-        return .followBottom
-    }
-
-    mutating func setNearBottom(_ isNearBottom: Bool) {
-        self.isNearBottom = isNearBottom
-    }
-
-    mutating func sourceMessagePositioned(in conversationID: String) {
-        positionedConversationID = conversationID
-        isNearBottom = false
-    }
-}
-
 private struct DashboardConversationMessageRow: Identifiable {
     let message: WorkspaceMessageRecord
     let layout: ConversationMessageLayout.Row
@@ -129,7 +83,16 @@ struct DashboardCloudConversation: View {
     @State private var choosingFolder = false
     @State private var folderSelectionError: String?
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let conversation, model.federatedExecutionOwners[conversation.id] != nil {
+            FederatedConversationPane(model: model, conversation: conversation, savedMessages: messages,
+                draft: $draft, sendInProgress: sendInProgress, onSend: onSend)
+        } else {
+            nativeBody
+        }
+    }
+
+    @ViewBuilder private var nativeBody: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
         let attachmentsByMessageID = Dictionary(grouping: messageAttachments, by: \.messageID)
@@ -1229,19 +1192,8 @@ struct ConversationUserMessage: View {
     let attachments: [WorkspaceMessageAttachmentRecord]
     let references: [WorkspaceMessageReferenceRecord]
     var onOpenAttachment: ((WorkspaceMessageAttachmentRecord) -> Void)? = nil
-    @State private var expanded = false
-
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            if !content.isEmpty {
-                Text(content)
-                    .font(.system(size: 15))
-                    .lineSpacing(4)
-                    .lineLimit(isLong && !expanded ? 6 : nil)
-                    .foregroundStyle(DashboardPalette.foreground)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
+        ConversationUserBubble(content: content, hasAttachments: !attachments.isEmpty || !references.isEmpty) {
             if !attachments.isEmpty || !references.isEmpty {
                 LazyVGrid(
                     columns: [GridItem(.adaptive(minimum: 150), spacing: 6)],
@@ -1275,37 +1227,7 @@ struct ConversationUserMessage: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if isLong {
-                Button(expanded ? "Show less" : "Show full message") {
-                    withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            }
         }
-        .frame(maxWidth: preferredContentWidth, alignment: .trailing)
-        .padding(.horizontal, 17)
-        .padding(.vertical, 13)
-        .background(DashboardPalette.primary.opacity(0.13))
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private var isLong: Bool {
-        content.count > 420 || content.filter { $0 == "\n" }.count > 5
-    }
-
-    private var preferredContentWidth: CGFloat {
-        if !attachments.isEmpty || !references.isEmpty { return 420 }
-        let font = NSFont.systemFont(ofSize: 15)
-        let longestLine = content
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { ($0 as NSString).size(withAttributes: [.font: font]).width }
-            .max() ?? 0
-        // 586 points of content plus the 34 points of horizontal padding
-        // preserves the 620-point T3-style maximum without stretching short
-        // messages to that width.
-        return min(586, max(isLong ? 118 : 1, ceil(longestLine)))
     }
 }
 

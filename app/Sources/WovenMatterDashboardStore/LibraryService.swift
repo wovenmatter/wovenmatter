@@ -18,6 +18,7 @@ public actor LibraryService {
   public typealias RemoteWorkspaceLookup = @Sendable (String) async -> RemoteWorkspaceConfiguration?
 
   private let database: WorkspaceDatabase
+  private let savedArtifacts: SavedArtifactLibraryService
   private let files: LibraryFileStore
   private let remoteFiles: RemoteLibraryFiles
   private var synchronizing = false
@@ -26,8 +27,17 @@ public actor LibraryService {
 
   public init(database: WorkspaceDatabase, remoteFiles: RemoteLibraryFiles = .init()) {
     self.database = database
+    savedArtifacts = SavedArtifactLibraryService(database: database)
     files = database.libraryFiles
     self.remoteFiles = remoteFiles
+  }
+
+  public func savedArtifactItems() async throws -> [SavedArtifactLibraryItem] {
+    try await savedArtifacts.items()
+  }
+
+  public func openSavedArtifactURL(id: String, revision: Int64) async throws -> URL {
+    try await savedArtifacts.openURL(id: id, revision: revision)
   }
 
   public func synchronize(locations: [LibraryLocation], remoteWorkspace: RemoteWorkspaceLookup) async throws {

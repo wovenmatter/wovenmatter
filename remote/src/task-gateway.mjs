@@ -282,7 +282,7 @@ export function createTaskGateway({ directory, execute, workspaceRoot, now = Dat
     }
     return {entries,cursor:String(cursor)}
   }
-  return { status,configure,publish,tick,results,schedules:() => ({ schedules:structuredClone(state.schedules), ...status() }),
+  return { status,configure,publish,tick,results,retainedRunIDs:()=>Object.values(state.claims).map(claim=>claim.run.id),schedules:() => ({ schedules:structuredClone(state.schedules), ...status() }),
     enabled:() => state.enabled && !disabling,
     hasActiveRuntime:id => [...active.values()].some(x=>x.runtimeKind === id),
     start() { timer ??= setInterval(tick,1000); timer.unref(); tick() },

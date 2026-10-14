@@ -114,6 +114,7 @@ public actor DashboardStore {
   public nonisolated let library: LibraryService
   public nonisolated let conversationChanges: AsyncStream<DashboardConversationChange>
 
+  private let runControls: DashboardRunControlAdapters?
   private let deviceIdentity: DashboardDeviceIdentity
   private let ownedLocalSessions: LocalACPSessionCoordinator?
   private let ownedMessageAttachments: MessageAttachmentStore?
@@ -126,6 +127,11 @@ public actor DashboardStore {
   private var localWorkspacePrepared = false
 
   public init(supportDirectory: URL, readOnlyProjection: Bool = false) async throws {
+    try await self.init(supportDirectory: supportDirectory, readOnlyProjection: readOnlyProjection, runControls: nil)
+  }
+
+  init(supportDirectory: URL, readOnlyProjection: Bool = false, runControls: DashboardRunControlAdapters? = nil) async throws {
+    self.runControls = runControls
     if readOnlyProjection {
       let database = try await WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
       self.database = database
@@ -369,8 +375,8 @@ public actor DashboardStore {
     )
   }
 
-  public func updateNote(id: String, title: String, content: String) async throws {
-    try await database.updateNote(id: id, title: title, content: content)
+  public func updateNote(id: String, title: String, content: String, expectedRevision: String? = nil) async throws {
+    try await database.updateNote(id: id, title: title, content: content, expectedRevision: expectedRevision)
   }
 
   public func handleNoteEditingRequest(
@@ -417,14 +423,17 @@ public actor DashboardStore {
     runtimeKind: AgentRuntimeKind,
     title: String,
     requestedConversationID: UUID? = nil,
-    allowMissingCalendarFolder: Bool = false
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) async throws -> String {
-    try await database.createLocalACPSession(
+    await runControls?.beforeSessionCreation()
+    return try await database.createLocalACPSession(
       runtimeKind: runtimeKind,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
       requestedConversationID: requestedConversationID,
-      allowMissingCalendarFolder: allowMissingCalendarFolder
+      allowMissingCalendarFolder: allowMissingCalendarFolder,
+      executionRoot: executionRoot
     )
   }
 
@@ -435,16 +444,19 @@ public actor DashboardStore {
     remoteWorkspaceName: String,
     title: String,
     requestedConversationID: UUID? = nil,
-    allowMissingCalendarFolder: Bool = false
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) async throws -> String {
-    try await database.createRemoteACPSession(
+    await runControls?.beforeSessionCreation()
+    return try await database.createRemoteACPSession(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
       requestedConversationID: requestedConversationID,
-      allowMissingCalendarFolder: allowMissingCalendarFolder
+      allowMissingCalendarFolder: allowMissingCalendarFolder,
+      executionRoot: executionRoot
     )
   }
 
@@ -527,6 +539,7 @@ public actor DashboardStore {
     onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
+    if let runControls { return try await runControls.accept(.localACP, conversationID, input, deliveryContent, noteContext) }
     try dispatchFence?.check()
     let context = try await localACPLaunchContext(
       conversationID: conversationID,
@@ -568,12 +581,15 @@ public actor DashboardStore {
     conversationID: String,
     input: AgentMessageInput,
     deliveryContent: String? = nil,
+    expectedRunID: String? = nil,
     dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
+    if let runControls { return try await runControls.steer(.localACP, conversationID, input, deliveryContent, expectedRunID) }
     return try await localSessions.sendActiveInput(
       conversationID: conversationID,
       input: input,
       deliveryContent: deliveryContent,
+      expectedRunID: expectedRunID,
       dispatchFence: dispatchFence
     )
   }
@@ -589,6 +605,9 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?
   ) async throws -> LocalACPSessionConfiguration {
+    if let configuration = runControls?.sessionConfiguration {
+      return try await configuration(conversationID)
+    }
     let context = try await localACPLaunchContext(
       conversationID: conversationID,
       directLaunch: launch,
@@ -610,6 +629,10 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?
   ) async throws -> LocalACPSessionConfiguration {
+    if let configure = runControls?.configureSession {
+      return try await configure(conversationID,
+        SessionSelections(model: model, thinking: thinking, permission: permission), workspace)
+    }
     let context = try await localACPLaunchContext(
       conversationID: conversationID,
       directLaunch: launch,
@@ -624,6 +647,15 @@ public actor DashboardStore {
       workspace: context.workspace,
       systemPrompt: context.systemPrompt
     )
+  }
+
+  public func localACPActiveInputCapability(conversationID: String) async -> LocalACPActiveInputRoute? {
+    try? await localSessions.activeInputCapability(conversationID: conversationID)
+  }
+
+  public func cancelLocalACPPrompt(conversationID: String, expectedRunID: String) async throws {
+    if let runControls { try await runControls.cancel(.localACP, conversationID, expectedRunID); return }
+    try await localSessions.cancel(conversationID: conversationID, expectedRunID: expectedRunID)
   }
 
   private func localACPLaunchContext(
@@ -650,6 +682,10 @@ public actor DashboardStore {
 
   public func stopLocalACPPrompt(conversationID: String) async throws {
     try await ownedLocalSessions?.stop(conversationID: conversationID)
+  }
+
+  public func detachLocalACPForExecutionAdoption(conversationID: String) async throws {
+    try await localSessions.detachForExecutionAdoption(conversationID: conversationID)
   }
 
   public func shutdownLocalACPSessions() async {

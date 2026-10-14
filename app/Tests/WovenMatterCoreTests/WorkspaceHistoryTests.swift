@@ -293,7 +293,8 @@ struct WorkspaceHistoryTests {
       let current = try await db.readNoteForEditing(id: note)
       for n in 0..<10 {
         _ = try await db.persistNoteDraft(
-          id: note, title: "Draft \(n)", content: try #require(current.document).encoded())
+          id: note, title: "Draft \(n)", content: try #require(current.document).encoded(),
+          expectedRevision: try await db.readNoteForEditing(id: note).revision)
       }
       #expect(try await db.noteAssetVersions(id: note).count == 1)
       try await db.checkpointNote(id: note)
@@ -340,7 +341,7 @@ struct WorkspaceHistoryTests {
           command: .apply, noteID: note, expectedRevision: previous,
           operations: [.setHTML("<p>\(n) \(body)</p>")]))
       let revision = try #require(response.revision)
-      #expect(revision > previous)
+      #expect(try #require(Int64(revision)) > #require(Int64(previous)))
       previous = revision
     }
     let versions = try await db.noteAssetVersions(id: note)

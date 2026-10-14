@@ -43,6 +43,16 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date
   ) throws {
     guard let context else { return }
+    if context.requireCurrentRevision == true {
+      // This executes inside run acceptance, after any asynchronous discovery or
+      // attachment staging, so a phone cannot grant editing from a stale base.
+      try requireToolUnlocked(.notes, sessionID: conversationID)
+      let current = try noteForEditingUnlocked(id: context.noteID,
+        operatorID: localMutationOperatorIDUnlocked())
+      guard current.revision == context.revision else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+    }
     let timestamp = Self.timestamp(createdAt)
     let reference = try prepareUnlocked("""
       INSERT INTO dashboard_message_references (
@@ -179,7 +189,7 @@ extension WorkspaceDatabaseConnection {
       guard note.revision == pending.expectedRevision else {
         throw WorkspaceNoteMutationError.revisionConflict
       }
-      try envelope.validateApplying(to: NoteDocument.decode(note.content))
+      try envelope.validateApplying(to: NoteDocument.editableDocument(from: note.content))
       let response = try applyNoteEditsUnlocked(NoteEditingRequest(
         command: .apply,
         noteID: pending.noteID,
@@ -328,7 +338,7 @@ extension WorkspaceDatabaseConnection {
         operation: "notes.create", input: [folderID, title, content, kind.rawValue]) {
         let content = try (content.isEmpty
           ? NoteDocument(kind: kind)
-          : NoteDocument.decode(content)).encoded()
+          : NoteDocument.editableDocument(from: content)).encoded()
         guard content.utf8.count <= RemoteNoteEditEnvelope.maximumEnvelopeBytes else {
           throw WorkspaceToolError.invalid("A note document must be at most 1 MiB.")
         }
@@ -372,34 +382,20 @@ extension WorkspaceDatabaseConnection {
     id: String,
     title: String,
     content: String,
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil
   ) throws -> Bool {
-    try transaction {
-      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
-      let content = try NoteDocument.decode(content).encoded()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let update = try prepareUnlocked("""
-        UPDATE notes
-        SET title = ?, content = ?, snippet = ?, updated_at = ?
-        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-        """)
-      defer { sqlite3_finalize(update) }
-      try bind(title, at: 1, to: update)
-      try bind(content, at: 2, to: update)
-      try bind(Self.noteSnippet(content), at: 3, to: update)
-      try bind(nextNoteRevisionUnlocked(id:id,now:updatedAt), at: 4, to: update)
-      try bind(id, at: 5, to: update)
-      try bind(operatorID, at: 6, to: update)
-      try stepDone(update)
-      guard changedRowCountUnlocked == 1 else {
-        throw WorkspaceNoteMutationError.noteNotFound
-      }
-
-      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
-      return true
+    // Legacy in-process callers may intentionally replace the current value.
+    // Client autosave uses persistNoteDraft with the revision it actually read.
+    try withLock {
+      let revision = try expectedRevision ?? noteForEditingUnlocked(id: id, operatorID: localMutationOperatorIDUnlocked()).revision
+      return try persistNoteDraft(id: id, title: title, content: content,
+                                  updatedAt: updatedAt, expectedRevision: revision)
     }
   }
 
+  /// Whole-document autosave shares the optimistic boundary used by mobile and
+  /// agent edits. A missing or deleted note is never recreated under its old ID.
   @discardableResult
   public func persistNoteDraft(
     id: String,
@@ -407,56 +403,46 @@ extension WorkspaceDatabaseConnection {
     content: String,
     folderID: String? = nil,
     createdAt: String? = nil,
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil,
+    baseContent: String? = nil,
+    baseTitle: String? = nil,
+    operationID: String? = nil
   ) throws -> Bool {
     try transaction {
-      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
-      let content = try NoteDocument.decode(content).encoded()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let timestamp = try nextNoteRevisionUnlocked(id:id,now:updatedAt)
-      let update = try prepareUnlocked("""
-        UPDATE notes
-        SET title = ?, content = ?, snippet = ?, updated_at = ?
-        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-        """)
-      defer { sqlite3_finalize(update) }
-      try bind(title, at: 1, to: update)
-      try bind(content, at: 2, to: update)
-      try bind(Self.noteSnippet(content), at: 3, to: update)
-      try bind(timestamp, at: 4, to: update)
-      try bind(id, at: 5, to: update)
-      try bind(operatorID, at: 6, to: update)
-      try stepDone(update)
-
-      let restoredMissingNote = changedRowCountUnlocked != 1
-      if restoredMissingNote {
-        try validateFolderUnlocked(id: folderID, operatorID: operatorID)
-        let position = try nextNotePositionUnlocked(
-          folderID: folderID,
-          operatorID: operatorID
-        )
-        let insert = try prepareUnlocked("""
-          INSERT INTO notes (
-            id, user_id, folder_id, title, content, snippet, is_pinned,
-            position, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-          """)
-        defer { sqlite3_finalize(insert) }
-        try bind(id, at: 1, to: insert)
-        try bind(operatorID, at: 2, to: insert)
-        try bindNullable(folderID, at: 3, to: insert)
-        try bind(title, at: 4, to: insert)
-        try bind(content, at: 5, to: insert)
-        try bind(Self.noteSnippet(content), at: 6, to: insert)
-        guard sqlite3_bind_int64(insert, 7, Int64(position)) == SQLITE_OK else {
-          throw bindError()
+      if let operationID, let receipt = try companionDraftReceiptUnlocked(operationID: operationID) {
+        guard receipt.id == id, receipt.title == title,
+              receipt.content == Self.companionContentFingerprint(content) else {
+          throw WorkspaceNoteMutationError.revisionConflict
         }
-        try bind(createdAt ?? timestamp, at: 8, to: insert)
-        try bind(timestamp, at: 9, to: insert)
-        try stepDone(insert)
+        return true
       }
-
+      let operatorID = try localMutationOperatorIDUnlocked()
+      let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
+      if note.title == title, note.content == content {
+        try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+          title: title, content: content, revision: note.revision)
+        return true
+      }
+      guard let expectedRevision, expectedRevision == note.revision else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+      // Decoding must preserve every supported field; persist the editor's raw
+      // bytes so a title-only change can retain an unsupported future document.
+      if content != note.content {
+        _ = try NoteDocument.editableDocument(from: note.content)
+        _ = try NoteDocument.editableDocument(from: content)
+      }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
+      try companionExecuteUnlocked(
+        "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        values: [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
+      )
+      guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
+      let revision = try noteForEditingUnlocked(id: id, operatorID: operatorID).revision
+      try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+        title: title, content: content, revision: revision)
       return true
     }
   }
@@ -471,7 +457,7 @@ extension WorkspaceDatabaseConnection {
         noteID: id,
         title: note.title,
         revision: note.revision,
-        document: NoteDocument.decode(note.content)
+        document: try NoteDocument.editableDocument(from: note.content)
       )
     }
   }
@@ -505,10 +491,10 @@ extension WorkspaceDatabaseConnection {
     guard !request.operations.isEmpty else {
       return NoteEditingResponse(
         success: true, noteID: request.noteID, title: note.title,
-        revision: note.revision, document: NoteDocument.decode(note.content)
+        revision: note.revision, document: try NoteDocument.editableDocument(from: note.content)
       )
     }
-    let currentDocument = NoteDocument.decode(note.content)
+    let currentDocument = try NoteDocument.editableDocument(from: note.content)
     try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
     try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: true)
     var document = currentDocument
@@ -520,7 +506,7 @@ extension WorkspaceDatabaseConnection {
     }
     let updatedTitle = try document.apply(request.operations) ?? note.title
     let content = try document.encoded()
-    let revision = try nextNoteRevisionUnlocked(id:request.noteID)
+    let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.noteID)
     let update = try prepareUnlocked("""
       UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ?
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
@@ -529,7 +515,7 @@ extension WorkspaceDatabaseConnection {
     try bind(updatedTitle, at: 1, to: update)
     try bind(content, at: 2, to: update)
     try bind(Self.noteSnippet(content), at: 3, to: update)
-    try bind(revision, at: 4, to: update)
+    try bind(updatedAt, at: 4, to: update)
     try bind(request.noteID, at: 5, to: update)
     try bind(operatorID, at: 6, to: update)
     try stepDone(update)
@@ -539,7 +525,7 @@ extension WorkspaceDatabaseConnection {
     try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: true)
     return NoteEditingResponse(
       success: true, noteID: request.noteID, title: updatedTitle,
-      revision: revision, document: document
+      revision: try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID).revision, document: document
     )
   }
 
@@ -570,7 +556,7 @@ extension WorkspaceDatabaseConnection {
     operatorID: String
   ) throws -> (title: String, content: String, revision: String) {
     let statement = try prepareUnlocked("""
-      SELECT title, content, updated_at
+      SELECT title, content, CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
       FROM notes
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
       """)
@@ -588,7 +574,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   static func noteSnippet(_ content: String) -> String {
-    let content = NoteDocument.decode(content).plainText
+    let content = (try? NoteDocument.editableDocument(from: content).plainText) ?? "Unsupported document"
     let replacements: [(String, String, String.CompareOptions)] = [
       (#"</p>\s*<p[^>]*>"#, " ", .regularExpression),
       (#"<br\s*/?>"#, " ", [.regularExpression, .caseInsensitive]),
@@ -660,9 +646,10 @@ extension WorkspaceDatabase {
     id: String,
     title: String,
     content: String,
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil
   ) async throws -> Bool {
-    try await write { try $0.updateNote(id: id, title: title, content: content, updatedAt: updatedAt) }
+    try await write { try $0.updateNote(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision) }
   }
 
   @discardableResult
@@ -672,9 +659,10 @@ extension WorkspaceDatabase {
     content: String,
     folderID: String? = nil,
     createdAt: String? = nil,
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil, baseContent: String? = nil, baseTitle: String? = nil, operationID: String? = nil
   ) async throws -> Bool {
-    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, folderID: folderID, createdAt: createdAt, updatedAt: updatedAt) }
+    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, folderID: folderID, createdAt: createdAt, updatedAt: updatedAt, expectedRevision: expectedRevision, baseContent: baseContent, baseTitle: baseTitle, operationID: operationID) }
   }
 
   public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {

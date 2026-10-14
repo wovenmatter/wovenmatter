@@ -574,7 +574,8 @@ extension WorkspaceDatabaseConnection {
           SELECT json_object(
             'id', id, 'folder_id', folder_id, 'title', title,
             'content', content, 'created_at', created_at,
-            'updated_at', updated_at, 'is_pinned', is_pinned
+            'updated_at', updated_at, 'is_pinned', is_pinned,
+            'revision', CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
           )
           FROM notes
           WHERE user_id = ? AND deleted_at IS NULL
@@ -766,7 +767,6 @@ extension WorkspaceDatabase {
   }
 }
 
-
 extension WorkspaceDatabaseConnection {
   public func sessionExecutionRoot(id: String) throws -> WorkspaceFolderLocation? {
     try withLock {
@@ -777,24 +777,26 @@ extension WorkspaceDatabaseConnection {
   }
 
   public func saveSessionExecutionRoot(id: String, folderID: String?, location: WorkspaceFolderLocation, defaultPath: String) throws {
-    try transaction {
-      // A scheduled session keeps its captured root after its UI folder is removed.
-      // Reuse is valid only when the saved owner and directory still match.
-      if let existing = try sessionExecutionRoot(id: id) {
-        guard existing.workspaceID == location.workspaceID, existing.rootPath == location.rootPath else { throw WorkspaceToolError.invalid("This session's execution root is fixed.") }
-        return
-      }
-      if let folderID {
-        guard let row = try historyRowsUnlocked("SELECT workspace_id,root_path FROM folder_execution_roots WHERE folder_id=?", values: [folderID]).first?.objectValue,
-              row["workspace_id"]?.stringValue == location.workspaceID,
-              row["root_path"]?.stringValue == location.rootPath else {
-          throw WorkspaceToolError.invalid("Choose a folder in the agent's execution workspace.")
-        }
-      }
-      try toolsExecuteUnlocked("INSERT INTO execution_workspace_defaults(workspace_id,default_path) VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET default_path=excluded.default_path", [location.workspaceID,defaultPath])
-      try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path) VALUES(?,?,?)", [id,location.workspaceID,location.rootPath])
-      try toolsExecuteUnlocked("UPDATE dashboard_conversations SET folder_id=? WHERE id=?", [folderID,id])
+    try transaction { try saveSessionExecutionRootUnlocked(id: id, folderID: folderID, location: location, defaultPath: defaultPath) }
+  }
+
+  func saveSessionExecutionRootUnlocked(id: String, folderID: String?, location: WorkspaceFolderLocation, defaultPath: String) throws {
+    // A scheduled session keeps its captured root after its UI folder is removed.
+    // Reuse is valid only when the saved owner and directory still match.
+    if let existing = try sessionExecutionRoot(id: id) {
+      guard existing.workspaceID == location.workspaceID, existing.rootPath == location.rootPath else { throw WorkspaceToolError.invalid("This session's execution root is fixed.") }
+      return
     }
+    if let folderID {
+      guard let row = try historyRowsUnlocked("SELECT workspace_id,root_path FROM folder_execution_roots WHERE folder_id=?", values: [folderID]).first?.objectValue,
+            row["workspace_id"]?.stringValue == location.workspaceID,
+            row["root_path"]?.stringValue == location.rootPath else {
+        throw WorkspaceToolError.invalid("Choose a folder in the agent's execution workspace.")
+      }
+    }
+    try toolsExecuteUnlocked("INSERT INTO execution_workspace_defaults(workspace_id,default_path) VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET default_path=excluded.default_path", [location.workspaceID,defaultPath])
+    try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path) VALUES(?,?,?)", [id,location.workspaceID,location.rootPath])
+    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET folder_id=? WHERE id=?", [folderID,id])
   }
 
   public func setFolderReferences(id: String, paths: [String]) throws {
@@ -888,5 +890,18 @@ extension WorkspaceDatabaseConnection {
 extension WorkspaceDatabase {
   public func bindFolderExecutionRoot(id: String, location: WorkspaceFolderLocation) async throws {
     try await write { try $0.bindFolderExecutionRoot(id: id, location: location) }
+  }
+}
+
+/// Captured owner and directory committed atomically with a new conversation.
+public struct SessionCreationRoot: Sendable {
+  public let folderID: String?
+  public let location: WorkspaceFolderLocation
+  public let defaultPath: String
+
+  public init(folderID: String?, location: WorkspaceFolderLocation, defaultPath: String) {
+    self.folderID = folderID
+    self.location = location
+    self.defaultPath = defaultPath
   }
 }

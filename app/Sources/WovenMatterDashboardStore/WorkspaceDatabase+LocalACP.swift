@@ -119,9 +119,17 @@ extension WorkspaceDatabaseConnection {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     requestedConversationID: UUID? = nil,
-    allowMissingCalendarFolder: Bool = false
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) throws -> String {
-    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder) }
+    try transaction {
+      let id = try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
+      if let executionRoot {
+        try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
+          location: executionRoot.location, defaultPath: executionRoot.defaultPath)
+      }
+      return id
+    }
   }
 
   @discardableResult
@@ -233,9 +241,17 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
-    allowMissingCalendarFolder: Bool = false
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) throws -> String {
-    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder) }
+    try transaction {
+      let id = try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
+      if let executionRoot {
+        try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
+          location: executionRoot.location, defaultPath: executionRoot.defaultPath)
+      }
+      return id
+    }
   }
 
   @discardableResult
@@ -495,6 +511,9 @@ extension WorkspaceDatabaseConnection {
       throw OpenCodeError.message("OpenCode v1 transcripts are read-only. OpenCode v2 uses the shared server directly.")
     }
     return try transaction {
+      guard try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
+        throw CompanionAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
+      }
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
         WHERE conversation_id = ? AND desktop_owned = 1 AND status IN ('running', 'uncertain')
@@ -1789,9 +1808,10 @@ extension WorkspaceDatabase {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     requestedConversationID: UUID? = nil,
-    allowMissingCalendarFolder: Bool = false
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) async throws -> String {
-    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder) }
+    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot) }
   }
 
   @discardableResult
@@ -1804,9 +1824,10 @@ extension WorkspaceDatabase {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
-    allowMissingCalendarFolder: Bool = false
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) async throws -> String {
-    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder) }
+    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot) }
   }
 
   @discardableResult

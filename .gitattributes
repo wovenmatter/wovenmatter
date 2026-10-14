@@ -1,0 +1,7 @@
+# Preserve checksum-verified upstream license notices byte for byte.
+ios/Sources/EmbeddedExecution/Resources/Emscripten-LICENSE.txt whitespace=-blank-at-eol,-blank-at-eof
+ios/Sources/EmbeddedExecution/Resources/xz-COPYING.txt whitespace=-blank-at-eol,-blank-at-eof
+
+# Generated runtime bundles; review the source bridges and locked dependencies.
+ios/Sources/PiDurableRuntime/Resources/pi-durable.js linguist-generated=true
+ios/Sources/EmbeddedExecution/Resources/worker.js linguist-generated=true

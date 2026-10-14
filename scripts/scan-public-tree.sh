@@ -43,8 +43,14 @@ while IFS= read -r file; do
   fi
 
   case "$file" in *.svg) continue ;; esac
+  allowed_ipv4='^(127\.0\.0\.1|0\.0\.0\.0)$'
+  if [ "$file" = ios/Sources/EmbeddedExecution/Resources/worker.js ]; then
+    # Unchanged Emscripten IPv6 rendering maps this sentinel to ::1. The generated
+    # bundle is verified by scripts/build-ios-embedded-runtime.mjs --check.
+    allowed_ipv4='^(127\.0\.0\.1|0\.0\.0\.0|0\.0\.0\.1)$'
+  fi
   if grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' "$file" | \
-      grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0)$' >/dev/null; then
+      grep -Ev "$allowed_ipv4" >/dev/null; then
     printf 'Public-tree scan found a non-loopback IPv4 address in %s\n' "$file" >&2
     exit 1
   fi

@@ -67,7 +67,9 @@ struct DefaultAgentSDKControlTests {
         #expect(pressure.probeRemainsQueued())
         let result = try await DefaultAgentSDKControl.run(.init(action: .status),
             executable: URL(filePath: "/bin/sh"),
-            arguments: ["-c", #"printf '%s\n' '{"result":{"sdks":[],"generation":"owned-thread"}}'"#],
+            // Consume the request before exiting, as the real helper does. An
+            // immediate exit otherwise races the parent's write and causes EPIPE.
+            arguments: ["-c", #"IFS= read -r request; printf '%s\n' '{"result":{"sdks":[],"generation":"owned-thread"}}'"#],
             timeout: 1)
         #expect(result.generation == "owned-thread")
         // A watchdog eventually releases pressure to keep a broken implementation

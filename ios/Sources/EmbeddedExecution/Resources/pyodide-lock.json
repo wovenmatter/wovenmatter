@@ -1,0 +1,9 @@
+{
+  "info": {
+    "abi_version": "2026_0",
+    "arch": "wasm32",
+    "platform": "emscripten_5_0_3",
+    "python": "3.14.2"
+  },
+  "packages": {}
+}

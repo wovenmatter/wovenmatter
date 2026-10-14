@@ -53,3 +53,24 @@ test('custom models enter the existing picker and use literal stored keys; remov
     assert.equal(engine.modelOptions().length, 0);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('saved custom models cannot send replacement credentials to a previous server endpoint', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'woven-local-destination-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const config = { providers: [id], defaultModel: id + '/fixture', customServers: [{ id, url, models: ['fixture'] }] };
+  const engine = await new DefaultAgentEngine({ cwd: directory, directory, config,
+    credentials: { [id]: { type: 'api_key', key: 'original-fixture-key' } } }).initialize();
+  const selected = structuredClone(await engine.ensureModel(config.defaultModel));
+  const nextURL = 'http://localhost:32101/v1';
+  await engine.apply({ config: { ...config, customServers: [{ id, url: nextURL, models: ['fixture'] }] },
+    credentials: { [id]: { type: 'api_key', key: 'replacement-fixture-key' } } });
+  let credentialsRead = 0;
+  const read = engine.credentials.read.bind(engine.credentials);
+  engine.credentials.read = (...args) => { credentialsRead++; return read(...args) };
+  await assert.rejects(engine.ensureModel(config.defaultModel, selected), /endpoint changed/);
+  credentialsRead = 0;
+  const auth = engine.runtime.getAuth(selected);
+  assert.equal(credentialsRead, 0);
+  await assert.rejects(auth, /endpoint changed/);
+  assert.equal((await engine.ensureModel(config.defaultModel)).baseUrl, nextURL);
+});

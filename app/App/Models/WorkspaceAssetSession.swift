@@ -1,3 +1,6 @@
+#if COMPANION_FACADE_TESTS
+import CompanionBrowserTestBridge
+#endif
 import AppKit
 import Observation
 import WovenMatterCore

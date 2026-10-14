@@ -352,7 +352,7 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false) async throws -> String {
+    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot? = nil) async throws -> String {
         if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder)).createdID ?? "" }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
@@ -378,6 +378,10 @@ final class OpenCodeModel {
                     ?? sessionPreferences.usesProductPermissionDefault(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
             defaults.set(try JSONEncoder().encode(captured), forKey: selectionKey)
         }
+        if let executionRoot,
+           URL(fileURLWithPath: captured.nativeDirectory).standardizedFileURL.path != URL(fileURLWithPath: executionRoot.location.rootPath).standardizedFileURL.path {
+            throw OpenCodeError.message("Retry this chat in its original folder. Its execution directory is already fixed.")
+        }
         defaults.set(id, forKey: pendingKey)
         var nativeCreationConfirmed = false
         do {
@@ -386,7 +390,7 @@ final class OpenCodeModel {
                 workspace: URL(fileURLWithPath: captured.nativeDirectory), recover: pending != nil || requestedConversationID != nil,
                 title: title, nativeWorkspaceID: nativeWorkspaceID)
             nativeCreationConfirmed = true
-            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured, allowMissingCalendarFolder: allowMissingCalendarFolder)
+            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
             defaults.removeObject(forKey: pendingKey)
             defaults.removeObject(forKey: selectionKey)
             return localID
@@ -422,7 +426,7 @@ final class OpenCodeModel {
     }
 
     private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil,
-                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil, allowMissingCalendarFolder: Bool = false) async throws -> String {
+                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -430,11 +434,11 @@ final class OpenCodeModel {
             conversationID = try await store.database.createRemoteACPSession(runtimeKind: .opencode,
                 remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
+                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
         } else {
             conversationID = try await store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
@@ -492,6 +496,24 @@ final class OpenCodeModel {
         }
         if isBackendProjection { return try await backendCommand(.sessionCall(id, suffix, method, body)).value ?? .null }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This is a saved transcript. Start a new OpenCode chat to continue.") }
+        let parts = suffix.split(separator: "/").map { String($0).removingPercentEncoding ?? String($0) }
+        if method == "POST", parts.count == 3, ["permission", "form"].contains(parts[0]),
+           ["reply", "cancel"].contains(parts[2]) {
+            let runID = try await store.database.activeRunID(conversationID: id)
+            if parts[0] == "permission", parts[2] == "reply",
+               let request = snapshots[id]?.permissions.first(where: { $0["id"].text == parts[1] }) {
+                try await coordinator.replyToPermission(link, expectedRequest: request,
+                    expectedRunID: runID, reply: body?["reply"].text ?? "")
+            } else if parts[0] == "form", let request = snapshots[id]?.forms.first(where: { $0["id"].text == parts[1] }) {
+                if parts[2] == "cancel" {
+                    try await coordinator.cancelForm(link, expectedRequest: request, expectedRunID: runID)
+                } else {
+                    try await coordinator.replyToForm(link, expectedRequest: request, expectedRunID: runID,
+                        answers: body?["answer"] ?? .null)
+                }
+            } else { throw OpenCodeError.message("This OpenCode request has already ended. Refresh the conversation.") }
+            return .null
+        }
         let result = try await coordinator.sessionCall(link, suffix: suffix, method: method, body: body)
         if method != "GET" { try? await coordinator.refresh(link) }
         return result
@@ -703,8 +725,9 @@ final class OpenCodeModel {
 
     func cancelPendingInput(_ id: String) { pendingDispatches[id]?.cancel() }
 
+    @discardableResult
     func send(_ id: String, input: AgentMessageInput,
-              dispatchFence: AgentDispatchFence? = nil) async throws {
+              requiresIdle: Bool = false, dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeSubmissionReceipt {
         let fence = dispatchFence ?? AgentDispatchFence()
         try fence.check()
         guard pendingDispatches[id] == nil else { throw OpenCodeError.message("The previous input is still being submitted.") }
@@ -714,7 +737,7 @@ final class OpenCodeModel {
             if let selection = selectionTasks[id] { try await selection.value }
             // IPC dispatch may reach the execution owner even if its reply is lost.
             try fence.claimDispatch()
-            _ = try await backendCommand(.send(id, input)); return
+            _ = try await backendCommand(.send(id, input)); return OpenCodeSubmissionReceipt()
         }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
@@ -740,13 +763,16 @@ final class OpenCodeModel {
         }
         try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
-            try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments,
-                    historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace,
-                    cliContext: input.cliContext), dispatchFence: fence)
+            return try await coordinator.command(link, name: command.name,
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, cliContext: input.cliContext), requiresIdle: requiresIdle, dispatchFence: fence)
         } else {
-            try await coordinator.prompt(link, input: input, dispatchFence: fence)
+            return try await coordinator.prompt(link, input: input, requiresIdle: requiresIdle, dispatchFence: fence)
         }
+    }
+
+    func interrupt(_ id: String, expectedRunID: String? = nil) async throws {
+        guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
+        try await coordinator.interrupt(link, expectedRunID: expectedRunID)
     }
 
     func perform(_ operation: @escaping @MainActor () async throws -> Void) {

@@ -125,7 +125,7 @@ public struct LocalACPActiveInputReceipt: Sendable {
     }
 }
 
-enum LocalACPActiveInputRoute: Equatable, Sendable {
+public enum LocalACPActiveInputRoute: String, Codable, Equatable, Sendable {
     case acpSteering
     case grokInterjection
     case concurrentPrompt
@@ -1323,7 +1323,11 @@ public actor LocalACPClient {
         }
     }
 
-    nonisolated static func activeInputRoute(
+    public func activeInputCapability() -> LocalACPActiveInputRoute {
+        Self.activeInputRoute(runtimeKind: runtimeKind, steeringSupported: steeringSupported)
+    }
+
+    public nonisolated static func activeInputRoute(
         runtimeKind: AgentRuntimeKind,
         steeringSupported: Bool
     ) -> LocalACPActiveInputRoute {
@@ -1398,6 +1402,9 @@ public actor LocalACPClient {
             if runtimeKind == .defaultAgent || durableRemoteACP {
                 metadata["wovenRunID"] = .string(promptRunID)
                 metadata["wovenInputID"] = .string(UUID().uuidString.lowercased())
+                if let conversationID = input.cliContext?.sessionID {
+                    metadata["wovenConversationID"] = .string(conversationID)
+                }
             }
             if let context = input.cliContext {
                 metadata["wovenTools"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))

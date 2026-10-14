@@ -5,6 +5,7 @@ import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
+    var showsBackgroundExecution = true
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
@@ -36,7 +37,7 @@ struct SettingsGeneralView: View {
             credentialAccessCard
             appearanceCard
             sidebarLayoutCard
-            backgroundExecutionCard
+            if showsBackgroundExecution { backgroundExecutionCard }
             idleSleepProtectionCard
             closedLidProtectionCard
             dictationCard

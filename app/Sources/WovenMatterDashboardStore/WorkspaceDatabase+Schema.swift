@@ -371,8 +371,9 @@ extension WorkspaceDatabaseConnection {
       try createWorkspaceCacheTablesUnlocked()
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
+      try createCompanionSchemaUnlocked()
       // Prior sessions stay in history but have no supported execution root.
-      try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE desktop_owned=1 AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id)")
+      try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE desktop_owned=1 AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations WHERE id=dashboard_conversations.id)")
     }
   }
 

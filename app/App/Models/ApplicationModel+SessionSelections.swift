@@ -151,7 +151,7 @@ extension ApplicationModel {
                     permissionOptions: configuration.permissionOptions,
                     permissionOptionMetadata: configuration.permissionOptionMetadata,
                     workingDirectory: configuration.workingDirectory)
-                publishSessionSelectionMetadata(metadata, conversationID: conversationID, gateway: false)
+                publishSessionSelectionMetadata(metadata, conversationID: conversationID)
                 confirmedMetadata = metadata
             }
         }

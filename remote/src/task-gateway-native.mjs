@@ -24,7 +24,7 @@ export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest
   }
 }
 
-async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession}) {
+async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive}) {
   const permission=config.permission
   if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
@@ -90,7 +90,18 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     accepted=true
     const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[]})
     if(receipt.data?.id!==messageID)throw new Error('OpenCode did not acknowledge the task prompt. Check its session before retrying.')
-    let observed=false
+    let observed=false, presentedText
+    const presentedActivities=new Map()
+    const interactions = new Map()
+    interactive?.bind({async respond(id,response) {
+      if(signal.aborted)throw new Error('The run has stopped.')
+      const item=interactions.get(id);if(!item)throw new Error('This interaction is no longer pending.')
+      const current=(await call('GET',path+'/'+item.kind)).data??[]
+      if(!current.some(value=>value.id===item.request.id&&isDeepStrictEqual(value,item.request)))throw new Error('The native request changed before the response.')
+      if(item.kind==='permission'){if(!item.ordinary&&!response.cancelled)throw new Error('Review this request in the desktop workspace interface.');if(!response.cancelled&&!['once','always','reject'].includes(response.optionID))throw new Error('Choose an offered response.');await call('POST',path+'/permission/'+encodeURIComponent(item.request.id)+'/reply',{reply:response.cancelled?'reject':response.optionID})}
+      else {if(!response.cancelled)throw new Error('Complete this native form in the desktop workspace interface.');await call('DELETE',path+'/form/'+encodeURIComponent(item.request.id))}
+      interactions.delete(id)
+    }})
     for(let checks=0;checks<86400;checks++) {
       if (signal.aborted) throw new Error('Background execution was turned off.')
       const permissions=(await call('GET',path+'/permission')).data??[]
@@ -109,11 +120,39 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
       for (const message of await currentMessages()) {
         messages.push(await archive.capture(message, {id: 'message:' + message.id, kind: 'message', contentMode: 'snapshot', completeness: 'native-export'}))
       }
-      if (permissions.length || forms.length) throw approval()
+      if (permissions.length || forms.length) {
+        if (!interactive) throw approval()
+        for (const request of permissions) {
+          const id='permission:'+request.id+':'+createHash('sha256').update(JSON.stringify(request)).digest('hex')
+          interactions.set(id,{kind:'permission',request})
+          const category=String(request.action??'').toLowerCase().split(/[.:/_-]/)[0]
+          const ordinary=request.id.startsWith('per')&&typeof request.action==='string'&&request.action.length>0&&Array.isArray(request.resources)&&request.resources.every(value=>typeof value==='string')&&request.effect!=='deny'
+            && !['auth','authenticate','authentication','login','oauth','credential','credentials','secret','secrets','form','question','questions','ask','askuser','userinput'].includes(category)
+            && (request.type==null||request.type==='permission')&&(request.source?.type==null||request.source.type==='tool')
+          interactions.set(id,{kind:'permission',request,ordinary})
+          interactive.publish({id,kind:'approval',title:ordinary?'Permission: '+request.action:'Review this request on your desktop',detail:ordinary?(request.resources??[]).join('\n'):'This request can be cancelled here.',
+            options:ordinary?[{id:'once',label:'Allow Once'},...(request.save?.length?[{id:'always',label:'Always Allow'}]:[]),{id:'reject',label:'Reject'}]:[],questions:[]})
+        }
+        for (const request of forms) {
+          const id='form:'+request.id+':'+createHash('sha256').update(JSON.stringify(request)).digest('hex');interactions.set(id,{kind:'form',request})
+          interactive.publish({id,kind:'approval',title:'Complete the native form on your desktop',detail:'This form can be cancelled here.',options:[],questions:[]})
+        }
+      }
       const incoming=messages.filter(x=>x.id!==messageID&&(x.type==='assistant'||x.role==='assistant'||x.info?.role==='assistant'))
       if(incoming.length)observed=true
+      if(interactive) {
+        const chronological=[...incoming].reverse(),text=chronological.flatMap(message=>(message.content??message.parts??[]).filter(part=>part.type==='text').map(part=>part.text??'')).join('')
+        if(text!==presentedText){publishNativePresentation({...textUpdate(text),_meta:{wovenAssistantSnapshot:true}},publish);presentedText=text}
+        for(const message of chronological)for(const [index,part] of (message.content??message.parts??[]).entries()) {
+          const id=message.id+':'+(part.id??index),fingerprint=JSON.stringify(part)
+          if(presentedActivities.get(id)===fingerprint)continue
+          presentedActivities.set(id,fingerprint)
+          if(part.type==='reasoning')publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text??''},_meta:{wovenThoughtID:id,wovenThoughtSnapshot:true}},publish)
+          if(part.type==='tool')publishNativePresentation({sessionUpdate:'tool_call_update',toolCallId:id,title:part.state?.title??part.name,status:part.state?.status??part.state?.type??'running',content:[{type:'content',content:{type:'text',text:part.state?.output??(part.state?.content??[]).map(item=>item.text??'').join('\n')}}]},publish)
+        }
+      }
       const running=(await call('GET','/api/session/active')).data??{}
-      if(!running[sessionID]&&observed){if(signal.aborted)throw new Error('Background execution was turned off.');for(const message of incoming.reverse())for(const part of message.content??message.parts??[]){if(part.type==='text'&&part.text)publishNativePresentation(textUpdate(part.text), publish);if(part.type==='reasoning'&&part.text)publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text}}, publish);}if(incoming.some(message=>message.error || message.info?.error))throw new Error('OpenCode could not complete this task.');return {stopReason:'end_turn'}}
+      if(!running[sessionID]&&observed){if(signal.aborted)throw new Error('Background execution was turned off.');if(!interactive)for(const message of incoming.reverse())for(const part of message.content??message.parts??[]){if(part.type==='text'&&part.text)publishNativePresentation(textUpdate(part.text), publish);if(part.type==='reasoning'&&part.text)publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text}}, publish);}if(incoming.some(message=>message.error || message.info?.error))throw new Error('OpenCode could not complete this task.');return {stopReason:'end_turn'}}
       await pause(250)
     }
     throw new Error('OpenCode task exceeded its runtime limit.')

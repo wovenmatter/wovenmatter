@@ -12,10 +12,11 @@ let package = Package(
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"])
   ],
-  dependencies: [],
+  dependencies: [.package(path: "../shared"), .package(path: "../ios")],
   targets: [
     .target(
       name: "WovenMatterCore",
+      dependencies: [.product(name: "WovenMatterCompanion", package: "shared")],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ]
@@ -55,35 +56,33 @@ let package = Package(
       name: "WovenMatterClientTests",
       dependencies: ["WovenMatterClient"]
     ),
-    .testTarget(
-      name: "WovenMatterDictationTests",
-      dependencies: ["WovenMatterCore", "WovenMatterClient"],
-      path: "App",
-      sources: [
-        "Models/DictationModel.swift", "Models/BackendSpeechService.swift", "Services/DictationAudioCapture.swift",
-        "Services/DictationEditor.swift", "Tests/DictationTests.swift"
-      ]
+    // A fail-closed bridge keeps provider-free facade tests independent of CEF.
+    // The native Xcode target still compiles and validates the production bridge.
+    .target(
+      name: "CompanionBrowserTestBridge",
+      path: "TestsSupport/CompanionBrowserTestBridge",
+      publicHeadersPath: "include",
+      cSettings: [.unsafeFlags(["-fobjc-arc"])],
+      linkerSettings: [.linkedFramework("AppKit")]
     ),
-    // Exercise the same app service and socket/relay sources that the native
-    // bundle uses, without launching the UI or any provider runtimes.
+    // Build the native app sources once without its executable entry point.
+    // Both test suites exercise those same services without starting providers.
+    .target(
+      name: "WovenMatterAppFacade",
+      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", .product(name: "CompanionClient", package: "ios")],
+      path: "App",
+      exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Resources", "Tests"],
+      sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],
+      swiftSettings: [.define("COMPANION_FACADE_TESTS")]
+    ),
     .testTarget(
       name: "WovenMatterAgentToolsTests",
-      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
-      path: "App",
-      exclude: [
-        "ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift",
-        "Info.plist", "Assets.xcassets", "Resources", "Views",
-        "Models/ApplicationModel+AgentTools.swift", "Models/ApplicationModel+Calendar.swift", "Models/AgentDatabases.swift",
-        "Models/ConversationMarkdownDocument.swift", "Models/DashboardConversationReferencePreview.swift",
-        "Models/DashboardConversationState.swift", "Models/OpenCodeModel.swift", "Models/RemoteWorkspacesModel.swift"
-      ],
-      sources: [
-        "Models/ExecutorRuntime.swift", "Models/WorkspaceAgentToolsModel.swift", "Models/WorkspaceAgentToolsModel+Calendar.swift", "Services/WovenMatterToolService.swift",
-        "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
-        "Tests/WorkspaceAgentToolsServiceTests.swift",
-        "Services/DashboardNoteDrafts.swift", "Tests/DashboardNoteWriteBehindTests.swift",
-        "Models/LibraryModel.swift", "Models/BackendLibraryService.swift", "Tests/LibraryModelTests.swift"
-      ]
+      dependencies: ["WovenMatterAppFacade", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
+      path: "App/Tests"
+    ),
+    .testTarget(
+      name: "WovenMatterAppFacadeTests",
+      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", .product(name: "CompanionClient", package: "ios")]
     )
   ]
 )
