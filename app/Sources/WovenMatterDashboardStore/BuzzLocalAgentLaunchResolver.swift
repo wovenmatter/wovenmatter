@@ -72,14 +72,6 @@ public struct BuzzLocalAgentLaunch: Sendable {
 }
 
 public struct BuzzLocalAgentLaunchResolver: Sendable {
-  private enum Mode {
-    case acp
-    case directGateway(port: Int)
-    var isDirectGateway: Bool {
-      if case .directGateway = self { return true }
-      return false
-    }
-  }
   typealias ExecutableResolver = @Sendable (String) -> URL?
   private let resolveExecutable: ExecutableResolver
   private let executableSearchPath: @Sendable () -> String
@@ -100,22 +92,6 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
   public func resolve(
     agentID: String,
     in link: BuzzWorkspaceLink
-  ) throws -> BuzzLocalAgentLaunch {
-    try resolve(agentID: agentID, in: link, mode: .acp)
-  }
-
-  public func resolveDirectGateway(
-    agentID: String,
-    in link: BuzzWorkspaceLink,
-    port: Int
-  ) throws -> BuzzLocalAgentLaunch {
-    try resolve(agentID: agentID, in: link, mode: .directGateway(port: port))
-  }
-
-  private func resolve(
-    agentID: String,
-    in link: BuzzWorkspaceLink,
-    mode: Mode
   ) throws -> BuzzLocalAgentLaunch {
     guard link.isEnabled else {
       throw BuzzLocalAgentLaunchError.workspaceDisabled
@@ -173,18 +149,7 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
     }
 
     let global = try globalConfiguration(beside: storeURL)
-    let arguments: [String]
-    switch mode {
-    case .acp:
-      arguments = Self.normalizedArguments(record.agentArgs ?? [], defaultArguments: harness.defaultArguments)
-    case .directGateway(let port):
-      guard harness.runtimeKind == .openclaw else {
-        throw BuzzLocalAgentLaunchError.harnessUnsupported(harnessIdentity)
-      }
-      arguments = [
-        "gateway", "--port", String(port), "--bind", "loopback", "--auth", "none",
-      ]
-    }
+    let arguments = Self.normalizedArguments(record.agentArgs ?? [], defaultArguments: harness.defaultArguments)
     var environment: [String: String] = [:]
     environment["PATH"] = Self.searchPath(
       executable: executable,
@@ -195,12 +160,12 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
       definition?.environment ?? [:],
       record.environment,
     ] {
-      for (key, value) in layer where Self.allowedEnvironment(key: key, value: value, mode: mode) {
+      for (key, value) in layer where Self.allowedEnvironment(key: key, value: value) {
         environment[key] = value
       }
     }
     environment = environment.filter {
-      Self.allowedEnvironment(key: $0.key, value: $0.value, mode: mode)
+      Self.allowedEnvironment(key: $0.key, value: $0.value)
     }
 
     if harness.runtimeKind == .claudeCode,
@@ -215,9 +180,7 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
         arguments: arguments,
         environment: environment,
         environmentKeysToRemove: Array(
-          mode.isDirectGateway
-            ? Self.forbiddenEnvironmentKeys
-            : Self.forbiddenEnvironmentKeys.union(Self.openClawPathEnvironmentKeys)
+          Self.forbiddenEnvironmentKeys.union(Self.openClawPathEnvironmentKeys)
         ).sorted(),
         environmentKeyPrefixesToRemove: ["BUZZ_", "NOSTR_"]
       ),
@@ -297,33 +260,11 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
         command: rawValue.contains("/") ? rawValue : "grok",
         defaultArguments: ["agent", "--always-approve", "stdio"]
       )
-    case "openclaw":
-      return Harness(
-        runtimeKind: .openclaw,
-        command: rawValue.contains("/") ? rawValue : "openclaw",
-        defaultArguments: ["acp"]
-      )
-    case "cursor", "cursor-agent", "cursor-cli":
-      let command = rawValue.contains("/") || identity == "cursor-agent"
-        ? rawValue : CursorACPSupport.commandName
-      return Harness(
-        runtimeKind: .cursor,
-        command: command,
-        defaultArguments: ["acp"]
-      )
     case "opencode", "open-code":
       return Harness(
         runtimeKind: .opencode,
         command: rawValue.contains("/") ? rawValue : "opencode",
         defaultArguments: ["acp"]
-      )
-    case "pi", "pi-acp", "pi-coding-agent", "picodingagent":
-      let command = rawValue.contains("/") || identity == "pi-acp"
-        ? rawValue : "pi-acp"
-      return Harness(
-        runtimeKind: .pi,
-        command: command,
-        defaultArguments: []
       )
     case "buzz-acp", "buzz-agent":
       throw BuzzLocalAgentLaunchError.harnessUnsupported(identity)
@@ -332,7 +273,7 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
     }
   }
 
-  private static func allowedEnvironment(key: String, value: String, mode: Mode) -> Bool {
+  private static func allowedEnvironment(key: String, value: String) -> Bool {
     guard !value.contains("\0"), value.utf8.count <= 32 * 1_024 else {
       return false
     }
@@ -347,16 +288,12 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
     }
     let upper = key.uppercased()
     if Self.openClawPathEnvironmentKeys.contains(upper) {
-      if case .directGateway = mode { return true }
       return false
     }
     let relaySilent = !upper.hasPrefix("BUZZ_")
       && !upper.hasPrefix("NOSTR_")
       && !forbiddenEnvironmentKeys.contains(upper)
     guard relaySilent else { return false }
-    if case .directGateway = mode {
-      return !upper.contains("TOKEN") && !upper.contains("PASSWORD")
-    }
     return true
   }
 

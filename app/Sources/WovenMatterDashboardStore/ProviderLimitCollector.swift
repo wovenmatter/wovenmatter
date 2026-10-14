@@ -109,7 +109,7 @@ enum ProviderLimitCollector {
             return await sharedAccount(provider, credentials: sharedCredentials, now: now, choice: choice)
           }
           return switch provider {
-          case .codex, .claude, .grok, .cursor:
+          case .codex, .claude, .grok:
             await credentialSensitiveAccount(
               provider: provider,
               accountScopeID: provider == .codex ? codexWorkspaceSource?.workspace.id : nil,
@@ -137,8 +137,6 @@ enum ProviderLimitCollector {
                   )
                 case .grok:
                   return try? await grokProxy(homeDirectory: homeDirectory, now: now)
-                case .cursor:
-                  return try? await CursorAccountClient(homeDirectory: homeDirectory).limits(now: now)
                 default:
                   return nil
                 }
@@ -161,8 +159,6 @@ enum ProviderLimitCollector {
                   )
                 case .grok:
                   return await grokCLI(now: now)
-                case .cursor:
-                  return await cursorCLI(now: now)
                 default:
                   return unavailable(provider, detail: "This provider is unavailable.", now: now)
                 }
@@ -172,8 +168,8 @@ enum ProviderLimitCollector {
             await OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
           case .openRouter:
             await openRouter(apiKey: openRouterAPIKey, now: now)
-          case .unknown:
-            unavailable(.unknown, detail: "This provider is unavailable.", now: now)
+          case .cursor, .unknown:
+            unavailable(provider, detail: "This provider is unavailable.", now: now)
           }
         }
       }
@@ -1100,39 +1096,6 @@ enum ProviderLimitCollector {
     )
   }
 
-  private static func cursorCLI(now: Date) async -> UsageLimitAccount {
-    guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent") else {
-      return unavailable(.cursor, detail: "Cursor Agent CLI is not installed.", now: now)
-    }
-    let probe = await Task.detached {
-      CursorACPSupport.probeAbout(executable: executable)
-    }.value
-    switch probe.auth {
-    case .authenticated(let email):
-      return UsageLimitAccount(
-        provider: .cursor,
-        accountLabel: email ?? "Cursor account",
-        status: .signedIn,
-        source: "Cursor Agent CLI",
-        detail: "Signed in locally, but Cursor's account usage APIs were unavailable during this refresh.",
-        observedAt: now,
-        dashboardURL: ProviderDashboardURL.cursor
-      )
-    case .unauthenticated:
-      return UsageLimitAccount(
-        provider: .cursor,
-        accountLabel: "Cursor account",
-        status: .needsCredential,
-        source: "Cursor Agent CLI",
-        detail: "Cursor Agent is installed but not signed in.",
-        observedAt: now,
-        dashboardURL: ProviderDashboardURL.cursor
-      )
-    case .unknown:
-      return failed(.cursor, detail: probe.message ?? "Cursor sign-in state could not be verified.", now: now)
-    }
-  }
-
   private static func openRouter(apiKey: String?, now: Date) async -> UsageLimitAccount {
     guard let apiKey, !apiKey.isEmpty else {
       return UsageLimitAccount(
@@ -1416,7 +1379,6 @@ enum ProviderDashboardURL {
   static let codex = URL(string: "https://chatgpt.com/codex/settings/usage")
   static let claude = URL(string: "https://claude.ai/settings/usage")
   static let grok = URL(string: "https://grok.com/?_s=usage")
-  static let cursor = URL(string: "https://cursor.com/dashboard?tab=usage")
   static let openCodeGo = URL(string: "https://opencode.ai/auth")
   static let openRouter = URL(string: "https://openrouter.ai/settings/credits")
 }

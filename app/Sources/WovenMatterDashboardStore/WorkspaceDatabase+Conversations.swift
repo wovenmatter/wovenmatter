@@ -90,6 +90,24 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
       try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+      guard let root = try sessionExecutionRoot(id: id),
+            let row = try historyRowsUnlocked("SELECT folder_locked FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
+            row["folder_locked"]?.intValue == 0,
+            try historyRowsUnlocked("SELECT 1 FROM dashboard_messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty else {
+        throw WorkspaceToolError.invalid("A chat's folder is fixed after its first message.")
+      }
+      let path: String
+      if let folderID {
+        guard let folder = try historyRowsUnlocked("SELECT * FROM folder_execution_roots WHERE folder_id=?", values: [folderID]).first?.objectValue,
+              folder["workspace_id"]?.stringValue == root.workspaceID,
+              let folderPath = folder["root_path"]?.stringValue else { throw WorkspaceToolError.invalid("Choose a folder in this agent's workspace.") }
+        path = folderPath
+      } else {
+        // The default directory was captured at creation, not inferred on another device.
+        guard let defaultPath = try historyRowsUnlocked("SELECT default_path FROM execution_workspace_defaults WHERE workspace_id=?", values: [root.workspaceID]).first?.objectValue?["default_path"]?.stringValue else { throw WorkspaceToolError.invalid("Workspace default directory unavailable.") }
+        path = defaultPath
+      }
+      try toolsExecuteUnlocked("UPDATE session_execution_roots SET root_path=? WHERE conversation_id=?", [path,id])
 
       let authority = try prepareUnlocked("""
         SELECT 1
@@ -124,6 +142,8 @@ extension WorkspaceDatabaseConnection {
   }
 
   func conversationContentUnlocked(id: String) throws -> WorkspaceConversationContent {
+    // Old desktop chats have no execution root, but retain their readable transcript.
+    // Other archived chats keep their existing visibility rules.
     guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
       return WorkspaceConversationContent(conversationID: id, messages: [], runs: [])
     }
@@ -148,7 +168,9 @@ extension WorkspaceDatabaseConnection {
       WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
         AND conversation.id = ?
         AND conversation.deleted_at IS NULL
-        AND conversation.is_archived = 0
+        AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
+          AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+            WHERE conversation_id = conversation.id)))
         AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY message.created_at, message.id
@@ -175,7 +197,9 @@ extension WorkspaceDatabaseConnection {
       WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
         AND conversation.id = ?
         AND conversation.deleted_at IS NULL
-        AND conversation.is_archived = 0
+        AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
+          AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+            WHERE conversation_id = conversation.id)))
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY run.created_at, run.id
       """,
@@ -233,7 +257,10 @@ extension WorkspaceDatabaseConnection {
           LEFT JOIN desktop_message_revisions revision ON revision.id=message.id
           WHERE message.conversation_id=? AND message.id IN (SELECT value FROM json_each(?))
             AND (conversation.user_id=? OR conversation.desktop_owned=1)
-            AND conversation.deleted_at IS NULL AND conversation.is_archived=0
+            AND conversation.deleted_at IS NULL
+            AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
+              AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+                WHERE conversation_id = conversation.id)))
             AND conversation.governing_plane='wovenmatter_macos'
             AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           """)
@@ -289,7 +316,9 @@ extension WorkspaceDatabaseConnection {
         WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
           AND conversation.id = ?
           AND conversation.deleted_at IS NULL
-          AND conversation.is_archived = 0
+          AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
+            AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+              WHERE conversation_id = conversation.id)))
           AND conversation.governing_plane='wovenmatter_macos'
           AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           \(cursorPredicate)
@@ -345,7 +374,9 @@ extension WorkspaceDatabaseConnection {
           WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
             AND conversation.id = ?
             AND conversation.deleted_at IS NULL
-            AND conversation.is_archived = 0
+            AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
+              AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+                WHERE conversation_id = conversation.id)))
             AND (
               run.user_message_id IN (\(placeholders))
               OR run.assistant_message_id IN (\(placeholders))

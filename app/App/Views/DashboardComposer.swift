@@ -55,6 +55,11 @@ struct DashboardComposer: View {
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
     var onStop: (() -> Void)? = nil
+    var folderLabel: String? = nil
+    var availableFolders: [WorkspaceFolderRecord] = []
+    var selectedFolderID: String? = nil
+    var folderSelectionDisabled = true
+    var onSelectFolder: ((String?) -> Void)? = nil
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTaskProgress) private var taskProgress
@@ -78,6 +83,28 @@ struct DashboardComposer: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            if let folderLabel {
+                HStack(spacing: 6) {
+                    Menu {
+                        Button("Ungrouped") { onSelectFolder?(nil) }
+                            .disabled(selectedFolderID == nil)
+                        ForEach(availableFolders) { folder in
+                            Button(folder.name) { onSelectFolder?(folder.id) }
+                                .disabled(selectedFolderID == folder.id)
+                        }
+                    } label: {
+                        Label(folderLabel, systemImage: "folder")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .disabled(folderSelectionDisabled || onSelectFolder == nil)
+                    .help(folderSelectionDisabled ? "The folder is fixed after the first message." : "Choose a folder in this agent's workspace")
+                    .accessibilityLabel("Chat folder: \(folderLabel)")
+                    Spacer(minLength: 0)
+                }
+            }
             if let attachedNoteTitle {
                 HStack(spacing: 6) {
                     Image(systemName: "doc.text")

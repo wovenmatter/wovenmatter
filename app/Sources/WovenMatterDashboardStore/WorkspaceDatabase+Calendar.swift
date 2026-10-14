@@ -583,6 +583,18 @@ extension WorkspaceDatabaseConnection {
           openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
           requestedConversationID: conversationID, allowMissingCalendarFolder: true)
       }
+      guard let path = configuration.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
+        throw WorkspaceToolError.invalid("The scheduled session has no captured execution directory.")
+      }
+      let location = WorkspaceFolderLocation(workspaceID: "remote:" + workspaceID.uuidString.lowercased(), rootPath: path, managed: false)
+      if let saved = try sessionExecutionRoot(id: run.sessionID) {
+        guard saved.workspaceID == location.workspaceID, saved.rootPath == path else { throw WorkspaceToolError.invalid("Scheduled session execution directory changed.") }
+      } else {
+        // The remote owner's saved configuration is authoritative even when its
+        // UI folder was removed while the Mac was disconnected.
+        try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path,folder_locked) VALUES(?,?,?,1)", [run.sessionID,location.workspaceID,path])
+      }
+      try toolsExecuteUnlocked("UPDATE session_execution_roots SET folder_locked=1 WHERE conversation_id=?", [run.sessionID])
       if let recordedNativeID = existing?["acp_session_id"]?.stringValue,
          let nativeSessionID, recordedNativeID != nativeSessionID {
         throw WorkspaceToolError.invalid("Remote result belongs to a different native session.")
@@ -660,7 +672,7 @@ extension WorkspaceDatabaseConnection {
                   let payload = object["payload"] else { return }
             if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
               let native = try HermesValue.decode(JSONEncoder().encode(payload))
-              if let checklist = HermesGatewayClient.checklistUpdate(native),
+              if let checklist = HermesSessionArchive.checklistUpdate(native),
                  let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
                 hermesChecklistRevision = revision
                 activity = checklist

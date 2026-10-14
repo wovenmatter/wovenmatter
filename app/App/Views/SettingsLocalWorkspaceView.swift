@@ -25,26 +25,6 @@ struct SettingsLocalWorkspaceView: View {
         }
         .task { await model.openCode?.resolveExecutable(); model.refreshRuntimeInventory() }
         .confirmationDialog(
-            "Relink \(model.pendingWorkspaceFolderChange?.folder.directoryName ?? "folder")?",
-            isPresented: Binding(
-                get: { model.pendingWorkspaceFolderChange != nil },
-                set: { if !$0 { model.cancelWorkspaceFolderChange() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Copy files and relink") {
-                model.confirmWorkspaceFolderChange(copyContents: true)
-            }
-            Button("Keep backup only") {
-                model.confirmWorkspaceFolderChange(copyContents: false)
-            }
-            Button("Cancel", role: .cancel) { model.cancelWorkspaceFolderChange() }
-        } message: {
-            if let pending = model.pendingWorkspaceFolderChange {
-                Text("The current \(pending.folder.directoryName) folder contains files. Relinking will save that folder as a backup inside your workspace and link to:\n\(pending.destination.path)\n\nYou can also copy its contents into the linked folder. Items with names already present there will stay in the backup; existing destination files will not be overwritten.")
-            }
-        }
-        .confirmationDialog(
             "Review installer source",
             isPresented: Binding(
                 get: { model.preparedLocalACPRuntimeInstall != nil },
@@ -100,125 +80,16 @@ struct SettingsLocalWorkspaceView: View {
     }
 
     private var workspaceCard: some View {
-        SettingsCard(
-            title: "Workspace",
-            detail: "Local agents share this folder."
-        ) {
-            SettingsInset {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Local agent workspace")
-                            .font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        SettingsPill(
-                            model.localACPWorkspaceAvailability.isReady
-                                ? "Ready"
-                                : "Setup required",
-                            tone: model.localACPWorkspaceAvailability.isReady
-                                ? .neutral
-                                : .warning
-                        )
-                    }
-                    SettingsValueRow(
-                        label: "Agent home",
-                        value: model.localACPWorkspaceAvailability.rootPath
-                            ?? "~/.woven-matter"
-                    )
-                    SettingsValueRow(
-                        label: "Repositories",
-                        value: model.localACPWorkspaceAvailability
-                            .repositoriesPath ?? "~/.woven-matter/repos"
-                    )
-                    SettingsValueRow(
-                        label: "Databases",
-                        value: model.localACPWorkspaceAvailability
-                            .databasesPath ?? "~/.woven-matter/databases"
-                    )
-                    Text(model.localACPWorkspaceAvailability.detail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        WorkspaceFolderActions {
-                            Button("Choose repositories folder") {
-                                chooseLocalACPRepositories()
-                            }
-                            .buttonStyle(SettingsQuietButtonStyle())
-
-                            if model.localACPWorkspaceAvailability
-                                .usesExternalRepositories {
-                                Button("Use default repos") {
-                                    model.configureLocalACPRepositories(nil)
-                                }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                            }
-                        }
-
-                        WorkspaceFolderActions {
-                            Button("Choose databases folder") {
-                                chooseLocalACPDatabases()
-                            }
-                            .buttonStyle(SettingsQuietButtonStyle())
-
-                            if model.localACPWorkspaceAvailability
-                                .usesExternalDatabases {
-                                Button("Use default databases") {
-                                    model.configureLocalACPDatabases(nil)
-                                }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                            }
-
-                            Button("Open workspace") {
-                                openLocalACPWorkspace()
-                            }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                        }
-                    }
-                    .disabled(model.workspaceFolderChangeInProgress)
-
-                    if let error = model.workspaceFolderChangeError {
-                        Text(error)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(DashboardPalette.danger)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if model.workspaceFolderChangeInProgress {
-                        Text("Changing folder…")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                    }
-                    if let recovery = model.workspaceFolderRecovery,
-                       let backup = recovery.backupURL {
-                        Text("Previous files saved in \(backup.lastPathComponent).")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .textSelection(.enabled)
-                        if !recovery.skippedItemNames.isEmpty {
-                            Text("Already present in the destination; kept in the backup: \(recovery.skippedItemNames.joined(separator: ", ")).")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                                .textSelection(.enabled)
-                        }
-                        Button("Open backup") { NSWorkspace.shared.open(backup) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-
-                    if !model.localACPWorkspaceAvailability.isReady {
-                        Button("Retry setup") {
-                            model.setUpLocalACPWorkspace(
-                                homeDirectory: FileManager.default
-                                    .homeDirectoryForCurrentUser
-                            )
-                        }
-                        .buttonStyle(DashboardPrimaryButtonStyle())
-                        .disabled(model.workspaceFolderChangeInProgress)
-                    }
-                }
+        SettingsCard(title: "Workspace") {
+            Text(model.localACPWorkspaceAvailability.detail)
+            if let path = model.localACPWorkspaceAvailability.rootPath {
+                Text(path).font(.caption.monospaced()).textSelection(.enabled)
             }
-
+            Text("Each folder owns one project directory. Link an existing directory or create a blank project from the sidebar.")
+                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }
     }
+
 
     private var runtimesCard: some View {
         SettingsCard(title: "Runtimes") {
@@ -438,36 +309,6 @@ struct SettingsLocalWorkspaceView: View {
         }
     }
 
-    private func chooseLocalACPRepositories() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Use Repositories Folder"
-        panel.message = "Choose an existing folder for repositories used only by direct chats on this Mac."
-        Task {
-            guard await panel.begin() == .OK,
-                  let repositories = panel.url else { return }
-            model.configureLocalACPRepositories(repositories)
-        }
-    }
-
-    private func chooseLocalACPDatabases() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Use Databases Folder"
-        panel.message = "Choose an existing folder for databases used by direct chats on this Mac."
-        Task {
-            guard await panel.begin() == .OK,
-                  let databases = panel.url else { return }
-            model.configureLocalACPDatabases(databases)
-        }
-    }
-
     private func openLocalACPWorkspace() {
         let root = model.localACPWorkspaceAvailability.rootPath.map {
             URL(fileURLWithPath: $0, isDirectory: true)
@@ -482,16 +323,6 @@ private struct RuntimeMaintenanceActions<Content: View>: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8, content: content)
             VStack(alignment: .trailing, spacing: 8, content: content)
-        }
-    }
-}
-
-private struct WorkspaceFolderActions<Content: View>: View {
-    @ViewBuilder var content: () -> Content
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8, content: content)
-            VStack(alignment: .leading, spacing: 8, content: content)
         }
     }
 }

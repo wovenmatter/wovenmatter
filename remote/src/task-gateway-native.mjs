@@ -1,11 +1,10 @@
-import { spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
-import { resolve, isAbsolute } from 'node:path'
+import { isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
-import { createTaskNativeArchive, piRunEvent, hermesRunEvent, publishNativePresentation, isolateTaskEnvironment } from './task-native-archive.mjs'
+import { createTaskNativeArchive, publishNativePresentation } from './task-native-archive.mjs'
 
 const before = text => Object.assign(new Error(text), { beforePrompt: true })
 const approval = () => Object.assign(new Error('This task needs approval. Open its session to continue.'), { needsApproval: true })
@@ -13,232 +12,16 @@ const parseRegistration = bytes => { try { return JSON.parse(String(bytes)) } ca
 const pause = ms => new Promise(done => setTimeout(done, ms))
 const textUpdate = text => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
 const prompt = run => run.task.prompt
-const deferred = () => { let resolve, reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); promise.catch(()=>{}); return {promise,resolve,reject} }
 
-export function createNativeTaskExecutor({workspaceRoot, environment, launch = spawn, hermes, instances, fetchRequest = fetch, WebSocketClass = WebSocket, read = readFile}) {
+export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest = fetch, read = readFile}) {
   return async context => {
     const config = context.run.task.configuration
     const cwd = config.nativeWorkingDirectory ?? workspaceRoot
     if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
     if (context.signal.aborted) throw before('Background execution was turned off.')
-    if (config.runtimeKind === 'pi') return runPi({...context,config,cwd,environment,launch})
-    if (config.runtimeKind === 'hermes') return runHermes({...context,config,cwd,environment,hermes,read,WebSocketClass,fetchRequest})
     if (config.runtimeKind === 'opencode') return runOpenCode({...context,config,cwd,instances,read,fetchRequest})
     throw before('This native agent is not supported.')
   }
-}
-
-async function runPi({run,config,cwd,environment,launch,nativeSessionID,signal,publish,bindSession}) {
-  if (config.permission) throw before('Pi does not support the saved permission selection.')
-  const env = {...isolateTaskEnvironment(environment()), WOVENMATTER_LOCAL_PI:'1'}
-  const child = launch('pi',['--mode','rpc',...(nativeSessionID?['--session',nativeSessionID]:[])],{cwd,env,stdio:['pipe','pipe','pipe']})
-  const pending = new Map(), finished = deferred()
-  let accepted=false, exited=false, serial=0, needsApproval=false, turnFailed=false, settled=false, archive
-  const send = object => child.stdin.write(JSON.stringify(object)+'\n')
-  const fail = error => { for (const entry of pending.values()) {clearTimeout(entry.timer);entry.reject(error)}; pending.clear(); finished.reject(error) }
-  const rpc = (type, params={}) => new Promise((resolve,reject)=>{
-    const id=String(++serial), timer=setTimeout(()=>{pending.delete(id);reject(new Error('Pi did not acknowledge the task operation.'))},30000)
-    pending.set(id,{resolve,reject,timer}); send({id,type,...params})
-  })
-  const lines=createInterface({input:child.stdout})
-  const receiveLine = line => {
-    let value;try{value=JSON.parse(line)}catch{return}
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return
-    if (accepted && archive && piRunEvent(value.type)) {
-      void archive.capture(value, {kind: value.type, present: safe => {
-        const update = safe.assistantMessageEvent
-        if (safe.type === 'message_update' && update?.type === 'text_delta') publishNativePresentation(textUpdate(update.delta ?? ''), publish)
-        if (safe.type === 'message_update' && update?.type === 'thinking_delta') publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:update.delta ?? ''}}, publish)
-      }}).catch(error => { fail(error); child.kill('SIGTERM') })
-    }
-    if(value.type==='response' && pending.has(value.id)) {
-      const entry=pending.get(value.id);pending.delete(value.id);clearTimeout(entry.timer)
-      if(value.success===false) entry.reject(new Error('Pi rejected the saved task configuration or prompt.'))
-      else entry.resolve(value.data ?? {})
-    } else if(value.type==='message_update' && accepted) {
-      const update=value.assistantMessageEvent
-      if(update?.type==='error')turnFailed=true
-    } else if(value.type==='message_end' && accepted) {
-      if(value.message?.errorMessage || ['error','aborted'].includes(value.message?.stopReason))turnFailed=true
-    } else if(value.type==='extension_ui_request') {
-      needsApproval=true;send({type:'extension_ui_response',id:value.id,cancelled:true})
-    } else if(value.type==='agent_settled' && accepted) {
-      settled=true
-      if(needsApproval)finished.reject(approval());else if(turnFailed)finished.reject(new Error('Pi could not complete this task.'));else finished.resolve({stopReason:'end_turn'})
-    }
-  }
-  lines.on('line', line => {
-    try { receiveLine(line) }
-    catch {
-      fail(new Error('The task output could not be retained.'))
-      child.kill('SIGTERM')
-    }
-  })
-  child.stderr.on('data',()=>{})
-  child.stdin.on('error',()=>fail(new Error('Pi input connection closed.')))
-  child.on('error',()=>fail(new Error('Pi could not be started.')))
-  child.on('exit',()=>{exited=true;fail(new Error('Pi stopped before completing the task.'))})
-  const abort=()=>{try{send({type:'abort'})}catch{};child.kill('SIGTERM');fail(new Error('Background execution was turned off.'))}
-  signal.addEventListener('abort',abort,{once:true})
-  try {
-    let state=await rpc('get_state')
-    if(config.model) {
-      const split=config.model.indexOf('/'); if(split<1)throw before('The saved Pi model is invalid.')
-      await rpc('set_model',{provider:config.model.slice(0,split),modelId:config.model.slice(split+1)})
-    }
-    if(config.thinking)await rpc('set_thinking_level',{level:config.thinking})
-    state=await rpc('get_state')
-    if(config.model && `${state.model?.provider}/${state.model?.id}`!==config.model)throw before('Pi did not confirm the saved model.')
-    if(config.thinking && state.thinkingLevel!==config.thinking)throw before('Pi did not confirm the saved thinking level.')
-    const id=state.sessionId ?? state.session_id
-    if(!id || (nativeSessionID && id!==nativeSessionID))throw before('Pi did not confirm the recurring session identity.')
-    bindSession(id)
-    archive = await createTaskNativeArchive({sourceID: 'pi:' + (state.sessionFile ?? cwd), nativeSessionID: id, runID: run.id, publish})
-    const captureEntries = async (currentRun, since) => {
-      if (signal.aborted) throw new Error('Background execution was turned off.')
-      const snapshot = await rpc('get_entries', since ? {since} : {})
-      if (!Array.isArray(snapshot.entries)) throw new Error('Pi returned an incomplete native entry export.')
-      const seen = new Set()
-      for (const entry of snapshot.entries) {
-        if (typeof entry.id !== 'string' || !entry.id || seen.has(entry.id)) throw new Error('Pi returned duplicate or missing native entry identities.')
-        seen.add(entry.id)
-        await archive.capture(entry, {id: 'entry:' + entry.id, kind: entry.type ?? 'entry', contentMode: 'snapshot', completeness: 'native-export', currentRun})
-      }
-      return snapshot.entries.at(-1)?.id
-    }
-    const entryCursor = await captureEntries(false)
-    if(signal.aborted)throw before('Background execution was turned off.')
-    accepted=true;await rpc('prompt',{message:prompt(run)})
-    let result, failure
-    try { result = await finished.promise } catch (error) { failure = error }
-    if (!settled) throw failure
-    await archive.drain()
-    await captureEntries(true, entryCursor)
-    if (failure) throw failure
-    if (signal.aborted) throw new Error('Background execution was turned off.')
-    return result
-  } catch(error) {if(!accepted)error.beforePrompt=true;throw error}
-  finally {
-    signal.removeEventListener('abort',abort);lines.close();fail(new Error('Pi task connection closed.'));child.kill('SIGTERM')
-    if(!exited){await Promise.race([new Promise(done=>child.once('exit',done)),pause(1500)]);if(!exited)child.kill('SIGKILL')}
-    await archive?.close()
-  }
-}
-
-async function runHermes({run,config,cwd,environment,hermes,read,WebSocketClass,fetchRequest,nativeSessionID,signal,publish,bindSession}) {
-  if(config.permission && !['default','full'].includes(config.permission))throw before('The saved Hermes permission is unavailable.')
-  let accepted=false, socket, heartbeat, liveID, serial=0, needsApproval=false, text='', lastSeq=0, archive, epoch, completed=false
-  const finished=deferred(), pending=new Map()
-  const fail=error=>{for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(error)};pending.clear();finished.reject(error)}
-  let send, rpc
-  try {
-    await hermes.start()
-    const home=environment().HERMES_HOME ?? resolve(environment().HOME,'.hermes')
-    const registration=parseRegistration(await read(resolve(home,'.woven-matter/service.json'),'utf8'))
-    if(!Number.isInteger(registration.port)||registration.port<1||registration.port>65535||typeof registration.token!=='string'||!registration.token)throw before('Hermes service registration is unavailable.')
-    socket=new WebSocketClass(`ws://127.0.0.1:${registration.port}/api/ws?token=${encodeURIComponent(registration.token)}`)
-    send=object=>socket.send(JSON.stringify(object))
-    rpc=(method,params={})=>new Promise((resolve,reject)=>{const id=String(++serial),timer=setTimeout(()=>{pending.delete(id);reject(new Error('Hermes did not acknowledge the task operation.'))},30000);pending.set(id,{resolve,reject,timer});send({jsonrpc:'2.0',id,method,params})})
-    const receiveEvent = event => {
-      for(const line of String(event.data).split('\n')) {
-        let value;try{value=JSON.parse(line)}catch{continue}
-        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
-        if(value.id!=null && value.method) {needsApproval=true;send({jsonrpc:'2.0',id:value.id,result:{choice:'deny',cancelled:true}});finished.reject(approval());continue}
-        if(pending.has(value.id)) {const entry=pending.get(value.id);pending.delete(value.id);clearTimeout(entry.timer);value.error?entry.reject(new Error('Hermes rejected the saved task settings or prompt.')):entry.resolve(value.result);continue}
-        const event=value.params
-        if(value.method!=='event'||event?.session_id!==liveID||!accepted)continue
-        if(event.seq!=null){if(event.seq<=lastSeq)continue;lastSeq=event.seq}
-        const payload=event.payload ?? {}
-        const checklistInTurn = !completed
-        const needsFinalText = event.type === 'message.complete' && !text
-        if(event.type==='message.delta')text+=payload.text??''
-        if (archive && hermesRunEvent(event.type)) {
-          void archive.capture(event, {id: event.seq == null ? undefined : `event:${epoch}:${event.seq}`, kind: event.type, present: safe => {
-            if (safe.type === 'message.delta' || needsFinalText && safe.payload?.text) publishNativePresentation(textUpdate(safe.payload?.text ?? ''), publish)
-            if (['thinking.delta','reasoning.delta'].includes(safe.type)) publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:safe.payload?.text ?? ''}}, publish)
-            // Keep the paired native args/result for the shared Mac normalizer.
-            if (checklistInTurn && safe.type === 'tool.complete' && ['todo_list','todo'].includes(safe.payload?.name)) {
-              const {name,args,result} = safe.payload
-              publish({sessionUpdate:'woven_hermes_tool_complete',nativeSessionID:boundID,payload:{name,args,result}})
-            }
-          }}).catch(error => fail(error))
-        }
-        if(['approval.request','clarify.request','sudo.request','secret.request'].includes(event.type)){needsApproval=true;if(event.type==='approval.request')void rpc('approval.respond',{session_id:liveID,request_id:payload.request_id,choice:'deny'}).catch(()=>{});finished.reject(approval());continue}
-        if(event.type==='message.complete') {
-          completed=true
-          if(needsApproval)finished.reject(approval())
-          else if(payload.status==='error')finished.reject(new Error('Hermes could not complete this task.'))
-          else finished.resolve({stopReason:payload.status==='interrupted'?'cancelled':'end_turn'})
-        }
-      }
-    }
-    socket.addEventListener('message', event => {
-      try { receiveEvent(event) }
-      catch { fail(new Error('The task output could not be retained.')) }
-    })
-    socket.addEventListener('close',()=>fail(new Error('Hermes disconnected before the task completed.')))
-    socket.addEventListener('error',()=>fail(new Error('Hermes connection failed.')))
-    await Promise.race([new Promise((done,reject)=>{socket.addEventListener('open',done,{once:true});socket.addEventListener('error',()=>reject(before('Hermes connection failed.')),{once:true})}),new Promise((_,reject)=>setTimeout(()=>reject(before('Hermes connection timed out.')),10000).unref())])
-    heartbeat=setInterval(()=>void rpc('ping').catch(()=>fail(new Error('Hermes connection was interrupted.'))),15000);heartbeat.unref()
-    const profile=await rpc('config.get',{key:'profile'})
-    if(profile.home!==home)throw before('Hermes connected to a different profile.')
-    const identityHome=config.workspaceID?'/remote-workspaces/'+config.workspaceID.toLowerCase()+home:home
-    let previous=nativeSessionID
-    if(previous?.startsWith('hermes-gateway:')||previous?.startsWith('hermes-import:')) {
-      const parts=previous.split(':');if(Buffer.from(parts[1],'base64').toString()!==identityHome)throw before('This Hermes task belongs to another profile.');previous=parts.slice(2).join(':')
-    }
-    const session=await rpc(previous?'session.resume':'session.create',{source:'desktop',close_on_disconnect:false,cwd,title:run.title,...(previous?{session_id:previous,defer_history:true}:{})})
-    if(session.running)throw before('The recurring Hermes task is already running.')
-    liveID=session.session_id
-    const resolved = session.stored_session_id ?? session.session_key
-    const stored = previous ?? resolved
-    if (!liveID || !resolved || !stored || (previous && resolved !== previous && session.resumed !== resolved)) throw before('Hermes did not confirm the durable session.')
-    const boundID = `hermes-gateway:${Buffer.from(identityHome).toString('base64')}:${stored}`
-    bindSession(boundID)
-    archive = await createTaskNativeArchive({sourceID: 'hermes:' + identityHome, nativeSessionID: boundID, runID: run.id, publish})
-    const replay = await rpc('session.events.since',{session_id:liveID,last_seen:0})
-    lastSeq = replay.latest_seq ?? 0
-    epoch = replay.epoch ?? `run:${run.id}`
-    await rpc('session.cwd.set',{session_id:liveID,cwd})
-    for(const [key,value] of [['model',config.model],['reasoning',config.thinking]])if(value){const result=await rpc('config.set',{session_id:liveID,key,value,scope:'session'});if(result.confirm_required)throw before('Hermes requires confirmation for this model.');const confirmed=await rpc('config.get',{session_id:liveID,key});if((confirmed.value??confirmed[key])!==value)throw before(`Hermes did not confirm the saved ${key}.`)}
-    if(config.permission){const value=config.permission==='full'?'1':'0';const confirmed=await rpc('config.set',{session_id:liveID,key:'yolo',value,scope:'session'});if(confirmed.scope!=='session'||String(confirmed.value)!==value)throw before('Hermes did not confirm the saved permission.');const state=await rpc('session.activate',{session_id:liveID,omit_messages:true});if(config.permission==='default'&&(state.info?.approval_mode==='off'||state.info?.yolo===true))throw before('Hermes cannot apply the requested approval policy.')}
-    const highWater = new Map()
-    const captureSnapshot = async currentRun => {
-      for (const target of new Set([stored, resolved])) {
-        const response = await fetchRequest(`http://127.0.0.1:${registration.port}/api/sessions/${encodeURIComponent(target)}/export`, {
-          headers: {authorization: 'Bearer ' + registration.token}, redirect: 'error',
-          signal: AbortSignal.any([signal, AbortSignal.timeout(45000)])})
-        if (!response.ok) throw new Error('Hermes could not export the current native session.')
-        const snapshot = await response.json()
-        if (snapshot.id !== target || !Array.isArray(snapshot.messages)) throw new Error('Hermes returned a different or incomplete native session export.')
-        const {messages, ...metadata} = snapshot
-        await archive.capture(metadata, {id: `session:${target}:export.metadata`, kind: 'session', contentMode: 'snapshot', completeness: 'native-export-metadata', currentRun: false})
-        const seen = new Set()
-        for (const message of messages) {
-          if (!Number.isSafeInteger(message.id) || message.id < 1 || seen.has(message.id)) throw new Error('Hermes export is missing a unique native message identity.')
-          seen.add(message.id)
-          await archive.capture(message, {id: `session:${target}:message:${message.id}`, kind: 'message', contentMode: 'snapshot', completeness: 'native-export', currentRun: currentRun && message.id > (highWater.get(target) ?? 0)})
-        }
-        if (!currentRun) highWater.set(target, Array.from(seen).reduce((maximum, id) => Math.max(maximum, id), 0))
-      }
-    }
-    await captureSnapshot(false)
-    const abort=()=>{void rpc('session.interrupt',{session_id:liveID}).catch(()=>{});finished.reject(new Error('Background execution was turned off.'))}
-    signal.addEventListener('abort',abort,{once:true})
-    try {
-      if(signal.aborted)throw before('Background execution was turned off.')
-      accepted=true;await rpc('prompt.submit',{session_id:liveID,text:prompt(run)})
-      let result, failure
-      try { result = await finished.promise } catch (error) { failure = error }
-      if (failure) try { await rpc('session.interrupt', {session_id: liveID}) } catch {}
-      await archive.drain()
-      await captureSnapshot(true)
-      if (failure) throw failure
-      if (signal.aborted) throw new Error('Background execution was turned off.')
-      return result
-    } finally {signal.removeEventListener('abort',abort)}
-  } catch(error){if(accepted&&liveID&&rpc)try{await rpc('session.interrupt',{session_id:liveID})}catch{};if(!accepted)error.beforePrompt=true;throw error}
-  finally {clearInterval(heartbeat);fail(new Error('Hermes task connection closed.'));socket?.close();await archive?.close()}
 }
 
 async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession}) {
@@ -258,6 +41,12 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     if(session?.id!==sessionID)throw before('OpenCode did not confirm the recurring session identity.')
     const path='/api/session/'+encodeURIComponent(sessionID)
     bindSession(sessionID)
+    // Bind only this Woven task to the owner-local CLI. Its databases stay
+    // writable when the Mac's connected-session bridge is unavailable.
+    const query = new URLSearchParams({'location[directory]': cwd})
+    await call('POST', '/api/rpc/wovenmatter-cli/connect?' + query, {input: {
+      sessionID, context: {executablePath: fileURLToPath(new URL('./wovenmatter', import.meta.url)), captureID: ''},
+    }})
     if(config.model||config.thinking){const model=config.model??[session.model?.providerID,session.model?.id].filter(Boolean).join('/'),split=model.indexOf('/');if(split<1)throw before('The saved OpenCode model is invalid.');const selection={providerID:model.slice(0,split),id:model.slice(split+1),...(config.thinking&&config.thinking!=='default'?{variant:config.thinking}:{})};await call('POST',path+'/model',{model:selection});session=(await call('GET',path)).data;if(session.model?.id!==selection.id||session.model?.providerID!==selection.providerID||(session.model?.variant??'default')!==(selection.variant??'default'))throw before('OpenCode did not confirm the saved model and thinking level.')}
     if (permission) {
       const rules = [...(session.permissions ?? [])]

@@ -1,7 +1,7 @@
 import { readFileSync, mkdirSync, appendFileSync, openSync, fsyncSync, closeSync, readSync, fstatSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { durableJSON } from './openclaw-results/store.mjs'
+import { durableJSON } from './durable-json.mjs'
 
 const fail = (code, message) => Object.assign(new Error(message), { statusCode: code })
 const read = (path, fallback) => { try { return JSON.parse(readFileSync(path, 'utf8')) } catch (e) { if (e.code === 'ENOENT') return fallback; throw e } }

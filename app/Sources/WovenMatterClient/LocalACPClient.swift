@@ -129,7 +129,6 @@ enum LocalACPActiveInputRoute: Equatable, Sendable {
     case acpSteering
     case grokInterjection
     case concurrentPrompt
-    case piRPC
     case unsupported
 }
 
@@ -608,8 +607,6 @@ public actor LocalACPClient {
     private var nextID: Int64 = 0
     private var negotiatedProtocolVersion: Int64?
     private var agentName: String?
-    private var pendingInitialSystemPrompt: String?
-    private var initialSystemPromptInFlight = false
     private var defaultAgentRunID: String?
     private var defaultAgentRemote = false
     private var durableRemoteACP = false
@@ -650,16 +647,15 @@ public actor LocalACPClient {
     private var permissionConfigurationID: String?
     private var permissionUsesSessionModeMethod = false
     private var permissionStateRevision: UInt64 = 0
-    private let cursorPermission: String
     private let requestedPermission: String?
     private var sessionCancellationRequested = false
     private var pendingPermissionRequestIDs: [ACPJSONValue] = []
     private var interactiveResponses: [UUID: (id: ACPJSONValue, fence: AgentDispatchFence)] = [:]
-    private struct PendingCursorRequest {
+    private struct PendingInteractiveRequest {
         let id: ACPJSONValue
         let method: String
     }
-    private var pendingCursorRequests: [PendingCursorRequest] = []
+    private var pendingInteractiveRequests: [PendingInteractiveRequest] = []
     private var elicitationDecisions: [(id: ACPJSONValue, decision: LocalACPInteractionDecision)] = []
     private struct PendingRequest {
         let codexExpectedGeneration: Int64?
@@ -717,7 +713,6 @@ public actor LocalACPClient {
         self.accountCoordinator = accountCoordinator
         self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
-        self.cursorPermission = requestedPermission ?? "native-default"
         self.process = process
         self.input = input
         self.cursor = cursor
@@ -735,8 +730,11 @@ public actor LocalACPClient {
         workingDirectory: URL,
         accountCoordinator: ProviderAccountCoordinator? = nil
     ) throws -> LocalACPClient {
+        guard AgentRuntimeKind.allCases.contains(launch.runtimeKind) else {
+            throw LocalACPClientError.unsupportedConfiguration("retired agent")
+        }
         guard launch.runtimeKind != .opencode else {
-            throw OpenCodeError.message("OpenCode v1 ACP is no longer supported. Create a new OpenCode v2 server session.")
+            throw OpenCodeError.message("This OpenCode session cannot resume. Start a new OpenCode chat.")
         }
         let process = Process()
         // Foundation.Process cannot configure POSIX_SPAWN_SETPGROUP. A minimal
@@ -834,14 +832,6 @@ public actor LocalACPClient {
     ) async throws -> LocalACPInitializedSession {
         try await prepareDefaultAgent()
         _ = try await initializeConnection()
-        if runtimeKind == .cursor {
-            _ = try await request(
-                method: "authenticate",
-                params: .object([
-                    "methodId": .string(CursorACPSupport.authMethodID),
-                ])
-            )
-        }
 
         if let existingSessionID, loadSessionSupported {
             let previousSessionID = sessionID
@@ -858,18 +848,8 @@ public actor LocalACPClient {
                         "_meta": .object(try nativeConnectionMetadata()),
                     ])
                 )
-                if runtimeKind == .hermes,
-                   loaded?["models"] == nil,
-                   loaded?["modelState"] == nil {
-                    return try await createSession(
-                        workingDirectory: workingDirectory,
-                        title: title,
-                        systemPrompt: systemPrompt
-                    )
-                }
                 sessionID = existingSessionID
                 captureSessionConfiguration(from: loaded)
-                try await discoverCursorModelsIfNeeded()
                 try await reconcileBuiltInNativeHistory()
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
@@ -919,11 +899,6 @@ public actor LocalACPClient {
         if runtimeKind == .claudeCode {
             clientCapabilities["elicitation"] = .object(["form": .object([:])])
         }
-        if runtimeKind == .cursor {
-            clientCapabilities["_meta"] = .object([
-                "parameterizedModelPicker": .bool(true),
-            ])
-        }
         let initializeResult = try await request(
             method: "initialize",
             params: .object([
@@ -971,18 +946,22 @@ public actor LocalACPClient {
         ]
         var metadata = try nativeConnectionMetadata()
         if let systemPrompt, !systemPrompt.isEmpty {
-            if agentName == "@agentclientprotocol/claude-agent-acp" {
-                metadata["systemPrompt"] = .object([
-                    "append": .string(systemPrompt),
-                ])
-            } else if let negotiatedProtocolVersion,
-                      negotiatedProtocolVersion >= 2 {
+            switch runtimeKind {
+            case .claudeCode:
+                metadata["systemPrompt"] = .object(["append": .string(systemPrompt)])
+            case .grokBuild:
+                metadata["rules"] = .string(systemPrompt)
+            case .defaultAgent:
                 parameters["systemPrompt"] = .string(systemPrompt)
-            } else {
-                // ACP v1 has no system-prompt field. Match Buzz's compatibility
-                // behavior by carrying the agent definition in the first user
-                // turn instead of silently discarding it or refusing the agent.
-                pendingInitialSystemPrompt = systemPrompt
+            case .codex:
+                // Codex accepts additive developer instructions in its native
+                // launch config. The invocation wrapper composed these before
+                // spawning the adapter; no ACP message replaces its base prompt.
+                guard process.environment?["WOVENMATTER_ADDITIONAL_INSTRUCTIONS"] == systemPrompt else {
+                    throw LocalACPClientError.unsupportedConfiguration("additional instructions")
+                }
+            default:
+                throw LocalACPClientError.unsupportedConfiguration("additional instructions")
             }
         }
         if let title, !title.isEmpty {
@@ -1007,46 +986,12 @@ public actor LocalACPClient {
         }
         try await notificationTask?.value
         captureSessionConfiguration(from: response)
-        try await discoverCursorModelsIfNeeded()
         try await reconcileBuiltInNativeHistory()
         return LocalACPInitializedSession(
             sessionID: created,
             loadedExistingSession: false,
             configuration: configuration
         )
-    }
-
-    private func discoverCursorModelsIfNeeded() async throws {
-        guard runtimeKind == .cursor else { return }
-        do {
-            let response = try await request(
-                method: "cursor/list_available_models",
-                params: .object([:])
-            )
-            let models = response?["models"]?.arrayValue?.compactMap { value -> String? in
-                let identifier = value["value"]?.stringValue
-                    ?? value["modelId"]?.stringValue
-                let trimmed = identifier?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed?.isEmpty == false ? trimmed : nil
-            } ?? []
-            guard !models.isEmpty else { return }
-            let catalogMetadata = Self.modelMetadata(response?["models"]?.arrayValue ?? [], idKeys: ["value", "modelId"])
-            configuration = LocalACPSessionConfiguration(
-                model: configuration.model,
-                thinking: configuration.thinking,
-                modelOptions: models,
-                thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands,
-                modelOptionMetadata: catalogMetadata.merging(configuration.modelOptionMetadata) { _, session in session },
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                permission: configuration.permission,
-                permissionOptions: configuration.permissionOptions,
-                permissionOptionMetadata: configuration.permissionOptionMetadata
-            )
-        } catch {
-            // session/new already advertised a catalog; keep that if the
-            // Cursor extension method is unavailable.
-        }
     }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
@@ -1072,7 +1017,6 @@ public actor LocalACPClient {
             throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
         if configuration.permission == permission { return configuration }
-        if runtimeKind == .cursor { throw LocalACPClientError.permissionChangeRequiresRestart }
         if runtimeKind == .grokBuild {
             throw LocalACPClientError.permissionChangeRequiresRestart
         }
@@ -1126,9 +1070,6 @@ public actor LocalACPClient {
             throw LocalACPClientError.sessionNotInitialized
         }
         if let model {
-            let model = runtimeKind == .cursor
-                ? CursorACPSupport.baseModelID(model)
-                : model
             if let modelConfigurationID {
                 try validateConfigurationValue(
                     model,
@@ -1377,7 +1318,7 @@ public actor LocalACPClient {
             return await LocalACPActiveInputReceipt(
                 completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
             )
-        case .piRPC, .unsupported:
+        case .unsupported:
             throw LocalACPClientError.activeInputUnsupported
         }
     }
@@ -1391,10 +1332,10 @@ public actor LocalACPClient {
             steeringSupported ? .acpSteering : .unsupported
         case .grokBuild:
             .grokInterjection
-        case .hermes, .cursor, .opencode, .openclaw:
+        case .opencode:
             .concurrentPrompt
-        case .pi:
-            .piRPC
+        case .hermes, .cursor, .openclaw, .pi:
+            .unsupported
         }
     }
 
@@ -1444,19 +1385,10 @@ public actor LocalACPClient {
             throw LocalACPClientError.sessionNotInitialized
         }
         let outboundText = input.transportText().trimmingCharacters(in: .whitespacesAndNewlines)
-        // Native commands must stay at the start of the message. Defer ACP v1's
-        // instruction prefix until an ordinary prompt instead of consuming it here.
-        let initialSystemPrompt = initialSystemPromptInFlight || outboundText.hasPrefix("/")
-            ? nil
-            : pendingInitialSystemPrompt
-        let prefixedText = initialSystemPrompt.map {
-            "[System]\n\($0)\n\n\(outboundText)"
-        } ?? outboundText
         // Validate attachments before reserving state, then reserve before the
         // async history write. Another prompt or notification can arrive there.
-        let blocks = try Self.promptBlocks(input, text: prefixedText)
+        let blocks = try Self.promptBlocks(input, text: outboundText)
         let promptID = UUID()
-        if initialSystemPrompt != nil { initialSystemPromptInFlight = true }
         activePrompts.append(ActivePrompt(id: promptID, onEvent: onEvent,
             onPermission: onPermission, onInteraction: onInteraction))
         let response: Task<ACPRequestResponse, any Error>
@@ -1480,7 +1412,6 @@ public actor LocalACPClient {
                 dispatchFence: dispatchFence
             )
         } catch {
-            if initialSystemPrompt != nil { resolveInitialSystemPrompt(succeeded: false) }
             promptRequestFinished(promptID)
             throw error
         }
@@ -1494,15 +1425,9 @@ public actor LocalACPClient {
                 if let usage = Self.usage(from: result.value) {
                     try await onEvent?(.usage(usage))
                 }
-                if initialSystemPrompt != nil {
-                    self.resolveInitialSystemPrompt(succeeded: true)
-                }
                 self.promptRequestFinished(promptID)
                 return reason
             } catch {
-                if initialSystemPrompt != nil {
-                    self.resolveInitialSystemPrompt(succeeded: false)
-                }
                 self.promptRequestFinished(promptID)
                 throw error
             }
@@ -1527,13 +1452,6 @@ public actor LocalACPClient {
         // Removing one request must preserve handlers owned by other prompts,
         // including when a queued send fails or replies finish out of order.
         activePrompts.removeAll { $0.id == id }
-    }
-
-    private func resolveInitialSystemPrompt(succeeded: Bool) {
-        initialSystemPromptInFlight = false
-        if succeeded {
-            pendingInitialSystemPrompt = nil
-        }
     }
 
     nonisolated static func promptBlocks(
@@ -1634,16 +1552,16 @@ public actor LocalACPClient {
         let pending = pendingPermissionRequestIDs.filter { id in
             !interactiveResponses.values.contains { $0.id == id && $0.fence.hasDispatched }
         }
-        let cursorRequests = pendingCursorRequests.filter { request in
+        let interactiveRequests = pendingInteractiveRequests.filter { request in
             !interactiveResponses.values.contains { $0.id == request.id && $0.fence.hasDispatched }
         }
         pendingPermissionRequestIDs.removeAll()
-        pendingCursorRequests.removeAll()
+        pendingInteractiveRequests.removeAll()
         for id in pending {
             try await respondWithCancelledPermission(id: id)
         }
-        for request in cursorRequests {
-            try await respondToCancelledCursorRequest(request)
+        for request in interactiveRequests {
+            try await respondToCancelledInteractiveRequest(request)
         }
         try await write(ACPEnvelope(
             method: "session/cancel",
@@ -1832,13 +1750,13 @@ public actor LocalACPClient {
         }
         if envelope.method == "$/cancel_request" {
             if let id = envelope.params?["requestId"],
-               let pending = pendingCursorRequests.first(where: { $0.id == id && $0.method == "elicitation/create" }) {
+               let pending = pendingInteractiveRequests.first(where: { $0.id == id && $0.method == "elicitation/create" }) {
                 elicitationDecisions.first(where: { $0.id == id })?.decision.cancel()
                 let responses = interactiveResponses.values.filter { $0.id == id }
                 for response in responses { response.fence.cancel() }
-                _ = removePendingCursorRequest(id: id)
+                _ = removePendingInteractiveRequest(id: id)
                 if !responses.contains(where: { $0.fence.hasDispatched }) {
-                    try await respondToCancelledCursorRequest(pending)
+                    try await respondToCancelledInteractiveRequest(pending)
                 }
             }
             return
@@ -1850,12 +1768,12 @@ public actor LocalACPClient {
             }
             guard let requestedSession = envelope.params?["sessionId"]?.stringValue,
                   requestedSession == sessionID, !sessionCancellationRequested else {
-                try await respondToCancelledCursorRequest(PendingCursorRequest(id: id, method: "elicitation/create"))
+                try await respondToCancelledInteractiveRequest(PendingInteractiveRequest(id: id, method: "elicitation/create"))
                 return
             }
-            guard !pendingCursorRequests.contains(where: { $0.id == id }) else { return }
+            guard !pendingInteractiveRequests.contains(where: { $0.id == id }) else { return }
             // Register before queueing: cancellation can precede UI delivery.
-            pendingCursorRequests.append(PendingCursorRequest(id: id, method: "elicitation/create"))
+            pendingInteractiveRequests.append(PendingInteractiveRequest(id: id, method: "elicitation/create"))
         }
         enqueueNotification(envelope)
         if runtimeKind == .codex, envelope.method == "session/update", belongsToActiveSession(envelope),
@@ -1956,38 +1874,6 @@ public actor LocalACPClient {
             )
         } else if envelope.method == "elicitation/create" {
             try await respondToElicitation(envelope)
-        } else if envelope.method == "cursor/ask_question" {
-            try await respondToCursorQuestion(
-                envelope,
-                handler: activeInteractionHandler
-            )
-        } else if envelope.method == "cursor/create_plan" {
-            guard belongsToActiveSession(envelope) else {
-                if let id = envelope.id {
-                    try await respondToCancelledCursorRequest(PendingCursorRequest(id: id, method: "cursor/create_plan"))
-                }
-                return
-            }
-            if let id = activeReasoningPhaseID {
-                activeReasoningPhaseID = nil
-                try await completeReasoningPhase(id)
-            }
-            if let event = Self.cursorPlanEvent(from: envelope) {
-                try await activeEventHandler?(event)
-            }
-            try await respondToCursorPlan(
-                envelope,
-                handler: activeInteractionHandler
-            )
-        } else if envelope.method == "cursor/update_todos" {
-            guard belongsToActiveSession(envelope) else { return }
-            if let id = activeReasoningPhaseID {
-                activeReasoningPhaseID = nil
-                try await completeReasoningPhase(id)
-            }
-            if let event = Self.cursorTodoEvent(from: envelope) {
-                try await activeEventHandler?(event)
-            }
         } else if envelope.method != nil, envelope.id != nil {
             try await write(ACPEnvelope(
                 id: envelope.id,
@@ -2063,8 +1949,7 @@ public actor LocalACPClient {
 
     private func captureSessionConfiguration(from value: ACPJSONValue?) {
         guard let value else { return }
-        // Codex/Claude modes govern approval policy. Cursor's agent/plan/ask
-        // modes govern execution and must not appear as permission choices.
+        // Codex and Claude advertise their native approval policies as modes.
         if runtimeKind == .codex || runtimeKind == .claudeCode,
            let modes = value["modes"],
            let available = modes["availableModes"]?.arrayValue {
@@ -2209,19 +2094,6 @@ public actor LocalACPClient {
                 permissionOptionMetadata: LocalACPSessionPermissions.grokMetadata
             )
         }
-        if runtimeKind == .cursor {
-            // ACP agent/plan/ask are execution modes; permissions are native process flags.
-            configuration = LocalACPSessionConfiguration(
-                model: configuration.model, thinking: configuration.thinking,
-                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands,
-                modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                permission: cursorPermission,
-                permissionOptions: LocalACPSessionPermissions.cursorOptions,
-                permissionOptionMetadata: LocalACPSessionPermissions.cursorMetadata
-            )
-        }
     }
 
     private struct ParsedConfigurationOption {
@@ -2350,13 +2222,6 @@ public actor LocalACPClient {
         _ envelope: ACPEnvelope,
         handler: PermissionHandler?
     ) async throws {
-        if runtimeKind == .cursor,
-           let id = envelope.id,
-           let requestSessionID = envelope.params?["sessionId"]?.stringValue,
-           let sessionID, requestSessionID != sessionID {
-            try await respondWithCancelledPermission(id: id)
-            return
-        }
         guard let id = envelope.id,
               let rawOptions = envelope.params?["options"]?.arrayValue else {
             throw LocalACPClientError.invalidPermissionRequest
@@ -2406,18 +2271,18 @@ public actor LocalACPClient {
     }
 
     private func respondToElicitation(_ envelope: ACPEnvelope) async throws {
-        guard let id = envelope.id, pendingCursorRequests.contains(where: { $0.id == id }) else { return }
+        guard let id = envelope.id, pendingInteractiveRequests.contains(where: { $0.id == id }) else { return }
         guard envelope.params?["mode"]?.stringValue == "form",
               let message = envelope.params?["message"]?.stringValue,
               let schema = envelope.params?["requestedSchema"] else {
-            _ = removePendingCursorRequest(id: id)
+            _ = removePendingInteractiveRequest(id: id)
             try await write(ACPEnvelope(id: id, error: .init(code: -32602, message: "Only form elicitation is supported")))
             return
         }
         let request: LocalACPFormRequest
         do { request = try LocalACPFormRequest.parse(message: message, schema: schema) }
         catch {
-            _ = removePendingCursorRequest(id: id)
+            _ = removePendingInteractiveRequest(id: id)
             try await write(ACPEnvelope(id: id, error: .init(code: -32602, message: "Unsupported elicitation form schema")))
             return
         }
@@ -2427,114 +2292,12 @@ public actor LocalACPClient {
         let handler = activeInteractionHandler
         decision.start { await handler?(.form(request)) ?? .cancelled }
         let response = await decision.value()
-        guard pendingCursorRequests.contains(where: { $0.id == id }) else { return }
+        guard pendingInteractiveRequests.contains(where: { $0.id == id }) else { return }
         let result: ACPJSONValue
         if case .formValues(let values) = response, request.accepts(values) {
             result = .object(["action": .string("accept"), "content": .object(values.mapValues(\.json))])
         } else { result = .object(["action": .string("cancel")]) }
         try await writeInteractiveResponse(ACPEnvelope(id: id, result: result))
-    }
-
-    private func respondToCursorQuestion(
-        _ envelope: ACPEnvelope,
-        handler: InteractionHandler?
-    ) async throws {
-        guard let id = envelope.id,
-              envelope.params?["toolCallId"]?.stringValue != nil,
-              let rawQuestions = envelope.params?["questions"]?.arrayValue else {
-            throw LocalACPClientError.invalidCursorExtension("cursor/ask_question")
-        }
-        let questions = rawQuestions.compactMap { value -> LocalACPQuestion? in
-            guard let questionID = value["id"]?.stringValue,
-                  let prompt = value["prompt"]?.stringValue,
-                  let rawOptions = value["options"]?.arrayValue else { return nil }
-            var options = rawOptions.compactMap { option -> LocalACPQuestionOption? in
-                guard let optionID = option["id"]?.stringValue,
-                      let label = option["label"]?.stringValue else { return nil }
-                return LocalACPQuestionOption(id: optionID, label: label)
-            }
-            guard options.count == rawOptions.count,
-                  value["allowMultiple"] == nil
-                    || value["allowMultiple"]?.boolValue != nil else { return nil }
-            if options.isEmpty {
-                options = [LocalACPQuestionOption(id: "ok", label: "OK")]
-            }
-            return LocalACPQuestion(
-                id: questionID,
-                prompt: prompt,
-                options: options,
-                allowsMultiple: value["allowMultiple"]?.boolValue == true
-            )
-        }
-        guard questions.count == rawQuestions.count, !questions.isEmpty else {
-            throw LocalACPClientError.invalidCursorExtension("cursor/ask_question")
-        }
-        let request = LocalACPQuestionRequest(
-            title: envelope.params?["title"]?.stringValue,
-            questions: questions
-        )
-        let pending = PendingCursorRequest(id: id, method: "cursor/ask_question")
-        guard !sessionCancellationRequested else {
-            try await respondToCancelledCursorRequest(pending)
-            return
-        }
-        pendingCursorRequests.append(pending)
-        let response = await handler?(.questions(request)) ?? .cancelled
-        guard pendingCursorRequests.contains(where: { $0.id == id }) else { return }
-
-        let answers: [String: ACPJSONValue]
-        if case .answers(let values) = response {
-            answers = values.mapValues { answer in
-                switch answer {
-                case .single(let value):
-                    .string(value)
-                case .multiple(let values):
-                    .array(values.map(ACPJSONValue.string))
-                }
-            }
-        } else {
-            answers = [:]
-        }
-        try await writeInteractiveResponse(ACPEnvelope(
-            id: id,
-            result: .object(["answers": .object(answers)])
-        ))
-    }
-
-    private func respondToCursorPlan(
-        _ envelope: ACPEnvelope,
-        handler: InteractionHandler?
-    ) async throws {
-        guard let id = envelope.id,
-              envelope.params?["toolCallId"]?.stringValue != nil,
-              let markdown = envelope.params?["plan"]?.stringValue,
-              envelope.params?["todos"]?.arrayValue != nil else {
-            throw LocalACPClientError.invalidCursorExtension("cursor/create_plan")
-        }
-        let request = LocalACPPlanRequest(
-            name: envelope.params?["name"]?.stringValue,
-            overview: envelope.params?["overview"]?.stringValue,
-            markdown: markdown.isEmpty
-                ? "# Plan\n\n(Cursor did not supply plan text.)"
-                : markdown
-        )
-        let pending = PendingCursorRequest(id: id, method: "cursor/create_plan")
-        guard !sessionCancellationRequested else {
-            try await respondToCancelledCursorRequest(pending)
-            return
-        }
-        pendingCursorRequests.append(pending)
-        let response = await handler?(.plan(request)) ?? .cancelled
-        guard pendingCursorRequests.contains(where: { $0.id == id }) else { return }
-        let accepted = if case .planAccepted(let accepted) = response {
-            accepted
-        } else {
-            false
-        }
-        try await writeInteractiveResponse(ACPEnvelope(
-            id: id,
-            result: .object(["accepted": .bool(accepted)])
-        ))
     }
 
     private func writeInteractiveResponse(_ envelope: ACPEnvelope) async throws {
@@ -2545,7 +2308,7 @@ public actor LocalACPClient {
         defer {
             interactiveResponses.removeValue(forKey: key)
             pendingPermissionRequestIDs.removeAll { $0 == id }
-            _ = removePendingCursorRequest(id: id)
+            _ = removePendingInteractiveRequest(id: id)
         }
         do {
             try await write(envelope, dispatchFence: fence)
@@ -2558,25 +2321,18 @@ public actor LocalACPClient {
         }
     }
 
-    private func removePendingCursorRequest(id: ACPJSONValue) -> Bool {
-        guard let index = pendingCursorRequests.firstIndex(where: { $0.id == id }) else {
+    private func removePendingInteractiveRequest(id: ACPJSONValue) -> Bool {
+        guard let index = pendingInteractiveRequests.firstIndex(where: { $0.id == id }) else {
             return false
         }
-        pendingCursorRequests.remove(at: index)
+        pendingInteractiveRequests.remove(at: index)
         return true
     }
 
-    private func respondToCancelledCursorRequest(
-        _ request: PendingCursorRequest
+    private func respondToCancelledInteractiveRequest(
+        _ request: PendingInteractiveRequest
     ) async throws {
-        let result: ACPJSONValue = if request.method == "elicitation/create" {
-            .object(["action": .string("cancel")])
-        } else if request.method == "cursor/create_plan" {
-            .object(["accepted": .bool(false)])
-        } else {
-            .object(["answers": .object([:])])
-        }
-        try await write(ACPEnvelope(id: request.id, result: result))
+        try await write(ACPEnvelope(id: request.id, result: .object(["action": .string("cancel")])))
     }
 
     private func respondWithCancelledPermission(id: ACPJSONValue) async throws {
@@ -2658,11 +2414,6 @@ public actor LocalACPClient {
     ) -> Bool {
         if code == resourceNotFoundErrorCode {
             return true
-        }
-        if runtimeKind == .cursor, code == -32_602 {
-            return message.localizedCaseInsensitiveContains(
-                "session \"\(expectedSessionID)\" not found"
-            )
         }
         return runtimeKind == .codex
             && code == -32_603
@@ -2796,70 +2547,6 @@ public actor LocalACPClient {
         }
     }
 
-    private static func cursorTodoEvent(from envelope: ACPEnvelope) -> LocalACPEvent? {
-        guard let params = envelope.params,
-              params["toolCallId"]?.stringValue != nil,
-              let merge = params["merge"]?.boolValue,
-              let rawTodos = params["todos"]?.arrayValue else { return nil }
-        let entries = rawTodos.compactMap(cursorPlanEntry)
-        return .activity(
-            AgentRunActivity(
-                id: "cursor-todos",
-                kind: .plan,
-                phase: !merge && entries.isEmpty ? "clear" : "update",
-                title: "Plan",
-                status: entries.allSatisfy { $0.status == "completed" }
-                    ? "completed"
-                    : "running",
-                planEntries: entries,
-                rawPayloadJSON: jsonString(params),
-                planKind: "checklist", planOperation: merge ? "merge" : "replace"
-            ),
-            appendsContent: false
-        )
-    }
-
-    private static func cursorPlanEvent(from envelope: ACPEnvelope) -> LocalACPEvent? {
-        guard let params = envelope.params,
-              let toolCallID = params["toolCallId"]?.stringValue,
-              let markdown = params["plan"]?.stringValue,
-              let rawTodos = params["todos"]?.arrayValue else { return nil }
-        let entries = rawTodos.compactMap(cursorPlanEntry)
-        return .activity(
-            AgentRunActivity(
-                id: toolCallID,
-                kind: .plan,
-                phase: "update",
-                title: params["name"]?.stringValue ?? "Proposed plan",
-                status: "completed",
-                content: markdown.nilIfEmpty,
-                planEntries: entries,
-                rawPayloadJSON: jsonString(params),
-                planKind: "proposal", planOperation: "replace"
-            ),
-            appendsContent: false
-        )
-    }
-
-    private static func cursorPlanEntry(_ value: ACPJSONValue) -> AgentRunPlanEntry? {
-        let content = value["content"]?.stringValue?.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        let title = value["title"]?.stringValue?.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard let step = [content, title]
-            .compactMap({ $0 })
-            .first(where: { !$0.isEmpty }) else { return nil }
-        let status = switch value["status"]?.stringValue {
-        case "completed": "completed"
-        case "in_progress", "inProgress": "in_progress"
-        case "cancelled", "canceled": "cancelled"
-        default: "pending"
-        }
-        return AgentRunPlanEntry(content: step, status: status, nativeID: value["id"]?.stringValue)
-    }
-
     private static func toolActivity(
         _ update: ACPJSONValue,
         phase: String,
@@ -2969,7 +2656,6 @@ public enum LocalACPClientError: LocalizedError, Sendable {
     case configurationNotConfirmed(String)
     case permissionChangeRequiresRestart
     case invalidConfigurationValue(field: String, value: String)
-    case invalidCursorExtension(String)
     case agent(code: Int, message: String)
 
     public var errorDescription: String? {
@@ -3009,8 +2695,6 @@ public enum LocalACPClientError: LocalizedError, Sendable {
             "This harness requires reconnecting the session to change its permission mode."
         case .invalidConfigurationValue(let field, let value):
             "The ACP agent did not advertise \"\(value)\" as a selectable \(field) for this session."
-        case .invalidCursorExtension(let method):
-            "Cursor sent an invalid \(method) request."
         case .agent(let code, let message):
             "The ACP agent reported error \(code): \(message)"
         }

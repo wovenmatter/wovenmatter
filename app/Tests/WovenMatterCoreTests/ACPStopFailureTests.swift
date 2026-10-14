@@ -68,7 +68,7 @@ struct ACPStopFailureTests {
         func prepare() async throws {
             _ = try await coordinator.configuration(conversationID: id,
                 launch: .init(runtimeKind: .codex, executableURL: URL(filePath: "/nonexistent-stop-fixture"), arguments: []),
-                workspace: .init(rootURL: directory, repositoriesURL: directory))
+                workspace: .init(rootURL: directory))
         }
         func cleanUp() { try? FileManager.default.removeItem(at: directory) }
     }

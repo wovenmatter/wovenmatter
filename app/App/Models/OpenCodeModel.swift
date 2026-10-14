@@ -36,6 +36,7 @@ final class OpenCodeModel {
     private var backendCommandGeneration = UUID()
     var backendSnapshotGeneration: UUID { backendSnapshotToken }
     var links: [String: OpenCodeSessionLink] = [:]
+    private var resumableSessionIDs: Set<String> = []
     var snapshots: [String: OpenCodeSessionSnapshot] = [:]
     var uncertainSubmissions: [String: [OpenCodeValue]] = [:]
     var statuses: [String: String] = [:]
@@ -128,6 +129,8 @@ final class OpenCodeModel {
         if remoteConfiguration == nil, let path = defaults.string(forKey: preference("executable")), FileManager.default.isExecutableFile(atPath: path) { executable = URL(fileURLWithPath: path) }
         let identity = remoteConfiguration.map { "remote-workspace:" + $0.id.uuidString.lowercased() }
             ?? "local:" + registration.standardizedFileURL.path
+        resumableSessionIDs = Set(((try? await store.database.resumableOpenCodeLinks()) ?? [])
+            .filter { $0.connectionID == identity }.map(\.conversationID))
         for link in (try? await store.database.openCodeLinks()) ?? [] where link.connectionID == identity {
             links[link.conversationID] = link
             if let snapshot = try? await store.database.openCodeSnapshot(conversationID: link.conversationID) {
@@ -169,7 +172,7 @@ final class OpenCodeModel {
         connectionTask?.cancel()
     }
 
-    func isLocalSession(_ id: String) -> Bool { links[id]?.connectionID == connectionID }
+    func isLocalSession(_ id: String) -> Bool { resumableSessionIDs.contains(id) && links[id]?.connectionID == connectionID }
 
     func restore() async {
         if isBackendProjection { do { _ = try await backendCommand(.restore) } catch { self.error = error.localizedDescription }; return }
@@ -243,7 +246,9 @@ final class OpenCodeModel {
             isEnabled = true
             defaults.set(true, forKey: preference("enabled"))
             defaults.set(true, forKey: preference("local-connected"))
-            for link in links.values where link.connectionID == connectionID { await coordinator.watch(link) }
+            resumableSessionIDs = Set((try await store.database.resumableOpenCodeLinks())
+                .filter { $0.connectionID == connectionID }.map(\.conversationID))
+            for link in links.values where isLocalSession(link.conversationID) { await coordinator.watch(link) }
         }
         connectionTask = task
         defer { if generation == connectionGeneration { connectionTask = nil; isConnecting = false } }
@@ -347,8 +352,8 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil) async throws -> String {
-        if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID)).createdID ?? "" }
+    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false) async throws -> String {
+        if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder)).createdID ?? "" }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
@@ -381,7 +386,7 @@ final class OpenCodeModel {
                 workspace: URL(fileURLWithPath: captured.nativeDirectory), recover: pending != nil || requestedConversationID != nil,
                 title: title, nativeWorkspaceID: nativeWorkspaceID)
             nativeCreationConfirmed = true
-            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured)
+            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured, allowMissingCalendarFolder: allowMissingCalendarFolder)
             defaults.removeObject(forKey: pendingKey)
             defaults.removeObject(forKey: selectionKey)
             return localID
@@ -417,7 +422,7 @@ final class OpenCodeModel {
     }
 
     private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil,
-                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil) async throws -> String {
+                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil, allowMissingCalendarFolder: Bool = false) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -425,11 +430,11 @@ final class OpenCodeModel {
             conversationID = try await store.database.createRemoteACPSession(runtimeKind: .opencode,
                 remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID)
+                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
         } else {
             conversationID = try await store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID)
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
@@ -438,26 +443,46 @@ final class OpenCodeModel {
         var initial = existing ?? persisted ?? OpenCodeSessionSnapshot()
         initial.info = session
         snapshots[conversationID] = initial
+        try await store.database.saveOpenCodeSnapshot(initial, conversationID: conversationID)
         if let captured = creationPreferences {
             sessionPreferences.captureConversation(id: conversationID,
                 harness: AgentRuntimeKind.opencode.rawValue, workspace: captured.workspace,
                 nativeFallback: nativeSelections(conversationID), capturedDefaults: captured.selections,
                 usesProductPermissionDefault: captured.usesProductPermissionDefault ?? false)
         }
-        if creationPreferences != nil, let captured = sessionPreferences.conversation(id: conversationID), captured.requiresApplication {
-            try await applySessionSelections(conversationID, selections: captured.desiredSelections)
-            sessionPreferences.markApplied(id: conversationID)
-        } else {
-            do { try await refreshCatalog(conversationID) }
-            catch { self.error = error.localizedDescription }
-            if creationPreferences == nil {
-                // Imports retain their own native settings, irrespective of defaults.
-                captureExistingSelections(conversationID)
-            }
+        if importedSnapshot != nil {
+            try await store.database.archiveImportedOpenCodeSession(conversationID: conversationID)
+            statuses[conversationID] = "Saved transcript"
         }
-        await coordinator.watch(link)
         await onChange?(conversationID)
         return conversationID
+    }
+
+    /// Creation stays passive until the owning folder/root has committed.
+    func activateCreatedSession(_ id: String) async throws {
+        if isBackendProjection { _ = try await backendCommand(.activateCreated(id)); return }
+        _ = try await store.database.openCodeExecutionRoot(conversationID: id)
+        guard let link = links[id], link.connectionID == connectionID else {
+            throw OpenCodeError.message("This workspace's new OpenCode chat is unavailable.")
+        }
+        resumableSessionIDs.insert(id)
+        if let captured = sessionPreferences.conversation(id: id), captured.requiresApplication {
+            try await applySessionSelections(id, selections: captured.desiredSelections)
+            sessionPreferences.markApplied(id: id)
+        } else {
+            try await refreshCatalog(id)
+        }
+        await coordinator.watch(link)
+    }
+
+    func validateExecutionRoot(_ id: String) async throws {
+        if isBackendProjection { _ = try await backendCommand(.validateExecutionRoot(id)); return }
+        _ = try await store.database.openCodeExecutionRoot(conversationID: id)
+        guard let link = links[id], isLocalSession(id) else {
+            throw OpenCodeError.message("This saved OpenCode transcript is read-only. Start a new chat.")
+        }
+        if !isReady { try await connectLocal() }
+        try await coordinator.validateExecutionRoot(link)
     }
 
     func sessionCall(_ id: String, _ suffix: String = "", method: String = "GET", body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
@@ -470,6 +495,27 @@ final class OpenCodeModel {
         let result = try await coordinator.sessionCall(link, suffix: suffix, method: method, body: body)
         if method != "GET" { try? await coordinator.refresh(link) }
         return result
+    }
+
+    /// The app validates the folder change against its unsent draft first.
+    /// OpenCode's native move preserves the session while fixing its execution cwd.
+    func moveDraftWorkspace(conversationID id: String, root: URL) async throws {
+        if isBackendProjection { _ = try await backendCommand(.moveDraft(id, root)); return }
+        guard let link = links[id], isLocalSession(id), let snapshot = snapshots[id],
+              snapshot.messages.isEmpty, !snapshot.active, snapshot.inbox.isEmpty,
+              pendingDispatches[id] == nil else {
+            throw OpenCodeError.message("Only an unsent OpenCode draft can choose a folder.")
+        }
+        let directory = root.standardizedFileURL.path
+        _ = try await sessionCall(id, "/move", method: "POST", body: ["directory": .string(directory)])
+        _ = try await coordinator.call(connectionID: link.connectionID, method: "POST",
+            path: "/api/experimental/session/" + OpenCodeHTTPClient.segment(link.sessionID) + "/wait")
+        let confirmed = try await sessionCall(id)
+        guard confirmed["data"]["id"].string == link.sessionID,
+              confirmed["data"]["location"]["directory"].string == directory else {
+            throw OpenCodeError.message("OpenCode has not confirmed this draft's folder. Refresh and choose it again before sending.")
+        }
+        snapshots[id]?.info = confirmed["data"]
     }
 
     func locationQuery(_ id: String) -> [String: String] {
@@ -510,6 +556,7 @@ final class OpenCodeModel {
     func refreshCatalog(_ id: String) async throws {
         if isBackendProjection { _ = try await backendCommand(.catalog(id)); await hydrateBackendSessions([id]); return }
         guard isLocalSession(id) else { return }
+        _ = try await store.database.openCodeExecutionRoot(conversationID: id)
         let result = try await coordinator.call(connectionID: connectionID, path: "/api/model", query: locationQuery(id))
         let fallback = try await coordinator.call(connectionID: connectionID, path: "/api/model/default", query: locationQuery(id))
         models[id] = result["data"].array.filter { $0["enabled"].bool }
@@ -711,6 +758,7 @@ final class OpenCodeModel {
 extension OpenCodeModel {
     struct BackendSnapshot: Codable, Sendable {
         var links: [String: OpenCodeSessionLink]
+        var resumableSessionIDs: Set<String>
         var sessionRevisions: [String: UInt64]
         var statuses: [String: String]
         var errors: [String: String]
@@ -739,7 +787,7 @@ extension OpenCodeModel {
         var commands: [String: [OpenCodeValue]]
     }
     func backendSnapshot(catalogSessionID: String? = nil, includeSettingsCatalog: Bool = false) -> BackendSnapshot {
-        BackendSnapshot(links: links, sessionRevisions: backendSessionRevisions, statuses: statuses, errors: errors,
+        BackendSnapshot(links: links, resumableSessionIDs: resumableSessionIDs, sessionRevisions: backendSessionRevisions, statuses: statuses, errors: errors,
             error: error, installed: isInstalled, registration: hasServerRegistration, canConnect: canConnect,
             enabled: isEnabled, ready: isReady, connecting: isConnecting, busy: busy, installing: isInstalling,
             installationFailures: installationFailures, inventory: installationInventory, controlling: isControllingServer,
@@ -756,6 +804,7 @@ extension OpenCodeModel {
         applyingBackendSnapshot = true
         defer { applyingBackendSnapshot = false }
         if links != value.links { links = value.links }; backendSessionRevisions = value.sessionRevisions; if statuses != value.statuses { statuses = value.statuses }; if errors != value.errors { errors = value.errors }
+        resumableSessionIDs = value.resumableSessionIDs
         error = value.error; projectedInstalled = value.installed; projectedRegistration = value.registration
         projectedCanConnect = value.canConnect; isEnabled = value.enabled; isReady = value.ready
         isConnecting = value.connecting; busy = value.busy; isInstalling = value.installing
@@ -803,6 +852,11 @@ extension OpenCodeModel {
     }
     func watch(_ link: OpenCodeSessionLink) async {
         if isBackendProjection { do { _ = try await backendCommand(.watch(link.conversationID)); await hydrateBackendSessions([link.conversationID]) } catch { self.error = error.localizedDescription }; return }
+        guard (try? await store.database.openCodeExecutionRoot(conversationID: link.conversationID)) != nil else {
+            resumableSessionIDs.remove(link.conversationID)
+            return
+        }
+        resumableSessionIDs.insert(link.conversationID)
         await coordinator.watch(link)
     }
     func shutdown() async { if !isBackendProjection { await coordinator.shutdown() } }
@@ -818,6 +872,7 @@ extension OpenCodeModel {
     func readFile(_ id: String, path: String) async throws -> Data {
         if isBackendProjection { return try await backendCommand(.file(id, path)).data ?? Data() }
         guard let link = links[id] else { throw OpenCodeError.message("The session is unavailable.") }
+        _ = try await store.database.openCodeExecutionRoot(conversationID: id)
         return try await coordinator.readFile(connectionID: link.connectionID, path: path, query: locationQuery(id)).0
     }
     func acknowledgeSubmission(_ id: String, submission: OpenCodeValue) async throws {

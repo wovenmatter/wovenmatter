@@ -4,11 +4,10 @@
 
 **The workspace for all of your harnesses.**
 
-WovenMatter brings **Codex, Claude Code, Grok Build, Cursor, Hermes, OpenClaw,
-OpenCode, and Pi** together in one workspace. Work with all of your harnesses
+WovenMatter brings **Pi Durable, Codex, Claude Code, Grok Build, and OpenCode** together in one workspace. Work with all of your harnesses
 in a simple, easy-to-use interface that keeps all of your work organized in one
-place. All of your agents within each workspace work out of the same root,
-allowing them to collaborate and work together seamlessly. WovenMatter ships
+place. Each project folder owns one directory in one execution workspace,
+so its agents collaborate on the files you choose. WovenMatter ships
 with a local agent workspace, which runs locally on your Mac. You can also
 launch remote agent workspaces on other machines on your network or Tailscale
 network, and work with those agents from the same interface.
@@ -32,18 +31,20 @@ See [Pi Durable](docs/guide/default-agent.md).
 ## Your agents, working in the same place
 
 WovenMatter is a lightweight macOS app designed to let you work and collaborate
-with all of your different harnesses. Each of the eight harnesses has a
+with all of your different harnesses. Each supported harness has a
 dedicated first-class integration. Use your existing installations or install
 harnesses in the settings page. Use your existing provider accounts and/or API keys.
 Models, authentication, and controls depend on the harness you use.
 
-All agents in your **local agent workspace** work from the same root on your
-Mac. They can use the same project files, instructions, research, and plans.
-When you work with another harness, that shared material is already there.
+Each project folder has one fixed root directory and one owning **execution
+workspace**. Create a blank project on your Mac or in a connected remote
+workspace, or link an existing directory on your Mac. Agents in that workspace
+can work on the project's files using their native permissions and project
+instructions.
 
-Each **remote agent workspace** follows the same pattern: its agents share a
-root within that workspace. You choose where the work happens, and use Woven
-Matter to work with agents in all of those locations.
+Choose the folder before a chat's first message. The folder and working
+directory are then fixed for that session. **Ungrouped** chats use one default
+directory per execution workspace.
 
 ## Your conversations, saved together
 
@@ -92,9 +93,11 @@ Agents can also read and edit a note you're working on through Woven Matter's
 note tools. This gives longer responses and reference material a place beside
 the chat, where you can keep reading without scrolling back through messages.
 
-Database folders give agents a place to curate data that you can revisit or
-present in spreadsheets and HTML artifacts. Usage, Calendar, Library, and Cron
-Jobs add other ways to organize and follow your work.
+Managed SQLite databases let agents curate data that you can revisit in live
+note tables and values, spreadsheets, and HTML artifacts. Each database has one
+writable workspace owner; the Mac keeps complete readable replicas of remote
+data. Usage, Calendar, Library, and Scheduled Tasks add other ways to organize
+and follow your work.
 
 Read more about [conversations and panels](docs/guide/conversations.md),
 [notes and data](docs/guide/notes-and-data.md), and
@@ -124,29 +127,21 @@ the installation and connection steps.
 
 ## Workspace layout
 
-The local agent workspace starts at `~/.woven-matter`. Each app-created remote
-workspace starts at `/home/.woven-matter` inside its persistent container home.
-Both use this initial layout:
+Managed project directories live under `~/.woven-matter` on your Mac and
+`/home/.woven-matter` inside each remote container. A newly created project is
+blank: Woven does not add preset folders, `AGENTS.md`, or `CLAUDE.md`. Existing
+linked directories and their instructions remain yours.
 
-```text
-.woven-matter/
-  AGENTS.md
-  CLAUDE.md -> AGENTS.md
-  repos/
-  databases/
-  guides/
-  plans/
-  research/
-  work_logs/
-  outbox/
-  scratch/
-  skills/
-```
+Renaming a folder changes its display name only. Removing it can preserve its
+files; deleting its physical root is offered only for managed project
+directories. Additional reference locations belong to the same execution
+workspace. Project files are not synchronized between devices.
 
-Adapt the contents to your work. On your Mac, `repos` and `databases` can link
-to folders you already use. Initialization preserves an existing `CLAUDE.md`
-instead of replacing it. See [Workspaces and storage](docs/guide/workspaces.md)
-for folder setup and the distinction between workspace files and app records.
+Named databases live in Woven's application or service storage, separate from
+project directories and the internal history/settings database. See
+[Workspaces and storage](docs/guide/workspaces.md) and
+[Notes and data](docs/guide/notes-and-data.md) for folder, replica, and copy
+behavior.
 
 ## Help and feedback
 

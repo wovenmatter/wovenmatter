@@ -4,17 +4,14 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HarnessChecklistTests {
-    @Test func codexCatalogEnablesNativeChecklistWithoutChangingOtherHarnesses() throws {
+    @Test func codexCatalogLeavesInheritedDeveloperInstructionsForNativeComposition() throws {
         let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
-        let encoded = try #require(definition.environment["CODEX_CONFIG"])
-        let config = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as! [String: Any]
-        #expect(config["tools.update_plan.enabled"] as? Bool == true)
-        #expect(config["approvals_reviewer"] as? String == "auto_review")
+        #expect(definition.environment["CODEX_CONFIG"] == nil)
         #expect(definition.adapterPackage == "@agentclientprotocol/codex-acp")
-        #expect(LocalACPRuntimeCatalog.definition(for: .pi)?.environment["CODEX_CONFIG"] == nil)
+        #expect(LocalACPRuntimeCatalog.definition(for: .pi) == nil)
     }
 
-    @Test func hermesUsesCanonicalResultForPartialMergeAndRejectsMalformedUpdates() throws {
+    @Test func archivedHermesChecklistUsesCanonicalResultAndRejectsMalformedUpdates() throws {
         let payload: HermesValue = ["name": "todo_list", "args": ["merge": .bool(true), "todos": .array([
             ["id": "a", "status": "completed"]
         ])], "result": ["revision": .number(2), "todos": .array([
@@ -22,7 +19,7 @@ struct HarnessChecklistTests {
             ["id": "b", "content": "Same label", "status": "cancelled"],
             ["id": "c", "content": "Future state", "status": "waiting"]
         ])]]
-        let plan = try #require(HermesGatewayClient.checklistUpdate(payload))
+        let plan = try #require(HermesSessionArchive.checklistUpdate(payload))
         #expect(plan.planKind == "checklist")
         #expect(plan.planOperation == "replace")
         #expect(plan.planEntries.map(\.nativeID) == ["a", "b", "c"])
@@ -36,11 +33,11 @@ struct HarnessChecklistTests {
             { $0["result"]["todos"] = .array([payload["result"]["todos"].array[0], payload["result"]["todos"].array[0]]) },
         ] {
             var changed = payload; mutation(&changed)
-            #expect(HermesGatewayClient.checklistUpdate(changed) == nil)
+            #expect(HermesSessionArchive.checklistUpdate(changed) == nil)
         }
         var clear = payload
         clear["result"]["todos"] = .array([])
-        let empty = try #require(HermesGatewayClient.checklistUpdate(clear))
+        let empty = try #require(HermesSessionArchive.checklistUpdate(clear))
         #expect(empty.planOperation == "clear")
         #expect(empty.planEntries.isEmpty)
     }

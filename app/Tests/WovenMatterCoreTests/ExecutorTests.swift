@@ -21,17 +21,16 @@ struct ExecutorTests {
         #expect(after.executorProfiles == ["app:profile"])
     }
     @Test func confirmedHarnessModesPreserveTheirMeaning() {
-        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.cursor, "auto"), (.cursor, "force"), (.opencode, "allow"), (.opencode, "full"), (.hermes, "full"), (.openclaw, "full")]
+        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.opencode, "allow"), (.opencode, "full")]
         for (runtime, mode) in full {
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .full)
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode, confirmed: false) == .ask)
         }
-        for (runtime, mode) in [(AgentRuntimeKind.claudeCode, "auto"), (.claudeCode, "acceptEdits"), (.grokBuild, "auto"), (.grokBuild, "acceptEdits"), (.codex, "agent"), (.hermes, "default"), (.openclaw, "workspace"), (.opencode, "acceptEdits"), (.pi, "full")] {
+        for (runtime, mode) in [(AgentRuntimeKind.claudeCode, "auto"), (.claudeCode, "acceptEdits"), (.grokBuild, "auto"), (.grokBuild, "acceptEdits"), (.codex, "agent"), (.opencode, "acceptEdits")] {
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .ask)
         }
         #expect(ExecutorApprovalPolicy.resolve(runtime: .claudeCode, mode: "dontAsk") == .deny)
         #expect(ExecutorApprovalPolicy.resolve(runtime: .codex, mode: "read-only") == .ask)
-        #expect(ExecutorApprovalPolicy.resolve(runtime: .openclaw, mode: "read-only") == .deny)
     }
     @Test func legacyPreferencesDecodeWithoutEnablingExecutor() throws {
         let old = Data(#"{"enabledByDefault":["notes","library"],"calendarAccess":"full","maximumManagedSessions":4,"maximumRunningSessions":16}"#.utf8)
@@ -55,7 +54,7 @@ struct ExecutorTests {
         var config = ExecutorConfiguration(); config.defaultProfiles = ["a:profile"]
         settings.executor = config; settings.enabledByDefault.insert(.executor)
         try await database.saveToolSettings(settings)
-        let first = try await database.createLocalACPSession(runtimeKind: .hermes, title: "First", ownerDeviceID: UUID())
+        let first = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "First", ownerDeviceID: UUID())
         #expect(try await database.sessionTools(existing).executorProfiles == [])
         #expect(try await database.sessionTools(first).executorProfiles == ["a:profile"])
         settings.executor?.defaultProfiles = ["b:profile"]
@@ -65,7 +64,7 @@ struct ExecutorTests {
         try await database.setSessionTools(policy, sessionID: first)
         try await database.applyInitialSessionTools(.init(enabled: [.executor], executorProfiles: ["b:profile"]), sessionID: first)
         #expect(try await database.sessionTools(first).executorProfiles == [])
-        let second = try await database.createLocalACPSession(runtimeKind: .pi, title: "Second", ownerDeviceID: UUID())
+        let second = try await database.createLocalACPSession(runtimeKind: .codex, title: "Second", ownerDeviceID: UUID())
         #expect(try await database.sessionTools(second).executorProfiles == ["b:profile"])
     }
     @Test func executorCLIHasNoAuthorityOrResumeOptions() throws {

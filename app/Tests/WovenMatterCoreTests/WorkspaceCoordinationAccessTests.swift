@@ -10,7 +10,7 @@ struct WorkspaceCoordinationAccessTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let target = try await database.createLocalACPSession(runtimeKind: .pi, title: "Worker", ownerDeviceID: UUID())
+    let target = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
     try await database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
     return (database, directory, source, target)
   }

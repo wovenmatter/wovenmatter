@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+import { harnessResource } from './harness-resources.mjs'
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
 import { createTaskNativeArchive, publishNativePresentation, isolateTaskEnvironment } from './task-native-archive.mjs'
 import { spawn } from 'node:child_process'
@@ -12,13 +14,9 @@ const delay = ms => new Promise(done => setTimeout(done,ms))
 // inherits native policy; explicit saved choices still fail before submission.
 export async function applyTaskConfiguration(rpc, sessionID, initial, configuration) {
   let current = initial
-  for (const [category,wanted] of [['model',configuration.runtimeKind==='cursor' && configuration.model ? configuration.model.trim().split('[')[0] : configuration.model],['thinking',configuration.thinking],['permission',configuration.permission]]) {
+  for (const [category,wanted] of [['model',configuration.model],['thinking',configuration.thinking],['permission',configuration.permission]]) {
     if (!wanted) continue
     if (category === 'permission' && configuration.runtimeKind === 'grok_build') continue // explicit CLI policy
-    if (category === 'permission' && configuration.runtimeKind === 'cursor') {
-      if (!['native-default','force'].includes(wanted)) throw before('The saved Cursor permission is unavailable.')
-      continue
-    }
     const option = (current.configOptions ?? []).find(o => category === 'model' ? o.id === 'model' || o.category === 'model'
       : category === 'thinking' ? ['effort','reasoning_effort','thinking'].includes(o.id) || o.category === 'thought_level'
         : ['permission_mode','approval_mode'].includes(o.id) || (o.id === 'mode' && ['codex','claude_code'].includes(configuration.runtimeKind)))
@@ -39,8 +37,8 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
   }
 }
 
-export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,hermes,instances,launch = spawn,isEnabled = async()=>true }) {
-  const native = createNativeTaskExecutor({workspaceRoot,environment,launch,hermes,instances})
+export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,instances,launch = spawn,isEnabled = async()=>true }) {
+  const native = createNativeTaskExecutor({workspaceRoot,instances})
   return async ({run,nativeSessionID,signal,publish,bindSession}) => {
     const config = run.task.configuration
     if (signal.aborted) throw before('Background execution was turned off.')
@@ -50,12 +48,12 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       const execute = () => runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot})
       return defaultAgent.withRuntimeLease ? defaultAgent.withRuntimeLease(execute) : execute()
     }
-    if (['pi','hermes','opencode'].includes(config.runtimeKind)) {
+    if (config.runtimeKind === 'opencode') {
       if (!await isEnabled(config.runtimeKind)) throw before('This agent is disabled in the workspace.')
       return native({run,nativeSessionID,signal,publish,bindSession})
     }
     const harness = catalog.get(config.runtimeKind)
-    if (!harness || !['acp','agent-stdio','acp-and-gateway'].includes(harness.transport)) throw before('This agent does not yet support autonomous workspace tasks. Use a connected session for this agent.')
+    if (!harness || !['acp','agent-stdio'].includes(harness.transport)) throw before('This agent does not yet support autonomous workspace tasks. Use a connected session for this agent.')
     if (!await isEnabled(harness.id)) throw before('This agent is disabled in the workspace.')
     if (signal.aborted) throw before('Background execution was turned off.')
     const directory = config.nativeWorkingDirectory ?? workspaceRoot
@@ -67,14 +65,12 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       args.unshift('--permission-mode',config.permission)
       const agentIndex=args.indexOf('agent');if(agentIndex>=0)args.splice(agentIndex+1,0,'--no-leader')
     }
-    if (harness.id === 'cursor' && config.permission) {
-      if (!['native-default', 'force'].includes(config.permission)) throw before('The saved Cursor permission is unavailable.')
-      args = args.filter(argument => !['--force', '--yolo', '-f'].includes(argument))
-      if (config.permission === 'force') args.unshift('--force')
-    }
     // Never lend a connected Mac session's identity/tool authority to a task.
     const env = isolateTaskEnvironment(environment(harness))
-    const child = launch(harness.command,args,{cwd:directory,env,stdio:['pipe','pipe','pipe']})
+    const wrapped = ['codex', 'claude_code', 'grok_build'].includes(harness.id)
+    const child = launch(wrapped ? process.execPath : harness.command, wrapped
+      ? [fileURLToPath(harnessResource('cli/adapter.mjs')), harness.id, harness.command, ...args] : args,
+      {cwd:directory,env,stdio:['pipe','pipe','pipe']})
     let count=0, sessionID, accepted=false, terminal=false, needsApproval=false, archive, promptCompleted=false
     const pending = new Map()
     const failAll = error => { for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error) }; pending.clear() }
@@ -91,14 +87,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     const receiveLine = line => {
       let message;try { message=JSON.parse(line) } catch { return }
       if (!message || typeof message !== 'object' || Array.isArray(message)) return
-      if (message.method === 'cursor/update_todos' && harness.id === 'cursor') {
-        // Native Cursor todos are notifications, separate from ACP session/update.
-        // Require the owning session and archive the original notification first.
-        if (!accepted || message.params?.sessionId !== sessionID) return
-        void archive.capture(message, {kind:'cursor/update_todos', present: promptCompleted ? undefined : safe => publish({
-          sessionUpdate:'woven_cursor_todos',nativeSessionID:sessionID,payload:safe.params,
-        })}).catch(() => { failAll(new Error('The task output could not be retained.')); child.kill('SIGTERM') })
-      } else if (message.method && message.id != null) {
+      if (message.method && message.id != null) {
         if (message.method==='session/request_permission') {
           if (accepted && archive && (!message.params?.sessionId || message.params.sessionId === sessionID)) {
             void archive.capture(message.params, {id: `permission:${run.id}:${message.id}`, kind: 'permission.request'})

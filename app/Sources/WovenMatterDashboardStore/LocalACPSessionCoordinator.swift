@@ -109,87 +109,6 @@ struct LocalACPSessionDriver: Sendable {
         launch: LocalACPRuntimeLaunchConfiguration,
         workingDirectory: URL
     ) throws -> Self {
-        if launch.runtimeKind == .hermes {
-            let client = HermesGatewayClient(launch: launch)
-            return Self(
-                initializeSession: { cwd, existing, title, context in
-                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title, systemPrompt: context)
-                },
-                prompt: { input, event, permission, interaction in
-                    try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction)
-                },
-                configuration: { await client.sessionConfiguration() },
-                setConfiguration: { model, thinking in try await client.setSessionConfiguration(model: model, thinking: thinking) },
-                setPermission: { try await client.setSessionPermission($0) },
-                activeInput: { input in
-                    try await client.steer(input)
-                    return LocalACPActiveInputReceipt(completion: Task { nil })
-                },
-                cancel: { try await client.cancel() },
-                shutdown: { await client.shutdown() },
-                setRunID: { await client.setRunID($0) },
-                fencedPrompt: { input, event, permission, interaction, fence in
-                    try await client.prompt(input, onEvent: event, onPermission: permission,
-                        onInteraction: interaction, dispatchFence: fence)
-                },
-                fencedActiveInput: { input, fence in
-                    try await client.steer(input, dispatchFence: fence)
-                    return LocalACPActiveInputReceipt(completion: Task { nil })
-                }
-            )
-        }
-        if launch.runtimeKind == .pi {
-            let client = PiRPCClient.start(
-                launch: launch,
-                workingDirectory: workingDirectory
-            )
-            return Self(
-                initializeSession: { workingDirectory, existingSessionID, title, systemPrompt in
-                    try await client.initializeSession(
-                        workingDirectory: workingDirectory,
-                        existingSessionID: existingSessionID,
-                        title: title,
-                        systemPrompt: systemPrompt
-                    )
-                },
-                prompt: { input, onEvent, onPermission, onInteraction in
-                    try await client.prompt(
-                        input,
-                        onEvent: onEvent,
-                        onPermission: onPermission,
-                        onInteraction: onInteraction
-                    )
-                },
-                configuration: {
-                    await client.sessionConfiguration()
-                },
-                setConfiguration: { model, thinking in
-                    try await client.setSessionConfiguration(
-                        model: model,
-                        thinking: thinking
-                    )
-                },
-                activeInput: { input in
-                    try await client.beginActiveInput(input)
-                },
-                cancel: {
-                    try await client.stop()
-                },
-                shutdown: {
-                    await client.shutdown()
-                },
-                finishRun: { await client.finishRun() },
-                setRunID: { await client.setRunID($0) },
-                setResumePermissionHandler: { await client.setResumePermissionHandler($0) },
-                fencedPrompt: { input, event, permission, interaction, fence in
-                    try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction,
-                        dispatchFence: fence)
-                },
-                fencedActiveInput: { input, fence in
-                    try await client.beginActiveInput(input, dispatchFence: fence)
-                }
-            )
-        }
         let client = try LocalACPClient.start(
             launch: launch,
             workingDirectory: workingDirectory
@@ -1214,8 +1133,6 @@ public actor LocalACPSessionCoordinator {
             default: return false
             }
         }
-        if case PiRPCClientError.commandFailed = error { return true }
-        if case HermesGatewayError.rpc = error { return true }
         return false
     }
 
@@ -1835,9 +1752,13 @@ public actor LocalACPSessionCoordinator {
         if let provider = cliConnectionProvider { cliConnection = try await provider(descriptor.conversationID) }
         else { cliConnection = launch.cliConnection }
         // The launch descriptor is shared across conversations; permission is not.
+        var scopedEnvironment = launch.environment
+        if descriptor.runtimeKind == .codex, let systemPrompt, !systemPrompt.isEmpty {
+            scopedEnvironment["WOVENMATTER_ADDITIONAL_INSTRUCTIONS"] = systemPrompt
+        }
         var launch = LocalACPRuntimeLaunchConfiguration(
             runtimeKind: launch.runtimeKind, executableURL: launch.executableURL,
-            arguments: launch.arguments, environment: launch.environment,
+            arguments: launch.arguments, environment: scopedEnvironment,
             environmentKeysToRemove: launch.environmentKeysToRemove,
             environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL,
@@ -1847,7 +1768,7 @@ public actor LocalACPSessionCoordinator {
         launch.cliConnection = cliConnection
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,
-            sourceScope: [.defaultAgent, .codex, .claudeCode, .grokBuild, .cursor].contains(descriptor.runtimeKind)
+            sourceScope: [.defaultAgent, .codex, .claudeCode, .grokBuild].contains(descriptor.runtimeKind)
                 ? nil : descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local"
         )
         let started = try clientFactory(launch, workspace.rootURL)
@@ -1861,31 +1782,7 @@ public actor LocalACPSessionCoordinator {
             return (started, initialized)
         } catch {
             await started.shutdown()
-            guard descriptor.runtimeKind == .pi,
-                  descriptor.acpSessionID != nil,
-                  let piError = error as? PiRPCClientError,
-                  case .processExited(let detail) = piError,
-                  detail?.contains("No session found matching") == true else {
-                throw error
-            }
-
-            // Pi exits when --session names an ID that was allocated by an
-            // earlier configuration probe but never materialized by a prompt.
-            // Retry once with a fresh session and preserve it after success.
-            let recovered = try clientFactory(launch, workspace.rootURL)
-            do {
-                let initialized = try await initializeSession(
-                    recovered,
-                    descriptor: descriptor,
-                    usesPersistedSessionID: false,
-                    workspace: workspace,
-                    systemPrompt: systemPrompt
-                )
-                return (recovered, initialized)
-            } catch {
-                await recovered.shutdown()
-                throw error
-            }
+            throw error
         }
     }
 
@@ -2235,5 +2132,22 @@ actor LocalACPAssistantStreamWriter {
         } catch {
             flushError = error
         }
+    }
+}
+
+
+extension LocalACPSessionCoordinator {
+    /// A draft may choose its folder before first send. Release its configuration
+    /// probe so the native session starts from the newly persisted directory.
+    public func discardDraftSession(conversationID: String) async throws {
+        guard try await database.canChooseSessionFolder(id: conversationID),
+              pendingSessionStarts[conversationID] == nil,
+              activeSessions[conversationID]?.activeUseCount ?? 0 == 0 else {
+            throw WorkspaceToolError.invalid("Wait for this draft's agent settings to finish loading.")
+        }
+        if let session = activeSessions.removeValue(forKey: conversationID) {
+            await shutDownSession(session, conversationID: conversationID)
+        }
+        try await database.clearDraftNativeSession(id: conversationID)
     }
 }

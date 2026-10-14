@@ -5,7 +5,7 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPResumePermissionTests {
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .pi], [false, true])
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex], [false, true])
   func configurationLoadsRouteDurableApprovalsToTheirConversation(runtime: AgentRuntimeKind, remote: Bool) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -34,7 +34,7 @@ struct ACPResumePermissionTests {
     let launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-resume-fixture"), arguments: []
     )
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
 
     // A configuration refresh can load an active remote run before a prompt
     // supplies its own handler. Each concurrent load must keep its identity.

@@ -22,6 +22,9 @@ struct DashboardAgentDatabase: Equatable, Identifiable, Codable, Sendable {
     let preference: AgentDatabasePreference
     let localURL: URL?
     let isExternal: Bool
+    var revision: Int64 = 0
+    var updatedAt: String? = nil
+    var offline: Bool = false
 
     var id: String { "\(sourceID):\(databaseID)" }
 }

@@ -179,6 +179,31 @@ struct WorkspaceNoteActionsTests {
     #expect(throws: WorkspaceExportError.tooLarge) { try linked.exported(title: "Linked", format: .document) }
   }
 
+  @Test func inlineValueLinksSurviveStorageAndUseExistingEditExportBounds() throws {
+    let link = DatabaseArtifactLink(sourceID: "device:test", databaseID: "sales", relativePath: "data.sqlite",
+                                   sqliteQuery: "SELECT sum(amount) FROM sales")
+    var wireRun = NoteTextRun(text: "", databaseLink: link)
+    wireRun.databaseValueID = nil // Agents may omit identity in their JSON edits.
+    let document = NoteDocument(blocks: [.richText(.init(id: "summary", runs: [.init(text: "Total: "), wireRun]))])
+    let stored = NoteDocument.decode(try document.encoded())
+    guard case .richText(let text) = stored.blocks[0], let value = text.runs.last else {
+      Issue.record("Missing inline value"); return
+    }
+    #expect(value.databaseLink == link && value.databaseValueID != nil && value.text.isEmpty)
+    #expect(NoteDocument.decode(try stored.encoded()) == stored)
+    #expect(stored.plainText == "Total: ")
+
+    var excessive = value
+    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: 64 * 1_024 + 1)
+    #expect(throws: RemoteNoteEditError.operationTooLarge) {
+      try RemoteNoteEditEnvelope.validate(operations: [.replaceBlock(id: "summary", block: .richText(.init(runs: [excessive])))],
+                                          noteKind: .note)
+    }
+    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)
+    let oversized = NoteDocument(blocks: [.richText(.init(runs: [excessive]))])
+    #expect(throws: WorkspaceExportError.tooLarge) { try oversized.exported(title: "Inline", format: .document) }
+  }
+
   @Test func cancelledExportNeverTouchesAnExistingDestination() async throws {
     let f = try await Fixture(); defer { f.close() }
     let destination = f.root.appending(path: "keep.md")

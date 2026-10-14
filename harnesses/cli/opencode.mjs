@@ -1,3 +1,4 @@
+import { wovenInstructions } from './instructions.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { environment } from './binding.mjs';
 
@@ -30,6 +31,13 @@ export default {
         await command.run({ sessionID: input.sessionID, context }, () => api.session.command(input));
         return null;
       },
+    }));
+    registrations.push(await api.session.hook('context', async event => {
+      if (!await api.storage.get('connection:' + event.sessionID)) return;
+      // The hook receives freshly assembled context on every normal request,
+      // including resumed sessions. Never mutate stored messages.
+      event.system = event.system.filter(part => part.text !== wovenInstructions);
+      event.system.push({ type: 'text', text: wovenInstructions });
     }));
     registrations.push(await api.session.hook('prompt', event => {
       const active = command.getStore();

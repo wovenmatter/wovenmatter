@@ -33,8 +33,7 @@ in your installed version.
 - [Remote database limits](reference/REMOTE_DATABASES.md)
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
 - [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
-- [Hermes integration](integrations/HERMES_GATEWAY.md)
-- [OpenClaw integration](OPENCLAW_2026_9_2_UPGRADE.md)
+- [Native Woven instructions](NATIVE_INSTRUCTIONS.md)
 
 ## Build and contribute
 

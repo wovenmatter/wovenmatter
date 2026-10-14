@@ -39,11 +39,8 @@
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
 		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
 		A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */; };
-		0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */; };
-		0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000004 /* OpenClawSessionView.swift */; };
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
 		5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000004 /* SettingsGeneralView.swift */; };
-		5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000006 /* SettingsOpenClawView.swift */; };
 		5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */; };
 		5E7A0000000000000000000B /* SettingsBuzzWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */; };
 		5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsUsageView.swift */; };
@@ -77,13 +74,10 @@
 		E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */; };
 		FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C178F10C928BB5DF700830 /* DashboardComposer.swift */; };
 		2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */; };
-		BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */; };
 		923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */; };
 		C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04200000000000000000002 /* DashboardConversationPopover.swift */; };
 		4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */; };
 		E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */; };
-		BA480090AAD04BE7A8327211 /* SettingsHermesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */; };
-		E45100000000000000000001 /* DashboardHermesCron.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45100000000000000000002 /* DashboardHermesCron.swift */; };
 		ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
@@ -104,7 +98,6 @@
 		B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */; };
 		A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */; };
 		B2F8DB61A6E248D0FCD77382 /* BackendRuntimeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */; };
-		C83FDB61A6E248D0FCD77382 /* BackendCronService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C976B05B2AE0D773B0C59957 /* BackendCronService.swift */; };
 		D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */; };
 		418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */; };
 		4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D14690B191EF43D51603C /* BackendConnectionsService.swift */; };
@@ -156,11 +149,8 @@
 		624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterApp.swift; sourceTree = "<group>"; };
 		C49C2130B0B0B01A795C7504 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAgentDefaultsSection.swift; sourceTree = "<group>"; };
-		0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewaySettingsView.swift; sourceTree = "<group>"; };
-		0C1A00000000000000000004 /* OpenClawSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawSessionView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000004 /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
-		5E7A00000000000000000006 /* SettingsOpenClawView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOpenClawView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLocalWorkspaceView.swift; sourceTree = "<group>"; };
 		5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBuzzWorkspacesView.swift; sourceTree = "<group>"; };
 		5E7A0000000000000000000E /* SettingsUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUsageView.swift; sourceTree = "<group>"; };
@@ -191,13 +181,10 @@
 		B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversation.swift; sourceTree = "<group>"; };
 		45C178F10C928BB5DF700830 /* DashboardComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposer.swift; sourceTree = "<group>"; };
 		52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNotePane.swift; sourceTree = "<group>"; };
-		3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardOpenClawCron.swift; sourceTree = "<group>"; };
 		40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSharedViews.swift; sourceTree = "<group>"; };
 		C04200000000000000000002 /* DashboardConversationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationPopover.swift; sourceTree = "<group>"; };
 		3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeModel.swift; sourceTree = "<group>"; };
 		97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSettingsView.swift; sourceTree = "<group>"; };
-		D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHermesView.swift; sourceTree = "<group>"; };
-		E45100000000000000000002 /* DashboardHermesCron.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHermesCron.swift; sourceTree = "<group>"; };
 		502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLocalSecretCard.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
@@ -218,7 +205,6 @@
 		35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceMutations.swift"; sourceTree = "<group>"; };
 		D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendToolsService.swift"; sourceTree = "<group>"; };
 		A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRuntimeService.swift"; sourceTree = "<group>"; };
-		C976B05B2AE0D773B0C59957 /* BackendCronService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendCronService.swift"; sourceTree = "<group>"; };
 		D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceServices.swift"; sourceTree = "<group>"; };
 		DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRemoteWorkspaceService.swift"; sourceTree = "<group>"; };
 		296D14690B191EF43D51603C /* BackendConnectionsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendConnectionsService.swift"; sourceTree = "<group>"; };
@@ -306,7 +292,6 @@
 				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
 				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
 				A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */,
-				C976B05B2AE0D773B0C59957 /* BackendCronService.swift */,
 				D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */,
 				DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */,
 				296D14690B191EF43D51603C /* BackendConnectionsService.swift */,
@@ -341,14 +326,11 @@
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
-				D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */,
-				E45100000000000000000002 /* DashboardHermesCron.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
 				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
-				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
 				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
@@ -372,8 +354,6 @@
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
-				0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */,
-				0C1A00000000000000000004 /* OpenClawSessionView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
 				A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */,
 				5E7A00000000000000000002 /* SettingsComponents.swift */,
@@ -383,7 +363,6 @@
 				E7E000000000000000000004 /* ExecutorControls.swift */,
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
-				5E7A00000000000000000006 /* SettingsOpenClawView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
 				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
 				5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */,
@@ -555,8 +534,6 @@
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,
-				BA480090AAD04BE7A8327211 /* SettingsHermesView.swift in Sources */,
-				E45100000000000000000001 /* DashboardHermesCron.swift in Sources */,
 				ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */,
 				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
@@ -564,7 +541,6 @@
 				C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
-				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
@@ -588,7 +564,6 @@
 				A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */,
 				F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */,
 				B2F8DB61A6E248D0FCD77382 /* BackendRuntimeService.swift in Sources */,
-				C83FDB61A6E248D0FCD77382 /* BackendCronService.swift in Sources */,
 				D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */,
 				418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */,
 				4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */,
@@ -625,8 +600,6 @@
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
 				A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */,
-				0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */,
-				0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */,
 				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,
 				D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */,
 				D472AB9160464F1FAB826C42 /* WorkspaceSessionManagement.swift in Sources */,
@@ -634,7 +607,6 @@
 				E7E000000000000000000003 /* ExecutorControls.swift in Sources */,
 				D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */,
 				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
-				5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */,
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000B /* SettingsBuzzWorkspacesView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,

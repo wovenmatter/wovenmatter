@@ -1,7 +1,7 @@
 # Agent setup
 
-WovenMatter has dedicated integrations for Codex, Claude Code, Grok Build,
-Cursor, Hermes, OpenClaw, OpenCode, and Pi. Use your existing installations or
+WovenMatter has dedicated integrations for Pi Durable, Codex, Claude Code,
+Grok Build, and OpenCode. Use your existing installations or
 install harnesses in the settings page. Use your existing provider accounts
 and/or API keys; models, authentication, and controls depend on the harness.
 
@@ -25,11 +25,11 @@ A remote workspace has its own installations and credentials.
 ## Harness settings
 
 Open the harness's **Settings** for its connection and maintenance controls.
-Hermes and OpenClaw include agent and service settings. OpenCode includes model
-selection and server controls; configure its provider accounts through OpenCode.
+OpenCode includes model selection and server controls; configure its provider
+accounts through OpenCode.
 
-OpenCode uses a specific supported v2 build. Use the app's installation flow to
-get the compatible version. Stopping a shared service can affect other clients
+OpenCode uses stable v2 releases. Use the app's installation flow to
+get a compatible version. Stopping a shared service can affect other clients
 using that service.
 
 ## Updates and visibility

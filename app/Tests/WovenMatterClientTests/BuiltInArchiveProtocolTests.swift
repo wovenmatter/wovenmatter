@@ -3,6 +3,13 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterClient
 
+private actor NativeBatchCapture {
+    var values: [WorkspaceNativeRunRecordBatch] = []
+    func append(_ data: Data) throws {
+        values.append(try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: data))
+    }
+}
+
 @Suite(.timeLimit(.minutes(1)))
 struct BuiltInArchiveProtocolTests {
     @Test @MainActor func reconnectPagesNativeHistoryWithoutCapturingCredentialWire() async throws {

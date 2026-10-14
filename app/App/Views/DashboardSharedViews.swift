@@ -216,13 +216,15 @@ struct DashboardRailRow: View {
     var onRename: (() -> Void)? = nil
     var exportMenuTitle: String? = nil
     var onExport: (() -> Void)? = nil
+    var referenceMenuTitle: String? = nil
+    var onManageReferences: (() -> Void)? = nil
     var destructiveMenuTitle: String? = nil
     var onDelete: (() -> Void)? = nil
     let action: () -> Void
 
     private var hasContextMenu: Bool {
         onTogglePin != nil || onMoveUp != nil || onMoveDown != nil
-            || onRename != nil || onExport != nil || onDelete != nil
+            || onRename != nil || onExport != nil || onManageReferences != nil || onDelete != nil
     }
 
     var body: some View {
@@ -300,6 +302,9 @@ struct DashboardRailRow: View {
                 }
                 if let renameMenuTitle, let onRename {
                     Button(renameMenuTitle, action: onRename)
+                }
+                if let referenceMenuTitle, let onManageReferences {
+                    Button(referenceMenuTitle, action: onManageReferences)
                 }
                 if let exportMenuTitle, let onExport {
                     Divider()
@@ -382,7 +387,6 @@ struct DashboardConversationRow: View {
     let isRunning: Bool
     @Binding var detailCardState: DashboardConversationDetailCardState
     let folders: [WorkspaceFolderRecord]
-    let onMoveConversation: (String, String?) -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let action: () -> Void
 
@@ -490,7 +494,6 @@ struct DashboardConversationRow: View {
             conversation: conversation,
             folders: folders,
             isRunning: isRunning,
-            onMove: onMoveConversation,
             onAction: onConversationAction
         ))
         .onDisappear {
@@ -533,7 +536,7 @@ struct DashboardConversationRow: View {
     }
 }
 
-/// Hover pop-out for a workspace chat row, including names for OpenClaw agents.
+/// Hover pop-out for a workspace chat row.
 struct DashboardConversationHoverCard: View {
     let presentation: DashboardConversationRowPresentation
 
@@ -548,7 +551,7 @@ struct DashboardConversationHoverCard: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 hoverRow(icon: .folder, text: meta.folderLabel)
-                if let agent = presentation.agent, agent.runtimeKind == .openclaw || agent.runtimeKind == .hermes || agent.runtimeKind == .opencode {
+                if let agent = presentation.agent, agent.runtimeKind == .opencode {
                     hoverRow(icon: .bot, text: dashboardAgentDisplayName(agent))
                 }
                 if let runtime = meta.runtimeLabel {
@@ -794,7 +797,7 @@ func dashboardAgentGlyph(
         if key.contains("spark") { return .sparkles }
         if key.contains("brain") { return .brain }
         if key.contains("user") { return .userRound }
-        if key.contains("cpu") || agent.runtimeKind == .pi { return .cpu }
+        if key.contains("cpu") { return .cpu }
         return agent.executionLocation == .local ? .monitor : .bot
     }
 }

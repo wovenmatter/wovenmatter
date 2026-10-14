@@ -1,8 +1,8 @@
+import { appendWovenInstructions } from './instructions.mjs';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { PiBindings } from './pi-bindings.mjs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,6 @@ import { connect, enqueue, quote, writeJSON } from './binding.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 export function promptCandidates(runtime, params) {
-  if (runtime === 'pi') return [params.message ?? ''];
   if (typeof params.text === 'string') return [params.text];
   const text = [], context = [];
   const link = (uri, name) => name ? `[@${name}](${uri})`
@@ -29,10 +28,18 @@ export function promptCandidates(runtime, params) {
 }
 
 export function configure(runtime, directory, args, env) {
+  if (!['codex', 'claude_code', 'grok_build'].includes(runtime)) throw new Error('Unsupported Woven harness');
   const command = [process.execPath, join(root, 'hook.mjs'), runtime].map(quote).join(' ');
   const hooks = Object.fromEntries(['UserPromptSubmit', 'PreToolUse'].map(name => [name, [{ hooks: [{ type: 'command', command }] }]]));
   const plugin = join(directory, 'plugin');
   if (runtime === 'codex') {
+    const config = JSON.parse(env.CODEX_CONFIG ?? '{}');
+    config.approvals_reviewer = 'auto_review';
+    config['tools.update_plan.enabled'] = true;
+    const additions = [config.developer_instructions, env.WOVENMATTER_ADDITIONAL_INSTRUCTIONS].filter(Boolean).join('\n\n');
+    config.developer_instructions = appendWovenInstructions(additions);
+    delete env.WOVENMATTER_ADDITIONAL_INSTRUCTIONS;
+    env.CODEX_CONFIG = JSON.stringify(config);
     for (const [name, label] of [['UserPromptSubmit', 'user_prompt_submit'], ['PreToolUse', 'pre_tool_use']]) {
       args.push('-c', `hooks.${name}=[{hooks=[{type="command",command=${JSON.stringify(command)}}]}]`);
       // Trust only this bundled hook in this invocation, not unrelated user hooks.
@@ -45,19 +52,32 @@ export function configure(runtime, directory, args, env) {
   } else if (runtime === 'claude_code') {
     writeJSON(join(plugin, '.claude-plugin', 'plugin.json'), { name: 'wovenmatter-cli', version: '1.0.0' });
     writeJSON(join(plugin, 'hooks', 'hooks.json'), { hooks });
-  } else if (runtime === 'cursor') {
-    writeJSON(join(plugin, '.cursor-plugin', 'plugin.json'), { name: 'wovenmatter-cli', version: '1.0.0' });
-    writeJSON(join(plugin, 'hooks', 'hooks.json'), { version: 1, hooks: {
-      beforeSubmitPrompt: [{ command }], preToolUse: [{ command }],
-    } });
-    args.unshift('--plugin-dir', plugin);
   } else if (runtime === 'grok_build') {
     // Grok intentionally excludes hooks from its environment config overlay.
     // This additive native hook is inert outside Woven Matter's transport.
     writeJSON(join(env.GROK_HOME ?? join(homedir(), '.grok'), 'hooks', 'wovenmatter-cli.json'), { hooks });
-  } else if (runtime === 'pi') args.push('--extension', join(root, 'pi.mjs'));
+  }
   env.WOVENMATTER_BINDING_DIRECTORY = directory;
   return plugin;
+}
+
+export function nativeSessionInstructions(runtime, message, plugin) {
+  if (!['session/new', 'session/load'].includes(message.method)) return message;
+  const metadata = (message.params ??= {})._meta ??= {};
+  if (message.method === 'session/new' && runtime === 'grok_build') {
+    metadata.rules = appendWovenInstructions(metadata.rules);
+  }
+  if (runtime === 'claude_code') {
+    if (message.method === 'session/new') {
+      const supplied = metadata.systemPrompt;
+      metadata.systemPrompt = { ...(typeof supplied === 'object' && supplied !== null ? supplied : {}),
+        append: appendWovenInstructions(typeof supplied === 'string' ? supplied : supplied?.append) };
+    }
+    const options = (metadata.claudeCode ??= {}).options ??= {};
+    const native = { type: 'local', path: plugin };
+    options.plugins = [...(options.plugins ?? []).filter(value => value.path !== plugin), native];
+  }
+  return message;
 }
 
 async function main() {
@@ -65,69 +85,38 @@ async function main() {
   const directory = mkdtempSync(join(tmpdir(), 'wovenmatter-cli-'));
   const env = { ...process.env };
   const plugin = configure(runtime, directory, args, env);
-  const child = spawn(executable, args, { env, stdio: ['pipe', 'pipe', 'inherit', ...(runtime === 'pi' ? ['pipe'] : [])] });
-  const pi = runtime === 'pi' ? new PiBindings(directory, value => child.stdio[3].write(JSON.stringify(value) + '\n')) : undefined;
+  const child = spawn(executable, args, { env, stdio: ['pipe', 'pipe', 'inherit'] });
   const pending = new Map();
   let promptID;
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const output = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  const admission = [];
-  let admitting;
-  function forward(message) {
-    if (pi && ['prompt', 'steer', 'follow_up'].includes(message.type)) {
-      admission.push(message);
-      pump();
-    } else child.stdin.write(JSON.stringify(message) + '\n');
-  }
-  function pump() {
-    if (admitting || !admission.length) return;
-    admitting = admission.shift();
-    pi.submit(admitting._wovenContext);
-    delete admitting._wovenContext;
-    child.stdin.write(JSON.stringify(admitting) + '\n');
-  }
   input.on('line', line => {
     try {
       const message = JSON.parse(line);
-      const params = runtime === 'pi' ? message : message.params;
+      const params = message.params;
       const meta = params?._meta;
       if (meta?.wovenToolsConnection) connect(directory, meta.wovenToolsConnection);
       if (message.method === 'woven/cli') { connect(directory, message.params); return; }
       if (message.method === 'session/prompt') promptID = message.id;
       if (meta?.wovenTools) {
-        if (pi) {
-          connect(directory, meta.wovenTools);
-          message._wovenContext = meta.wovenTools;
-        } else {
-          const remove = enqueue(directory, meta.wovenTools, promptCandidates(runtime, params));
-          if (message.id !== undefined) pending.set(message.id, { remove, promptID, method: message.method });
-        }
+        const remove = enqueue(directory, meta.wovenTools, promptCandidates(runtime, params));
+        if (message.id !== undefined) pending.set(message.id, { remove, promptID, method: message.method });
       }
       if (meta) {
         delete meta.wovenTools; delete meta.wovenToolsConnection;
         delete meta.wovenRunID; delete meta.wovenInputID;
-        if (runtime === 'pi' && !Object.keys(meta).length) delete params._meta;
       }
-      if (runtime === 'claude_code' && ['session/new', 'session/load'].includes(message.method)) {
-        const metadata = params._meta ??= {};
-        const options = (metadata.claudeCode ??= {}).options ??= {};
-        options.plugins = [...(options.plugins ?? []), { type: 'local', path: plugin }];
-      }
-      forward(message);
+      nativeSessionInstructions(runtime, message, plugin);
+      child.stdin.write(JSON.stringify(message) + '\n');
     } catch (error) { process.stderr.write('Woven Matter transport: ' + error.message + '\n'); child.kill(); }
   });
   output.on('line', line => {
     try {
       const message = JSON.parse(line);
-      if (pi?.observe(message)) return;
-      if (pi && admitting && message.id === admitting.id && message.type === 'response') {
-        admitting = undefined;
-        pump();
-      }
       // Rejected native input must not be mistaken for a later identical input.
-      if (message.id !== undefined && (message.error || message.result !== undefined || message.type === 'response')) {
+      if (message.id !== undefined && (message.error || message.result !== undefined)) {
         const entry = pending.get(message.id);
-        if (message.error || message.success === false || entry?.method === 'session/prompt'
+        if (message.error || entry?.method === 'session/prompt'
             || message.result?.outcome === 'promptRequired') {
           entry?.remove(); pending.delete(message.id);
         }

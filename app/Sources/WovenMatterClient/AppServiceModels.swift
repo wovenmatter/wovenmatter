@@ -157,13 +157,12 @@ public struct LocalACPSessionMetadataTaskIdentity: Hashable, Sendable {
     private let launchAvailable: Bool?
 
     public init?(conversationID: String, runtimeKind: AgentRuntimeKind?,
-                 usesOpenClawGateway: Bool, launchAvailable: @autoclosure () -> Bool) {
-        guard let runtimeKind else { return nil }
+                 launchAvailable: @autoclosure () -> Bool) {
+        guard let runtimeKind, AgentRuntimeKind.allCases.contains(runtimeKind) else { return nil }
         self.conversationID = conversationID
         self.runtimeKind = runtimeKind
-        // These paths watch an existing native session or gateway connection.
-        // Do not observe unrelated CLI launch state for either one.
-        self.launchAvailable = runtimeKind == .opencode || usesOpenClawGateway
+        // OpenCode watches its existing native service connection.
+        self.launchAvailable = runtimeKind == .opencode
             ? nil : launchAvailable()
     }
 }

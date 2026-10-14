@@ -3,19 +3,16 @@ const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', i
 const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
-import { createHermesInstance } from './hermes-instance.mjs'
+import { createProject, deleteProject } from './projects.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
 import { createDurableACP } from './durable-acp.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
-import { prepareOpenClawResults } from './prepare-openclaw-results.mjs'
-import { durableJSON } from './openclaw-results/store.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { connect } from 'node:net'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -26,15 +23,13 @@ const catalogPath = process.env.WOVENMATTER_HARNESS_CATALOG
   ?? resolve(serviceRoot, 'harnesses/catalog.json')
 const workspaceRoot = process.env.WOVENMATTER_WORKSPACE
   ?? resolve(process.env.HOME, '.woven-matter')
+const managedDataRoot = process.env.WOVENMATTER_DATA_DIRECTORY ?? resolve(process.env.HOME, '.local/share/wovenmatter/databases')
 const listenHost = process.env.WOVENMATTER_LISTEN_HOST ?? '127.0.0.1'
 const listenPort = parsePositiveInteger(process.env.WOVENMATTER_LISTEN_PORT, 7337)
 const apiToken = runningAsService
   ? requiredEnvironment('WOVENMATTER_API_TOKEN')
   : process.env.WOVENMATTER_API_TOKEN ?? ''
 const apiTokenDigest = createHash('sha256').update(apiToken).digest()
-const gatewayPort = parsePositiveInteger(process.env.WOVENMATTER_GATEWAY_PORT, 18789)
-const gatewayDesiredPath = resolve(workspaceRoot, '.wovenmatter', 'openclaw-desired.json')
-
 const catalogDocument = runningAsService
   ? JSON.parse(await readFile(catalogPath, 'utf8'))
   : { schemaVersion: 4, harnesses: [] }
@@ -51,29 +46,13 @@ const installerDownloadTimeoutMilliseconds = 30_000
 const maximumInstallerRedirects = 5
 // Bound abandoned sign-in processes even when the desktop disconnects.
 const authenticationSessionTimeoutMilliseconds = 30 * 60_000
-let gateway = {
-  process: null,
-  desired: false,
-  ready: false,
-  restarts: 0,
-  lastError: null,
-  startPromise: null,
-}
-
-const hermes = createHermesInstance({ environment: harnessEnvironment, pluginSource: resolve(dirname(catalogPath), 'hermes-delivery'), isEnabled: async () => await maintenance.isEnabled('hermes') })
-
 const instances = createWorkspaceInstances({
   workspaceRoot, environment: harnessEnvironment,
-  gateway: {
-    status: gatewayStatus,
-    start: async () => { setGatewayDesired(true); await startGateway() },
-    stop: async () => { setGatewayDesired(false); await stopGateway() },
-  },
   isEnabled: async id => await maintenance.isEnabled(id),
 })
 const maintenance = createRuntimeMaintenance({
   catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
-  hasActiveRuntime: async id => (id === 'hermes' && hermes.hasActiveRuntime()) || await instances.hasActiveRuntime(id)
+  hasActiveRuntime: async id => await instances.hasActiveRuntime(id)
     || taskGateway?.hasActiveRuntime(id) || durableACP.hasActiveRuntime(id)
     || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
 })
@@ -90,7 +69,7 @@ const taskGateway = runningAsService ? createTaskGateway({
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
   execute:createTaskExecutor({catalog,workspaceRoot,
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
-    defaultAgent,hermes,instances,
+    defaultAgent,instances,
     isEnabled:id => maintenance.isEnabled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
@@ -139,17 +118,22 @@ const server = createServer(async (request, response) => {
     }
 
 
-    if (request.method === 'GET' && url.pathname === '/v1/databases') {
-      return json(response, 200, await databaseOperation(workspaceRoot, { action: 'list' }))
+    if (request.method === 'POST' && url.pathname === '/v1/projects') {
+      return json(response, 201, await createProject(workspaceRoot, (await readJSON(request)).name))
     }
-    const databaseActions = { 'POST /v1/databases': 'create', 'PATCH /v1/databases/preference': 'preference', 'POST /v1/databases/data': 'data' }
+    if (request.method === 'POST' && url.pathname === '/v1/projects/delete') {
+      return json(response, 200, await deleteProject(workspaceRoot, (await readJSON(request)).path))
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/databases') {
+      return json(response, 200, await databaseOperation(managedDataRoot, { action: 'list' }))
+    }
+    const databaseActions = { 'POST /v1/databases': 'create', 'POST /v1/databases/data': 'data', 'POST /v1/databases/query': 'query', 'POST /v1/databases/execute': 'execute', 'POST /v1/databases/snapshot': 'snapshot', 'POST /v1/databases/copy': 'copy' }
     const databaseAction = databaseActions[`${request.method} ${url.pathname}`]
     if (databaseAction) {
-      const body = await readJSON(request)
-      return json(response, 200, await databaseOperation(workspaceRoot, { ...body, action: databaseAction }))
+      const body = await readJSON(request, databaseAction === 'copy' ? 48 * 1024 * 1024 : 1_048_576)
+      return json(response, 200, await databaseOperation(managedDataRoot, { ...body, action: databaseAction }))
     }
 
-    if (await hermes.handle(request, response, url)) return
     if (await instances.handle(request, response, url)) return
     if (request.method === 'GET' && url.pathname === '/v1/runtime-maintenance') {
       return json(response, 200, await maintenance.list())
@@ -171,7 +155,6 @@ const server = createServer(async (request, response) => {
         version: '0.1.0',
         workspaceRoot,
         harnessCount: catalog.size,
-        gateway: gatewayStatus(),
       })
     }
 
@@ -248,23 +231,6 @@ const server = createServer(async (request, response) => {
       return json(response, 202, { stopping: true })
     }
 
-    if (request.method === 'GET' && url.pathname === '/v1/openclaw/gateway') {
-      return json(response, 200, gatewayStatus())
-    }
-    if (request.method === 'POST' && url.pathname === '/v1/openclaw/gateway/start') {
-      setGatewayDesired(true)
-      await startGateway()
-      return json(response, 202, gatewayStatus())
-    }
-    if (request.method === 'POST' && url.pathname === '/v1/openclaw/gateway/restart') {
-      if (!await maintenance.isEnabled('openclaw') || maintenance.isBusy('openclaw')) throw httpError(409, 'runtime_not_enabled_or_busy')
-      setGatewayDesired(true)
-      gateway.restarts = 0
-      await stopGateway()
-      gateway.desired = true
-      await startGateway()
-      return json(response, 202, gatewayStatus())
-    }
     return json(response, 404, { error: 'not_found' })
   } catch (error) {
     const status = error.statusCode ?? 500
@@ -272,40 +238,7 @@ const server = createServer(async (request, response) => {
   }
 })
 
-server.on('upgrade', async (request, socket, head) => {
-  if (authorized(request) && request.url === '/v1/workspace-instances/hermes/socket') {
-    try { await hermes.upgrade(request, socket, head) } catch { socket.destroy() }
-    return
-  }
-  if (!authorized(request) || request.url !== '/v1/openclaw/gateway/socket') {
-    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
-    return socket.destroy()
-  }
-  if (!gateway.ready || !gateway.process) {
-    socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
-    return socket.destroy()
-  }
-  const upstream = connect({ host: '127.0.0.1', port: gatewayPort }, () => {
-    const headers = Object.entries(request.headers)
-      .filter(([name]) => name.toLowerCase() === 'connection'
-        || name.toLowerCase() === 'upgrade'
-        || name.toLowerCase().startsWith('sec-websocket-'))
-      .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(', ') : value}`)
-      .join('\r\n')
-    upstream.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${gatewayPort}\r\n${headers}\r\n\r\n`)
-    if (head.length) upstream.write(head)
-    socket.pipe(upstream).pipe(socket)
-  })
-  upstream.on('error', () => socket.destroy())
-})
-
 if (runningAsService) {
-  try {
-    const saved = JSON.parse(await readFile(gatewayDesiredPath, 'utf8'))
-    gateway.desired = saved.running === true
-  } catch (error) {
-    if (error.code !== 'ENOENT') gateway.lastError = 'openclaw_desired_state_unavailable'
-  }
   taskGateway.start()
   setInterval(() => {
     for (const [id, lease] of foregroundDefaultRuns) {
@@ -316,30 +249,14 @@ if (runningAsService) {
       }
     }
   }, 5000).unref()
-  void hermes.restore()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
   })
-  // Host supervision is independent of desktop connections and survives a
-  // bounded startup failure. Explicit Stop clears the persisted intent.
-  setInterval(() => {
-    if (gateway.desired && !gateway.process && !gatewayLaunchReservation) {
-      startGateway().catch(() => { gateway.lastError = 'openclaw_gateway_start_failed' })
-    }
-  }, 10000).unref()
-  queueMicrotask(() => {
-    if (gateway.desired) startGateway().catch(() => { gateway.lastError = 'openclaw_gateway_start_failed' })
-  })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await taskGateway.close(); await durableACP.stopAll(); await defaultAgent.close(); await stopGateway(); releaseTaskOwner?.(); process.exit(0) }
+    try { await taskGateway.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
-}
-
-function setGatewayDesired(running) {
-  durableJSON(gatewayDesiredPath, { running })
-  gateway.desired = running
 }
 
 function authorized(request) {
@@ -350,16 +267,6 @@ function authorized(request) {
 }
 
 async function harnessStatus(harness) {
-  if (harness.id === 'hermes') {
-    const inventory = await maintenance.inventory(harness)
-    const running = hermes.status().state === 'running'
-    return { id: harness.id, displayName: harness.displayName, transport: 'hermes-native', capabilities: harness.capabilities,
-      state: inventory.installed ? (running ? 'ready' : 'transport_unavailable') : 'cli_missing',
-      installationStatus: inventory.installed ? 'installed' : 'cli_missing', authenticationStatus: 'unknown',
-      transportStatus: running ? 'ready' : 'unavailable', transportError: running ? null : 'Connect Hermes in this workspace’s settings.',
-      setupMethods: (harness.authentication.methods ?? []).map(({ id, displayName }) => ({ id, displayName })),
-      detectedProviders: [] }
-  }
   if (harness.transport === 'opencode-v2') {
     const inventory = await maintenance.inventory(harness)
     const instance = await instances.status('opencode')
@@ -417,10 +324,7 @@ async function harnessStatus(harness) {
 export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess = spawn) {
   return new Promise((resolvePromise) => {
     const probeID = `woven-matter-readiness-${randomUUID()}`
-    const isPiRPC = harness.transport === 'rpc'
-    const request = isPiRPC
-      ? { type: 'get_state', id: probeID }
-      : {
+    const request = {
           jsonrpc: '2.0',
           id: probeID,
           method: 'initialize',
@@ -451,12 +355,6 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
       let response
       try { response = JSON.parse(line) } catch { return }
       if (response.id !== probeID) return
-      if (isPiRPC) {
-        return response.type === 'response'
-          && response.success !== false
-          && response.error == null
-          ? finish(true) : finish(false, 'Pi RPC rejected the readiness probe.')
-      }
       const version = response.result?.protocolVersion
       return response.error == null && (version === 1 || version === 2)
         ? finish(true)
@@ -488,9 +386,10 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
 function harnessRuntimeEnvironment(harness) {
   const environment = harnessEnvironment()
   if (harness.id === 'codex') {
-    environment.CODEX_CONFIG = '{"approvals_reviewer":"auto_review","tools.update_plan.enabled":true}'
-  } else if (harness.id === 'hermes') {
-    environment.HERMES_ACP_SKIP_CONFIGURED_MCP = '0'
+    const config = JSON.parse(environment.CODEX_CONFIG ?? '{}')
+    config.approvals_reviewer = 'auto_review'
+    config['tools.update_plan.enabled'] = true
+    environment.CODEX_CONFIG = JSON.stringify(config)
   }
   return environment
 }
@@ -636,137 +535,6 @@ function authenticationProcessLaunch(method) {
   return process.platform === 'darwin'
     ? { command: '/bin/bash', arguments: ['-c', command] }
     : { command: '/usr/bin/script', arguments: ['-qefc', command, '/dev/null'] }
-}
-
-let gatewayUnlock = null
-let gatewayRestartTimer = null
-let gatewayGeneration = 0
-let gatewayLaunchReservation = null
-async function startGateway() {
-  if (gatewayLaunchReservation) return gatewayLaunchReservation
-  const generation = gatewayGeneration
-  gatewayLaunchReservation = (async () => {
-    if (!await maintenance.isEnabled('openclaw') || maintenance.isBusy('openclaw')) throw httpError(409, 'runtime_not_enabled_or_busy')
-    requireGatewayStartCurrent(generation)
-    if (gateway.ready && gateway.process) return
-    if (gateway.process) throw httpError(503, 'openclaw_gateway_start_in_progress')
-    const unlock = await acquireHostLock(resolve(process.env.HOME, '.wovenmatter/runtime-operation.lock'), harnessEnvironment(), workspaceRoot, true)
-    gatewayUnlock = unlock
-    try { requireGatewayStartCurrent(generation); await startGatewayProcess(generation) }
-    catch (error) { if (!gateway.process) { unlock(); gatewayUnlock = null }; throw error }
-  })().finally(() => { gatewayLaunchReservation = null })
-  return gatewayLaunchReservation
-}
-function requireGatewayStartCurrent(generation) {
-  if (!gateway.desired || generation !== gatewayGeneration) throw httpError(409, 'openclaw_gateway_start_cancelled')
-}
-async function startGatewayProcess(generation) {
-  if (gateway.ready && gateway.process) return
-  if (gateway.startPromise) return gateway.startPromise
-  if (gateway.process) throw httpError(503, 'openclaw_gateway_start_in_progress')
-  if (await tcpListenerAvailable('127.0.0.1', gatewayPort, 500)) throw httpError(409, 'openclaw_gateway_port_in_use')
-  if (!await commandExists('openclaw')) throw httpError(409, 'openclaw_not_installed')
-  requireGatewayStartCurrent(generation)
-  await prepareOpenClawResults({ environment: harnessEnvironment() })
-  requireGatewayStartCurrent(generation)
-  const child = spawn('openclaw', ['gateway', 'run', '--bind', 'loopback', '--port', String(gatewayPort)], {
-    cwd: workspaceRoot,
-    env: harnessEnvironment(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  child.on('error', () => { gateway.lastError = 'openclaw_gateway_launch_failed' })
-  gateway.process = child
-  gateway.ready = false
-  gateway.lastError = null
-  child.stdout.on('data', (data) => process.stdout.write(`[gateway] ${data}`))
-  child.stderr.on('data', (data) => {
-    gateway.lastError = String(data).trim().slice(-2000)
-    process.stderr.write(`[gateway] ${data}`)
-  })
-  child.on('close', () => {
-    gatewayUnlock?.(); gatewayUnlock = null
-    if (gateway.process === child) gateway.process = null
-    gateway.ready = false
-    gateway.startPromise = null
-    if (gateway.desired && gateway.restarts < 3) {
-      gateway.restarts += 1
-      gatewayRestartTimer = setTimeout(() => {
-        gatewayRestartTimer = null
-        if (gateway.desired) startGateway().catch((error) => { gateway.lastError = error.message })
-      }, 1000 * gateway.restarts)
-    }
-  })
-  const startup = waitForTCPListener(gatewayPort, child, 15_000)
-    .then(() => {
-      requireGatewayStartCurrent(generation)
-      if (gateway.process !== child) throw httpError(503, 'openclaw_gateway_exited')
-      gateway.ready = true
-    })
-    .catch((error) => {
-      gateway.lastError = error.message
-      if (child.exitCode === null && !child.killed) child.kill('SIGTERM')
-      throw error
-    })
-    .finally(() => {
-      if (gateway.startPromise === startup) gateway.startPromise = null
-    })
-  gateway.startPromise = startup
-  return startup
-}
-
-async function stopGateway() {
-  gatewayGeneration += 1
-  gateway.desired = false
-  clearTimeout(gatewayRestartTimer)
-  gatewayRestartTimer = null
-  const child = gateway.process
-  if (!child) return
-  child.kill('SIGTERM')
-  await new Promise((resolvePromise) => {
-    const timeout = setTimeout(resolvePromise, 5_000)
-    child.once('close', () => {
-      clearTimeout(timeout)
-      resolvePromise()
-    })
-  })
-  if (child.exitCode === null && child.signalCode === null) throw httpError(503, 'openclaw_gateway_stop_pending')
-}
-
-async function waitForTCPListener(port, child, timeoutMilliseconds) {
-  const deadline = Date.now() + timeoutMilliseconds
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw httpError(503, 'openclaw_gateway_exited')
-    if (await tcpListenerAvailable('127.0.0.1', port, 500)) return
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
-  }
-  throw httpError(503, 'openclaw_gateway_start_timed_out')
-}
-
-function tcpListenerAvailable(host, port, timeoutMilliseconds) {
-  return new Promise((resolvePromise) => {
-    const socket = connect({ host, port })
-    const finish = (ready) => {
-      socket.removeAllListeners()
-      socket.destroy()
-      resolvePromise(ready)
-    }
-    socket.setTimeout(timeoutMilliseconds, () => finish(false))
-    socket.once('connect', () => finish(true))
-    socket.once('error', () => finish(false))
-  })
-}
-
-function gatewayStatus() {
-  return {
-    desired: gateway.desired,
-    state: gateway.ready
-      ? 'running'
-      : gateway.process ? 'starting' : gateway.desired ? 'reconnecting' : 'stopped',
-    pid: gateway.process?.pid ?? null,
-    restarts: gateway.restarts,
-    lastError: gateway.lastError ? 'Gateway reported an error. Inspect logs on this workspace host.' : null,
-    socketPath: '/v1/openclaw/gateway/socket',
-  }
 }
 
 function authenticationSessionView(session) {
@@ -1106,8 +874,6 @@ function harnessEnvironment() {
     HOME: process.env.HOME,
     PATH: `${resolve(process.env.HOME, '.local/bin')}:${resolve(process.env.HOME, '.npm-global/bin')}:${process.env.PATH}`,
     WOVENMATTER_WORKSPACE: workspaceRoot,
-    WOVENMATTER_GATEWAY_PORT: String(gatewayPort),
-    OPENCLAW_GATEWAY_TOKEN: apiToken,
   }
 }
 

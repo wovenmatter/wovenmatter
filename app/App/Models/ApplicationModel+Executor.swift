@@ -131,7 +131,7 @@ extension ApplicationModel {
         var runtime = workspaceOverview?.conversations.first { $0.id == session }?.localRuntimeKind
         if runtime == nil { runtime = try? await database.localACPSession(conversationID: session).runtimeKind }
         guard let runtime else { return .ask }
-        let metadata = openCodeModel(for: session)?.metadata(session) ?? openClawGatewaySessionMetadata[session] ?? localACPSessionMetadata[session]
+        let metadata = openCodeModel(for: session)?.metadata(session) ?? localACPSessionMetadata[session]
         // Unconfirmed, inherited and native smart modes retain manual review.
         return .resolve(runtime: runtime, mode: metadata?.permission,
             confirmed: !updatingLocalACPSessionIDs.contains(session))

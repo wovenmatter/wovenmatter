@@ -116,6 +116,11 @@ private struct ApprovalContext {
         connection = try OpenCodeConnection(identity: "approval-fixture", url: URL(string: "http://127.0.0.1:1")!, username: "fixture", password: "fixture")
         let first = try await database.createLocalACPSession(runtimeKind: .opencode, title: "A", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, "ses_a"))
         let second = try await database.createLocalACPSession(runtimeKind: .opencode, title: "B", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, "ses_b"))
+        for id in [first, second] {
+            try await database.saveSessionExecutionRoot(id: id, folderID: nil,
+                location: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/fixture", managed: false),
+                defaultPath: "/fixture")
+        }
         a = .init(conversationID: first, connectionID: connection.identity, sessionID: "ses_a")
         b = .init(conversationID: second, connectionID: connection.identity, sessionID: "ses_b")
         ApprovalURLProtocol.fixture = fixture

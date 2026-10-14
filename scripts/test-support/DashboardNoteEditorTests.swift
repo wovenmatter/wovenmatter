@@ -37,6 +37,7 @@ struct DashboardNoteEditorTests {
         try verifyDocumentBindingCache()
         try verifyTextStatistics()
         try verifyNativeEditingControls()
+        try verifyInlineDatabaseValues()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("wovenmatter-note-regression-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -424,6 +425,112 @@ struct DashboardNoteEditorTests {
         controller.unbind(textView)
         try require(!controller.canUndo && !controller.canRedo, "Detached editor must clear toolbar availability")
         print("PASS: actual hosted Notes editor enables spelling and isolates native undo/redo for typing, formatting, tables, dictation, external edits, separate notes, keyboard actions, and read-only states")
+    }
+
+    static func verifyInlineDatabaseValues() throws {
+        let link = DatabaseArtifactLink(sourceID: "device:test", databaseID: "scalar", relativePath: "data.sqlite",
+                                       sqliteQuery: "SELECT sum(amount) FROM sales")
+        let inline = NoteTextRun(text: "12", bold: true, databaseLink: link, databaseValueID: "revenue")
+        let original = NoteDocument(blocks: [.richText(.init(id: "summary", runs: [
+            .init(text: "Revenue: "), inline, .init(text: " EUR today", italic: true)
+        ]))])
+        var saved = original
+        let controller = DashboardNoteEditorController()
+        let editor = DashboardNoteEditor(document: Binding(get: { saved }, set: { saved = $0 }), controller: controller)
+        let host = NSHostingView(rootView: editor)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 240),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        defer { window.close() }
+        guard let textView = controller.textView,
+              let coordinator = textView.delegate as? DashboardNoteEditor.Coordinator else {
+            throw Failure(description: "Hosted inline-value editor missing")
+        }
+        coordinator.apply(original, to: textView)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        guard case .richText(var text) = saved.blocks[0] else { throw Failure(description: "Inline paragraph missing") }
+        var linked = text.runs.filter { $0.databaseValueID == "revenue" }
+        try require(linked.count == 1 && linked[0].databaseLink == link && linked[0].bold,
+                    "Inline link, identity or formatting was lost in native attributed roundtrip")
+        let selected = (textView.string as NSString).range(of: "EUR")
+        textView.setSelectedRange(selected)
+        try require(text.refreshDatabaseValue(id: "revenue", expectedRuns: linked, value: "6789"), "Scalar did not refresh")
+        saved.blocks[0] = .richText(text)
+        coordinator.apply(saved, to: textView)
+        try require(textView.selectedRange() == (textView.string as NSString).range(of: "EUR"),
+                    "Native selection moved away from surrounding prose after a scalar changed width")
+        try require(saved.plainText == "Revenue: 6789 EUR today", "Scalar refresh rewrote surrounding prose")
+
+        let valueRange = (textView.string as NSString).range(of: "6789")
+        textView.textStorage!.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue,
+                                          range: NSRange(location: valueRange.location + 1, length: 3))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        guard case .richText(let formatted) = saved.blocks[0] else { throw Failure(description: "Formatted scalar missing") }
+        text = formatted
+        linked = text.runs.filter { $0.databaseValueID == "revenue" }
+        try require(linked.count == 2 && linked.allSatisfy { $0.databaseLink == link },
+                    "Native formatting lost the shared inline-value metadata")
+        try require(text.refreshDatabaseValue(id: "revenue", expectedRuns: linked, value: "12345"), "Formatted scalar did not refresh")
+        try require(text.runs.filter { $0.databaseValueID == "revenue" }.map(\.text).joined() == "12345",
+                    "Formatted fragments duplicated the linked value")
+        try require(text.runs.last?.italic == true && text.runs.last?.text == " EUR today", "Prose formatting changed")
+        saved.blocks[0] = .richText(text)
+        coordinator.apply(saved, to: textView)
+
+        linked = text.runs.filter { $0.databaseValueID == "revenue" }
+        var edited = linked
+        edited[0].text = "User edit"
+        try require(!text.refreshDatabaseValue(id: "revenue", expectedRuns: edited, value: "999"),
+                    "A stale refresh overwrote changed linked text")
+        try require(text.refreshDatabaseValue(id: "revenue", expectedRuns: linked, value: ""), "Empty scalar did not refresh")
+        saved.blocks[0] = .richText(text)
+        coordinator.apply(saved, to: textView)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        guard case .richText(let empty) = saved.blocks[0] else { throw Failure(description: "Empty scalar missing") }
+        try require(empty.runs.contains { $0.databaseValueID == "revenue" && $0.databaseLink == link && $0.text.isEmpty },
+                    "An empty SQL value lost its live link in the native editor")
+        try require(saved.plainText == "Revenue:  EUR today", "Empty scalar leaked its editor placeholder into saved text")
+
+        text = empty
+        linked = text.runs.filter { $0.databaseValueID == "revenue" }
+        try require(text.refreshDatabaseValue(id: "revenue", expectedRuns: linked, value: "123"), "Empty scalar could not become nonempty")
+        saved.blocks[0] = .richText(text)
+        coordinator.apply(saved, to: textView)
+        let middle = (textView.string as NSString).range(of: "2")
+        textView.undoManager?.removeAllActions()
+        textView.undoManager?.beginUndoGrouping()
+        try require(!coordinator.textView(textView, shouldChangeTextIn: middle, replacementString: "x"),
+                    "Editing a live value should use one native undoable edit")
+        textView.undoManager?.endUndoGrouping()
+        guard case .richText(let detached) = saved.blocks[0] else { throw Failure(description: "Detached scalar missing") }
+        try require(detached.runs.allSatisfy { $0.databaseLink == nil && $0.databaseValueID == nil },
+                    "Editing live text left a link that would overwrite the user edit")
+        try require(saved.plainText == "Revenue: 1x3 EUR today", "Detaching a scalar changed other text")
+        controller.undo()
+        guard case .richText(let restored) = saved.blocks[0] else { throw Failure(description: "Undo lost inline paragraph") }
+        try require(saved.plainText == "Revenue: 123 EUR today" && restored.runs.contains { $0.databaseLink == link },
+                    "Undo did not restore linked-value text and metadata together")
+        controller.redo()
+        try require(saved.plainText == "Revenue: 1x3 EUR today", "Redo did not restore explicit inline unlinking")
+
+        coordinator.apply(original, to: textView)
+        let copied = textView.textStorage!.attributedSubstring(from: (textView.string as NSString).range(of: "12"))
+        textView.insertText(copied, replacementRange: NSRange(location: textView.string.utf16.count - 1, length: 0))
+        guard case .richText(let pasted) = saved.blocks[0] else { throw Failure(description: "Paste lost inline paragraph") }
+        let pastedIDs = Set(pasted.runs.compactMap(\.databaseValueID))
+        try require(pastedIDs.count == 2 && pasted.plainText == "Revenue: 12 EUR today12",
+                    "Pasting a live value reused the original identity or lost its content")
+
+        let adjacent = NoteRichTextBlock(runs: [.init(text: "2", databaseLink: link), .init(text: "2", databaseLink: link)]).normalized()
+        try require(adjacent.runs.count == 2 && adjacent.runs[0].databaseValueID != adjacent.runs[1].databaseValueID,
+                    "Adjacent independent values merged into one live value")
+        let raw = try JSONEncoder().encode(NoteTextRun(text: "0", databaseLink: link))
+        let reopened = try JSONDecoder().decode(NoteTextRun.self, from: raw)
+        try require(reopened.databaseLink == link && reopened.databaseValueID != nil, "JSON discarded inline metadata")
+        print("PASS: inline database values preserve metadata, formatting, prose, native selection, empty results and explicit text-edit unlinking")
     }
 
     static func verifyMetadata(_ document: NoteDocument, original: NoteDocument, label: String) throws {

@@ -48,8 +48,7 @@ struct ACPConfigurationLifecycleTests {
       arguments: []
     )
     let workspace = LocalACPWorkspaceLaunchConfiguration(
-      rootURL: directory,
-      repositoriesURL: directory
+      rootURL: directory
     )
 
     let observed = try await coordinator.configuration(
