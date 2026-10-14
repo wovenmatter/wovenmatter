@@ -44,7 +44,6 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let compass = Self("compass")
     static let panelTop = Self("panel-top")
     static let panelsTopLeft = Self("panels-top-left")
-    static let radioTower = Self("radio-tower")
     static let container = Self("container")
     static let flame = Self("flame")
     static let rocket = Self("rocket")

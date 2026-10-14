@@ -54,7 +54,7 @@ struct ACPStopFailureTests {
             self.state = state
             coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
                 LocalACPSessionDriver(
-                    initializeSession: { _, existing, _, _ in
+                    initializeSession: { _, existing, _ in
                         LocalACPInitializedSession(sessionID: existing ?? "fixture-native", loadedExistingSession: existing != nil,
                             configuration: LocalACPSessionConfiguration())
                     },

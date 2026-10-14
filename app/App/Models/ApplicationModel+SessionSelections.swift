@@ -53,8 +53,6 @@ extension ApplicationModel {
             workspace = resolved
         } else if let remote = session.remoteWorkspaceID {
             workspace = "remote:" + remote.uuidString.lowercased()
-        } else if let buzz = session.buzzWorkspaceLinkID {
-            workspace = "buzz:" + buzz.uuidString.lowercased()
         } else {
             guard let root = localACPWorkspaceLaunchConfiguration?.rootURL else {
                 throw ApplicationModelError.localACPRuntimeUnavailable
@@ -142,10 +140,10 @@ extension ApplicationModel {
                     throw LocalACPSessionDatabaseError.sessionNotFound
                 }
                 let context = try await directACPLaunchContext(conversation: conversation,
-                    runtimeKind: native.runtimeKind, isBuzzWorkspaceSession: native.buzzWorkspaceLinkID != nil)
+                    runtimeKind: native.runtimeKind)
                 if saved.usesProductPermissionDefault {
                     let available = try await dashboardStore.localACPSessionConfiguration(conversationID: conversationID,
-                        launch: context?.launch, workspace: context?.workspace)
+                        launch: context.launch, workspace: context.workspace)
                     desired = sessionSelectionPreferences.reconcileProductPermissionDefault(id: conversationID,
                         options: available.permissionOptions, nativePermission: available.permission)?.desiredSelections ?? desired
                 }
@@ -154,7 +152,7 @@ extension ApplicationModel {
                 let configuration = try await dashboardStore.updateLocalACPSessionConfiguration(
                     conversationID: conversationID, model: desired.model, thinking: desired.thinking,
                     permission: native.runtimeKind == .pi ? nil : desired.permission,
-                    launch: context?.launch, workspace: context?.workspace)
+                    launch: context.launch, workspace: context.workspace)
                 let metadata = LocalACPSessionMetadata(sessionKey: conversationID,
                     model: configuration.model, thinking: configuration.thinking,
                     modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,

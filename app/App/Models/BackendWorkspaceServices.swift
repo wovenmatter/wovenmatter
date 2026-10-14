@@ -6,9 +6,6 @@ enum BackendWorkspaceServiceCommand: Codable, Sendable {
     case authorizeSavedConnections
     case openCodeSettingsAgent(UUID?), renameOpenCode(UUID, String), remoteOpenClawAgent(UUID)
     case consumePrefill(String, String)
-    case buzzEnabled(Bool), refreshBuzz, addBuzz(name: String, workspacePath: String, agentStorePath: String)
-    case createBuzzSession(UUID)
-    case discoverBuzz(UUID), enrollBuzz(workspaceID: UUID, candidateID: String), removeBuzzEnrollment(UUID), deleteBuzz(UUID)
     case connectHermes(UUID, restart: Bool), unlinkHermes(UUID), renameHermes(UUID, String)
     case connectRemoteHermes(UUID), stopRemoteHermes(UUID)
     case hermesApprovals(agentID: UUID?, workspaceID: UUID?, mode: String?)
@@ -25,16 +22,6 @@ enum BackendWorkspaceServiceCommand: Codable, Sendable {
 }
 
 struct BackendGatewaySettingsSnapshot: Codable, Sendable {
-    var buzzEnabled: Bool
-    var buzzLinks: [BuzzWorkspaceLink]
-    var buzzEnrollments: [BuzzWorkspaceAgentEnrollment]
-    var buzzCandidates: [UUID: [BuzzWorkspaceAgentCandidate]]
-    var buzzLaunchable: Set<UUID>
-    var buzzChecking: Set<UUID>
-    var buzzMutating: Set<UUID>
-    var buzzBoundConversations: Set<String>
-    var buzzAgents: [WorkspaceAgent]
-    var buzzError: String?
     var linkedHermesIDs: Set<UUID>
     var connectedHermesIDs: Set<UUID>
     var remoteHermesIDs: Set<UUID>

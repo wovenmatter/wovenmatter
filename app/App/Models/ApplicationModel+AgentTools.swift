@@ -28,7 +28,6 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let session = try await database.localACPSession(conversationID: conversationID)
         if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
-        if let buzz = session.buzzWorkspaceLinkID { return "buzz:" + buzz.uuidString.lowercased() }
         let creation = try await database.toolSessionCreationConfiguration(targetID: conversationID)
         let directory = creation?.nativeWorkingDirectory
             ?? openCodeModel(for: conversationID)?.snapshots[conversationID]?.info["location"]["directory"].string
@@ -404,12 +403,10 @@ extension ApplicationModel {
         }
         // A phone-owned caller has no local ACP session or host filesystem
         // location to inherit. Resolving it must not start or contact a provider.
-        let sourceSession = federatedSource ? nil : try await store.database.localACPSession(conversationID: source.id)
-        let sameWorkspace = !federatedSource && workspaceID == source.remoteWorkspaceID && sourceSession?.buzzWorkspaceLinkID == nil
+        let sameWorkspace = !federatedSource && workspaceID == source.remoteWorkspaceID
         var nativeLocation: OpenCodeValue?
         var inheritedDirectory: String?
         // An explicit destination does not need to query the source provider.
-        // Buzz workspaces are separate from the local/remote creation targets.
         if sameWorkspace, command.options["directory"] == nil {
             if source.localRuntimeKind == .openclaw {
                 inheritedDirectory = try await store.openClawGatewaySessionMetadata(conversationID: source.id).workingDirectory
@@ -421,11 +418,10 @@ extension ApplicationModel {
                 nativeLocation = snapshot.info["location"]
                 inheritedDirectory = snapshot.info["location"]["directory"].string
             } else if let sourceRuntime = source.localRuntimeKind {
-                let context = try await directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime,
-                    isBuzzWorkspaceSession: sourceSession?.buzzWorkspaceLinkID != nil)
+                let context = try await directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime)
                 let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
-                    launch: context?.launch, workspace: context?.workspace)
-                inheritedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path
+                    launch: context.launch, workspace: context.workspace)
+                inheritedDirectory = configuration.workingDirectory ?? context.workspace.rootURL.path
             }
             if inheritedDirectory == nil {
                 inheritedDirectory = try await store.database.toolSessionCreationConfiguration(targetID: source.id)?.nativeWorkingDirectory

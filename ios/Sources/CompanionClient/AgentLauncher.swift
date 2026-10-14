@@ -53,9 +53,8 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
     for provider in providers where known(provider, workspace: "central") {
       let parts = provider.id.split(separator: ":", omittingEmptySubsequences: false)
       let remoteID = parts.count == 3 && parts[0] == "remote" ? UUID(uuidString: String(parts[1]))?.uuidString.lowercased() : nil
-      let isLinked = provider.id.hasPrefix("buzz:")
-      let workspace = remoteID.flatMap { id in workspaces.first { $0.id == id } } ?? (remoteID == nil && !isLinked ? central : nil)
-      let group = remoteID ?? (isLinked ? provider.id : "central")
+      let workspace = remoteID.flatMap { id in workspaces.first { $0.id == id } } ?? (remoteID == nil ? central : nil)
+      let group = remoteID ?? "central"
       let name = workspace?.name ?? (group == "central" ? "Mac" : provider.routeName)
       let direct = workspace.flatMap { workspace in
         workspaceProviders[workspace.id]?.first { candidate in

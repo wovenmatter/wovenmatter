@@ -1,7 +1,7 @@
 # Conversations
 
-Choose **New chat** and select an agent. WovenMatter groups agents by their local,
-remote, or linked Buzz workspace. Choose where you want the work to run, then
+Choose **New chat** and select an agent. WovenMatter groups agents by their local
+or remote workspace. Choose where you want the work to run, then
 select a model and thinking level where the harness offers those controls.
 
 ## Models, thinking, tools, and permissions

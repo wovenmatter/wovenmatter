@@ -44,7 +44,6 @@ public actor HermesGatewayClient {
     private var workingDirectory: URL?
     private var latestUsage: HermesValue = [:]
     private var usageBaseline: HermesValue = [:]
-    private var initialContext: String?
     private var replaying = false
     private var buffered: [HermesValue] = []
     private var interactionFences: [String: AgentDispatchFence] = [:]
@@ -85,7 +84,7 @@ public actor HermesGatewayClient {
         return (home, pieces[2])
     }
 
-    public func initializeSession(workingDirectory: URL, existingSessionID: String?, title: String?, systemPrompt: String?) async throws -> LocalACPInitializedSession {
+    public func initializeSession(workingDirectory: URL, existingSessionID: String?, title: String?) async throws -> LocalACPInitializedSession {
         recoveryInvalidated = true
         let priorArchive = nativeArchiveTask
         nativeArchiveToken = nil; nativeArchiveTask = nil
@@ -108,8 +107,6 @@ public actor HermesGatewayClient {
         if let pinnedHome = previous?.home { environment["HERMES_HOME"] = pinnedHome }
         var scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
             arguments: launch.arguments, environment: environment,
-            environmentKeysToRemove: launch.environmentKeysToRemove,
-            environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL)
         scoped.historyRecorder = launch.historyRecorder
         let (profileHome, client) = try await connectTransport(scoped)
@@ -132,8 +129,6 @@ public actor HermesGatewayClient {
         } else {
             if let title { params["title"] = .string(title) }
             snapshot = try await client.call("session.create", params)
-            // Same ACP v1 compatibility behavior: agent instructions accompany the first user turn.
-            initialContext = systemPrompt
         }
         try bind(snapshot, requestedStoredID: previous?.storedID)
         try await prepareCLI(launch.cliConnection)
@@ -407,7 +402,7 @@ public actor HermesGatewayClient {
         let connected = await rpc?.isConnected == true
         if (recoveryInvalidated || !connected), let workingDirectory {
             _ = try await initializeSession(workingDirectory: workingDirectory,
-                existingSessionID: Self.identity(home: home, storedID: storedID, imported: imported), title: nil, systemPrompt: nil)
+                existingSessionID: Self.identity(home: home, storedID: storedID, imported: imported), title: nil)
         }
         try fence.check()
         guard let rpc else { throw HermesGatewayError.message("Hermes is disconnected.") }
@@ -451,7 +446,6 @@ public actor HermesGatewayClient {
                 throw HermesGatewayError.message("Hermes returned an unsupported command outcome.")
             }
         }
-        if let initialContext, !initialContext.isEmpty { content = initialContext + "\n\n" + content }
         var stagedImages: [String] = []
         do {
             for file in input.files {
@@ -485,7 +479,6 @@ public actor HermesGatewayClient {
             try await prepareCLI(input.cliContext, text: content, resetPending: true)
             try fence.check()
             _ = try await rpc.call("prompt.submit", ["session_id": .string(sessionID), "text": .string(content)], dispatchFence: fence)
-            initialContext = nil
             if let terminal { return try terminal.get() }
             return try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { completion = $0 }

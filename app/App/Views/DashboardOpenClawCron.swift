@@ -23,7 +23,6 @@ struct OpenClawCronSurface: View {
     private var agents: [WorkspaceAgent] {
         let all = model.localCLIAgents
             + model.remoteWorkspaceAgents
-            + model.buzzWorkspaceAgents
         return all.filter {
             $0.runtimeKind == .openclaw && model.isOpenClawGatewayLinked(agentID: $0.id)
         }

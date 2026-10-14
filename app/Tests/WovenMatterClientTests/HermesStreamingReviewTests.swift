@@ -11,7 +11,7 @@ struct HermesStreamingReviewTests {
       launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
       transport: transport, home: "/tmp/hermes-checklist-review")
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
-      existingSessionID: nil, title: nil, systemPrompt: nil)
+      existingSessionID: nil, title: nil)
     let output = HermesStreamingEvents()
     let turn = Task { try await client.prompt(.init(text: "fixture"), onEvent: { await output.record($0) },
       onPermission: nil, onInteraction: nil) }
@@ -66,7 +66,7 @@ struct HermesStreamingReviewTests {
       transport: transport, home: "/tmp/hermes-command-review"
     )
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
-      existingSessionID: nil, title: nil, systemPrompt: nil)
+      existingSessionID: nil, title: nil)
     let output = HermesStreamingEvents()
     let turn = Task {
       try await client.prompt(.init(text: "/review"), onEvent: { await output.record($0) },
@@ -105,7 +105,7 @@ struct HermesStreamingReviewTests {
       transport: transport, home: "/tmp/hermes-command-review"
     )
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
-      existingSessionID: nil, title: nil, systemPrompt: nil)
+      existingSessionID: nil, title: nil)
     let turn = Task { try await client.prompt(.init(text: "/review"),
       onEvent: { event in
         if duringFeedback, case .activity = event { try await client.cancel() }
@@ -128,7 +128,7 @@ struct HermesStreamingReviewTests {
     )
     _ = try await client.initializeSession(
       workingDirectory: URL(filePath: "/tmp"), existingSessionID: nil,
-      title: nil, systemPrompt: nil
+      title: nil
     )
     let output = HermesStreamingEvents()
     let turn = Task {
@@ -160,7 +160,7 @@ struct HermesStreamingReviewTests {
       transport: transport, home: "/tmp/hermes-stream-review"
     )
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
-                                           existingSessionID: nil, title: nil, systemPrompt: nil)
+                                           existingSessionID: nil, title: nil)
     let output = HermesStreamingEvents()
     let turn = Task {
       try await client.prompt(.init(text: "fixture"), onEvent: { await output.record($0) },

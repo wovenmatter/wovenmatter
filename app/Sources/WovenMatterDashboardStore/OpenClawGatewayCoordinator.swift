@@ -152,8 +152,7 @@ public actor OpenClawGatewayCoordinator {
     let location = try await database.openClawGatewayLinks().first(where: {
       $0.agentID == agentID
     })?.location
-    let attempts = requestedAttempts ?? (location == .buzzLocal
-      || location == .localAgentWorkspace
+    let attempts = requestedAttempts ?? (location == .localAgentWorkspace
       || location == .remoteWorkspace ? 12 : 1)
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(

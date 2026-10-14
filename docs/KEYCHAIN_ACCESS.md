@@ -19,7 +19,7 @@ refresh never opens credential authorization UI.
 | Local runtime readiness | Startup, reopen, Settings, and passive refresh resolve installed executables without starting credential-sensitive provider sessions | Existing runtime Enable checks only that runtime |
 | Codex title options | No automatic session solely to discover models | Existing Refresh options action |
 
-OpenCode service registration, Buzz discovery/configuration, and local OpenClaw
+OpenCode service registration and local OpenClaw
 configuration/SQLite credential resolution do not call Keychain. Existing
 user-enabled service restoration and actual conversation runs can start external
 provider processes; those processes own their own credential storage and system

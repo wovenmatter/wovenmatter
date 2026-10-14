@@ -59,7 +59,7 @@ struct CompanionRunControlTests {
         #expect(conversationID == id)
         let gate = CompanionPromptGate()
         let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-            LocalACPSessionDriver(initializeSession: { _, _, _, _ in
+            LocalACPSessionDriver(initializeSession: { _, _, _ in
                 .init(sessionID: "fixture", loadedExistingSession: false)
             }, prompt: { input, onEvent, _, _ in
                 try await onEvent?(.assistantChunk("Fixture output"))

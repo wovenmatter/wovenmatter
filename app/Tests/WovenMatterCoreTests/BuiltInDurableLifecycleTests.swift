@@ -69,7 +69,7 @@ struct BuiltInDurableLifecycleTests {
       title: "Dispatch fixture", ownerDeviceID: UUID())
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      LocalACPSessionDriver(initializeSession: { _, _, _, _ in
+      LocalACPSessionDriver(initializeSession: { _, _, _ in
           .init(sessionID: "native", loadedExistingSession: false, configuration: configuration)
         }, prompt: { _, _, _, _ in throw LocalACPClientError.processExited },
         configuration: { configuration }, setConfiguration: { _, _ in configuration }, cancel: {}, shutdown: {},
@@ -105,7 +105,7 @@ private actor BackgroundDriverFixture {
   var promptCount = 0
   nonisolated func driver() -> LocalACPSessionDriver {
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
-    return LocalACPSessionDriver(initializeSession: { _, existing, _, _ in
+    return LocalACPSessionDriver(initializeSession: { _, existing, _ in
         await self.initialize(existing: existing, configuration: configuration)
       }, prompt: { _, event, _, _ in try await self.prompt(event: event) },
       configuration: { configuration }, setConfiguration: { _, _ in configuration }, cancel: {},

@@ -95,12 +95,6 @@ final class CompanionCommandService: CompanionCommandServing {
             provider(runtime, id: "local:\(runtime.rawValue)", name: runtime.displayName,
                      route: "This Mac", available: model.canStartCanonicalLocalSession(runtime))
         }
-        for enrollment in model.buzzWorkspaceSnapshot.enrollments {
-            guard let runtime = enrollment.runtimeKind else { continue }
-            result.append(provider(runtime, id: "buzz:\(enrollment.id.uuidString.lowercased())",
-                                   name: enrollment.displayNameSnapshot, route: "Linked workspace",
-                                   available: model.launchableBuzzWorkspaceEnrollmentIDs.contains(enrollment.id)))
-        }
         for workspace in model.remoteWorkspaces.workspaces {
             for runtime in AgentRuntimeKind.allCases {
                 result.append(provider(runtime,
@@ -109,7 +103,7 @@ final class CompanionCommandService: CompanionCommandServing {
                     available: model.remoteWorkspaces.isHarnessReady(runtime, in: workspace)))
             }
         }
-        let agents = model.localCLIAgents + model.buzzWorkspaceAgents + model.remoteWorkspaceAgents
+        let agents = model.localCLIAgents + model.remoteWorkspaceAgents
         for link in model.openClawGatewayLinks {
             let name = agents.first(where: { $0.id == link.agentID })?.displayName ?? "OpenClaw"
             let available = model.canStartCanonicalGatewaySession(agentID: link.agentID)
@@ -141,10 +135,6 @@ final class CompanionCommandService: CompanionCommandServing {
             routeID = "gateway:\(session.agentID.uuidString.lowercased())"
         } else if let workspaceID = conversation.remoteWorkspaceID {
             routeID = "remote:\(workspaceID.uuidString.lowercased()):\(runtime.rawValue)"
-        } else if let enrollment = model.buzzWorkspaceSnapshot.enrollments.first(where: {
-            $0.id.uuidString.lowercased() == conversation.agentID?.lowercased()
-        }) {
-            routeID = "buzz:\(enrollment.id.uuidString.lowercased())"
         } else {
             routeID = "local:\(runtime.rawValue)"
         }
@@ -375,10 +365,6 @@ final class CompanionCommandService: CompanionCommandServing {
                 id = try await model.createCanonicalGatewaySession(agentID: agentID, conversationID: requestedID, folderID: command.folderID)
             } else if providerID.hasPrefix("local:") {
                 id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
-            } else if providerID.hasPrefix("buzz:"),
-                      let enrollmentID = UUID(uuidString: String(providerID.dropFirst(5))),
-                      let enrollment = model.buzzWorkspaceSnapshot.enrollments.first(where: { $0.id == enrollmentID }) {
-                id = await model.createBuzzWorkspaceLocalACPSession(enrollment: enrollment, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
             } else if let target = model.remoteWorkspaces.readyChatTargets.first(where: {
                 "remote:\($0.configuration.id.uuidString.lowercased()):\($0.harness.id.rawValue)" == providerID
             }) {
