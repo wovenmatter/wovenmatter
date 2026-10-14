@@ -81,7 +81,6 @@ struct ACPPermissionLifecycleTests {
     let launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: .grokBuild, executableURL: fixture.launch.executableURL,
       arguments: ["host", "--", "quoted-command"], environment: ["OUTER": "kept"],
-      environmentKeysToRemove: ["REMOVE"], environmentKeyPrefixesToRemove: ["TOKEN_"],
       processWorkingDirectoryURL: fixture.directory,
       wrappedCommand: wrapped
     )
@@ -94,8 +93,6 @@ struct ACPPermissionLifecycleTests {
     #expect(observed.wrappedCommand?.harnessArgumentsStartIndex == wrapped.harnessArgumentsStartIndex)
     #expect(observed.arguments == launch.arguments)
     #expect(observed.environment == launch.environment)
-    #expect(observed.environmentKeysToRemove == launch.environmentKeysToRemove)
-    #expect(observed.environmentKeyPrefixesToRemove == launch.environmentKeyPrefixesToRemove)
     #expect(observed.processWorkingDirectoryURL == launch.processWorkingDirectoryURL)
     await fixture.coordinator.shutdown()
   }
@@ -407,7 +404,7 @@ private final class PermissionLifecycleFactory: @unchecked Sendable {
       return driver
     }
     return LocalACPSessionDriver(
-      initializeSession: { [self] _, existing, _, _ in
+      initializeSession: { [self] _, existing, _ in
         driver.recordExisting(existing)
         if let policy = launch.requestedPermission {
           if policy == gatedLaunchPermission { await launchGate?.hold() }

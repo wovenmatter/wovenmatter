@@ -126,7 +126,7 @@ struct PiRPCSettlementTests {
     let fixture = PiPipeFixture(recorder: { capture.append($0,$1) }, durable: true)
     let server = Task { try await fixture.serve(settles: true, recovery: true) }
     let initialized = try await fixture.client.initializeSession(workingDirectory: URL(filePath:"/private/tmp"),
-      existingSessionID:"fixture-session",title:nil,systemPrompt:nil)
+      existingSessionID:"fixture-session",title:nil)
     #expect(initialized.recoveredDefaultAgentRuns.first?.runID == "prior-run")
     #expect(initialized.recoveredDefaultAgentRuns.first?.content == "saved result")
     await fixture.client.setRunID("current-run")
@@ -236,8 +236,7 @@ struct PiRPCSettlementTests {
     let initialized = try await fixture.client.initializeSession(
       workingDirectory: URL(filePath: "/private/tmp"),
       existingSessionID: nil,
-      title: nil,
-      systemPrompt: nil
+      title: nil
     )
     #expect(initialized.configuration.model == "anthropic/shared-model")
     #expect(initialized.configuration.modelOptions == [
@@ -297,7 +296,7 @@ struct PiPipeFixture: Sendable {
   }
   func initialize() async throws {
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
-      existingSessionID: nil, title: nil, systemPrompt: nil)
+      existingSessionID: nil, title: nil)
   }
   fileprivate func serveSteering(ready: AsyncStream<Void>.Continuation, rejected: Bool, pending: PiPromptGate? = nil, uncertain: Bool = false) async throws {
     defer { try? events.fileHandleForWriting.close() }
@@ -610,7 +609,7 @@ struct PiHandledCommandTests {
     let resumedServer = Task { try await serveCommands(resumed, firstPrompt: "ordinary message", normalStartup: true) }
     let session = try await resumed.client.initializeSession(
       workingDirectory: URL(filePath: "/private/tmp"), existingSessionID: "fixture-session",
-      title: nil, systemPrompt: nil)
+      title: nil)
     #expect(session.loadedExistingSession)
     #expect(session.sessionID == "fixture-session")
     #expect(try await resumed.client.prompt("ordinary message") == .endTurn)

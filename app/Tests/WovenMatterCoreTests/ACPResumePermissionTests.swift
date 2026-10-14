@@ -73,7 +73,7 @@ private actor ResumePermissionDriver {
 
   nonisolated func driver() -> LocalACPSessionDriver {
     LocalACPSessionDriver(
-      initializeSession: { _, existing, _, _ in try await self.load(existing) },
+      initializeSession: { _, existing, _ in try await self.load(existing) },
       prompt: { _, _, _, _ in
         Issue.record("Reattaching a remote approval must not send a new prompt")
         return .endTurn

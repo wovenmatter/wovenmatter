@@ -51,11 +51,6 @@ remote workspace before any resume request.
   Matter-created sessions, including legacy local ACP sessions. Its Repos and
   Databases links retain their configured external targets. Imported sessions
   retain the cwd recorded by Hermes. Global `terminal.cwd` is never changed.
-- Agent-definition context retains Woven Matter's existing ACP v1 compatibility:
-  the optional `systemPrompt` supplied by the existing session coordinator is
-  prepended once to the first user turn. This is agent-definition context, not
-  repeated directory instructions. Hermes's `config.set prompt` writes the
-  profile-wide custom prompt, so it is not used for per-conversation context.
 - Text, final authoritative text, reasoning, tool activity, and usage use native
   events. Stop sends `session.interrupt`; steering sends `session.steer`.
   Neither action kills the shared server. Disabling an idle Hermes runtime stops

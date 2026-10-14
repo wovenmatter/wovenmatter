@@ -45,17 +45,6 @@ struct SettingsOpenClawView: View {
                     )
                 }
             }
-            if !isWorkspaceScoped {
-                let buzzAgents = model.buzzWorkspaceAgents.filter { $0.runtimeKind == .openclaw }
-                    .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-                if !buzzAgents.isEmpty {
-                    SettingsCard(title: "Buzz workspaces", detail: "Agent names and existing Gateway connections.") {
-                        VStack(spacing: 8) {
-                            ForEach(buzzAgents) { agent in agentRow(agent) }
-                        }
-                    }
-                }
-            }
             if !isWorkspaceScoped || workspaceID != nil {
                 SettingsCard(title: "Remote agent workspaces") {
                     let configurations = model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }
@@ -198,7 +187,6 @@ struct SettingsOpenClawView: View {
 
     private func locationLabel(for agent: WorkspaceAgent) -> String {
         switch model.openClawGatewayLink(agentID: agent.id)?.location {
-        case .buzzLocal: "Local Buzz workspace"
         case .localAgentWorkspace: "Local agent workspace"
         case .remoteWorkspace: "Remote workspace"
         case nil: "Discovered OpenClaw"
@@ -213,7 +201,7 @@ struct SettingsOpenClawAgentView: View {
     var onBack: () -> Void
 
     private var agent: WorkspaceAgent? {
-        (model.localCLIAgents + model.remoteWorkspaceAgents + model.buzzWorkspaceAgents)
+        (model.localCLIAgents + model.remoteWorkspaceAgents)
             .first { $0.id == agentID }
     }
 

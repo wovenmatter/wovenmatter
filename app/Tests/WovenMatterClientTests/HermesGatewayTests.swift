@@ -9,7 +9,7 @@ struct HermesGatewayTests {
         let client = makeClient(transport)
         let identity = HermesGatewayClient.identity(home: "/tmp/hermes-fixture", storedID: "stored", imported: true)
         let initialized = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/different/app/workspace"),
-            existingSessionID: identity, title: nil, systemPrompt: nil)
+            existingSessionID: identity, title: nil)
         #expect(initialized.configuration.workingDirectory == "/native/imported project")
         let updated = try await client.setSessionConfiguration(model: nil, thinking: nil)
         #expect(updated.workingDirectory == "/native/imported project")
@@ -23,7 +23,7 @@ struct HermesGatewayTests {
         let identity = HermesGatewayClient.identity(home: "/remote-workspaces/other/home/.hermes", storedID: "stored")
         await #expect(throws: (any Error).self) {
             try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
-                existingSessionID: identity, title: nil, systemPrompt: nil)
+                existingSessionID: identity, title: nil)
         }
         #expect(await transport.calls.isEmpty)
         #expect(await !transport.isConnected)
@@ -34,10 +34,10 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
         let created = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
-            existingSessionID: nil, title: "A conversation", systemPrompt: nil)
+            existingSessionID: nil, title: "A conversation")
         #expect(created.configuration.workingDirectory == "/tmp")
         _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
-            existingSessionID: created.sessionID, title: "A conversation", systemPrompt: nil)
+            existingSessionID: created.sessionID, title: "A conversation")
         #expect(await transport.calls.first { $0.0 == "session.create" }?.1["title"] == "A conversation")
         #expect(await transport.calls.first { $0.0 == "session.resume" }?.1["defer_history"] == .bool(true))
         await client.shutdown()
@@ -46,7 +46,7 @@ struct HermesGatewayTests {
     @Test func remoteWorkspaceAttachesTheStagedPathWithoutUploadingBytes() async throws {
         let transport = HermesTransportFixture()
         let client = try makeClient(transport, environment: remoteHermesEnvironment())
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let remotePath = "/home/.woven-matter/.wovenmatter/attachments/h/notes.txt"
         let file = AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
             sizeBytes: 1, contentHash: "h", localURL: URL(fileURLWithPath: "/tmp/notes.txt"), remotePath: remotePath)
@@ -63,7 +63,7 @@ struct HermesGatewayTests {
     @Test func remoteWorkspaceRefusesAnUnstagedFileBeforeSubmitting() async throws {
         let transport = HermesTransportFixture()
         let client = try makeClient(transport, environment: remoteHermesEnvironment())
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let file = AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
             sizeBytes: 1, contentHash: "h", localURL: URL(fileURLWithPath: "/tmp/notes.txt"))
         await #expect(throws: HermesGatewayError.self) {
@@ -77,7 +77,7 @@ struct HermesGatewayTests {
     @Test func attachmentsUseNativeSchemasAndRollBackImagesWhenStagingFails() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let image = AgentFileAttachmentDraft(kind: .image, fileName: "image.png", mimeType: "image/png",
             sizeBytes: 1, contentHash: "image", localURL: URL(fileURLWithPath: "/tmp/image.png"))
         let file = AgentFileAttachmentDraft(kind: .file, fileName: "file.txt", mimeType: "text/plain",
@@ -100,7 +100,7 @@ struct HermesGatewayTests {
     @Test func nativeRequestsUseResponseFramesAndKeepTheReaderAvailable() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let turn = Task {
             try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: nil,
                 onPermission: { _ in "once" }, onInteraction: { request in
@@ -141,7 +141,7 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
         let gate = HermesAnswerGate()
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let turn = Task {
             try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: nil, onPermission: nil,
                 onInteraction: { _ in await gate.answer() })
@@ -164,7 +164,7 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
         let gate = HermesAnswerGate()
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let turn = Task {
             try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: nil, onPermission: nil,
                 onInteraction: { _ in await gate.answer() })
@@ -184,7 +184,7 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
         let identity = HermesGatewayClient.identity(home: "/tmp/hermes-fixture", storedID: "stored")
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: identity, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: identity, title: nil)
         #expect(await transport.calls.first { $0.0 == "session.resume" }?.1["defer_history"] == .bool(true))
         let turn = Task { try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: nil, onPermission: nil, onInteraction: nil) }
         try await transport.waitForSubmit()
@@ -199,7 +199,7 @@ struct HermesGatewayTests {
     @Test func identityIsPublishedBeforeAnyProviderSubmission() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         await #expect(throws: (any Error).self) {
             try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: { event in
                 if case .sessionIdentity(let identity) = event {
@@ -216,7 +216,7 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         await transport.loseNextSubmit()
         let client = makeClient(transport)
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         for _ in 0..<2 {
             await #expect(throws: (any Error).self) {
                 try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: nil, onPermission: nil, onInteraction: nil)
@@ -231,7 +231,7 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
         let output = HermesOutputFixture()
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let turn = Task {
             try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: { await output.record($0) },
                 onPermission: { _ in "deny" }, onInteraction: nil)
@@ -252,7 +252,7 @@ struct HermesGatewayTests {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
         let output = HermesEventFixture()
-        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil)
         let turn = Task { try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: { await output.record($0) }, onPermission: nil, onInteraction: nil) }
         try await transport.waitForSubmit()
         await transport.event(type: "message.complete", payload: ["text": "Final", "reasoning": "Late reasoning"])

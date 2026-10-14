@@ -74,8 +74,7 @@ Revocation blocks future reads; it cannot erase content already retrieved.
 ## Sessions and coordination
 
 New sessions inherit the source harness, working location, and folder unless
-explicitly overridden. A Buzz source uses the selected local or remote destination
-root; this command does not create Buzz-bound sessions. Model and thinking accept
+explicitly overridden. Model and thinking accept
 the existing explicit creation arguments. Remaining selections resolve from the
 user's destination workspace/harness defaults, harness defaults, and native
 defaults, in that order. The source chat's selections do not become defaults for
