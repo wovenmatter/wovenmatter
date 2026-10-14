@@ -172,8 +172,8 @@ struct DashboardCloudConversation: View {
                                 icon: .messageSquare,
                                 title: agent.map { "New conversation with \(dashboardAgentDisplayName($0))" } ?? "Choose a conversation",
                                 detail: agent == nil
-                                    ? "Choose New chat for a direct local workspace session, or select a synced conversation."
-                                    : "Choose a synced conversation from Workspace."
+                                    ? "Choose New chat to select an agent, or open an existing conversation."
+                                    : "Choose a conversation from All Workspaces."
                             )
                         } else if timeline.isEmpty {
                             DashboardConversationEmptyState(
@@ -184,7 +184,7 @@ struct DashboardCloudConversation: View {
                                 title: conversation?.title ?? "Conversation",
                                 detail: conversation?.localRuntimeKind == nil
                                     ? "This conversation has no messages yet."
-                                    : conversation?.localRuntimeKind == .opencode ? "This session uses its workspace on the connected OpenCode host." : "This direct chat is ready in the shared ~/.woven-matter workspace."
+                                    : conversation?.localRuntimeKind == .opencode ? "This session uses its workspace on the connected OpenCode host." : "Send a message to start this chat."
                             )
                         } else {
                             if scrollState.positionedConversationID == conversation?.id,

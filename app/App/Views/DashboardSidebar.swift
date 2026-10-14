@@ -1790,7 +1790,7 @@ struct DashboardSidebarWorkspacePage: View {
                 .help("Hide workspace")
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(selectedFolderName ?? "Workspace")
+                Text(selectedFolderName ?? "All Workspaces")
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text("\(conversations.count) chats · \(notes.count) notes")
@@ -2015,7 +2015,7 @@ struct DashboardConversationListMeta: Equatable, Sendable {
             let name = folder.name.trimmingCharacters(in: .whitespacesAndNewlines)
             folderLabel = name.isEmpty ? "Untitled folder" : name
         } else {
-            folderLabel = "Workspace"
+            folderLabel = "All Workspaces"
         }
 
         return DashboardConversationListMeta(
