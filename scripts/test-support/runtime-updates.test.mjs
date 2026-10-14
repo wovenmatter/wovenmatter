@@ -43,6 +43,7 @@ function metadata({ missingChecksum = false } = {}) {
     '@earendil-works/pi-ai': ['2.0.0', '1.3.0'],
     '@earendil-works/pi-coding-agent': ['2.0.0', '1.3.0'],
     '@earendil-works/pi-durable': ['2.0.0', '1.3.0'],
+    '@earendil-works/chord': ['2.0.0', '1.3.0'],
     '@modelcontextprotocol/sdk': ['1.32.1'], 'proper-lockfile': ['4.1.2'], 'typebox': ['1.3.38'],
     'esbuild': ['0.29.0', '0.28.3'], 'npm': ['13.0.0', '12.3.0'], 'playwright': ['2.0.0', '1.65.0'],
   };

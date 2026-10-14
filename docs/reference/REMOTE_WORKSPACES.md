@@ -82,6 +82,8 @@ the reviewed build dependencies and regenerates the mobile Pi bundle, version
 constant, provenance, and notices from that same lockfile. It never deploys or
 updates a remote host. Review the complete diff, upstream release notes and
 licenses, then open a PR. Do not treat source refresh as a deployed update.
+Review the pinned checkout/setup-node action releases in the CI workflow during
+the same maintenance pass; retain full commit SHA references.
 
 The command retains the supported Node major and Debian codename, the supported
 agent-package majors, and the minor line of pre-1.0 packages. New runtime or OS

@@ -79,6 +79,8 @@ export async function runtimeUpdatePlan({ root = repoRoot, fetchImplementation =
   }
   const piVersions = Object.entries(packages.dependencies).filter(([name]) => name.startsWith('@earendil-works/pi-')).map(([, range]) => range.replace(/^[~^]/, ''));
   if (new Set(piVersions).size !== 1) throw new Error('Pi package releases are not aligned; retry after publication finishes.');
+  const chord = await latestSupportedPackage('@earendil-works/chord', { major: Number(piVersions[0].split('.')[0]), fetchImplementation });
+  if (chord !== piVersions[0]) throw new Error('Pi and Chord releases are not aligned; retry after publication finishes.');
   for (const name of ['THIRD_PARTY_NOTICES.md', 'ios/Runtime/README.md']) files.set(name, files.get(name).replaceAll(oldPi, piVersions[0]));
   files.set('default-agent/package.json', JSON.stringify(packages, null, 2) + '\n');
   for (const name of ['npm', 'playwright']) {
@@ -109,6 +111,11 @@ async function main() {
   };
   const npmOptions = ['--prefix', 'default-agent', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org'];
   run('npm', ['update', '--package-lock-only', ...npmOptions]);
+  const manifest = JSON.parse(await readFile(resolve(repoRoot, 'default-agent/package.json'), 'utf8'));
+  const lock = JSON.parse(await readFile(resolve(repoRoot, 'default-agent/package-lock.json'), 'utf8'));
+  for (const update of plan.updates) if (manifest.dependencies?.[update.name] || manifest.devDependencies?.[update.name]) {
+    if (lock.packages[`node_modules/${update.name}`]?.version !== update.latest) throw new Error('Package releases changed during refresh. Rerun before generating resources.');
+  }
   run('npm', ['ci', ...npmOptions]);
   run(process.execPath, ['scripts/build-ios-pi-runtime.mjs']);
   console.log('Updated runtime pins, lockfile, and mobile SDK resources. Review the diff and run scripts/test-changes.sh --all.');
