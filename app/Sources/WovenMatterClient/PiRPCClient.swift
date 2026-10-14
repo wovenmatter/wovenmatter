@@ -184,8 +184,7 @@ public actor PiRPCClient {
                 let initialized = try await client.initializeSession(
                     workingDirectory: workingDirectory,
                     existingSessionID: nil,
-                    title: nil,
-                    systemPrompt: nil
+                    title: nil
                 )
                 timeoutTask.cancel()
                 await client.shutdown()
@@ -203,11 +202,9 @@ public actor PiRPCClient {
     public func initializeSession(
         workingDirectory: URL,
         existingSessionID: String?,
-        title: String?,
-        systemPrompt: String?
+        title: String?
     ) async throws -> LocalACPInitializedSession {
         _ = workingDirectory
-        _ = systemPrompt
         try spawn(sessionID: existingSessionID)
         startReader()
         try await refreshConfiguration()

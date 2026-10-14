@@ -99,7 +99,7 @@ struct ACPHarnessStreamingReviewTests {
     defer { fixture.remove() }
     let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil, systemPrompt: nil)
+      title: nil)
     let events = ACPReviewEvents()
     #expect(try await client.prompt("Replay") { await events.record($0) } == .endTurn)
     await client.shutdown()
@@ -178,7 +178,7 @@ struct ACPHarnessStreamingReviewTests {
     defer { fixture.remove() }
     let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil, systemPrompt: "Agent instructions")
+      title: nil)
     let input = "/native keep  spacing\nand this line"
     let events = ACPReviewEvents()
     #expect(try await client.prompt(input) { await events.record($0) } == .endTurn)
@@ -201,18 +201,12 @@ struct ACPHarnessStreamingReviewTests {
     #expect(prompts.count == 3)
     let lastParams = prompts.last?["params"] as? [String: Any]
     let lastBlocks = lastParams?["prompt"] as? [[String: Any]]
-    let expectedText = protocolVersion == 1
-      ? "[System]\nAgent instructions\n\nordinary message" : "ordinary message"
-    #expect(lastBlocks?.first?["text"] as? String == expectedText)
+    #expect(lastBlocks?.first?["text"] as? String == "ordinary message")
     let sessions = requests.filter { $0["method"] as? String == "session/new" }
     #expect(sessions.count == 1)
-    if protocolVersion == 2 {
-      let sessionParams = sessions.first?["params"] as? [String: Any]
-      #expect(sessionParams?["systemPrompt"] as? String == "Agent instructions")
-    }
   }
 
-  @Test func overlappingPromptsReserveInstructionsBeforeHistorySuspends() async throws {
+  @Test func overlappingPromptsReserveHandlersBeforeHistorySuspends() async throws {
     let fixture = try ACPHarnessFixture(kind: .cursor, initialize: #"{"protocolVersion":1}"#,
       session: #"{"sessionId":"overlap"}"#, extras: ["authenticate": "{}", "cursor/list_available_models": "{}"])
     defer { fixture.remove() }
@@ -232,13 +226,13 @@ struct ACPHarnessStreamingReviewTests {
       }
     }
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil, systemPrompt: "Unique initial instructions")
+      title: nil)
     let events = ACPReviewEvents()
     let first = Task { try await client.prompt("first") { await events.record($0) } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
     // Active input must inherit the first prompt's handlers even while its
-    // outbound history is suspended, and it must not repeat the prefix.
+    // outbound history is suspended.
     let second = Task { try await client.beginActiveInput("second") }
     let deadline = ContinuousClock.now + .seconds(60)
     while await client.activePromptRequestCount != 2 {
@@ -252,7 +246,9 @@ struct ACPHarnessStreamingReviewTests {
     #expect(await client.activePromptRequestCount == 0)
     #expect(await events.values().count > 0)
     await client.shutdown()
-    #expect(try fixture.log().components(separatedBy: "Unique initial instructions").count - 1 == 1)
+    let log = try fixture.log()
+    #expect(log.components(separatedBy: #""text":"first""#).count - 1 == 1)
+    #expect(log.components(separatedBy: #""text":"second""#).count - 1 == 1)
   }
 
   @Test func stoppedDispatchFenceNeverWritesPromptAfterHistorySuspension() async throws {
@@ -277,7 +273,7 @@ struct ACPHarnessStreamingReviewTests {
     #expect(!(try fixture.log()).contains(#""method":"session/prompt""#))
   }
 
-  @Test func rejectedHistoryWriteReleasesInitialInstructionsForRetry() async throws {
+  @Test func rejectedHistoryWriteReleasesPromptForRetry() async throws {
     actor Recorder {
       var reject = true
       func record(_ direction: String, _ data: Data) throws {
@@ -295,12 +291,14 @@ struct ACPHarnessStreamingReviewTests {
     let recorder = Recorder()
     let client = try await fixture.client { try await recorder.record($0, $1) }
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil, systemPrompt: "Retry instructions")
+      title: nil)
     await #expect(throws: Failure.expected) { try await client.prompt("rejected") }
     #expect(await client.activePromptRequestCount == 0)
     #expect(try await client.prompt("retry") == .endTurn)
     await client.shutdown()
-    #expect(try fixture.log().components(separatedBy: "Retry instructions").count - 1 == 1)
+    let log = try fixture.log()
+    #expect(!log.contains(#""text":"rejected""#))
+    #expect(log.components(separatedBy: #""text":"retry""#).count - 1 == 1)
   }
 
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor])
@@ -432,12 +430,12 @@ struct ACPHarnessStreamingReviewTests {
     }
   }
 
-  @Test func claudeUsesSystemPromptMetadataAndRetainsAdvertisedNativeModes() async throws {
+  @Test func claudeRetainsAdvertisedNativeModes() async throws {
     try await review(
       .claudeCode,
       initialize: #"{"protocolVersion":2,"agentInfo":{"name":"@agentclientprotocol/claude-agent-acp"},"agentCapabilities":{"loadSession":false}}"#,
       session: #"{"sessionId":"claude-session","configOptions":[{"id":"mode","options":[{"value":"auto"}],"currentValue":"default"}]}"#,
-      extras: [:], expected: [#""systemPrompt":{"append":"System fixture"}"#]
+      extras: [:], expected: []
     ) { configuration in
       #expect(configuration.permission == "default")
       #expect(configuration.permissionOptions == ["auto"])
@@ -479,7 +477,7 @@ struct ACPHarnessStreamingReviewTests {
     let client = try await fixture.client()
     let initialized = try await client.initializeSession(
       workingDirectory: fixture.root, existingSessionID: existingSessionID,
-      title: "Fixture", systemPrompt: "System fixture"
+      title: "Fixture"
     )
     check(initialized.configuration)
     let events = ACPReviewEvents()

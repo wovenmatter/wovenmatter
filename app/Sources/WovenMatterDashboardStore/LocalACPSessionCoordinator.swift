@@ -111,7 +111,7 @@ struct LocalACPSessionDriver: Sendable {
             let client = HermesGatewayClient(launch: launch)
             return Self(
                 initializeSession: { cwd, existing, title in
-                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title, systemPrompt: nil)
+                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title)
                 },
                 prompt: { input, event, permission, interaction in
                     try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction)
@@ -146,8 +146,7 @@ struct LocalACPSessionDriver: Sendable {
                     try await client.initializeSession(
                         workingDirectory: workingDirectory,
                         existingSessionID: existingSessionID,
-                        title: title,
-                        systemPrompt: nil
+                        title: title
                     )
                 },
                 prompt: { input, onEvent, onPermission, onInteraction in
@@ -203,8 +202,7 @@ struct LocalACPSessionDriver: Sendable {
                 try await client.initializeSession(
                     workingDirectory: workingDirectory,
                     existingSessionID: existingSessionID,
-                    title: title,
-                    systemPrompt: nil
+                    title: title
                 )
             },
             prompt: { input, onEvent, onPermission, onInteraction in

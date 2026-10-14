@@ -35,7 +35,7 @@ struct NativeHarnessArchiveTests {
                 }
             }
         }
-        _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"), existingSessionID: "native-session", title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"), existingSessionID: "native-session", title: nil)
         await client.setRunID("woven-run")
         let turn = Task { try await client.prompt("fixture") }
         try await gate.waitFor(frames: false)
@@ -116,7 +116,7 @@ struct NativeHarnessArchiveTests {
         var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: [])
         launch.historyRecorder = { _, _ in }
         let client = HermesGatewayClient(launch: launch, transport: transport, home: "/fixture/.hermes")
-        _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"), existingSessionID: nil, title: nil)
         let turn = Task { try await client.prompt(.init(text: "fixture"), onEvent: nil, onPermission: nil, onInteraction: nil) }
         try await transport.waitForSubmit()
         let delivered = Task { await transport.complete() }
@@ -238,7 +238,7 @@ struct NativeHarnessArchiveTests {
             }
         }
         _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp/native-fixture"),
-            existingSessionID: "native-session", title: nil, systemPrompt: nil)
+            existingSessionID: "native-session", title: nil)
         await client.setRunID("woven-run")
         if archiveFails {
             await #expect(throws: PiRPCClientError.self) { try await client.prompt("fixture prompt") }

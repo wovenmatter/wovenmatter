@@ -606,10 +606,6 @@ public actor LocalACPClient {
     private let runtimeKind: AgentRuntimeKind
     private let workingDirectory: URL
     private var nextID: Int64 = 0
-    private var negotiatedProtocolVersion: Int64?
-    private var agentName: String?
-    private var pendingInitialSystemPrompt: String?
-    private var initialSystemPromptInFlight = false
     private var defaultAgentRunID: String?
     private var defaultAgentRemote = false
     private var durableRemoteACP = false
@@ -818,8 +814,7 @@ public actor LocalACPClient {
     public func initializeSession(
         workingDirectory: URL,
         existingSessionID: String?,
-        title: String?,
-        systemPrompt: String? = nil
+        title: String?
     ) async throws -> LocalACPInitializedSession {
         try await prepareDefaultAgent()
         _ = try await initializeConnection()
@@ -852,8 +847,7 @@ public actor LocalACPClient {
                    loaded?["modelState"] == nil {
                     return try await createSession(
                         workingDirectory: workingDirectory,
-                        title: title,
-                        systemPrompt: systemPrompt
+                        title: title
                     )
                 }
                 sessionID = existingSessionID
@@ -888,8 +882,7 @@ public actor LocalACPClient {
 
         return try await createSession(
             workingDirectory: workingDirectory,
-            title: title,
-            systemPrompt: systemPrompt
+            title: title
         )
     }
 
@@ -934,8 +927,6 @@ public actor LocalACPClient {
                 initializeResult?["protocolVersion"]?.integerValue
             )
         }
-        negotiatedProtocolVersion = negotiatedVersion
-        agentName = initializeResult?["agentInfo"]?["name"]?.stringValue
         loadSessionSupported =
             initializeResult?["agentCapabilities"]?["loadSession"]?.boolValue ?? false
         steeringSupported = initializeResult?["_meta"]?["steering"]?["supported"]?
@@ -951,28 +942,13 @@ public actor LocalACPClient {
 
     private func createSession(
         workingDirectory: URL,
-        title: String?,
-        systemPrompt: String?
+        title: String?
     ) async throws -> LocalACPInitializedSession {
         var parameters: [String: ACPJSONValue] = [
             "cwd": .string(workingDirectory.path),
             "mcpServers": .array([]),
         ]
         var metadata = try nativeConnectionMetadata()
-        if let systemPrompt, !systemPrompt.isEmpty {
-            if agentName == "@agentclientprotocol/claude-agent-acp" {
-                metadata["systemPrompt"] = .object([
-                    "append": .string(systemPrompt),
-                ])
-            } else if let negotiatedProtocolVersion,
-                      negotiatedProtocolVersion >= 2 {
-                parameters["systemPrompt"] = .string(systemPrompt)
-            } else {
-                // ACP v1 has no system-prompt field. Carry the instructions
-                // in the first user turn instead.
-                pendingInitialSystemPrompt = systemPrompt
-            }
-        }
         if let title, !title.isEmpty {
             metadata["sessionTitle"] = .string(title)
         }
@@ -1432,19 +1408,10 @@ public actor LocalACPClient {
             throw LocalACPClientError.sessionNotInitialized
         }
         let outboundText = input.transportText().trimmingCharacters(in: .whitespacesAndNewlines)
-        // Native commands must stay at the start of the message. Defer ACP v1's
-        // instruction prefix until an ordinary prompt instead of consuming it here.
-        let initialSystemPrompt = initialSystemPromptInFlight || outboundText.hasPrefix("/")
-            ? nil
-            : pendingInitialSystemPrompt
-        let prefixedText = initialSystemPrompt.map {
-            "[System]\n\($0)\n\n\(outboundText)"
-        } ?? outboundText
         // Validate attachments before reserving state, then reserve before the
         // async history write. Another prompt or notification can arrive there.
-        let blocks = try Self.promptBlocks(input, text: prefixedText)
+        let blocks = try Self.promptBlocks(input, text: outboundText)
         let promptID = UUID()
-        if initialSystemPrompt != nil { initialSystemPromptInFlight = true }
         activePrompts.append(ActivePrompt(id: promptID, onEvent: onEvent,
             onPermission: onPermission, onInteraction: onInteraction))
         let response: Task<ACPRequestResponse, any Error>
@@ -1468,7 +1435,6 @@ public actor LocalACPClient {
                 dispatchFence: dispatchFence
             )
         } catch {
-            if initialSystemPrompt != nil { resolveInitialSystemPrompt(succeeded: false) }
             promptRequestFinished(promptID)
             throw error
         }
@@ -1482,15 +1448,9 @@ public actor LocalACPClient {
                 if let usage = Self.usage(from: result.value) {
                     try await onEvent?(.usage(usage))
                 }
-                if initialSystemPrompt != nil {
-                    self.resolveInitialSystemPrompt(succeeded: true)
-                }
                 self.promptRequestFinished(promptID)
                 return reason
             } catch {
-                if initialSystemPrompt != nil {
-                    self.resolveInitialSystemPrompt(succeeded: false)
-                }
                 self.promptRequestFinished(promptID)
                 throw error
             }
@@ -1515,13 +1475,6 @@ public actor LocalACPClient {
         // Removing one request must preserve handlers owned by other prompts,
         // including when a queued send fails or replies finish out of order.
         activePrompts.removeAll { $0.id == id }
-    }
-
-    private func resolveInitialSystemPrompt(succeeded: Bool) {
-        initialSystemPromptInFlight = false
-        if succeeded {
-            pendingInitialSystemPrompt = nil
-        }
     }
 
     nonisolated static func promptBlocks(
