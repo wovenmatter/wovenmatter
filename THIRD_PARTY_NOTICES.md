@@ -67,18 +67,6 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-## Adapted runtime source
-
-The local CLI discovery, two-stage installer, managed Node.js runtime design,
-and portions of the remote container and OpenClaw supervisor design are adapted
-from [Buzz](https://github.com/block/buzz). This notice records the origin of
-those adaptations.
-
-Copyright 2026 Block, Inc.
-
-The upstream source is licensed under the Apache License 2.0. A copy is
-included at [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt).
-
 ## Usage discovery and presentation
 
 The local usage transcript discovery, de-duplication, fork suppression, and
