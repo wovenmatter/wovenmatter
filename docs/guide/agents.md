@@ -71,3 +71,11 @@ available when you want to limit iterations instead.
 Normal messages retain their priority. A goal waits for active work, questions,
 approvals and queued inputs before beginning another turn. Plan mode does not
 start automatic goal work.
+
+The controls before setting a goal and while pursuing one:
+
+![Goal controls before setting a goal](../assets/goals/empty.png)
+
+![An active goal with edit, pause and clear controls](../assets/goals/active.png)
+
+These examples use the native component with isolated sample data.
