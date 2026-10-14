@@ -3,7 +3,7 @@ const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', i
 const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
-import { createProject, deleteProject } from './projects.mjs'
+import { createProject, deleteProject, ensureScratchDirectory } from './projects.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
@@ -66,6 +66,7 @@ const durableACP = createDurableACP({ catalog, workspaceRoot,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isEnabled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
+  workspaceRoot,
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
   execute:createTaskExecutor({catalog,workspaceRoot,
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
@@ -120,6 +121,9 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/v1/projects') {
       return json(response, 201, await createProject(workspaceRoot, (await readJSON(request)).name))
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/scratch') {
+      return json(response, 200, await ensureScratchDirectory(workspaceRoot, (await readJSON(request)).path))
     }
     if (request.method === 'POST' && url.pathname === '/v1/projects/delete') {
       return json(response, 200, await deleteProject(workspaceRoot, (await readJSON(request)).path))

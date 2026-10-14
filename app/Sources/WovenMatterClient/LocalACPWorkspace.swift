@@ -48,7 +48,7 @@ public enum LocalACPWorkspaceProvisioner {
 
     public static func createProject(named rawName: String, in root: URL) throws -> URL {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name != ".", name != "..", !name.hasPrefix("."),
+        guard !name.isEmpty, name != ".", name != "..", name.lowercased() != "scratch", !name.hasPrefix("."),
               !name.contains("/"), !name.contains("\\"), !name.contains(":"),
               name.utf8.count <= 255,
               name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
@@ -60,6 +60,22 @@ public enum LocalACPWorkspaceProvisioner {
         }
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
         return path
+    }
+
+    /// The reservation is persisted by the session owner before this idempotent operation.
+    public static func ensureScratchDirectory(at directory: URL, in workspace: URL) throws {
+        let scratch = workspace.appendingPathComponent("scratch", isDirectory: true).standardizedFileURL
+        let target = directory.standardizedFileURL
+        guard target.deletingLastPathComponent() == scratch, !target.lastPathComponent.hasPrefix("."),
+              !target.lastPathComponent.isEmpty else { throw LocalACPWorkspaceError.invalidProjectName }
+        for path in [scratch, target] {
+            if !FileManager.default.fileExists(atPath: path.path) {
+                do { try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false) }
+                catch let error as CocoaError where error.code == .fileWriteFileExists { }
+            }
+            let info = try path.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard info.isDirectory == true, info.isSymbolicLink != true else { throw LocalACPWorkspaceError.invalidProjectName }
+        }
     }
 
     @discardableResult
@@ -114,7 +130,7 @@ public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
         case .selectHomeDirectory:
             "Woven Matter can create its managed workspace only in the current macOS home directory."
         case .invalidProjectName:
-            "Use a directory name without slashes or a leading period."
+            "Use a directory name without slashes or a leading period. Scratch is reserved for Ungrouped chats."
         case .projectAlreadyExists:
             "A directory with that name already exists. Link it instead."
         }

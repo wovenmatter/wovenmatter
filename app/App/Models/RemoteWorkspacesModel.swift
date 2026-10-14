@@ -482,6 +482,11 @@ final class RemoteWorkspacesModel {
 
     // Validate both sides of every suspension so credentials or destination changes
     // cannot publish a result belonging to an obsolete workspace connection.
+    func ensureScratchDirectory(path: String, in configuration: RemoteWorkspaceConfiguration) async throws {
+        let result = try await databaseRequest(configuration) { try await $0.ensureScratchDirectory(path: path) }
+        guard result.path == path else { throw WorkspaceToolError.invalid("The remote workspace returned a different scratch directory.") }
+    }
+
     func createProject(name: String, in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteProjectDirectory {
         try await databaseRequest(configuration) { try await $0.createProject(name: name) }
     }

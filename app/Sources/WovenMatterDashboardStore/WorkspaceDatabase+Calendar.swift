@@ -587,6 +587,16 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceToolError.invalid("The scheduled session has no captured execution directory.")
       }
       let location = WorkspaceFolderLocation(workspaceID: "remote:" + workspaceID.uuidString.lowercased(), rootPath: path, managed: false)
+      let directory = URL(fileURLWithPath: path)
+      if configuration.folderID == nil, directory.deletingLastPathComponent().lastPathComponent == "scratch" {
+        let base = directory.deletingLastPathComponent().deletingLastPathComponent().path
+        if let scratch = try sessionScratchDirectory(id: run.sessionID) {
+          guard scratch == location else { throw WorkspaceToolError.invalid("Remote scratch directory changed.") }
+        } else {
+          try toolsExecuteUnlocked("INSERT INTO session_scratch_directories(session_id,workspace_id,workspace_root,root_path) VALUES(?,?,?,?)",
+            [run.sessionID,location.workspaceID,base,path])
+        }
+      }
       if let saved = try sessionExecutionRoot(id: run.sessionID) {
         guard saved.workspaceID == location.workspaceID, saved.rootPath == path else { throw WorkspaceToolError.invalid("Scheduled session execution directory changed.") }
       } else {

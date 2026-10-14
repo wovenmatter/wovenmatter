@@ -41,6 +41,11 @@ extension WorkspaceDatabaseConnection {
         workspace_id TEXT NOT NULL, root_path TEXT NOT NULL,
         managed INTEGER NOT NULL, reference_paths TEXT NOT NULL DEFAULT '[]'
       );
+      CREATE TABLE IF NOT EXISTS session_scratch_directories (
+        session_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        workspace_root TEXT NOT NULL, root_path TEXT NOT NULL,
+        UNIQUE(workspace_id, root_path)
+      );
       CREATE TABLE IF NOT EXISTS execution_workspace_defaults (workspace_id TEXT PRIMARY KEY, default_path TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS session_execution_roots (
         conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,

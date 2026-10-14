@@ -1546,7 +1546,7 @@ final class ApplicationModel {
                     let target = URL(fileURLWithPath: path).standardizedFileURL
                     let managed = root.standardizedFileURL.resolvingSymlinksInPath()
                     guard target.resolvingSymlinksInPath().deletingLastPathComponent() == managed,
-                          target != managed else { throw WorkspaceToolError.invalid("This directory is outside the managed Woven workspace.") }
+                          target != managed, target.lastPathComponent.lowercased() != "scratch" else { throw WorkspaceToolError.invalid("This directory is outside the managed Woven workspace.") }
                     try FileManager.default.trashItem(at: target, resultingItemURL: nil)
                 }
             }
@@ -1578,7 +1578,10 @@ final class ApplicationModel {
             guard !runningToolSessionIDs.contains(id), toolSessionAdmission.begin(id, running: runningToolSessionIDs, limit: Int.max) == .start else { throw ApplicationModelError.localSessionConfigurationInProgress }
             defer { toolSessionAdmission.finish(id) }
             let descriptor = try await dashboardStore.database.localACPSession(conversationID: id)
-            let root = try await folderWorkingDirectory(folderID: folderID, workspaceID: descriptor.remoteWorkspaceID)
+            let root: URL
+            if folderID == nil, let scratch = try await dashboardStore.database.sessionScratchDirectory(id: id) {
+                root = URL(fileURLWithPath: scratch.rootPath)
+            } else { root = try await folderWorkingDirectory(folderID: folderID, workspaceID: descriptor.remoteWorkspaceID) }
             if descriptor.runtimeKind == .opencode {
                 guard let native = openCodeModel(for: id) else { throw ApplicationModelError.localACPRuntimeUnavailable }
                 try await native.moveDraftWorkspace(conversationID: id, root: root)
@@ -2262,6 +2265,10 @@ final class ApplicationModel {
         var normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
+        if !steering {
+            try await prepareUngroupedLaunch(conversation: conversation, firstMessage: normalized.text)
+            try dispatchFence.check()
+        }
         for reference in normalized.references where reference.kind == .conversation {
             try await dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)
         }
@@ -5008,5 +5015,41 @@ extension ApplicationModel {
             }
             await refreshDatabases(); return destinationSourceID + ":" + newID
         } catch { databaseError = error.localizedDescription; return nil }
+    }
+}
+
+extension ApplicationModel {
+    func ensureChatScratchDirectory(_ path: String, workspaceID: UUID?, workspaceRoot: String) async throws {
+        if let workspaceID {
+            guard let remote = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            try await remoteWorkspaces.ensureScratchDirectory(path: path, in: remote)
+        } else {
+            try LocalACPWorkspaceProvisioner.ensureScratchDirectory(at: URL(fileURLWithPath: path), in: URL(fileURLWithPath: workspaceRoot))
+        }
+    }
+
+    func prepareUngroupedLaunch(conversation: WorkspaceConversationRecord, firstMessage: String) async throws {
+        guard conversation.folderID == nil, let store = dashboardStore,
+              let current = try await store.database.sessionExecutionRoot(id: conversation.id) else { return }
+        guard current.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+            throw WorkspaceToolError.invalid("This chat belongs to another execution workspace.")
+        }
+        let existing = try await store.database.sessionScratchDirectory(id: conversation.id)
+        if existing?.rootPath == current.rootPath { return }
+        if existing == nil, !(try await store.database.canChooseSessionFolder(id: conversation.id)) { return }
+        let base = try defaultToolWorkingDirectory(workspaceID: conversation.remoteWorkspaceID)
+        // A scheduled task may retain a project root after its UI folder was removed.
+        if existing == nil, current.rootPath != base { return }
+        let scratch = try await store.database.reserveSessionScratchDirectory(id: conversation.id,
+            workspaceID: current.workspaceID, workspaceRoot: base, firstMessage: firstMessage)
+        try await ensureChatScratchDirectory(scratch.rootPath, workspaceID: conversation.remoteWorkspaceID, workspaceRoot: base)
+        if current.rootPath != scratch.rootPath {
+            if conversation.localRuntimeKind == .opencode {
+                guard let native = openCodeModel(for: conversation.id) else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                try await native.moveDraftWorkspace(conversationID: conversation.id, root: URL(fileURLWithPath: scratch.rootPath))
+            } else { try await store.discardDraftSession(conversationID: conversation.id) }
+            try await store.database.bindSessionScratchDirectory(id: conversation.id)
+            localACPSessionMetadata.removeValue(forKey: conversation.id)
+        }
     }
 }

@@ -1532,6 +1532,9 @@ enum RemoteWorkspaceProcess {
 public struct RemoteProjectDirectory: Codable, Sendable { public let path: String }
 
 extension RemoteWorkspaceServiceClient {
+    public func ensureScratchDirectory(path: String) async throws -> RemoteProjectDirectory {
+        try await request(path: "v1/scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
+    }
     public func createProject(name: String) async throws -> RemoteProjectDirectory {
         try await request(path: "v1/projects", method: "POST", body: JSONEncoder().encode(["name": name]))
     }

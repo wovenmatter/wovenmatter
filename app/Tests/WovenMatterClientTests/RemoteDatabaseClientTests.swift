@@ -14,6 +14,8 @@ struct RemoteDatabaseClientTests {
         let second = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42002")!, token: "two", session: session)
         #expect(try await first.databases().first?.name == "Sales #1")
         #expect(try await second.databases().isEmpty == true)
+        let scratch = "/home/.woven-matter/scratch/2026-10-14-research-12345678"
+        #expect(try await first.ensureScratchDirectory(path: scratch).path == scratch)
         #expect(try await first.createDatabase(name: "Sales #1", preference: .sqlite).id == Self.databaseID)
         let link = DatabaseArtifactLink(sourceID: "remote:configured-identity", databaseID: Self.databaseID, relativePath: "", sqliteQuery: "SELECT value FROM events")
         let data = try await first.databaseData(for: link)
@@ -69,6 +71,10 @@ private final class RemoteDatabaseFixtureProtocol: URLProtocol, @unchecked Senda
         } else {
             #expect(port == 42001)
             switch request.url?.path {
+            case "/v1/scratch":
+                #expect(request.httpMethod == "POST")
+                #expect(payload?["path"] as? String == "/home/.woven-matter/scratch/2026-10-14-research-12345678")
+                row = #"{"path":"/home/.woven-matter/scratch/2026-10-14-research-12345678"}"#
             case "/v1/databases":
                 #expect(request.httpMethod == "POST")
                 #expect(payload?["databaseID"] as? String == "Sales #1")

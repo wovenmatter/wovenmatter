@@ -30,6 +30,9 @@ extension ApplicationModel {
         if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
         if let buzz = session.buzzWorkspaceLinkID { return "buzz:" + buzz.uuidString.lowercased() }
         let root = try await database.sessionExecutionRoot(id: conversationID)
+        if let scratch = try await database.sessionScratchDirectory(id: conversationID), scratch.rootPath == root?.rootPath {
+            return "local:" + (try defaultToolWorkingDirectory(workspaceID: nil))
+        }
         let directory = root?.rootPath
             ?? openCodeModel(for: conversationID)?.snapshots[conversationID]?.info["location"]["directory"].string
             ?? localACPSessionMetadata[conversationID]?.workingDirectory

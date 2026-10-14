@@ -7,8 +7,12 @@ owner. Woven never initializes or normalizes a linked project, copies instructio
 files into it, or renames its directory when its display name changes.
 
 Draft chats can choose a folder in their agent's workspace or Ungrouped. The first
-accepted send locks the saved owner and cwd. Ungrouped has one saved default cwd
-per execution workspace. The database saves these roots for UI, orchestration,
+accepted send locks the saved owner and cwd. Each Ungrouped chat launches in its
+own blank directory under its execution workspace’s `scratch` directory. Its date/message/id name is reserved durably
+before filesystem creation and retained through launch retries, resumes and title
+changes. Drafts can switch folders before sending; returning to Ungrouped reuses
+the chat’s reservation. Chat deletion preserves working files. Scratch is reserved
+for these chat directories. The database saves these roots for UI, orchestration,
 calendar tasks, and child sessions. A scheduled task keeps its captured root even
 if its UI folder is removed. Old sessions without this execution contract remain
 archived, readable SQLite history and cannot execute.
@@ -68,6 +72,9 @@ Trey should exercise these remaining integration checks on the PR build:
   draft folder, send, and verify locked cwd and one native Woven instruction block.
   An agent clicked while another workspace's folder is selected starts Ungrouped;
   a rejected first send still permits choosing a folder.
+- Start two Ungrouped chats on the Mac and on each remote workspace. Verify
+  separate initially empty `scratch/<date>-<message>-<id>` directories, retry and
+  resume reuse, stable paths after rename, and preserved files after chat deletion.
 - Read an old chat and confirm it offers no resume/send action.
 - Collect remote scheduled data while the Mac is disconnected, reconnect, and
   verify last-updated state, linked table/value/spreadsheet/HTML refresh, and Copy

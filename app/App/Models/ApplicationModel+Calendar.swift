@@ -184,7 +184,7 @@ extension ApplicationModel {
         if config.runtimeKind == .opencode, config.workspaceID == nil, openCode?.isEnabled != true {
             throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
         }
-        guard let path = config.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
+        guard var path = config.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
             throw WorkspaceToolError.invalid("The task has no captured working directory. Edit it before running.")
         }
         let owner = try await executionWorkspaceIdentity(workspaceID: config.workspaceID)
@@ -202,7 +202,6 @@ extension ApplicationModel {
                 folderID = nil
             }
         }
-        let calendarExecutionRoot = WorkspaceFolderLocation(workspaceID: owner, rootPath: path, managed: false)
         let scope = config.selectionWorkspace ?? config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
             ?? "local:" + path
         let selections = SessionSelections(model: config.model, thinking: config.thinking,
@@ -211,14 +210,23 @@ extension ApplicationModel {
             workspace: scope, selections: selections,
             usesProductPermissionDefault: config.usesProductPermissionDefault ?? false)
         let existing = snapshot.conversations.first(where: { $0.id == run.sessionID })
+        if existing == nil, (try? await store.database.localACPSession(conversationID: run.sessionID)) != nil {
+            throw WorkspaceToolError.invalid("The task's session was deleted. Edit the task to use a new session.")
+        }
+        let scratchBinding = try await store.database.sessionScratchDirectory(id: run.sessionID)
+        let isDraft: Bool
+        if existing == nil { isDraft = true }
+        else { isDraft = try await store.database.canChooseSessionFolder(id: run.sessionID) }
+        if config.folderID == nil, scratchBinding != nil || isDraft {
+            let scratch = try await store.database.reserveSessionScratchDirectory(id: run.sessionID,
+                workspaceID: owner, workspaceRoot: path, firstMessage: run.task.prompt)
+            try await ensureChatScratchDirectory(scratch.rootPath, workspaceID: config.workspaceID, workspaceRoot: path)
+            path = scratch.rootPath
+            if let existing { try await prepareUngroupedLaunch(conversation: existing, firstMessage: run.task.prompt) }
+        }
+        let capturedRoot = WorkspaceFolderLocation(workspaceID: owner, rootPath: path, managed: false)
         try dispatchFence.check()
         if existing == nil {
-            // A deleted destination is not silently recreated under an old ID.
-            let deleted = try? await store.database.localACPSession(conversationID: run.sessionID)
-            try dispatchFence.check()
-            if deleted != nil {
-                throw WorkspaceToolError.invalid("The task's session was deleted. Edit the task to use a new session.")
-            }
             let created: String?
             let directory = URL(fileURLWithPath: path)
             if let workspaceID = config.workspaceID {
@@ -226,10 +234,10 @@ extension ApplicationModel {
                     throw ApplicationModelError.remoteHarnessUnavailable
                 }
                 created = await createRemoteACPSession(target: target, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID, folderID: folderID, calendarExecutionRoot: calendarExecutionRoot)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID, folderID: folderID, calendarExecutionRoot: capturedRoot)
             } else {
                 created = await createLocalACPSession(runtimeKind: config.runtimeKind, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID, folderID: folderID, calendarExecutionRoot: calendarExecutionRoot)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID, folderID: folderID, calendarExecutionRoot: capturedRoot)
             }
             try dispatchFence.check()
             guard created == run.sessionID else { throw WorkspaceToolError.invalid(localRunError ?? "The scheduled session could not be created.") }

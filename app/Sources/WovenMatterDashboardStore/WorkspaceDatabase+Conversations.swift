@@ -105,7 +105,7 @@ extension WorkspaceDatabaseConnection {
       } else {
         // The default directory was captured at creation, not inferred on another device.
         guard let defaultPath = try historyRowsUnlocked("SELECT default_path FROM execution_workspace_defaults WHERE workspace_id=?", values: [root.workspaceID]).first?.objectValue?["default_path"]?.stringValue else { throw WorkspaceToolError.invalid("Workspace default directory unavailable.") }
-        path = defaultPath
+        path = try sessionScratchDirectory(id: id)?.rootPath ?? defaultPath
       }
       try toolsExecuteUnlocked("UPDATE session_execution_roots SET root_path=? WHERE conversation_id=?", [path,id])
 

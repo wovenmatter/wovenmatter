@@ -4,6 +4,26 @@ import Testing
 
 @Suite("Blank project roots")
 struct WorkspaceProjectTests {
+  @Test func scratchDirectoriesStartEmptyAndRetriesKeepFiles() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = root.appending(path: "scratch/2026-10-14-chat-12345678")
+    try LocalACPWorkspaceProvisioner.ensureScratchDirectory(at: directory, in: root)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    try "Keep me".write(to: directory.appending(path: "report.txt"), atomically: true, encoding: .utf8)
+    try LocalACPWorkspaceProvisioner.ensureScratchDirectory(at: directory, in: root)
+    #expect(try String(contentsOf: directory.appending(path: "report.txt"), encoding: .utf8) == "Keep me")
+    #expect(throws: (any Error).self) { try LocalACPWorkspaceProvisioner.createProject(named: "scratch", in: root) }
+    let external = root.appending(path: "External")
+    try FileManager.default.createDirectory(at: external, withIntermediateDirectories: false)
+    let link = root.appending(path: "scratch/linked")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: external)
+    #expect(throws: (any Error).self) { try LocalACPWorkspaceProvisioner.ensureScratchDirectory(at: link, in: root) }
+    #expect(throws: (any Error).self) { try LocalACPWorkspaceProvisioner.ensureScratchDirectory(at: external, in: root) }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: external.path).isEmpty)
+  }
+
   @Test func creationIsBlankAndExistingFilesStayUntouched() async throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "blank-projects-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

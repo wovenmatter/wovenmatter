@@ -24,6 +24,47 @@ struct WorkspaceExecutionRootTests {
     }
   }
 
+  @Test func scratchReservationSurvivesRetriesRenamesAndFolderChanges() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let id = try await f.draft()
+    let base = f.location("Ungrouped").rootPath
+    let date = Date(timeIntervalSince1970: 1_790_294_400)
+    let scratch = try await f.db.reserveSessionScratchDirectory(id: id, workspaceID: f.owner,
+      workspaceRoot: base, firstMessage: "Convert these PNGs to WebP please!", date: date)
+    #expect(scratch.rootPath.contains("/scratch/2026-09-25-convert-these-pngs-to-webp-"))
+    #expect(!FileManager.default.fileExists(atPath: scratch.rootPath))
+    try await f.db.bindSessionScratchDirectory(id: id)
+    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "history.sqlite"))
+    let retry = try await reopened.reserveSessionScratchDirectory(id: id, workspaceID: f.owner,
+      workspaceRoot: base, firstMessage: "A changed title or retry", date: date.addingTimeInterval(86400))
+    #expect(retry == scratch)
+    let folder = try await reopened.createFolder(name: "Project", location: f.location("Project"))
+    #expect(try await reopened.moveConversation(id: id, toFolderID: folder))
+    #expect(try await reopened.moveConversation(id: id, toFolderID: nil))
+    #expect(try await reopened.sessionExecutionRoot(id: id)?.rootPath == scratch.rootPath)
+    try await reopened.lockSessionFolder(id: id)
+    try await reopened.bindSessionScratchDirectory(id: id)
+    await #expect(throws: (any Error).self) {
+      try await reopened.reserveSessionScratchDirectory(id: id, workspaceID: "remote:other", workspaceRoot: "/home", firstMessage: "retry")
+    }
+  }
+
+  @Test func scratchNamesCannotCollideOrEscapeAndNamedProjectsKeepTheirRoot() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let first = "11111111-1111-4111-8111-111112345678", second = "22222222-2222-4222-8222-222212345678"
+    let base = f.root.path
+    let a = try await f.db.reserveSessionScratchDirectory(id: first, workspaceID: f.owner, workspaceRoot: base, firstMessage: "../../etc repeated title")
+    let b = try await f.db.reserveSessionScratchDirectory(id: second, workspaceID: f.owner, workspaceRoot: base, firstMessage: "../../etc repeated title")
+    #expect(a.rootPath != b.rootPath)
+    #expect(URL(fileURLWithPath: a.rootPath).deletingLastPathComponent().path == base + "/scratch")
+    let id = try await f.draft()
+    let folder = try await f.db.createFolder(name: "Project", location: f.location("Project"))
+    #expect(try await f.db.moveConversation(id: id, toFolderID: folder))
+    _ = try await f.db.reserveSessionScratchDirectory(id: id, workspaceID: f.owner, workspaceRoot: f.location("Ungrouped").rootPath, firstMessage: "Hello")
+    await #expect(throws: (any Error).self) { try await f.db.bindSessionScratchDirectory(id: id) }
+    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("Project").rootPath)
+  }
+
   @Test func renameAndReferencesPreserveOneOwningRootAcrossReopen() async throws {
     let f = try await Fixture(); defer { f.remove() }
     let location = f.location("Initial directory")

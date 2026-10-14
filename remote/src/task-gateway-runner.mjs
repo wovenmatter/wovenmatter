@@ -4,7 +4,8 @@ import { createNativeTaskExecutor } from './task-gateway-native.mjs'
 import { createTaskNativeArchive, publishNativePresentation, isolateTaskEnvironment } from './task-native-archive.mjs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, dirname, join } from 'node:path'
+import { ensureScratchDirectory } from './projects.mjs'
 
 const before = message => Object.assign(new Error(message), { beforePrompt:true })
 const values = options => (options ?? []).flatMap(o => o.value == null ? values(o.options) : [o.value])
@@ -42,6 +43,10 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
   return async ({run,nativeSessionID,signal,publish,bindSession}) => {
     const config = run.task.configuration
     if (signal.aborted) throw before('Background execution was turned off.')
+    if (!config.folderID && dirname(config.nativeWorkingDirectory ?? '') === join(workspaceRoot, 'scratch')) {
+      try { await ensureScratchDirectory(workspaceRoot, config.nativeWorkingDirectory) }
+      catch { throw before('The chat scratch directory could not be prepared.') }
+    }
     if (config.runtimeKind === 'default_agent') {
       // Hold admission through session setup and the completed run. An SDK update
       // must not rotate the worker between load/configuration/prompt requests.
