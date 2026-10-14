@@ -728,7 +728,7 @@ public actor LocalACPSessionCoordinator {
                         sessionID: sessionID,
                         model: configuration.model ?? descriptor.model,
                         reasoningLevel: configuration.thinking ?? descriptor.thinking,
-                        agent: descriptor.buzzAgentID,
+                        agent: nil,
                         workspace: workspace.rootURL.path,
                         tokens: tokens,
                         costUSD: nil
@@ -1024,8 +1024,7 @@ public actor LocalACPSessionCoordinator {
             conversationID: descriptor.conversationID, runtimeKind: descriptor.runtimeKind,
             title: descriptor.title, acpSessionID: descriptor.acpSessionID,
             model: model, thinking: thinking, permission: permission,
-            buzzWorkspaceLinkID: descriptor.buzzWorkspaceLinkID,
-            buzzAgentID: descriptor.buzzAgentID, remoteWorkspaceID: descriptor.remoteWorkspaceID
+            remoteWorkspaceID: descriptor.remoteWorkspaceID
         )
     }
 

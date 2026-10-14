@@ -39,8 +39,7 @@ and evidence in historical audits rather than presenting them as current tests.
 - Open the pull request directly against `main`.
 - Do not include credentials, provider transcripts, personal paths, private
   hosts, generated build products, or proprietary assets.
-- Keep the local app useful without Buzz or a remote machine.
-- Keep Buzz local and optional. Do not add relay or deployment management.
+- Keep the local app useful without a remote machine.
 - Keep one remote container equal to one complete workspace, not one agent.
 - Do not bundle third-party harness CLIs or ACP adapters.
 

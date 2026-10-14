@@ -44,8 +44,8 @@ runtime operation. No operation cancels an active turn.
 Each remote agent workspace has its own inventory, preferences, latest checks and
 verified maintenance actions, served by that workspace's authenticated service
 through its SSH tunnel. Installers execute on the selected host. Remote services
-must include these endpoints before the controls are available. Buzz remains
-outside this management surface. Local package presence never verifies a remote
+must include these endpoints before the controls are available.
+Local package presence never verifies a remote
 installation or a linked gateway's runtime.
 
 On first inventory, runtimes without saved preferences retain their previous
@@ -80,7 +80,7 @@ OpenClaw settings open workspace-specific gateway controls and the actual agent
 name/gateway settings. The remote service proxies only a gateway process it owns,
 and rejects an unrelated listener on the configured port. Starting, stopping and
 configuration belong to the selected workspace; local controls do not operate on
-remote or Buzz gateways. Installing a CLI does not install provider runtimes or
+remote gateways. Installing a CLI does not install provider runtimes or
 upgrade independently linked gateways.
 
 ## Upstream reference snapshot — September 11, 2026

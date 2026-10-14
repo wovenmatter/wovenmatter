@@ -979,9 +979,8 @@ public actor LocalACPClient {
                       negotiatedProtocolVersion >= 2 {
                 parameters["systemPrompt"] = .string(systemPrompt)
             } else {
-                // ACP v1 has no system-prompt field. Match Buzz's compatibility
-                // behavior by carrying the agent definition in the first user
-                // turn instead of silently discarding it or refusing the agent.
+                // ACP v1 has no system-prompt field. Carry the instructions
+                // in the first user turn instead.
                 pendingInitialSystemPrompt = systemPrompt
             }
         }

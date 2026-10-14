@@ -33,7 +33,6 @@ private enum SettingsSection: Equatable {
     case openClawAgent(UUID)
     case localWorkspace
     case remoteWorkspaces
-    case buzzWorkspaces
     case usage
 }
 
@@ -149,12 +148,6 @@ struct SettingsView: View {
                             origin: .remoteWorkspaces
                         )
                     },
-                    onBack: { section = .landing }
-                )
-            case .buzzWorkspaces:
-                SettingsBuzzWorkspacesView(
-                    model: model,
-                    reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
             case .usage:
@@ -284,12 +277,6 @@ struct SettingsView: View {
                     detail: "Local runtime status and workspace settings.",
                     icon: { DashboardHarnessLogoIcon(logo: .pi, size: 15) },
                     action: { section = .harness(.pi, nil, .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "Buzz agent workspaces",
-                    detail: "Connect agents from local Buzz workspaces.",
-                    icon: { DashboardLucideIcon(glyph: .radioTower, size: 15) },
-                    action: { section = .buzzWorkspaces }
                 )
                 SettingsDestinationRow(
                     title: "Usage",
