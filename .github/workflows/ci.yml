@@ -68,7 +68,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.macos == 'true'
     runs-on: macos-26
-    # Cold desktop builds plus iPhone/iPad UI suites need their own completion budget.
+    # Cold desktop builds and companion integration have a separate budget from UI tests.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -78,10 +78,32 @@ jobs:
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
-      - name: Test desktop, companion packages, and iPhone/iPad UI flows
+      - name: Test desktop and companion runtime integration
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/test-changes.sh --macos
+
+  ios:
+    name: iOS UI (${{ matrix.device.name }})
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: macos-26
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        device:
+          - name: iPhone
+            type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro
+          - name: iPad
+            type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Test native mobile flows
+        env:
+          WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device.type }}
+        run: scripts/test-ios.sh --ui
 
   remote:
     name: Remote workspace
@@ -124,7 +146,7 @@ jobs:
 
   gate:
     name: CI
-    needs: [changes, macos, remote]
+    needs: [changes, macos, ios, remote]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -133,8 +155,10 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
+          IOS_RESULT: ${{ needs.ios.result }}
           REMOTE_RESULT: ${{ needs.remote.result }}
         run: |
           test "$CHANGES_RESULT" = success
           case "$MACOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
+          case "$IOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
           case "$REMOTE_RESULT" in success|skipped) ;; *) exit 1 ;; esac

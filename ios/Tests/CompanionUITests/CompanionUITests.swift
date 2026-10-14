@@ -131,8 +131,16 @@ final class CompanionUITests: XCTestCase {
     let app = launch()
     app.buttons["New folder"].tap()
     let name = "Offline " + String(UUID().uuidString.prefix(6))
-    app.alerts.textFields["Folder name"].typeText(name)
-    app.alerts.buttons["Create"].tap()
+    let alert = app.alerts["New folder"]
+    let field = alert.textFields["Folder name"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    field.tap()
+    field.typeText(name)
+    XCTAssertEqual(field.value as? String, name)
+    // One tap must submit while the keyboard is open, without a second tap to
+    // compensate for the app's outside-tap keyboard dismissal gesture.
+    alert.buttons["Create"].tap()
+    XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
     XCTAssertTrue(app.buttons["back-folders"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["This folder is empty. Add a note or start a chat."].exists)
     app.buttons["back-folders"].tap()

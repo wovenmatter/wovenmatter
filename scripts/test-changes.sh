@@ -132,7 +132,8 @@ run_macos() {
   run_default_agent_tests
   run_package_tests
   run_app_build
-  run_companion --all-devices
+  # CI runs iPhone/iPad UI in independent matrix jobs. --all retains both locally.
+  run_companion --simulator
 }
 
 run_remote() {
