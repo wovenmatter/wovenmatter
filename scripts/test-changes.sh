@@ -43,6 +43,8 @@ run_package_tests() {
   local suite
   local process_suites=(
     ACPSessionPermissionTests
+    ACPSessionRoutingTests
+    WorkspaceFolderRecoveryTests
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
     WorkspaceAgentToolsServiceTests
@@ -61,7 +63,8 @@ run_package_tests() {
   # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
-  # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
+  # resource-heavy suites (including continuous folder polling) so they cannot
+  # consume unrelated IPC timing budgets on
   # toolchains that combine every test target in one parallel runner. Every
   # excluded suite runs below with its original bounds and explicit concurrency
   # tests intact, using the same compiled test artifacts.
