@@ -9,10 +9,6 @@
   permission path; if it still fails, stop and report the blocker to the user.
 - Build and launch: `scripts/build_and_run.sh`.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
-  Text inputs must reuse `DashboardSearchField`, `.dashboardInput()`, or
-  `.settingsInput()`. Never use `.roundedBorder` or the native blue focus ring
-  for app forms. Match the sidebar chat search and check focused/unfocused fields
-  in Green and Cognac before handing off a new page.
 - Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
   Development/main CI owns source validation. Release preparation never runs
   local test suites or reruns CI; follow the release skill to start the workflow.
