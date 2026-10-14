@@ -78,6 +78,8 @@ run_package_tests() {
 
 run_default_agent_tests() {
   npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
+  # Serialize test files that spawn SDK processes; their own concurrency tests
+  # retain their original bounds and parallel operations.
   npm test --prefix default-agent
   node scripts/build-ios-pi-runtime.mjs --check
   node scripts/build-ios-embedded-runtime.mjs --check
