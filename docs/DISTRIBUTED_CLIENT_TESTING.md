@@ -116,7 +116,10 @@ and inference acceptance remain a human test for each provider.
    A client attempting to publish another workspace’s journal must be rejected.
 4. Interrupt the response to a send, then reopen. Recover its existing receipt;
    do not create a second send to guess whether the first was accepted. Test
-   Stop and approvals after switching the selected conversation. Delay owner
+   Stop and approvals after switching the selected conversation. Open that same
+   chat from Home, Folders, and Pending Requests with its original connection
+   unavailable: each must use an authorized available route to the same owner,
+   never an identically named agent on another device. Delay owner
    publication while keeping direct control reachable: the central Mac must
    still recognize the live run, reject a second idle-only send, steer that run,
    and stop it. Its observer cache must not advance the central history cursor.
@@ -150,7 +153,7 @@ the agent loop, native tools, code execution, and checkpoints remain on iOS.
 - Background and reopen the app. Resume retained work explicitly. Repeat after
   terminating the app while a response is arriving. A stopped run must stay
   stopped after relaunch, including a Stop interrupted before acknowledgement.
-- Stop central sharing while the chosen inference endpoint remains reachable.
+- Disconnect the central Mac from Tailscale while the chosen inference endpoint remains reachable.
   Continue locally, then reconnect and inspect the complete history elsewhere.
 - Test the selected real provider account separately. Automated fixtures do not
   establish provider billing, subscription eligibility, or tailnet reachability.

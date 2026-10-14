@@ -86,6 +86,39 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(model.executionAvailable(for: id))
   }
 
+  @MainActor func testFolderAndPendingRequestEntryPointsResolveOnlyTheSameAgent() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    try await store.bindWorkspace("library")
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.state = await store.snapshot()
+    let central = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "central-owner", kind: .mac, name: "Central", capabilities: ["history.central.v1"])
+    let other = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "other-owner", kind: .mac, name: "Another Mac")
+    try await store.journal.bind(libraryID: "library")
+    for workspace in [central, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
+    let provider = CompanionProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
+    model.executionWorkspaces = [other, central]
+    model.providers = [provider]; model.workspaceProviders = [central.id: [provider], other.id: [provider]]
+    model.workspaceReachable = [central.id: true, other.id: true]; model.online = false
+    let id = UUID().uuidString.lowercased()
+    model.state.conversations[id] = .init(id: id, title: "Existing", providerID: provider.id, runtimeKind: provider.runtimeKind)
+    // Folders and Pending Requests both select a conversation without an explicit route.
+    await model.selectConversation(id)
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, central.id)
+    XCTAssertEqual(model.executionOwner(of: id), "central")
+    model.workspaceReachable[central.id] = false
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central", "An unrelated Mac cannot substitute for this agent")
+    model.conversationWorkspaceIDs[id] = central.id; model.online = true
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central")
+    model.conversationWorkspaceIDs[id] = other.id
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id)
+    model.workspaceReachable[other.id] = false
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id, "Central access cannot substitute for another Mac's own session")
+  }
+
   @MainActor func testHomeLauncherKeepsExactWorkspaceAndDimsDisconnectedAgents() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

@@ -193,6 +193,15 @@ extension CompanionModel {
     if let workspaceID = conversationWorkspaceIDs[conversationID] { return workspaceID == deviceWorkspaceID ? "local" : workspaceID }
     return "central"
   }
+  /// All entry points resolve the same agent identity, including Folders and pending requests.
+  func preferredExecutionRoute(for conversationID: String) -> String {
+    let owner = executionOwner(of: conversationID)
+    guard owner != "local", let provider = state.conversations[conversationID]?.providerID else { return owner }
+    return launcherAgents.first { agent in
+      agent.isAvailable && ((agent.workspaceID == owner && agent.providerID == provider)
+        || agent.conversationRoutes[owner]?.contains(provider) == true)
+    }?.workspaceID ?? owner
+  }
   /// A transport fallback never changes which workspace owns retained history.
   func executionRoute(for conversationID: String) -> String {
     if let route = selectedConversationRoute, route.conversationID == conversationID { return route.workspaceID }

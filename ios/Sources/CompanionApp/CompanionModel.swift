@@ -354,7 +354,7 @@ import CompanionInference
     }
   }
   func selectConversation(_ id: String, workspaceID: String? = nil) async {
-    selectedConversationRoute = workspaceID.map { (id, $0) }
+    selectedConversationRoute = (id, workspaceID ?? preferredExecutionRoute(for: id))
     selectedConversationID = id; tab = .chat
     if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
     else if selectedExecutionWorkspaceID == "central" { await refresh() }
