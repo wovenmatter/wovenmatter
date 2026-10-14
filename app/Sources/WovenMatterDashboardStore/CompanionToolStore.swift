@@ -66,7 +66,7 @@ extension WorkspaceDatabaseConnection {
         throw CompanionAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")
       }
       let identity = try companionLibraryIdentityUnlocked()
-      let workspaces = try federationValuesUnlocked("SELECT payload FROM companion_execution_workspaces", as: CompanionExecutionWorkspace.self)
+      let workspaces = try federationValuesUnlocked("SELECT payload FROM companion_execution_workspaces ORDER BY id", as: CompanionExecutionWorkspace.self)
       guard let host = workspaces.first(where: { $0.kind == .mac && !$0.deleted && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID }) else { return }
       let denied = try companionIDsUnlocked("SELECT workspace_id FROM companion_workspace_access WHERE device_id=? AND workspace_id=? AND enabled=0", bindings: [owner.executionDeviceID ?? owner.ownerDeviceID, host.id])
       guard denied.isEmpty else {

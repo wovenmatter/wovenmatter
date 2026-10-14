@@ -43,8 +43,11 @@ struct CompanionToolBridgeTests {
   @Test func ongoingAutomationRechecksDeviceExecutionAccess() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }
     let identity = try await fixture.database.companionLibraryIdentity()
+    _ = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+      id: "20000000-0000-0000-0000-000000000001", libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+      kind: .mac, name: "Later registration", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
     let host = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-      id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+      id: "10000000-0000-0000-0000-000000000001", libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
       kind: .mac, name: "Central Mac", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
     try await fixture.database.requireCompanionAutomationAccess(callerID: fixture.conversationID)
     try await fixture.database.setCompanionWorkspaceAccess(deviceID: fixture.deviceID, workspaceID: host.id,
