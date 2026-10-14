@@ -72,7 +72,7 @@ class BundledCLITests(unittest.TestCase):
 
     def test_large_automation_payload_uses_bounded_stdin(self):
         payload = json.dumps({"action": "upload", "data": "A" * 2800000})
-        result, request = self.invoke(["browser", "call", "--json", "-"], {"success": True}, stdin=payload)
+        result, request = self.invoke(["browser", "call", "--json", "-"], {"success": True, "silent": False}, stdin=payload)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(request["arguments"], ["browser", "call", "--json", payload])
         too_large = subprocess.run([str(CLI), "computer", "call", "--json", "-"], input="x" * (3 * 1024 * 1024 + 1),
