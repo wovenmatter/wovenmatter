@@ -191,11 +191,28 @@ export class ExecutorBroker {
   }
   async inventory() {
     const { body } = await this.request('/dashboard/api/overview');
+    const legacyProfiles = Array.isArray(body.profiles);
+    if (!Array.isArray(body.apps) || (!legacyProfiles && (!Array.isArray(body.links) || !Array.isArray(body.accounts)))) {
+      throw new Error('Executor returned an incompatible app inventory. Existing selections were retained.');
+    }
     const result = [];
     for (const app of body.apps) {
       // The bundled management app holds the server's administrator key. Giving
       // it to a scoped agent would let the agent edit its own scope.
       if (app.owner === 'executor-local') continue;
+      // Current Executor scopes name an account-free app or exact linked user
+      // accounts. Keep the persisted selection field, but never infer a broader
+      // account grant from an old profile ID when the runtime migrates.
+      if (!legacyProfiles) {
+        const needsUser = Object.values(app.requirements?.accounts ?? {}).some(value => (value.scope ?? 'user') === 'user');
+        if (!needsUser) result.push({ id: `${app.id}:@app`, app: app.id, name: app.name ?? app.slug, profile: '@app', profileName: 'App' });
+        else for (const accountID of new Set(body.links.filter(link => link.app === app.id).map(link => link.account))) {
+          const account = body.accounts.find(value => value.id === accountID);
+          if (account) result.push({ id: `${app.id}:@account:${account.id}`, app: app.id, name: app.name ?? app.slug,
+            profile: `@account:${account.id}`, profileName: account.name ?? 'Account' });
+        }
+        continue;
+      }
       let profiles = body.profiles.filter(profile => profile.app === app.id && profile.enabled !== false);
       // Explicit account-free profiles work around beta.7's undefined optional
       // fields in structured input results. Account-bearing apps need user setup.
@@ -240,7 +257,12 @@ export class ExecutorBroker {
     const grouped = new Map();
     for (const profile of enabled ? profiles : []) {
       const app = grouped.get(profile.app) ?? { app: profile.app, runsAs: [], tools: { kind: 'all' } };
-      if (!app.runsAs.some(value => value.id === profile.profile)) app.runsAs.push({ kind: 'profile', id: profile.profile });
+      if (typeof profile.profile !== 'string' || !profile.profile || typeof profile.app !== 'string' || !profile.app) throw new Error('Invalid Executor app selection.');
+      const target = profile.profile === '@app' ? { kind: 'app' }
+        : profile.profile.startsWith('@account:') ? { kind: 'account', id: profile.profile.slice('@account:'.length) }
+        : { kind: 'profile', id: profile.profile };
+      if ('id' in target && !target.id) throw new Error('Invalid Executor account selection.');
+      if (!app.runsAs.some(value => value.kind === target.kind && value.id === target.id)) app.runsAs.push(target);
       grouped.set(profile.app, app);
     }
     const apps = [...grouped.values()];

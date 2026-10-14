@@ -261,3 +261,50 @@ test('existing remote connections never report the previous local runtime versio
   const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' });
   assert.equal(result.version, null);
 });
+
+
+test('inventory supports exact linked accounts without creating profiles or exposing the administrator app', async t => {
+  const { broker } = await fixture(t, async () => ({}));
+  const requests = [];
+  broker.request = async path => {
+    requests.push(path);
+    return { body: {
+      apps: [
+        { id: 'admin', owner: 'executor-local', name: 'Manager' },
+        { id: 'public', name: 'Public', requirements: { accounts: {} } },
+        { id: 'app-owned', name: 'App owned', requirements: { accounts: { shared: { scope: 'app' } } } },
+        { id: 'private', name: 'Private', requirements: { accounts: { user: { scope: 'user' } } } },
+        { id: 'unconfigured', name: 'Unconfigured', requirements: { accounts: { old: {} } } },
+      ],
+      links: [{ app: 'private', account: 'selected' }, { app: 'private', account: 'selected' }, { app: 'private', account: 'missing' }],
+      accounts: [{ id: 'selected', name: 'Selected' }, { id: 'unlinked', name: 'Unlinked' }],
+    } };
+  };
+  const inventory = await broker.inventory();
+  assert.deepEqual(inventory.map(value => [value.app, value.profile]), [['public', '@app'], ['app-owned', '@app'], ['private', '@account:selected']]);
+  assert.deepEqual(requests, ['/dashboard/api/overview']);
+  broker.request = async () => ({ body: { apps: [] } });
+  await assert.rejects(broker.inventory(), /incompatible app inventory/);
+});
+
+test('current app and account selections remain exact and legacy profiles never widen to app access', async t => {
+  const { broker, scopes } = await fixture(t, async () => ({}));
+  const scope = await broker.scope('accounts', [
+    { app: 'public', profile: '@app' }, { app: 'private', profile: '@account:selected' },
+    { app: 'private', profile: '@account:selected' }, { app: 'old', profile: 'retained-profile' },
+  ], true);
+  assert.deepEqual(scopes.get(scope.id).apps.map(value => value.runsAs), [
+    [{ kind: 'app' }], [{ kind: 'account', id: 'selected' }], [{ kind: 'profile', id: 'retained-profile' }],
+  ]);
+  await broker.scope('accounts', [], false);
+  assert.deepEqual(scopes.get(scope.id).apps, []);
+  await assert.rejects(broker.scope('invalid', [{ app: 'private', profile: '@account:' }], true), /Invalid Executor account/);
+});
+
+test('legacy inventory retains configured profiles and excludes disabled profiles', async t => {
+  const { broker } = await fixture(t, async () => ({}));
+  broker.request = async () => ({ body: { apps: [{ id: 'old', name: 'Old' }], profiles: [
+    { id: 'enabled', app: 'old', name: 'Enabled' }, { id: 'disabled', app: 'old', enabled: false },
+  ] } });
+  assert.deepEqual((await broker.inventory()).map(value => value.profile), ['enabled']);
+});

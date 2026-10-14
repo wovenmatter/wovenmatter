@@ -44,7 +44,7 @@ try {
   }
   const profiles = await broker.inventory();
   assert.equal(profiles.length, 2); assert.ok(profiles.every(profile => profile.name.startsWith('Fixture')));
-  check('Account-free profiles are saved and the administrator app is excluded');
+  check('Account-free apps are selectable and the administrator app is excluded');
   const selected = apps.map(app => profiles.find(profile => profile.app === app.id));
   const a = await broker.scope('conversation-a', [selected[0]], true);
   const b = await broker.scope('conversation-b', [selected[1]], true);
@@ -60,7 +60,7 @@ try {
       await wait(100);
     }
   }
-  const path = (app, profile) => `tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.profile)}]`;
+  const path = (app, profile) => profile.profile === '@app' ? `tools[${JSON.stringify(app.slug)}]` : `tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.profile)}]`;
   assert.equal((await run(a, 'conversation-a', `return await ${path(apps[0], selected[0])}.read({});`)).result.execution.value.fixture, 'alpha');
   assert.equal((await run(b, 'conversation-b', `return await ${path(apps[1], selected[1])}.read({});`)).result.execution.value.fixture, 'beta');
   check('Broker issues working conversation-bound grants through the public API');
