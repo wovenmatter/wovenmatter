@@ -96,7 +96,8 @@ Computer Use grants broad access to the Mac desktop; there are no per-app
 allowlists. Enable it in the chat's Tools menu, or set a default for new chats.
 Grant Woven Matter Screen Recording and Accessibility in macOS System Settings.
 The tool's `status` reports those grants; agents cannot grant them. `apps` lists
-app bundle IDs and `launch` activates an installed app. Capture a `screenshot`
+app bundle IDs and `launch` activates an installed app. `press` uses comma-separated
+macOS keys, such as `cmd,c` or `cmd,shift,t`. Capture a `screenshot`
 (optional zero-based `screen`), then supply its `frameId` to `click`, `type`,
 `press` or `scroll`. Coordinates are screenshot pixels. Frames expire after 30
 seconds, belong to the calling chat, and are consumed by one input action.

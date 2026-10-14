@@ -13,7 +13,7 @@ export const automationSchemas = {
   computer: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['status', 'apps', 'screenshot', 'click', 'type', 'press', 'scroll', 'launch'] },
     frameId: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, button: { enum: ['single', 'right', 'double', 'middle'] },
-    text: { type: 'string' }, key: { type: 'string' }, direction: { enum: ['up', 'down', 'left', 'right'] },
+    text: { type: 'string' }, key: { type: 'string', description: 'Comma-separated macOS keys, e.g. cmd,c or cmd,shift,t.' }, direction: { enum: ['up', 'down', 'left', 'right'] },
     amount: { type: 'integer', minimum: 1, maximum: 50 }, screen: { type: 'integer', minimum: 0 }, app: { type: 'string' }
   } }
 };

@@ -156,6 +156,7 @@ def run_mcp():
         props["action"]["enum"] = actions
         props["button"] = {"enum": ["left", "right", "middle"] if name == "browser" else ["single", "right", "double", "middle"]}
         if name == "computer":
+            props["key"]["description"] = "Comma-separated macOS keys, e.g. cmd,c or cmd,shift,t."
             props["amount"] = {"type": "integer", "minimum": 1, "maximum": 50}
             props["direction"] = {"enum": ["up", "down", "left", "right"]}
         else:
