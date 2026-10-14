@@ -91,6 +91,12 @@ extension WorkspaceDatabaseConnection {
       return .init(acceptedEventIDs: accepted, preference: preference, discardedEventIDs: discarded)
     }
   }
+  func pruneProductAnalytics() throws {
+    try withLock {
+      try executeUnlocked(
+        "DELETE FROM product_analytics_events WHERE created < \(Date().addingTimeInterval(-7*86400).timeIntervalSince1970)")
+    }
+  }
   func productAnalyticsLog(limit: Int = 500) throws -> [ProductAnalyticsLogEntry] {
     try withLock {
       let stmt = try prepareUnlocked(
@@ -131,7 +137,10 @@ extension WorkspaceDatabase {
     -> ProductAnalyticsAcknowledgement
   { try await write { try $0.enqueueProductAnalytics(events) } }
   public func productAnalyticsLog(limit: Int = 500) async throws -> [ProductAnalyticsLogEntry] {
-    try await read { try $0.productAnalyticsLog(limit: limit) }
+    // Expiry must advance even when no new user event arrives. Refresh/upload
+    // reads are the maintenance boundary; a closed library is pruned on reopen.
+    if !isReadOnlyProjection { try await write { try $0.pruneProductAnalytics() } }
+    return try await read { try $0.productAnalyticsLog(limit: limit) }
   }
   public func markProductAnalyticsDelivered(_ ids: [String]) async throws {
     try await write { try $0.markProductAnalyticsDelivered(ids) }

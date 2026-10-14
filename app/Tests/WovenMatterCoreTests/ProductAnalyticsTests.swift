@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-import WovenMatterDashboardStore
+@testable import WovenMatterDashboardStore
 
 @Suite("Product analytics privacy and persistence")
 struct ProductAnalyticsTests {
@@ -23,6 +23,23 @@ struct ProductAnalyticsTests {
     #expect(try await restarted.productAnalyticsPreference() == p)
     let second = try await WorkspaceDatabase(url: dir.appendingPathComponent("other.sqlite"))
     #expect(try await second.productAnalyticsPreference().analyticsID != p.analyticsID)
+  }
+  @Test("idle libraries physically expire telemetry when the log is refreshed")
+  func idleExpiry() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let db = try await WorkspaceDatabase(url: dir.appendingPathComponent("library.sqlite"))
+    let initial = try await db.productAnalyticsPreference()
+    let preference = try await db.setProductAnalyticsPreference(
+      .init(enabled: true, expectedRevision: initial.revision, acknowledgeDisclosure: true))
+    _ = try await db.enqueueProductAnalytics([.init(preferenceRevision: preference.revision, name: .appOpened)])
+    try await db.write { connection in
+      try connection.withLock { try connection.executeUnlocked("UPDATE product_analytics_events SET created=0") }
+    }
+    #expect(try await db.productAnalyticsLog().isEmpty)
+    // Read directly as well: expired rows are removed, rather than just hidden.
+    #expect(try await db.read { try $0.productAnalyticsLog().isEmpty })
   }
   @Test("multiple devices retry one event; opt-out clears pending and fences delayed uploads")
   func epochs() async throws {

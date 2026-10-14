@@ -24,7 +24,12 @@ public actor MobileProductAnalytics {
       (try? JSONDecoder().decode(MobileProductAnalyticsState.self, from: Data(contentsOf: file)))
       ?? .init()
   }
-  public func snapshot() -> MobileProductAnalyticsState { state }
+  public func snapshot() -> MobileProductAnalyticsState {
+    if state.events.contains(where: { $0.timestamp < Date().addingTimeInterval(-7 * 86400) }) {
+      try? persist()
+    }
+    return state
+  }
   public func disclose(enabled: Bool) throws {
     state.disclosed = true
     try setEnabled(enabled && (state.preference?.enabled ?? true))

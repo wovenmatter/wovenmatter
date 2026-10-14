@@ -62,6 +62,18 @@ import WovenMatterCompanion
     #expect(await transport.sent.count == 1)
     #expect(await transport.sent.first?.properties["platform"] == "ios")
   }
+  @Test("reopening an offline client expires unsent telemetry without another action")
+  func idleExpiry() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    var state = MobileProductAnalyticsState()
+    state.events = [.init(timestamp: Date().addingTimeInterval(-8 * 86400), preferenceRevision: 1, name: .appOpened)]
+    try JSONEncoder().encode(state).write(to: file)
+    let store = try MobileProductAnalytics(file: file)
+    #expect(await store.snapshot().events.isEmpty)
+    let persisted = try JSONDecoder().decode(MobileProductAnalyticsState.self, from: Data(contentsOf: file))
+    #expect(persisted.events.isEmpty)
+  }
   @Test("a damaged analytics file does not block startup or resume collection")
   func damagedFile() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
