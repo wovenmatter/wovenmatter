@@ -290,7 +290,9 @@ final class BackendApplicationService {
         case let .setSessionTools(id, tools, confirmed):
             _ = try await conversation(id)
             guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            let previous = try await database.sessionTools(id)
             try await database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
+            if !previous.enabled.subtracting(tools.enabled).isDisjoint(with: [.browser, .computer]) { await model.cancelAutomation(callerID: id) }
             try await model.agentTools?.reload()
         case let .cancelSession(id):
             // Keep legacy Stop useful for an older client and scheduled work.

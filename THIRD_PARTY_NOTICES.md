@@ -131,3 +131,16 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Browser and computer automation
+
+Woven Matter embeds [Peekaboo](https://github.com/openclaw/Peekaboo) Automation Kit
+at `1e42f1d9053109d6d19e604504ea80bc229a88e8`, under MIT, copyright 2025 Peter
+Steinberger. AXorcist and the Swift support-library licenses are reproduced in
+`app/App/ThirdPartyNotices.txt`, which is included in the application bundle.
+
+Browser automation bundles `playwright-core` 1.64.1 from
+[Microsoft Playwright](https://github.com/microsoft/playwright) under Apache-2.0
+and `ws` 8.21.3 from [websockets/ws](https://github.com/websockets/ws) under MIT.
+Their upstream licenses remain in the bundled Node dependencies. Playwright
+connects to Woven Matter’s pinned CEF rather than installing another browser.

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = B40A00000000000000000002 /* WovenMatterAutomation */; };
 		E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */; };
 		FCF465ABA5EF4C84A9433309 /* ConversationTranscriptState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */; };
 		8CF0AF093FDD4417AE3CE998 /* ConversationTasksBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */; };
@@ -137,6 +138,8 @@
 		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
 		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
 		04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969050270F91397F88F6A49D /* FederatedConversationPane.swift */; };
+		6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */; };
+		E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -270,6 +273,8 @@
 		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
 		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
 		969050270F91397F88F6A49D /* FederatedConversationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedConversationPane.swift; sourceTree = "<group>"; };
+		CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+Automation.swift"; sourceTree = SOURCE_ROOT; };
+		259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/WovenAutomationHost.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -279,6 +284,7 @@
 			files = (
 				1865697E240F2F2763E855ED /* CompanionClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
+				B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */,
 				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -336,6 +342,7 @@
 			children = (
 				8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */,
 				619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */,
+				CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */,
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
 				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
@@ -466,6 +473,7 @@
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
+				259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */,
 				851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */,
 				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
@@ -498,6 +506,7 @@
 			packageProductDependencies = (
 				C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
+				B40A00000000000000000002 /* WovenMatterAutomation */,
 				D46000000000000000000001 /* WovenMatterDashboardStore */,
 			);
 			productName = WovenMatter;
@@ -617,6 +626,8 @@
 				C4263304AD979555E1FFD2A7 /* CentralLibraryClientSettings.swift in Sources */,
 				A2D41477A1E81E4EC0EE3D4F /* CentralLibraryClientView.swift in Sources */,
 				BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */,
+				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
+				6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
@@ -946,6 +957,7 @@
 
 
 /* Begin XCSwiftPackageProductDependency section */
+		B40A00000000000000000002 /* WovenMatterAutomation */ = {isa = XCSwiftPackageProductDependency; productName = WovenMatterAutomation; };
 		0C11E0000000000000000004 /* WovenMatterClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterClient;

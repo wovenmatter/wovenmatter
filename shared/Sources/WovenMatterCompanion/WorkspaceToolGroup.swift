@@ -1,7 +1,7 @@
 import Foundation
 
 public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sendable {
-  case notes, history, sessions, timers, usage, calendar, library, executor
+  case notes, history, sessions, timers, usage, calendar, library, executor, browser, computer
   public var id: String { rawValue }
   public var title: String {
     switch self {
@@ -13,6 +13,8 @@ public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sen
     case .calendar: "Calendar"
     case .library: "Library"
     case .executor: "Executor"
+    case .browser: "Browser Use"
+    case .computer: "Computer Use"
     }
   }
 }

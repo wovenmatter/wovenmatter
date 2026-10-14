@@ -180,6 +180,8 @@ final class ApplicationModel {
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
+    let workspaceAssets = WorkspaceAssetSession()
+    @ObservationIgnored var automationHost: WovenAutomationHost?
     var activeSessionLimitPresented = false
     var pendingSessionAccess: [WorkspaceCoordinationAccessRequest] = []
     var sessionAccessError: String?
@@ -588,6 +590,11 @@ final class ApplicationModel {
         try await dashboardStore.setCLIConnectionProvider { [weak self] id in
             try await self?.sessionCLIConnection(id)
         }
+        agentTools?.automationHandler = { [weak self] caller, command, request in
+            guard let self else { throw CancellationError() }
+            return try await self.handleAutomationTool(callerID: caller, command: command, request: request)
+        }
+        agentTools?.automationDidDisable = { [weak self] caller in await self?.cancelAutomation(callerID: caller) }
         try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
     }
@@ -2389,6 +2396,7 @@ final class ApplicationModel {
     }
 
     private func stopBackendAgentDispatch(conversationID: String) async throws {
+        await cancelAutomation(callerID: conversationID)
         guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
         if (try await dashboardStore?.database.companionExecutionOwner(conversationID: conversationID)) != nil {
             let client = try centralExecutionClient()
@@ -3473,6 +3481,7 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        automationHost?.stop(); automationHost = nil
         executorRuntime.setupTask?.cancel()
         for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
         Task { await executorRuntime.client?.shutdown() }

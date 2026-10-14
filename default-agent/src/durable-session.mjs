@@ -22,6 +22,7 @@ import { createNativeCompactionRegistry } from './native-compaction-registry.mjs
 import { createSubagentContext } from './subagent-context.mjs';
 import { ChildContext, Subagents, createSubagents } from './subagents.mjs';
 import { reportProgramStatus } from './program-status.mjs';
+import { automationTools } from './automation-tools.mjs';
 
 const context = BACKGROUND_CONTEXT;
 const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
@@ -236,7 +237,9 @@ export async function openDurableSession(engine, id, requested) {
     const loader = new DefaultResourceLoader({ cwd, agentDir: engine.directory, settingsManager, noExtensions: true, noThemes: true });
     await loader.reload();
     let codemode;
-    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key), checklistTool];
+    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key), checklistTool,
+      ...automationTools(() => (toolScopes.getStore() ?? record).cli.environment(process.env))];
+    record.ordinaryTools.push('browser', 'computer');
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
     const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
@@ -248,7 +251,7 @@ export async function openDurableSession(engine, id, requested) {
         return { ...context, env: { ...nativeEnv, ...env } };
       } }) : tool;
       let output = '', detailsError, detailsQueue = Promise.resolve();
-      const result = await boundTool.execute(api.callId, args, ctx.abortSignal, update => {
+      const result = await toolScopes.run(scope, () => boundTool.execute(api.callId, args, ctx.abortSignal, update => {
         const snapshot = textOf([{ content: update.content }]);
         if (snapshot.startsWith(output)) api.output(snapshot.slice(output.length));
         output = snapshot;
@@ -257,7 +260,7 @@ export async function openDurableSession(engine, id, requested) {
         // only a verified suffix enters the native output accumulator.
         const details = { ...update.details, ...(update.content ? { wovenOutputSnapshot: update.content } : {}) };
         detailsQueue = detailsQueue.then(() => api.details(details, ctx)).catch(error => { if (!ctx.abortSignal.aborted) detailsError = error; });
-      });
+      }));
       await detailsQueue;
       if (detailsError) throw detailsError;
       return { ...result, ...(result.structuredContent === undefined ? {} : { details: { ...result.details, structuredContent: result.structuredContent } }) };

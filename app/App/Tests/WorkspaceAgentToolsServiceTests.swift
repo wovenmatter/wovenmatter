@@ -973,6 +973,38 @@ extension WorkspaceAgentToolsServiceTests {
 
 
 extension WorkspaceAgentToolsServiceTests {
+    @Test(arguments: AgentRuntimeKind.allCases)
+    func automationUsesBoundIdentityAndIndependentUserToggles(runtime: AgentRuntimeKind) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
+        var seen: [String] = []
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        service.automationHandler = { identity, command, _ in
+            seen.append(identity + ":" + command.group!.rawValue + ":" + command.action)
+            return .init(result: .object(["fixture": .bool(true)]))
+        }
+        defer { service.stop() }
+        let endpoint = try await service.endpoint(for: caller)
+        func request(_ args: [String]) async throws -> WovenMatterToolResponse {
+            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: args))
+            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) })
+        }
+        #expect(try await request(["browser", "call", "--json", #"{"action":"tabs"}"#]).success)
+        #expect(try await !request(["computer", "call", "--json", #"{"action":"apps"}"#]).success)
+        _ = try await database.setSessionToolEnabled(.computer, enabled: true, sessionID: caller)
+        #expect(try await request(["computer", "call", "--json", #"{"action":"apps"}"#]).success)
+        #expect(try await !request(["browser", "call", "--json", #"{"action":"tabs"}"#, "--session", "other"]).success)
+        _ = try await database.setSessionToolEnabled(.browser, enabled: false, sessionID: caller)
+        #expect(try await !request(["browser", "call", "--json", #"{"action":"tabs"}"#]).success)
+        #expect(try await request(["browser", "cancel", "--id", "all"]).success)
+        #expect(seen == [caller + ":browser:call", caller + ":computer:call", caller + ":browser:cancel"])
+    }
+
     @Test func queuedSettingsToggleCanUndoItsPendingPredecessor() async throws {
         let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }

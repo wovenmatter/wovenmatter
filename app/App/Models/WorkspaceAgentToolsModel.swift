@@ -30,6 +30,8 @@ final class WorkspaceAgentToolsModel {
     typealias CalendarTaskHandler = @MainActor (String, WovenMatterToolCommand, WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask
     var executorControl: (@MainActor (ExecutorControl) async throws -> URL?)?
     private let executorHandler: SessionHandler?
+    var automationHandler: SessionHandler?
+    var automationDidDisable: (@MainActor (String) async -> Void)?
     var executorDashboardURL: URL?
     var executorBusy = false
     func controlExecutor(_ control: ExecutorControl) async throws {
@@ -317,6 +319,7 @@ final class WorkspaceAgentToolsModel {
         let policy = try await database.setSessionToolEnabled(group, enabled: enabled, sessionID: sessionID,
             confirmedPausingTimers: confirmedPausingTimers)
         sessionPolicies[sessionID] = policy
+        if [.browser, .computer].contains(group), !enabled { await automationDidDisable?(sessionID) }
         try await reload()
     }
 
@@ -419,7 +422,9 @@ final class WorkspaceAgentToolsModel {
             guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool.") }
             // Scoped history reads have their own independent attachment/management
             // checks. All other commands require the group's current capability.
-            if group != .history { try await database.requireTool(group, sessionID: callerID) }
+            if group != .history && !([.browser, .computer].contains(group) && command.action == "cancel") {
+                try await database.requireTool(group, sessionID: callerID)
+            }
             let result: WovenMatterToolResponse
             if let replica = try await replicaReadHandler?(request, command, callerID) { result = replica }
             else { switch group {
@@ -458,6 +463,9 @@ final class WorkspaceAgentToolsModel {
             case .executor:
                 guard let executorHandler else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
                 result = try await executorHandler(callerID, command, request)
+            case .browser, .computer:
+                guard let automationHandler else { throw WorkspaceToolError.invalid("Open Woven Matter to use browser and computer tools.") }
+                result = try await automationHandler(callerID, command, request)
             }
             }
             if command.isMutation {

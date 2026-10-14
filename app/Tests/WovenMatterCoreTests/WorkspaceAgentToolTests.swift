@@ -6,6 +6,77 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func automationDefaultsMigrateOnceAndComputerUseRequiresUserChoice() async throws {
+    let (db, dir, caller, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    #expect(try await db.sessionTools(caller).enabled.contains(.browser))
+    #expect(try await !db.sessionTools(caller).enabled.contains(.computer))
+    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
+    var settings = try await db.toolSettings(); settings.enabledByDefault = [.notes]
+    try await db.saveToolSettings(settings)
+    try await db.write { try $0.executeUnlocked("DELETE FROM workspace_tool_schema WHERE version=2") }
+    let migrated = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try await migrated.sessionTools(caller).enabled == [.notes, .browser])
+    #expect(try await migrated.toolSettings().enabledByDefault == [.notes, .browser])
+    try await migrated.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try await reopened.sessionTools(caller).enabled == [.notes])
+    let fresh = try await reopened.createLocalACPSession(runtimeKind: .defaultAgent, title: "Fresh", ownerDeviceID: UUID())
+    #expect(try await reopened.sessionTools(fresh).enabled == [.notes, .browser])
+  }
+
+  @Test func automationIntentsPersistBeforeInputAndRejectChangedReplays() async throws {
+    let (db, dir, caller, other) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID().uuidString.lowercased()
+    let request = WovenMatterToolRequest(arguments: ["browser", "call", "--json", #"{"action":"click","tabId":"fixture","selector":"button"}"#], requestID: id)
+    #expect(try await db.reserveAutomationRequest(callerID: caller, request: request))
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try await !reopened.reserveAutomationRequest(callerID: caller, request: request))
+    var changed = request; changed.arguments[3] = #"{"action":"click","selector":"other"}"#
+    await #expect(throws: (any Error).self) { try await reopened.reserveAutomationRequest(callerID: caller, request: changed) }
+    #expect(try await reopened.reserveAutomationRequest(callerID: other, request: request))
+    await #expect(throws: WorkspaceToolError.disabled(.computer)) {
+      try await reopened.reserveAutomationRequest(callerID: caller, request: .init(arguments: ["computer", "call", "--json", #"{"action":"screenshot"}"#]))
+    }
+    try await reopened.setSessionTools(.init(enabled: []), sessionID: caller)
+    await #expect(throws: WorkspaceToolError.disabled(.browser)) { try await reopened.reserveAutomationRequest(callerID: caller, request: request) }
+  }
+
+  @Test func automationCancellationSurvivesLateAdmissionAndHostRestart() async throws {
+    let (db, dir, caller, other) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let request = WovenMatterToolRequest(arguments: ["browser", "call", "--json", #"{"action":"click","tabId":"fixture","selector":"button"}"#])
+    // Stop reaches the backend before the action is admitted or reaches the GUI.
+    try await db.cancelAutomationRequest(callerID: caller, requestID: request.requestID.uppercased())
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    await #expect(throws: (any Error).self) { try await reopened.reserveAutomationRequest(callerID: caller, request: request) }
+    #expect(try await reopened.reserveAutomationRequest(callerID: other, request: request))
+    let projection = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+    try await projection.requireAutomationRequest(.browser, callerID: other, requestID: request.requestID)
+    try await reopened.cancelAutomationRequest(callerID: other, requestID: request.requestID)
+    // A running GUI action observes Stop on its read-only connection before its
+    // next native dispatch; cancellation never depends on Task registration.
+    await #expect(throws: (any Error).self) {
+      try await projection.requireAutomationRequest(.browser, callerID: other, requestID: request.requestID)
+    }
+  }
+
+  @Test func sessionStopCancelsAdmittedActionsThatHaveNotReachedTheGUI() async throws {
+    let (db, dir, caller, other) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let pending = WovenMatterToolRequest(arguments: ["browser", "call", "--json", #"{"action":"click"}"#])
+    #expect(try await db.reserveAutomationRequest(callerID: caller, request: pending))
+    #expect(try await db.reserveAutomationRequest(callerID: other, request: pending))
+    try await db.cancelAutomationRequests(callerID: caller)
+    let projection = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+    await #expect(throws: (any Error).self) {
+      try await projection.requireAutomationRequest(.browser, callerID: caller, requestID: pending.requestID)
+    }
+    try await projection.requireAutomationRequest(.browser, callerID: other, requestID: pending.requestID)
+    #expect(try await db.reserveAutomationRequest(callerID: caller, request: .init(arguments: pending.arguments)))
+  }
+
   @Test func inputCapturesAreImmutableSessionScopedAndPermissionChecked() async throws {
     let (db, dir, caller, other) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -416,13 +487,13 @@ struct WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try await DashboardStore(supportDirectory: directory)
     let session = try await store.database.createLocalACPSession(runtimeKind: .codex, title: "Fresh app", ownerDeviceID: UUID())
-    #expect(try await store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }))
+    #expect(try await store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }))
     let run = try await store.database.beginLocalACPRun(conversationID: session, content: "Retained input")
     try await store.database.completeLocalACPRun(runID: run.runID)
     await store.shutdownLocalACPSessions()
     let reopened = try await DashboardStore(supportDirectory: directory)
     #expect(try await reopened.database.conversationContent(id: session).messages.first?.content == "Retained input")
-    #expect(try await reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }))
+    #expect(try await reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }))
     await reopened.shutdownLocalACPSessions()
   }
 

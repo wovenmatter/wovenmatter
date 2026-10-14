@@ -40,6 +40,10 @@ struct WorkspaceToolDefaultsCard: View {
                             }.labelsHidden().frame(width: 78)
                         }.padding(.leading, 38)
                     }
+                    if group == .browser {
+                        Text("Controls the browser inside Woven Matter.").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    if group == .computer { WorkspaceComputerUseExplanation() }
                 }
                 Divider()
                 HStack {
@@ -93,6 +97,7 @@ struct WorkspaceSessionToolsMenu: View {
                                 .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
+                    if group == .computer { WorkspaceComputerUseExplanation() }
                 }
                 }
                 WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
@@ -109,5 +114,20 @@ struct WorkspaceSessionToolsMenu: View {
             Button("Cancel", role: .cancel) { }
             Button("Disable and pause") { set(.timers, enabled: false, confirmed: true) }
         } message: { Text("Disabling timers will pause this session’s active timers.") }
+    }
+}
+
+private struct WorkspaceComputerUseExplanation: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Allows agents to see and control this Mac’s desktop and apps. Requires macOS permissions.")
+            HStack(spacing: 12) {
+                Button("Screen Recording") { open("Privacy_ScreenCapture") }
+                Button("Accessibility") { open("Privacy_Accessibility") }
+            }.buttonStyle(.plain).foregroundStyle(DashboardPalette.foreground)
+        }.font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+    }
+    private func open(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
     }
 }

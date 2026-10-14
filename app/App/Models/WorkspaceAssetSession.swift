@@ -14,6 +14,12 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     private(set) var pages: [UUID: WMBrowserPage] = [:]
     private(set) var pageRevision = 0
     var notice: String?
+    var automationTabs: [GatewayJSONValue] {
+        tabs.browserIDs.compactMap { id in
+            pages[id].map { .object(["tabId": .string(id.uuidString.lowercased()), "url": .string($0.url),
+                                    "title": .string($0.title), "loading": .bool($0.loading)]) }
+        }
+    }
     private static var preparedProfile = false
     static let clearDataKey = "wovenmatter.browser.clear-on-launch"
 

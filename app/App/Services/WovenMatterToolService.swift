@@ -16,6 +16,20 @@ typealias WovenMatterToolService = WovenSocketService<WovenMatterToolRequest, Wo
 
 enum WovenMatterCommandLine {
     static func run(arguments: [String], environment: [String: String]) -> Int32 {
+        if arguments == ["mcp"] {
+            guard let resources = DefaultAgentSupport.resources else { return EXIT_FAILURE }
+            let process = Process()
+            process.executableURL = resources.appending(path: "bin/node")
+            process.arguments = [resources.appending(path: "src/automation-mcp.mjs").path]
+            var env = environment
+            if env["WOVENMATTER_CLI"] == nil { env["WOVENMATTER_CLI"] = Bundle.main.resourceURL?.appending(path: "wovenmatter").path }
+            process.environment = env
+            process.standardInput = FileHandle.standardInput
+            process.standardOutput = FileHandle.standardOutput
+            process.standardError = FileHandle.standardError
+            do { try process.run(); process.waitUntilExit(); return process.terminationStatus }
+            catch { return EXIT_FAILURE }
+        }
         var dispatchedRequestID: String?
         do {
             let command = try WovenMatterToolCommand(arguments)
@@ -25,6 +39,7 @@ enum WovenMatterCommandLine {
                 return EXIT_SUCCESS
             }
             var args = arguments
+            if let index = command.optionIndices["image"] { args.removeSubrange(index...index + 1) }
             // File paths belong to the CLI host. Never ask the app to open an
             // arbitrary caller-supplied path on the Mac (remote callers included).
             if let index = command.optionIndices["file"] {
@@ -52,7 +67,9 @@ enum WovenMatterCommandLine {
             let data = try forward(try JSONEncoder().encode(request), to: socketPath)
             let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: data)
             if !response.silent {
-                FileHandle.standardOutput.write(data)
+                if let path = command.options["image"], response.success {
+                    FileHandle.standardOutput.write(try JSONEncoder().encode(WovenAutomationOutput.exportImage(response, to: URL(fileURLWithPath: path))))
+                } else { FileHandle.standardOutput.write(data) }
                 FileHandle.standardOutput.write(Data("\n".utf8))
             }
             return response.success ? EXIT_SUCCESS : EXIT_FAILURE

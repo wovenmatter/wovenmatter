@@ -88,6 +88,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .history, .usage, .library: return false
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
+    case .browser, .computer: return action == "call"
     case .timers: return action != "list"
     case .calendar: return !["list", "read", "occurrences"].contains(action)
     case nil: return false
@@ -128,11 +129,12 @@ public struct WovenMatterToolCommand: Sendable {
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
       .executor: ["execute", "search", "skills", "status", "cancel"],
+      .browser: ["call", "cancel"], .computer: ["call", "cancel"],
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code"]
+    let valueFlags: Set<String> = ["image", "id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -145,7 +147,7 @@ public struct WovenMatterToolCommand: Sendable {
         throw WorkspaceToolError.invalid("Unknown or repeated option '\(item)'.")
       }
       indices[key] = arguments.count - args.count - 1
-      if booleanFlags.contains(key) && !(group == .notes && key == "json") {
+      if booleanFlags.contains(key) && !([.notes, .browser, .computer].contains(group) && key == "json") {
         options[key] = "true"; operationArguments.append(item)
       } else {
         guard !args.isEmpty else { throw WorkspaceToolError.invalid("\(item) requires a value.") }
@@ -177,6 +179,8 @@ public struct WovenMatterToolCommand: Sendable {
     let allowed: Set<String>
     let maximumPositionals: Int
     switch (group, action) {
+    case (.browser, "call"), (.computer, "call"): allowed = ["json", "image"] + request; maximumPositionals = 0
+    case (.browser, "cancel"), (.computer, "cancel"): allowed = ["id"] + request; maximumPositionals = 0
     case (.executor, "execute"): allowed = ["code", "file"] + request; maximumPositionals = 0
     case (.executor, "search"): allowed = ["query", "limit"] + request; maximumPositionals = 0
     case (.executor, "skills"): allowed = request; maximumPositionals = 0
@@ -430,6 +434,14 @@ public struct WovenMatterToolCommand: Sendable {
       Read returns attribution, revision, and session links.
       Read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
+      """
+    case .browser, .computer: """
+      call --json JSON [--image NEW_FILE] [--request-id UUID]
+      cancel --id REQUEST_ID|all
+      Browser Use controls only Woven Matter's embedded Chromium tabs. Computer Use
+      controls the Mac desktop through Peekaboo and must be enabled by the user.
+      Desktop input requires a fresh screenshot frameId. Inspect state after input
+      or interruption; never replay input blindly. --image writes on the CLI host.
       """
     case .executor: """
       search [--query TEXT --limit 1...100 --request-id UUID]
