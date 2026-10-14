@@ -337,11 +337,14 @@ public struct WovenMatterToolCommand: Sendable {
       calendar    Read, create and maintain calendar events
       library     Inspect available retained Library items
       executor    Search selected apps and execute scoped JavaScript programs
+      browser     Control Woven Matter's embedded Chromium browser
+      computer    Control the hosting Mac desktop when Computer Use is enabled
 
     Tools must be enabled for this session. Commands run on behalf of this session
     and use the permissions set by the user.
     For commands that make changes, supply a UUID with --request-id.
     If a response is lost, retry the same command in the same session with the same UUID.
+    After interrupted browser or desktop input, inspect fresh state before further input.
     """ + "\n"
 
   public static func help(for group: WorkspaceToolGroup) -> String {
@@ -443,6 +446,7 @@ public struct WovenMatterToolCommand: Sendable {
       dialog, download, downloads, read-download.
       Start with {"action":"tabs"} or {"action":"open","url":"https://example.com"}.
       Then pass tabId and inspect snapshot before input. Page actions use selector;
+      click/hover can instead use viewport x/y coordinates without selector/frame.
       optional frame is an iframe selector. fill/type use text; press uses key
       (Playwright syntax, e.g. ControlOrMeta+C); scroll uses x/y wheel deltas.
       select uses value; check uses checked; drag uses destination; evaluate uses code.

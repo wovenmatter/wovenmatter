@@ -14,7 +14,7 @@ static void WaitUntil(int line, BOOL (^done)()) {
   if (!done()) { fprintf(stderr,"Automation fixture timed out at line %d\n",line); exit(1); }
 }
 #define Until(...) WaitUntil(__LINE__, __VA_ARGS__)
-static NSDictionary *Action(WMBrowserPage *page, NSString *node, NSString *script, NSDictionary *input) {
+static NSDictionary *Action(WMBrowserPage *page, NSString *node, NSString *script, NSDictionary *input, BOOL expectsFailure = NO) {
   fprintf(stderr,"Testing browser action: %s\n",[input[@"action"] UTF8String]);
   NSTask *task = [NSTask new]; task.executableURL = [NSURL fileURLWithPath:node]; task.arguments = @[script];
   NSPipe *in = [NSPipe pipe], *out = [NSPipe pipe]; task.standardInput = in; task.standardOutput = out;
@@ -47,8 +47,8 @@ static NSDictionary *Action(WMBrowserPage *page, NSString *node, NSString *scrip
   Check([task launchAndReturnError:nil]);
   send(@{@"target":@{@"id":@"fixture",@"title":page.title,@"url":page.url},@"version":@"154.0.8037.98",@"input":input});
   Until(^BOOL { return result || failure; });
-  if (failure) fprintf(stderr,"Playwright: %s\n",failure.UTF8String);
-  Check(!failure);
+  if (failure && !expectsFailure) fprintf(stderr,"Playwright: %s\n",failure.UTF8String);
+  Check(expectsFailure ? [failure containsString:@"at most 2 MiB"] : !failure);
   [page detachAutomation]; [in.fileHandleForWriting closeFile];
   if (task.running) [task terminate];
   Until(^BOOL { return !task.running; });
@@ -78,9 +78,24 @@ int main(int argc, char **argv) {
     Action(page,node,script,@{@"action":@"click",@"selector":@"#submit"});
     NSDictionary *value = Action(page,node,script,@{@"action":@"evaluate",@"code":@"document.querySelector('#result').textContent"});
     Check([value[@"content"][0][@"text"] containsString:@"synthetic user"]);
+    Action(page,node,script,@{@"action":@"fill",@"selector":@"#name",@"text":@"viewport input"});
+    value = Action(page,node,script,@{@"action":@"evaluate",@"code":@"(()=>{const r=document.querySelector('#submit').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()"});
+    NSDictionary *point = [NSJSONSerialization JSONObjectWithData:[value[@"content"][0][@"text"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    Action(page,node,script,@{@"action":@"hover",@"x":point[@"x"],@"y":point[@"y"]});
+    Action(page,node,script,@{@"action":@"click",@"x":point[@"x"],@"y":point[@"y"]});
+    value = Action(page,node,script,@{@"action":@"evaluate",@"code":@"document.querySelector('#result').textContent"});
+    Check([value[@"content"][0][@"text"] containsString:@"viewport input"]);
     Action(page,node,script,@{@"action":@"upload",@"selector":@"#file",@"name":@"fixture.txt",@"data":@"aGVsbG8="});
     value = Action(page,node,script,@{@"action":@"evaluate",@"code":@"document.querySelector('#file').files[0].name"});
     Check([value[@"content"][0][@"text"] containsString:@"fixture.txt"]);
+    NSMutableData *upload = [NSMutableData dataWithLength:2 * 1024 * 1024];
+    Action(page,node,script,@{@"action":@"upload",@"selector":@"#file",@"name":@"large.bin",@"data":[upload base64EncodedStringWithOptions:0]});
+    value = Action(page,node,script,@{@"action":@"evaluate",@"code":@"document.querySelector('#file').files[0].size"});
+    Check([value[@"content"][0][@"text"] isEqualToString:@"2097152"]);
+    [upload increaseLengthBy:1];
+    Action(page,node,script,@{@"action":@"upload",@"selector":@"#file",@"name":@"oversized.bin",@"data":[upload base64EncodedStringWithOptions:0]},YES);
+    value = Action(page,node,script,@{@"action":@"evaluate",@"code":@"document.querySelector('#file').files[0].name"});
+    Check([value[@"content"][0][@"text"] containsString:@"large.bin"]);
     Action(page,node,script,@{@"action":@"fill",@"frame":@"#subframe",@"selector":@"#frame-name",@"text":@"cross-origin frame"});
     value = Action(page,node,script,@{@"action":@"evaluate",@"frame":@"#subframe",@"code":@"document.querySelector('#frame-name').value"});
     Check([value[@"content"][0][@"text"] containsString:@"cross-origin frame"]);

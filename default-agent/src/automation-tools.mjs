@@ -6,7 +6,7 @@ export const automationSchemas = {
   browser: { type: 'object', additionalProperties: false, required: ['action'], properties: {
     action: { type: 'string', enum: ['tabs', 'open', 'focus', 'close', 'navigate', 'snapshot', 'screenshot', 'click', 'fill', 'type', 'press', 'scroll', 'hover', 'select', 'check', 'drag', 'evaluate', 'upload', 'dialog', 'download', 'downloads', 'read-download'] },
     tabId: { type: 'string' }, url: { type: 'string' }, frame: { type: 'string', description: 'Optional iframe CSS selector for page content operations.' }, selector: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' },
-    x: { type: 'number' }, y: { type: 'number' }, button: { enum: ['left', 'right', 'middle'] }, clickCount: { type: 'integer', minimum: 1, maximum: 3 },
+    x: { type: 'number', description: 'Viewport CSS pixels for click/hover without selector or frame; wheel delta for scroll.' }, y: { type: 'number', description: 'Viewport CSS pixels for click/hover without selector or frame; wheel delta for scroll.' }, button: { enum: ['left', 'right', 'middle'] }, clickCount: { type: 'integer', minimum: 1, maximum: 3 },
     destination: { type: 'string' }, code: { type: 'string' }, value: { type: 'string' }, checked: { type: 'boolean' }, accept: { type: 'boolean' },
     name: { type: 'string' }, mimeType: { type: 'string' }, data: { type: 'string' }, id: { type: 'string' }, offset: { type: 'integer', minimum: 0 }
   } },

@@ -77,7 +77,10 @@ between input steps. Local command help is available while offline.
 
 Browser Use controls only the browser inside Woven Matter. It shares the user's
 tabs, profile and signed-in sessions. Start with `{"action":"tabs"}` or
-`{"action":"open","url":"https://example.com"}`, then use its `tabId`:
+`{"action":"open","url":"https://example.com"}`, then use its `tabId`.
+
+Click and hover accept either a CSS selector or viewport `x`/`y` coordinates,
+matching the browser screenshot's CSS pixels. Coordinate actions omit `frame`.
 
 ```sh
 wovenmatter browser call --json '{"action":"snapshot","tabId":"UUID"}'

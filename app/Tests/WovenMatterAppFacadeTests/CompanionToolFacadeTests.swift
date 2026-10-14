@@ -185,6 +185,25 @@ struct CompanionToolFacadeTests {
         }
     }
 
+    @Test func companionToolRevocationFencesAutomationEvenAfterReenable() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        fixture.model.clientExecutionDirectory = fixture.directory
+        let caller = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Mac caller", ownerDeviceID: UUID())
+        try await fixture.database.setSessionTools(.init(enabled: [.browser, .computer]), sessionID: caller)
+        let call = WovenMatterToolRequest(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"])
+        let tools = try #require(fixture.model.agentTools)
+        #expect(await tools.handle(call, callerID: caller).success)
+        for enabled in [["browser"], ["browser", "computer"]] {
+            let command = CompanionCommand(deviceID: fixture.device, kind: .workspace,
+                workspaceAction: .sessionTools(id: caller, enabled: enabled, confirmPausingTimers: true))
+            #expect(try await fixture.model.companionCommands.execute(command, deviceID: fixture.device).status == .completed)
+        }
+        #expect(try await fixture.database.sessionTools(caller).enabled.contains(.computer))
+        await #expect(throws: (any Error).self) {
+            try await fixture.database.requireAutomationRequest(.browser, callerID: caller, requestID: call.requestID)
+        }
+    }
+
     private func importPhone(_ fixture: FacadeFixture) async throws -> String {
         let identity = try await fixture.database.companionLibraryIdentity()
         let caller = UUID().uuidString.lowercased()

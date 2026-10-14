@@ -77,6 +77,12 @@ export async function browserAction(page, input, command, waitDownload) {
     if (typeof input.selector !== 'string' || !input.selector || input.selector.length > 4096) throw new Error('Provide a selector from the latest page snapshot.');
     return scope.locator(input.selector);
   };
+  const viewportPoint = () => {
+    if (input.frame || !Number.isFinite(input.x) || !Number.isFinite(input.y) || input.x < 0 || input.y < 0) {
+      throw new Error('Provide viewport x/y coordinates without a frame selector.');
+    }
+    return [input.x, input.y];
+  };
   switch (input.action) {
     case 'navigate': {
       const url = new URL(input.url);
@@ -90,19 +96,28 @@ export async function browserAction(page, input, command, waitDownload) {
       if (bytes.length > 650000) throw new Error('The browser viewport exceeds the screenshot limit. Reduce its size and capture again.');
       return { content: [{ type: 'image', mimeType: 'image/jpeg', data: bytes.toString('base64') }] };
     }
-    case 'click': await selector().click({ button: input.button ?? 'left', clickCount: input.clickCount ?? 1 }); break;
+    case 'click': {
+      const options = { button: input.button ?? 'left', clickCount: input.clickCount ?? 1 };
+      if (input.selector) await selector().click(options);
+      else await page.mouse.click(...viewportPoint(), options);
+      break;
+    }
     case 'fill': await selector().fill(input.text); break;
     case 'type': if (input.selector) await selector().pressSequentially(input.text); else await page.keyboard.type(input.text); break;
     case 'press': if (input.selector) await selector().press(input.key); else await page.keyboard.press(input.key); break;
     case 'scroll': await page.mouse.wheel(input.x ?? 0, input.y ?? 500); break;
-    case 'hover': await selector().hover(); break;
+    case 'hover':
+      if (input.selector) await selector().hover(); else await page.mouse.move(...viewportPoint());
+      break;
     case 'select': await selector().selectOption(input.value); break;
     case 'check': await selector().setChecked(input.checked ?? true); break;
     case 'drag': await selector().dragTo(scope.locator(input.destination)); break;
     case 'evaluate': return { content: [{ type: 'text', text: JSON.stringify(await scope.evaluate(input.code)) ?? 'undefined' }] };
     case 'upload': {
       if (!/^[A-Za-z0-9+/]*={0,2}$/.test(input.data ?? '') || (input.data?.length ?? 0) > 2800000) throw new Error('Upload data must be base64 and at most 2 MiB.');
-      await selector().setInputFiles({ name: input.name ?? 'upload', mimeType: input.mimeType ?? 'application/octet-stream', buffer: Buffer.from(input.data, 'base64') }); break;
+      const buffer = Buffer.from(input.data, 'base64');
+      if (buffer.length > 2 * 1024 * 1024) throw new Error('Upload data must be base64 and at most 2 MiB.');
+      await selector().setInputFiles({ name: input.name ?? 'upload', mimeType: input.mimeType ?? 'application/octet-stream', buffer }); break;
     }
     case 'download': {
       const waiting = waitDownload();
