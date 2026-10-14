@@ -376,7 +376,7 @@ extension CompanionModel {
       }
       if let command = WorkspaceGoalCommand(text) {
         if case .set(let objective) = command {
-          _ = try await mutateDeviceGoal(id, mutation: .set(objective: objective, tokenBudget: nil, turnBudget: nil))
+          _ = try await mutateDeviceGoal(id, mutation: .set(objective: objective, tokenBudget: nil, turnBudget: nil), preparingInput: true)
         } else {
           try await handleDeviceGoalCommand(command, conversationID: id)
           composer = ""; return

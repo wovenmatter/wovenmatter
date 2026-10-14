@@ -55,7 +55,8 @@ final class ExecutionRoutingTests: XCTestCase {
     let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
     let id = UUID().uuidString.lowercased()
-    model.executionRecords[id] = DeviceConversationRecord(id: id, title: "Goal chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    let descriptor = InferenceModel(id: "gpt-test", name: "Test model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
+    model.executionRecords[id] = DeviceConversationRecord(id: id, title: "Goal chat", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
     let set = await model.perform(.goal(id: id, mutation: .set(objective: "Verify device work", tokenBudget: nil, turnBudget: 2)))
     XCTAssertTrue(set)
     guard case .session(let settings) = try await model.workspace(.session(id: id)) else { XCTFail("Missing owner status"); return }
@@ -73,6 +74,8 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(pause)
     let resume = await model.perform(.goal(id: id, mutation: .resume(id: goal.id)))
     XCTAssertTrue(resume)
+    try await model.configureDeviceChat(tools: [], conversationID: id)
+    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.status, .paused)
     let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
     try await reopened.loadExecutionConfiguration()

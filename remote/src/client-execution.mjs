@@ -314,7 +314,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if(action.id!==command.conversationID)throw fail(400,'Session identity does not match.')
         if(!['default_agent','codex','claude_code','grok_build','opencode'].includes(record.conversation.runtimeKind))throw fail(400,'Goals are unavailable for this runtime.')
         // Validate a concrete edit before cancelling any current work.
-        if(record.goalsEnabled===false)throw fail(403,'Goal tools are disabled for this session.')
+        if(record.goalsEnabled===false&&(action.mutation?.set||action.mutation?.resume))throw fail(403,'Goal tools are disabled for this session.')
         const draft=copy(record);mutateGoal(draft,action.mutation,record.conversation.activeRunID)
         if(action.mutation.set||(action.mutation.resume&&record.goal?.status!=='active'))record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
         const stops=['pause','clear','edit'].some(key=>action.mutation[key])

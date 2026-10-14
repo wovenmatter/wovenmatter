@@ -118,10 +118,13 @@ extension CompanionModel {
 extension CompanionModel {
   @discardableResult
   func mutateDeviceGoal(_ id: String, mutation: WorkspaceGoalMutation, requestID: String? = nil,
-                        agentInitiated: Bool = false) async throws -> WorkspaceGoal? {
+                        agentInitiated: Bool = false, preparingInput: Bool = false) async throws -> WorkspaceGoal? {
     guard let record = executionRecords[id], record.isTrashed != true else { throw WorkspaceToolError.notFound("This session has no active device execution owner.") }
     let context = try deviceToolContext(conversationID: id)
-    guard context.enabled.contains(.goals) else { throw WorkspaceToolError.invalid("Goals are disabled for this session.") }
+    let starts: Bool
+    switch mutation { case .set, .resume: starts = true; default: starts = false }
+    guard !starts || !configuringDeviceSessions.contains(id) || agentInitiated || preparingInput else { throw WorkspaceToolError.invalid("Wait for this session’s configuration to finish.") }
+    guard (!agentInitiated && !starts) || context.enabled.contains(.goals) else { throw WorkspaceToolError.invalid("Goals are disabled for this session.") }
     var ledger = record.goalLedger ?? .init()
     _ = try ledger.mutate(mutation, requestID: requestID, currentRunID: record.runID, sessionID: id)
     ledger.goal?.sessionID = id
@@ -140,7 +143,7 @@ extension CompanionModel {
     switch command {
     case .show: break
     case .pause: _ = try await mutateDeviceGoal(id, mutation: .pause(id: goal.id))
-    case .resume: _ = try await mutateDeviceGoal(id, mutation: .resume(id: goal.id))
+    case .resume: _ = try await mutateDeviceGoal(id, mutation: .resume(id: goal.id), preparingInput: true)
     case .clear: _ = try await mutateDeviceGoal(id, mutation: .clear(id: goal.id))
     case .set(let objective): _ = try await mutateDeviceGoal(id, mutation: .set(objective: objective, tokenBudget: nil, turnBudget: nil))
     }

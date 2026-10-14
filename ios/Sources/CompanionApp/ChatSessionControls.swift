@@ -120,11 +120,18 @@ extension CompanionModel {
     if let id, var record = executionRecords[id] {
       // The runtime captures its credential/model binding; reopen it only after the idle change is saved.
       try await localRuntimes[id]?.close(); localRuntimes.removeValue(forKey: id)
+      record.goalLedger = executionRecords[id]?.goalLedger
       let previous = record
       if let connection, let selected { record.connectionID = connection.id; record.connection = connection; record.modelJSON = try selected.descriptorJSON() }
       if let thinking { record.thinkingLevel = thinking }
       if selected?.supportedThinkingLevels.contains(record.thinkingLevel ?? "off") != true { record.thinkingLevel = deviceAgentDefaults.thinking(for: selected) }
-      if let tools { record.enabledTools = tools }
+      if let tools {
+        record.enabledTools = tools
+        if !Self.deviceToolEnabled("wovenmatter_goals", selection: tools) {
+          record.goalLedger?.recover()
+          if record.goalLedger?.goal?.status == .paused { record.goalLedger?.goal?.evidence = "Goal tools were disabled. Resume explicitly after enabling them." }
+        }
+      }
       executionRecords[id] = record
       do { try persistExecutionConfiguration() } catch { executionRecords[id] = previous; throw error }
     } else {
