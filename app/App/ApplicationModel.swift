@@ -1572,11 +1572,14 @@ final class ApplicationModel {
                 try await dashboardStore.discardDraftSession(conversationID: id)
             }
             let moved = try await dashboardStore.moveConversation(id: id, toFolderID: folderID)
-            localACPSessionMetadata.removeValue(forKey: id)
             if !moved {
                 folderMutationError = "The chat could not be moved."
                 return false
             }
+            // Only the execution directory changed. The saved native selections
+            // survive draft disposal and are reapplied on its next use; keep the
+            // already confirmed controls visible in the meantime.
+            localACPSessionMetadata[id] = localACPSessionMetadata[id]?.withWorkingDirectory(root.path)
             await refreshWorkspace()
             return true
         } catch {
@@ -4722,7 +4725,8 @@ extension ApplicationModel {
                 try await native.moveDraftWorkspace(conversationID: conversation.id, root: URL(fileURLWithPath: scratch.rootPath))
             } else { try await store.discardDraftSession(conversationID: conversation.id) }
             try await store.database.bindSessionScratchDirectory(id: conversation.id)
-            localACPSessionMetadata.removeValue(forKey: conversation.id)
+            localACPSessionMetadata[conversation.id] = localACPSessionMetadata[conversation.id]?
+                .withWorkingDirectory(scratch.rootPath)
         }
     }
 }

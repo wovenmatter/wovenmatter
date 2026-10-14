@@ -11,7 +11,9 @@ accepted send locks the saved owner and cwd. Each chat in All Workspaces launche
 own blank directory under its execution workspace’s `scratch` directory. Its date/message/id name is reserved durably
 before filesystem creation and retained through launch retries, resumes and title
 changes. Drafts can switch folders before sending; returning to All Workspaces reuses
-the chat’s reservation. Chat deletion preserves working files. Scratch is reserved
+the chat’s reservation. Folder changes retain the confirmed model, thinking level,
+permissions, and tool selections. Native draft reconnection uses the saved directory
+and reapplies those selections on its next use, without clearing the composer controls. Chat deletion preserves working files. Scratch is reserved
 for these chat directories. The database saves these roots for UI, orchestration,
 calendar tasks, and child sessions. A scheduled task keeps its captured root even
 if its UI folder is removed. Old sessions without this execution contract remain
@@ -77,6 +79,8 @@ Trey should exercise these remaining integration checks on the PR build:
 - Verify the composer lists All Workspaces and every sidebar folder. Existing
   virtual folders bind once on first use, retain their root after rename, and
   preserve existing files. Folders owned by another workspace are shown disabled.
+  Switch an unsent draft between All Workspaces and a folder; its model, thinking,
+  permissions, and tools should stay visible and keep the same selections.
 - Start two chats in All Workspaces on the Mac and on each remote workspace. Verify
   separate initially empty `scratch/<date>-<message>-<id>` directories, retry and
   resume reuse, stable paths after rename, and preserved files after chat deletion.

@@ -5,6 +5,48 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPConfigurationLifecycleTests {
+  @Test func draftFolderChangeKeepsSelectionsUntilLazyNativeReconnect() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Draft", ownerDeviceID: UUID())
+    let project = directory.appending(path: "Project")
+    let owner = "device:fixture"
+    try await database.saveSessionExecutionRoot(id: id, folderID: nil,
+      location: .init(workspaceID: owner, rootPath: directory.path, managed: false), defaultPath: directory.path)
+    let folder = try await database.createFolder(name: "Project",
+      location: .init(workspaceID: owner, rootPath: project.path, managed: false))
+    let tools = WorkspaceSessionTools(enabled: [.notes, .sessions])
+    try await database.setSessionTools(tools, sessionID: id)
+    let first = SelectorDriverState(expectedExistingSessionID: nil)
+    let second = SelectorDriverState(expectedExistingSessionID: nil)
+    let drivers = SelectorDriverSequence([first, second])
+    let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in drivers.next() })
+    let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
+      executableURL: URL(filePath: "/nonexistent-folder-selector-fixture"), arguments: [])
+    _ = try await coordinator.updateConfiguration(conversationID: id, model: "selected-model", thinking: "high",
+      permission: "auto", launch: launch, workspace: .init(rootURL: directory))
+    #expect(first.directories == [directory.path])
+
+    // Releasing a draft changes native identity, not its saved controls or tools.
+    try await coordinator.discardDraftSession(conversationID: id)
+    #expect(try await database.moveConversation(id: id, toFolderID: folder))
+    let saved = try await database.localACPSession(conversationID: id)
+    #expect(saved.acpSessionID == nil)
+    #expect(saved.model == "selected-model" && saved.thinking == "high" && saved.permission == "auto")
+    #expect(try await database.sessionTools(id) == tools)
+    #expect(first.shutdowns == 1 && drivers.requests == 1)
+
+    let restored = try await coordinator.configuration(conversationID: id, launch: launch,
+      workspace: .init(rootURL: project))
+    #expect(second.directories == [project.path])
+    #expect(restored.model == "selected-model" && restored.thinking == "high" && restored.permission == "auto")
+    #expect(try await database.sessionTools(id) == tools)
+    #expect(drivers.requests == 2)
+    await coordinator.shutdown()
+  }
+
   @Test func leasedSnapshotsAndSelectionsSurviveReopenWithoutStaleObserverWrites() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -118,6 +160,7 @@ private final class SelectorDriverState: @unchecked Sendable {
   private var configurationReadCount = 0
   private var shutdownCount = 0
   private var requests: [String] = []
+  private var initializedDirectories: [String] = []
   private var observer: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
 
   init(
@@ -130,7 +173,8 @@ private final class SelectorDriverState: @unchecked Sendable {
       model: "default-model",
       thinking: "low",
       modelOptions: modelOptions,
-      thinkingOptions: ["low", "high"]
+      thinkingOptions: ["low", "high"],
+      permission: "ask", permissionOptions: ["ask", "auto"]
     )
     self.observedUpdate = observedUpdate
     current = initial
@@ -140,11 +184,13 @@ private final class SelectorDriverState: @unchecked Sendable {
   var configurationReads: Int { lock.withLock { configurationReadCount } }
   var shutdowns: Int { lock.withLock { shutdownCount } }
   var setRequests: [String] { lock.withLock { requests } }
+  var directories: [String] { lock.withLock { initializedDirectories } }
 
   func driver() -> LocalACPSessionDriver {
     lock.withLock { startCount += 1 }
     return LocalACPSessionDriver(
-      initializeSession: { [self] _, existing, _, _ in
+      initializeSession: { [self] directory, existing, _, _ in
+        lock.withLock { initializedDirectories.append(directory.path) }
         #expect(existing == expectedExistingSessionID)
         return LocalACPInitializedSession(
           sessionID: "fixture-session",
@@ -175,6 +221,12 @@ private final class SelectorDriverState: @unchecked Sendable {
         lock.withLock {
           requests.append("model=\(model ?? "nil");thinking=\(thinking ?? "nil")")
           current = current.selecting(model: model, thinking: thinking)
+          return current
+        }
+      },
+      setPermission: { [self] permission in
+        lock.withLock {
+          current = current.selecting(permission: permission)
           return current
         }
       },
