@@ -99,18 +99,22 @@ struct FederatedExecutionFlowTests {
     #expect(await otherMac.store.snapshot().workspaceID == fixture.libraryID)
   }
 
-  @Test("two authorized observers relay one workspace history, while an ungranted client cannot")
-  func observerRelayAndOriginAuthorization() async throws {
+  @Test("observers retain remote history but only its execution workspace publishes centrally")
+  func ownerPublicationAndObserverIsolation() async throws {
     let fixture = try await FederationFlowFixture()
     defer { fixture.remove() }
-    let owner = try await fixture.client("owner")
     let phone = try await fixture.client("observer-phone")
     let mac = try await fixture.client("observer-mac")
-    let outsider = try await fixture.client("ungranted")
+    let identity = try await fixture.database.companionLibraryIdentity()
     var workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: fixture.libraryID,
-      ownerDeviceID: owner.credential.deviceID, kind: .linux, name: "Linux",
+      ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux",
+      // Deliberately collide with a paired client's ID: only the dedicated
+      // publisher credential may publish Linux history, even in this case.
+      executionDeviceID: mac.credential.deviceID,
       journalDeviceIDs: [phone.credential.deviceID, mac.credential.deviceID])
-    workspace = try await owner.transport.registerWorkspace(.init(workspace: workspace))
+    workspace = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
+    let grant = try await fixture.database.issueCompanionWorkspacePublisher(workspaceID: workspace.id,
+      endpoint: URL(string: "https://central.test-tailnet.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     let conversationID = UUID().uuidString.lowercased()
     let conversation = CompanionConversation(id: conversationID, title: "One execution owner", workspaceID: workspace.id)
     let message = CompanionMessage(id: UUID().uuidString.lowercased(), conversationID: conversationID,
@@ -121,28 +125,43 @@ struct FederatedExecutionFlowTests {
       CompanionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversationID,
         kind: .transcript, transcript: .init(conversationID: conversationID, messages: [message]))
     ]
+    let batch = CompanionJournalBatch(libraryID: fixture.libraryID, entries: entries)
     let source = RecordedExecutionSource(workspace: workspace, entries: entries)
-    for client in [phone, mac, outsider] {
+    for client in [phone, mac] {
       try await WorkspaceClient(store: client.store, workspaceID: workspace.id, transport: source).refresh()
       #expect(await client.store.snapshot().transcripts[conversationID]?.messages == [message])
-      #expect(await client.store.journal.snapshot().pendingEventIDs.count == 2)
-    }
-    do {
-      try await MobileSyncEngine(store: outsider.store, transport: outsider.transport).synchronize()
-      Issue.record("An ungranted client must not publish workspace history")
-    } catch MobileConnectionError.http(let status, _) { #expect(status == 400 || status == 403) }
-    #expect(await outsider.store.journal.snapshot().pendingEventIDs.count == 2)
-    #expect(try await fixture.database.companionJournal(after: 0).entries.isEmpty)
-
-    for client in [phone, mac] {
+      // Reproduce a previous-build cache whose foreign records were marked pending.
+      for entry in entries { try await client.store.journal.record(entry) }
       try await MobileSyncEngine(store: client.store, transport: client.transport).synchronize()
       #expect(await client.store.journal.snapshot().pendingEventIDs.isEmpty)
+      #expect(await client.store.snapshot().transcripts[conversationID]?.messages == [message])
+      #expect(client.transport.journalImports == 0)
+      do { _ = try await client.transport.importJournal(batch); Issue.record("A viewing client must not publish remote history") }
+      catch MobileConnectionError.http(let status, _) { #expect(status == 400 || status == 403) }
     }
+    #expect(try await fixture.database.companionJournal(after: 0).entries.isEmpty)
+    await #expect(throws: CompanionAPIError.self) {
+      try await fixture.database.ingestCompanionJournal(batch, deviceID: identity.hostDeviceID)
+    }
+
+    // No observing client participates: the workspace's scoped publisher reaches
+    // the real central API. Replaying its lost acknowledgement is idempotent.
+    let request = CompanionHTTPRequest(method: "POST", target: "/wovenmatter/v1/federation/publisher/journal", headers: [
+      "authorization": "Bearer " + grant.token, "x-woven-workspace": fixture.libraryID,
+      "x-woven-protocol": String(CompanionProtocol.version)
+    ], body: try JSONEncoder().encode(batch))
+    let published = await fixture.api.handle(request)
+    #expect(published.status == 200)
+    let replay = await fixture.api.handle(request)
+    #expect(replay.status == 200)
     #expect(try await fixture.database.companionJournal(after: 0).entries == entries)
     #expect(try await fixture.database.companionFederatedTranscript(conversationID: conversationID)?.messages == [message])
+    for client in [phone, mac] {
+      try await MobileSyncEngine(store: client.store, transport: client.transport).synchronize()
+      #expect(await client.store.snapshot().transcripts[conversationID]?.messages == [message])
+    }
     #expect(fixture.commands.executions == 0)
     #expect(await source.submissions == 0)
-
     try await fixture.authentication.revoke(deviceID: phone.credential.deviceID)
     do { _ = try await phone.transport.libraryIdentity(); Issue.record("Revoked pairing must not read federation data") }
     catch MobileConnectionError.http(let status, _) { #expect(status == 401) }
@@ -173,8 +192,12 @@ struct FederatedExecutionFlowTests {
     try await MobileSyncEngine(store: restarted, transport: owner.transport).synchronize()
     let reader = try await fixture.client("artifact-reader")
     try await MobileSyncEngine(store: reader.store, transport: reader.transport).synchronize()
-    let downloaded = try #require(await reader.store.artifacts.localURL(id: manifest.id))
+    #expect(await reader.store.artifacts.localURL(id: manifest.id) == nil)
+    let downloaded = try await reader.store.artifacts.download(id: manifest.id, using: reader.transport)
     #expect(try Data(contentsOf: downloaded) == bytes)
+    try await reader.store.artifacts.setPinned(manifest.id, true)
+    let reopenedReader = try MobileStore(file: reader.file)
+    #expect(await reopenedReader.artifacts.localURL(id: manifest.id) != nil)
     #expect(await reader.store.artifacts.manifests().count == 1)
     #expect(fixture.commands.executions == 0)
   }

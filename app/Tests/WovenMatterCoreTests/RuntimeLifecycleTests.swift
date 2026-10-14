@@ -6,92 +6,6 @@ import WovenMatterClient
 @testable import WovenMatterDashboardStore
 
 struct RuntimeLifecycleTests {
-  @Test func cancelledLocalStartupTerminatesUnreadyProcess() async throws {
-    let state = FakeGatewayProcess()
-    let gate = RuntimeGate()
-    let lifecycle = OpenClawLocalGatewayLifecycle(launchProcess: { _, _ in state.launch() },
-      isReady: { _ in false }, pause: { await gate.pause() })
-    let start = Task { try await lifecycle.ensure(agentID: UUID(), identity: "cancel", launch: launch,
-                                                   workingDirectory: URL(filePath: "/private/tmp")) }
-    await gate.waitForArrivals(1)
-    start.cancel()
-    await gate.release(0)
-    do { _ = try await start.value; Issue.record("cancelled startup succeeded") }
-    catch is CancellationError { }
-    #expect(!state.running)
-    await lifecycle.shutdown()
-  }
-
-  @Test func shutdownTracksProcessWhileStartupIsSuspended() async throws {
-    let state = FakeGatewayProcess()
-    let gate = RuntimeGate()
-    let lifecycle = OpenClawLocalGatewayLifecycle(launchProcess: { _, _ in state.launch() },
-      isReady: { _ in false }, pause: { await gate.pause() })
-    let start = Task { try await lifecycle.ensure(agentID: UUID(), identity: "shutdown", launch: launch,
-                                                   workingDirectory: URL(filePath: "/private/tmp")) }
-    await gate.waitForArrivals(1)
-    await lifecycle.shutdown()
-    #expect(!state.running)
-    await gate.release(0)
-    do { _ = try await start.value; Issue.record("shutdown startup succeeded") } catch { }
-    do {
-      _ = try await lifecycle.ensure(agentID: UUID(), identity: "new", launch: launch,
-                                     workingDirectory: URL(filePath: "/private/tmp"))
-      Issue.record("shutdown lifecycle restarted")
-    } catch is CancellationError { }
-    #expect(state.launches == 1)
-  }
-
-  @Test func readyLocalSchedulerSurvivesUnlinkAndDesktopShutdown() async throws {
-    let state = FakeGatewayProcess()
-    let gate = RuntimeGate()
-    let lifecycle = OpenClawLocalGatewayLifecycle(launchProcess: { _, _ in state.launch() },
-      isReady: { _ in state.ready }, pause: { await gate.pause() })
-    let firstID = UUID(), secondID = UUID()
-    let first = Task { try await lifecycle.ensure(agentID: firstID, identity: "shared", launch: launch,
-                                                   workingDirectory: URL(filePath: "/private/tmp")) }
-    await gate.waitForArrivals(1)
-    let second = Task { try await lifecycle.ensure(agentID: secondID, identity: "shared", launch: launch,
-                                                    workingDirectory: URL(filePath: "/private/tmp")) }
-    state.setReady()
-    await gate.release(0)
-    #expect(try await first.value == second.value)
-    #expect(state.launches == 1)
-    await lifecycle.release(agentID: firstID)
-    #expect(state.running)
-    await lifecycle.release(agentID: secondID)
-    #expect(state.running)
-    await lifecycle.shutdown()
-    #expect(state.running)
-  }
-
-  @Test func staleGatewayConnectionCannotClearOrReplaceNewConnection() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let agentID = UUID()
-    let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
-    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
-    let gate = RuntimeGate()
-    let coordinator = OpenClawGatewayCoordinator(database: database, connectClient: { _ in
-      await gate.pause()
-      return OpenClawGatewayCapabilities(methods: [], events: [])
-    })
-    let old = Task { try await coordinator.client(agentID: agentID) }
-    await gate.waitForArrivals(1)
-    await coordinator.configureTransport(agentID: agentID, endpoint: endpoint, requestHeaders: ["fixture": "new"])
-    let new = Task { try await coordinator.client(agentID: agentID) }
-    await gate.waitForArrivals(2)
-    await gate.release(0)
-    do { _ = try await old.value; Issue.record("stale connection returned") } catch is CancellationError { }
-    await gate.release(1)
-    let expected = try await new.value
-    #expect(try await coordinator.client(agentID: agentID) === expected)
-    #expect(try await database.openClawGatewayLinks().first?.connectionStatus == .ready)
-    await coordinator.disconnect(agentID: agentID)
-  }
-
   @Test func cancelledACPStartupShutsDriverDownAndAllowsRetry() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -99,7 +13,7 @@ struct RuntimeLifecycleTests {
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
     let gate = RuntimeGate()
-    let state = FakeGatewayProcess()
+    let state = FakeRuntimeProcess()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
       let process = state.launch()
       return LocalACPSessionDriver(initializeSession: { _, _, _, _ in
@@ -111,7 +25,7 @@ struct RuntimeLifecycleTests {
     })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
       executableURL: URL(filePath: "/nonexistent-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
     let start = Task { try await coordinator.configuration(conversationID: conversation, launch: launch, workspace: workspace) }
     await gate.waitForArrivals(1)
     start.cancel()
@@ -126,39 +40,6 @@ struct RuntimeLifecycleTests {
     #expect(!state.running)
   }
 
-  @Test(arguments: [true, false])
-  func actualOwnedProcessIsReapedAfterCancellationOrShutdown(cancel: Bool) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let pidFile = directory.appending(path: "pid")
-    let gate = RuntimeGate()
-    // The shell immediately execs sleep: one harmless process, no child tree or provider.
-    // Ignoring TERM deliberately exercises the bounded SIGKILL escalation.
-    let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .openclaw,
-      executableURL: URL(filePath: "/bin/sh"), arguments: ["-c",
-        "trap '' TERM; echo $$ > '\(pidFile.path)'; exec /bin/sleep 60"])
-    let lifecycle = OpenClawLocalGatewayLifecycle(isReady: { _ in false }, pause: { await gate.pause() })
-    let start = Task { try await lifecycle.ensure(agentID: UUID(), identity: UUID().uuidString,
-      launch: launch, workingDirectory: directory) }
-    await gate.waitForArrivals(1)
-    var pid: Int32?
-    for _ in 0..<100 {
-      if let text = try? String(contentsOf: pidFile, encoding: .utf8),
-         let value = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) { pid = value; break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    guard let pid else {
-      await lifecycle.shutdown()
-      Issue.record("fixture process did not write its PID")
-      return
-    }
-    if cancel { start.cancel() } else { await lifecycle.shutdown() }
-    do { _ = try await start.value; Issue.record("interrupted process startup succeeded") } catch { }
-    #expect(Darwin.kill(pid, 0) == -1 && errno == ESRCH)
-    await lifecycle.shutdown()
-  }
-
   @Test(arguments: ["model", "thinking"], [false, true])
   func lateStartupConfigurationCannotSurviveInterruption(stage: String, shutdown: Bool) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -168,7 +49,7 @@ struct RuntimeLifecycleTests {
     let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
     try await database.updateLocalACPSessionConfiguration(conversationID: conversation, model: "wanted", thinking: "high")
     let gate = NoncooperatingConfigurationGate()
-    let state = FakeGatewayProcess()
+    let state = FakeRuntimeProcess()
     let initial = LocalACPSessionConfiguration(model: stage == "model" ? "initial" : "wanted",
       thinking: "low", modelOptions: ["wanted"], thinkingOptions: ["high"])
     let late = LocalACPSessionConfiguration(model: "late", thinking: "late", thinkingOptions: ["high"])
@@ -181,7 +62,7 @@ struct RuntimeLifecycleTests {
     })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
       executableURL: URL(filePath: "/nonexistent-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
     let start = Task { try await coordinator.configuration(conversationID: conversation, launch: launch, workspace: workspace) }
     await gate.waitForStart()
     let stop: Task<Void, Never>?
@@ -200,24 +81,7 @@ struct RuntimeLifecycleTests {
     await coordinator.shutdown()
   }
 
-  private var launch: LocalACPRuntimeLaunchConfiguration {
-    LocalACPRuntimeLaunchConfiguration(runtimeKind: .openclaw,
-      executableURL: URL(filePath: "/nonexistent-fixture-gateway"), arguments: [])
-  }
-}
 
-private final class FakeGatewayProcess: @unchecked Sendable {
-  private let lock = NSLock()
-  private var alive = false, readyValue = false
-  private var count = 0
-  var running: Bool { lock.withLock { alive } }
-  var ready: Bool { lock.withLock { readyValue } }
-  var launches: Int { lock.withLock { count } }
-  func setReady() { lock.withLock { readyValue = true } }
-  func launch() -> OpenClawLocalGatewayLifecycle.OwnedProcess {
-    lock.withLock { alive = true; count += 1 }
-    return .init(isRunning: { self.running }, terminate: { self.lock.withLock { self.alive = false } })
-  }
 }
 
 private actor RuntimeGate {
@@ -274,4 +138,17 @@ private actor NoncooperatingConfigurationGate {
     interruptionObserver = nil
   }
   func release() { response?.resume(); response = nil }
+}
+
+private final class FakeRuntimeProcess: @unchecked Sendable {
+  struct Handle: Sendable { let terminate: @Sendable () -> Void }
+  private let lock = NSLock()
+  private var alive = false
+  private var count = 0
+  var running: Bool { lock.withLock { alive } }
+  var launches: Int { lock.withLock { count } }
+  func launch() -> Handle {
+    lock.withLock { alive = true; count += 1 }
+    return Handle(terminate: { self.lock.withLock { self.alive = false } })
+  }
 }

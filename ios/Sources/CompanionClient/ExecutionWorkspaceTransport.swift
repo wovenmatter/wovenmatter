@@ -162,6 +162,15 @@ public enum WorkspaceCredentialVault {
     return nil
     #endif
   }
+  public static func clear(workspaceID: String) throws {
+    #if canImport(Security)
+    let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
+      kSecAttrAccount: workspaceID] as CFDictionary)
+    guard status == errSecSuccess || status == errSecItemNotFound else {
+      throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+    }
+    #endif
+  }
   public static func save(_ credential: DirectWorkspaceCredential) throws {
     #if canImport(Security)
     let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: credential.workspaceID]

@@ -353,6 +353,10 @@ final class WorkspaceProcessLease {
 @main
 enum WovenMatterEntryPoint {
     @MainActor static func main() {
+        // Service helpers must never initialize AppKit, SwiftUI, or a workspace.
+        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
+            Darwin.exit(status)
+        }
         // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
         // Install CEF's required AppKit subclass first, without loading Chromium.
         if !CommandLine.arguments.contains("--wovenmatter-cli"), LocalExecutionRole.current != .backend {
@@ -370,9 +374,6 @@ struct WovenMatterApp: App {
     @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
 
     init() {
-        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
-            Darwin.exit(status)
-        }
         if let commandIndex = CommandLine.arguments.firstIndex(of: "--wovenmatter-cli") {
             Darwin.exit(WovenMatterCommandLine.run(
                 arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),

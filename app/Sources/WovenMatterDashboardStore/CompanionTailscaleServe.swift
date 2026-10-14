@@ -76,7 +76,7 @@ public final class CompanionTailscaleServe {
           status["BackendState"] as? String == "Running",
           let node = status["Self"] as? [String: Any],
           let rawHost = node["DNSName"] as? String else {
-      throw failure("Connect Tailscale on this Mac, then start companion sharing.")
+      throw failure("Connect Tailscale on this Mac to make it available to paired devices.")
     }
     let host = rawHost.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
     guard host.hasSuffix(".ts.net"), host.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 46 }) else {
@@ -87,7 +87,7 @@ public final class CompanionTailscaleServe {
     let used = try Self.occupiedPorts(in: before)
     let candidates = preferredHTTPSPort.map { [$0] } ?? [8443, 10_000, 8444, 8445]
     guard let httpsPort = candidates.first(where: { (1...65535).contains($0) && !used.contains($0) }) else {
-      throw failure("The paired companion HTTPS port is in use by another Tailscale Serve route. Stop that route or retry after this app finishes stopping; existing routes were preserved.")
+      throw failure("Another service is using this device connection address.")
     }
     let child = try launch(executable, ["serve", "--https=\(httpsPort)", "--set-path=/wovenmatter", "http://127.0.0.1:\(loopbackPort)"])
     process = child

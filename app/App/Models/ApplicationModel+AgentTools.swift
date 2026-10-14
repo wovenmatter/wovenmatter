@@ -28,11 +28,12 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let session = try await database.localACPSession(conversationID: conversationID)
         if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
-        if let buzz = session.buzzWorkspaceLinkID { return "buzz:" + buzz.uuidString.lowercased() }
-        let creation = try await database.toolSessionCreationConfiguration(targetID: conversationID)
-        let directory = creation?.nativeWorkingDirectory
+        let root = try await database.sessionExecutionRoot(id: conversationID)
+        if let scratch = try await database.sessionScratchDirectory(id: conversationID), scratch.rootPath == root?.rootPath {
+            return "local:" + (try defaultToolWorkingDirectory(workspaceID: nil))
+        }
+        let directory = root?.rootPath
             ?? openCodeModel(for: conversationID)?.snapshots[conversationID]?.info["location"]["directory"].string
-            ?? openClawGatewaySessionMetadata[conversationID]?.workingDirectory
             ?? localACPSessionMetadata[conversationID]?.workingDirectory
         let path = try directory ?? defaultToolWorkingDirectory(workspaceID: nil)
         return "local:" + URL(fileURLWithPath: path).standardizedFileURL.path
@@ -66,6 +67,7 @@ extension ApplicationModel {
         toolRuntimeTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.runAgentToolTick()
+                if let self, Date().timeIntervalSince(self.lastDatabaseSyncAt) >= 120 { await self.refreshDatabases() }
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
@@ -91,7 +93,7 @@ extension ApplicationModel {
                     requestID: request.id.uuidString, requiresUserApproval: kind == .permission, kind: kind) { notifications.append(delivery) }
             }
             for instance in openCodeInstances {
-                for (sessionID, snapshot) in instance.snapshots {
+                for (sessionID, snapshot) in instance.snapshots where instance.isLocalSession(sessionID) {
                     for request in snapshot.permissions where !request["id"].text.isEmpty {
                         if let delivery = try await database.recordCoordinationNeedsInput(sessionID: sessionID,
                             requestID: "opencode:" + request["id"].text, requiresUserApproval: true) { notifications.append(delivery) }
@@ -191,6 +193,7 @@ extension ApplicationModel {
 
     func handleSessionTool(callerID: String, command: WovenMatterToolCommand, request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
+        if command.isDatabaseCommand { return try await handleDatabaseTool(callerID: callerID, command: command) }
         try await database.requireTool(.sessions, sessionID: callerID)
         let source = try await toolConversation(callerID)
         switch command.action {
@@ -326,10 +329,10 @@ extension ApplicationModel {
                         let created: String?
                         if let remoteTarget {
                             created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid,
-                                nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID)
+                                nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID, folderID: configuration.folderID)
                         } else {
                             created = await self.createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid,
-                                nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID)
+                                nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID, folderID: configuration.folderID)
                         }
                         guard created == id else { throw WorkspaceToolError.invalid(self.localRunError ?? "Unable to create the session.") }
                     }
@@ -340,10 +343,7 @@ extension ApplicationModel {
                     }
                     try await store.database.requireTool(.sessions, sessionID: source.id)
                     try dispatchFence.check()
-                    if runtime == .openclaw {
-                        try await self.prepareCreatedOpenClawSession(target, configuration: configuration)
-                        try await store.database.requireTool(.sessions, sessionID: source.id)
-                    }
+
                     // Initial title/folder/tools commit with session insertion.
                     // Retrying preparation must preserve any later user edits.
                     try dispatchFence.check()
@@ -390,9 +390,10 @@ extension ApplicationModel {
         guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
+        guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
         let workspace = command.options["workspace"] ?? source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
         let workspaceID: UUID?
-        if workspace == "local" { workspaceID = nil }
+        if workspace == "local" { workspaceID = source.remoteWorkspaceID }
         else {
             guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
             workspaceID = id
@@ -402,36 +403,13 @@ extension ApplicationModel {
         if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {
             throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when creating a central session from another device.")
         }
-        // A phone-owned caller has no local ACP session or host filesystem
-        // location to inherit. Resolving it must not start or contact a provider.
-        let sourceSession = federatedSource ? nil : try await store.database.localACPSession(conversationID: source.id)
-        let sameWorkspace = !federatedSource && workspaceID == source.remoteWorkspaceID && sourceSession?.buzzWorkspaceLinkID == nil
-        var nativeLocation: OpenCodeValue?
-        var inheritedDirectory: String?
-        // An explicit destination does not need to query the source provider.
-        // Buzz workspaces are separate from the local/remote creation targets.
-        if sameWorkspace, command.options["directory"] == nil {
-            if source.localRuntimeKind == .openclaw {
-                inheritedDirectory = try await store.openClawGatewaySessionMetadata(conversationID: source.id).workingDirectory
-            } else if source.localRuntimeKind == .opencode {
-                await refreshLocalACPSession(conversation: source)
-                guard let native = openCodeModel(for: source.id), let snapshot = native.snapshots[source.id] else {
-                    throw WorkspaceToolError.invalid("The source OpenCode session is unavailable. Reconnect it before creating another session.")
-                }
-                nativeLocation = snapshot.info["location"]
-                inheritedDirectory = snapshot.info["location"]["directory"].string
-            } else if let sourceRuntime = source.localRuntimeKind {
-                let context = try await directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime,
-                    isBuzzWorkspaceSession: sourceSession?.buzzWorkspaceLinkID != nil)
-                let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
-                    launch: context?.launch, workspace: context?.workspace)
-                inheritedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path
-            }
-            if inheritedDirectory == nil {
-                inheritedDirectory = try await store.database.toolSessionCreationConfiguration(targetID: source.id)?.nativeWorkingDirectory
-            }
-        }
-        let directory = try command.options["directory"] ?? inheritedDirectory ?? defaultToolWorkingDirectory(workspaceID: workspaceID)
+        let sameWorkspace = !federatedSource && workspaceID == source.remoteWorkspaceID
+        let destinationFolder: String?
+        if let selected = command.options["folder"] {
+            destinationFolder = ["all", "ungrouped"].contains(selected) ? nil : selected
+        } else { destinationFolder = sameWorkspace ? source.folderID : nil }
+        let directory = try await folderWorkingDirectory(folderID: destinationFolder, workspaceID: workspaceID,
+            explicit: command.options["directory"].map { URL(fileURLWithPath: $0) }).path
         let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() }
             ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
         let explicit = SessionSelections(model: command.options["model"], thinking: command.options["thinking"])
@@ -441,14 +419,13 @@ extension ApplicationModel {
         if let identifiers = resolved.tools { tools = try WorkspaceSessionTools(identifiers: identifiers) }
         else { tools = WorkspaceSessionTools(enabled: settings.enabledByDefault) }
         tools.executorProfiles = settings.executor?.defaultProfiles ?? []
-        return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
+        return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: destinationFolder,
             title: title, model: resolved.model, thinking: resolved.thinking,
             permission: runtime == .pi ? nil : resolved.permission,
             usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
             selectionWorkspace: scope,
             nativeWorkingDirectory: directory,
-            nativeWorkspaceID: runtime == .opencode && sameWorkspace && command.options["directory"] == nil
-                ? nativeLocation?["workspaceID"].string : nil, tools: tools)
+            nativeWorkspaceID: nil, tools: tools)
     }
 
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery,
@@ -493,6 +470,8 @@ extension ApplicationModel {
             if dispatchFence.isCancelled, !dispatchFence.hasDispatched {
                 // A user-stopped occurrence cannot return to a retry queue.
                 try await database.setToolDeliveryStatus(id: claimed.id, status: "cancelled")
+            } else if !dispatchFence.hasDispatched, (error as? OpenCodeError) == .executionRootMismatch {
+                try await database.setToolDeliveryStatus(id: claimed.id, status: "failed")
             } else { try await database.failToolDeliveryAttempt(id: claimed.id) }
             if let failed = try await database.toolDelivery(id: claimed.id),
                ["cancelled", "failed", "uncertain"].contains(failed.status) {
@@ -532,5 +511,37 @@ extension ApplicationModel {
             value["purposeHasMore"] = .bool(purposePreview.count < purpose.count)
         }
         return .object(value)
+    }
+}
+
+
+extension ApplicationModel {
+    func handleDatabaseTool(callerID: String, command: WovenMatterToolCommand) async throws -> WovenMatterToolResponse {
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try await store.database.requireTool(.notes, sessionID: callerID)
+        let source = try await toolConversation(callerID)
+        let action = String(command.action.dropFirst("database-".count))
+        if let workspaceID = source.remoteWorkspaceID {
+            guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            if action == "list" { return try WovenMatterToolResponse.value(await remoteWorkspaces.databases(for: configuration)) }
+            if action == "create" { return try WovenMatterToolResponse.value(await remoteWorkspaces.createDatabase(name: command.required("title"), preference: .sqlite, in: configuration)) }
+            let result = try await remoteWorkspaces.datasetOperation(action: action, id: command.required("database-id"), sql: command.required("query"), in: configuration)
+            if action == "execute" { await refreshDatabases() }
+            return .init(result: result)
+        }
+        guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        let owner = try await executionWorkspaceIdentity(workspaceID: nil)
+        let id = command.options["database-id"] ?? "", sql = command.options["query"] ?? "", title = command.options["title"] ?? ""
+        switch action {
+        case "list": return try WovenMatterToolResponse.value(await Task.detached { try AgentDatabaseCatalog.list(at: root) }.value)
+        case "create":
+            let row = try await Task.detached { try AgentDatabaseCatalog.create(named: title, in: root, owner: owner) }.value
+            await refreshDatabases(); return try WovenMatterToolResponse.value(row)
+        case "query": return try WovenMatterToolResponse.value(await Task.detached { try AgentDatabaseCatalog.query(id: id, sql: sql, in: root) }.value)
+        case "execute":
+            let row = try await Task.detached { try AgentDatabaseCatalog.execute(id: id, sql: sql, in: root, owner: owner) }.value
+            await refreshDatabases(); return try WovenMatterToolResponse.value(row)
+        default: throw WorkspaceToolError.invalid("Unsupported database command.")
+        }
     }
 }

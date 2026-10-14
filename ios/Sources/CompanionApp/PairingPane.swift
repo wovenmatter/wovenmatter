@@ -5,43 +5,57 @@ import AVFoundation
 struct PairingPane: View {
   @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
-  @Environment(\.dismiss) private var dismiss
   @State private var scanning = false
   @State private var scannerError: String?
+  @State private var confirmDisconnect = false
   var body: some View {
-    Group {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 22) {
-          Text("On your Mac, open Woven Matter → Settings → Devices and create a pairing code. Keep both devices connected to the same Tailscale network.").foregroundStyle(DashboardPalette.mutedForeground)
-          Button { Task { await beginScanning() } } label: { Label("Scan Mac pairing code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity).padding(6) }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(model.connecting)
-          if let scannerError { Text(scannerError).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
-          Text("Or paste the pairing link").font(.subheadline.weight(.semibold))
-          TextField("wovenmatter://pair?…", text: $model.pairingText, axis: .vertical)
-            .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
-            .padding(12).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous)).accessibilityIdentifier("pairing-link")
-          Button(model.connecting ? "Pairing…" : "Pair with Mac") {
-            guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else { model.errorMessage = "Paste the full pairing link from your Mac."; return }
-            Task { await model.pair(url: url) }
-          }.buttonStyle(DashboardQuietButtonStyle()).disabled(model.connecting || model.pairingText.isEmpty)
-          CompanionInlineError(model: model)
-        }.padding(24)
-      }.navigationTitle("Pair your Mac").navigationBarTitleDisplayMode(.inline)
-        .mobilePageSurface().toolbar(.visible, for: .navigationBar)
-        .sheet(isPresented: $scanning) {
-          NavigationStack {
-            QRScanner(found: { value in
-              scanning = false
-              if let url = URL(string: value) { Task { await model.pair(url: url) } }
-            }, failed: { message in scanning = false; scannerError = message }).ignoresSafeArea(edges: .bottom).navigationTitle("Scan pairing code")
-              .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
-          }
+    Form {
+      if let credential = model.credential {
+        Section("Central database") {
+          Text(credential.endpoint.host ?? "Paired database").textSelection(.enabled)
+          Button("Unpair", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
         }
-    }.tint(theme.palette.themeAccent)
+      } else {
+        Section {
+          Button { Task { await beginScanning() } } label: { Label("Scan pairing code", systemImage: "qrcode.viewfinder") }
+            .disabled(model.pairingInProgress).accessibilityIdentifier("pairing-scan")
+          TextField("Paste pairing link", text: $model.pairingText, axis: .vertical)
+            .dashboardInput().textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
+          Button(model.pairingInProgress ? "Pairing…" : "Pair") {
+            guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+              model.pairingError = "Paste the full pairing link from your Mac."; return
+            }
+            Task { await model.pair(url: url) }
+          }.disabled(model.pairingInProgress || model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("pairing-connect")
+        } header: { Text("Device Connections") } footer: {
+          Text("On the Mac hosting your central database, open Woven Matter → Settings → Device Connections. Scan its code or paste its link. Both devices must use the same Tailscale network.")
+        }
+
+      }
+      if let problem = model.pairingError ?? scannerError {
+        Section { Text(problem).font(.callout).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+      }
+    }.mobileNavigationPage("Device Connections")
+      .sheet(isPresented: $scanning) {
+        NavigationStack {
+          QRScanner(found: { value in
+            scanning = false
+            if let url = URL(string: value) { Task { await model.pair(url: url) } }
+          }, failed: { message in scanning = false; scannerError = message }).ignoresSafeArea(edges: .bottom).navigationTitle("Scan pairing code")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
+        }
+      }
+      .confirmationDialog("Unpair from the central database?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+        Button("Unpair", role: .destructive) { Task { await model.disconnectMac() } }
+      } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on this device. Access to its connected workspaces ends until you pair again.") }
+      .tint(theme.palette.themeAccent)
   }
   private func beginScanning() async {
+    scannerError = nil
     guard DataScannerViewController.isSupported else { scannerError = "Camera scanning is unavailable on this device. Paste the pairing link instead."; return }
     let allowed = await AVCaptureDevice.requestAccess(for: .video)
-    guard allowed, DataScannerViewController.isAvailable else { scannerError = "Enable Camera access in iPhone Settings, or paste the pairing link."; return }
+    guard allowed, DataScannerViewController.isAvailable else { scannerError = "Enable Camera access in Settings, or paste the pairing link."; return }
     scanning = true
   }
 }

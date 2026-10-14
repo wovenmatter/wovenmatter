@@ -4,6 +4,7 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteDatabaseClientTests {
+    private static let databaseID = "11111111-1111-4111-8111-111111111111"
     @Test func keepsDatabaseIDsInBodiesAndRequestsOnTheirWorkspaceOrigin() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RemoteDatabaseFixtureProtocol.self]
@@ -13,12 +14,16 @@ struct RemoteDatabaseClientTests {
         let second = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42002")!, token: "two", session: session)
         #expect(try await first.databases().first?.name == "Sales #1")
         #expect(try await second.databases().isEmpty == true)
-        #expect(try await first.createDatabase(name: "Sales #1", preference: .json).id == "Sales #1")
-        #expect(try await first.setDatabasePreference(.sqlite, databaseID: "Sales #1").preference == .sqlite)
-        let link = DatabaseArtifactLink(sourceID: "remote:configured-identity", databaseID: "Sales #1", relativePath: "nested/data.json")
+        let scratch = "/home/.woven-matter/scratch/2026-10-14-research-12345678"
+        #expect(try await first.ensureScratchDirectory(path: scratch).path == scratch)
+        #expect(try await first.createProject(name: "Existing folder", reuseExisting: true).path == "/home/.woven-matter/Existing folder")
+        #expect(try await first.createDatabase(name: "Sales #1", preference: .sqlite).id == Self.databaseID)
+        let link = DatabaseArtifactLink(sourceID: "remote:configured-identity", databaseID: Self.databaseID, relativePath: "", sqliteQuery: "SELECT value FROM events")
         let data = try await first.databaseData(for: link)
-        #expect(Data(base64Encoded: data.jsonBase64 ?? "") == Data("[1]".utf8))
-        #expect(data.query == nil)
+        #expect(data.jsonBase64 == nil)
+        #expect(data.query?.rows == [["42"]])
+        let commit = try await first.managedDatabaseOperation(action: "execute", id: Self.databaseID, sql: "INSERT INTO events VALUES(43)")
+        #expect(commit.objectValue?["revision"]?.intValue == 3)
     }
 
     @Test func reportsOlderServiceAndOfflineErrorsWithoutEmptyCatalogSuccess() async throws {
@@ -58,28 +63,39 @@ private final class RemoteDatabaseFixtureProtocol: URLProtocol, @unchecked Senda
             }
         }
         let payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
-        var row = #"{"id":"Sales #1","name":"Sales #1","preference":"json"}"#
+        var row = #"{"id":"11111111-1111-4111-8111-111111111111","name":"Sales #1","preference":"sqlite","revision":2,"updatedAt":"2026-10-14T00:00:00Z","owner":"workspace:fixture"}"#
         let response: String
         if port == 42003 { response = #"{"error":"not_found"}"# }
         else if request.httpMethod == "GET" {
             #expect(request.url?.path == "/v1/databases")
             response = port == 42001 ? "{\"databases\":[\(row)]}" : #"{"databases":[]}"#
         } else {
-            #expect(payload?["databaseID"] as? String == "Sales #1")
             #expect(port == 42001)
             switch request.url?.path {
+            case "/v1/projects":
+                #expect(payload?["name"] as? String == "Existing folder")
+                #expect(payload?["reuseExisting"] as? Bool == true)
+                row = #"{"path":"/home/.woven-matter/Existing folder"}"#
+            case "/v1/scratch":
+                #expect(request.httpMethod == "POST")
+                #expect(payload?["path"] as? String == "/home/.woven-matter/scratch/2026-10-14-research-12345678")
+                row = #"{"path":"/home/.woven-matter/scratch/2026-10-14-research-12345678"}"#
             case "/v1/databases":
                 #expect(request.httpMethod == "POST")
-                #expect(payload?["preference"] as? String == "json")
-            case "/v1/databases/preference":
-                #expect(request.httpMethod == "PATCH")
+                #expect(payload?["databaseID"] as? String == "Sales #1")
                 #expect(payload?["preference"] as? String == "sqlite")
-                row = row.replacingOccurrences(of: "json", with: "sqlite")
             case "/v1/databases/data":
                 #expect(request.httpMethod == "POST")
-                #expect(payload?["relativePath"] as? String == "nested/data.json")
+                #expect(payload?["databaseID"] as? String == "11111111-1111-4111-8111-111111111111")
+                #expect(payload?["relativePath"] as? String == "")
+                #expect(payload?["sqliteQuery"] as? String == "SELECT value FROM events")
                 #expect(payload?["sourceID"] == nil)
-                row = #"{"jsonBase64":"WzFd"}"#
+                row = #"{"query":{"contractVersion":1,"columns":["value"],"rows":[["42"]]}}"#
+            case "/v1/databases/execute":
+                #expect(request.httpMethod == "POST")
+                #expect(payload?["databaseID"] as? String == "11111111-1111-4111-8111-111111111111")
+                #expect(payload?["sql"] as? String == "INSERT INTO events VALUES(43)")
+                row = row.replacingOccurrences(of: "\"revision\":2", with: "\"revision\":3")
             default: Issue.record("Unexpected database route")
             }
             response = row

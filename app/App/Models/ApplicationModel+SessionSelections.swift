@@ -53,8 +53,6 @@ extension ApplicationModel {
             workspace = resolved
         } else if let remote = session.remoteWorkspaceID {
             workspace = "remote:" + remote.uuidString.lowercased()
-        } else if let buzz = session.buzzWorkspaceLinkID {
-            workspace = "buzz:" + buzz.uuidString.lowercased()
         } else {
             guard let root = localACPWorkspaceLaunchConfiguration?.rootURL else {
                 throw ApplicationModelError.localACPRuntimeUnavailable
@@ -121,31 +119,19 @@ extension ApplicationModel {
         var confirmedMetadata: LocalACPSessionMetadata?
         if let openCode {
             try await openCode.applySessionSelections(conversationID, selections: desired)
-        } else if isOpenClawGatewayConversation(conversationID) {
-            if desired.model != nil || desired.thinking != nil || desired.permission != nil {
-                _ = try await dashboardStore.patchOpenClawGatewaySession(conversationID: conversationID,
-                    preferences: OpenClawSessionPreferences(model: desired.model,
-                        thinkingLevel: desired.thinking, permissionMode: desired.permission))
-                let metadata = try await dashboardStore.openClawGatewaySessionMetadata(conversationID: conversationID)
-                publishSessionSelectionMetadata(metadata, conversationID: conversationID, gateway: true)
-                confirmedMetadata = metadata
-            }
         } else {
             let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
-            // An unlinked OpenClaw chat will apply its captured native settings
-            // after the gateway is linked, rather than treating a DB write as a patch.
-            if native.runtimeKind == .openclaw { return }
-            let permission = native.runtimeKind == .pi ? nil : desired.permission
+            let permission = desired.permission
             if desired.model != nil || desired.thinking != nil || permission != nil {
                 guard let conversation = try await dashboardStore.database.workspaceOverview().conversations
                     .first(where: { $0.id == conversationID }) else {
                     throw LocalACPSessionDatabaseError.sessionNotFound
                 }
                 let context = try await directACPLaunchContext(conversation: conversation,
-                    runtimeKind: native.runtimeKind, isBuzzWorkspaceSession: native.buzzWorkspaceLinkID != nil)
+                    runtimeKind: native.runtimeKind)
                 if saved.usesProductPermissionDefault {
                     let available = try await dashboardStore.localACPSessionConfiguration(conversationID: conversationID,
-                        launch: context?.launch, workspace: context?.workspace)
+                        launch: context.launch, workspace: context.workspace)
                     desired = sessionSelectionPreferences.reconcileProductPermissionDefault(id: conversationID,
                         options: available.permissionOptions, nativePermission: available.permission)?.desiredSelections ?? desired
                 }
@@ -153,19 +139,19 @@ extension ApplicationModel {
                 // A DB seed alone cannot prove that its next prompt uses these values.
                 let configuration = try await dashboardStore.updateLocalACPSessionConfiguration(
                     conversationID: conversationID, model: desired.model, thinking: desired.thinking,
-                    permission: native.runtimeKind == .pi ? nil : desired.permission,
-                    launch: context?.launch, workspace: context?.workspace)
+                    permission: desired.permission,
+                    launch: context.launch, workspace: context.workspace)
                 let metadata = LocalACPSessionMetadata(sessionKey: conversationID,
                     model: configuration.model, thinking: configuration.thinking,
                     modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
                     slashCommands: configuration.slashCommands,
                     modelOptionMetadata: configuration.modelOptionMetadata,
                     thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                    permission: native.runtimeKind == .pi ? nil : configuration.permission,
+                    permission: configuration.permission,
                     permissionOptions: configuration.permissionOptions,
                     permissionOptionMetadata: configuration.permissionOptionMetadata,
                     workingDirectory: configuration.workingDirectory)
-                publishSessionSelectionMetadata(metadata, conversationID: conversationID, gateway: false)
+                publishSessionSelectionMetadata(metadata, conversationID: conversationID)
                 confirmedMetadata = metadata
             }
         }
@@ -227,7 +213,7 @@ extension ApplicationModel {
 
         guard let context = try? await sessionSelectionContext(conversationID: conversationID) else { return }
         let selections = await SessionSelections(model: metadata.model, thinking: metadata.thinking,
-            permission: context.harness == AgentRuntimeKind.pi.rawValue ? nil : metadata.permission,
+            permission: metadata.permission,
             tools: currentSessionToolIDs?(conversationID)
                 ?? sessionSelectionPreferences.conversation(id: conversationID)?.selections.tools)
         if sessionSelectionPreferences.conversation(id: conversationID) == nil {

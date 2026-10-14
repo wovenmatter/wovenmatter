@@ -23,7 +23,10 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var formatVersion = 1
   public var deviceID = UUID().uuidString.lowercased()
   public var workspaceID: String?
+  public var detachedWorkspaceID: String?
+  public var pairingTransitionWorkspaceID: String?
   public var cursor: Int64 = 0
+  public var hasLibrarySnapshot: Bool?
   public var folders: [String: CompanionFolder] = [:]
   public var notes: [String: CompanionNote] = [:]
   public var bases: [String: CompanionNote] = [:]
@@ -32,6 +35,9 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var conversations: [String: CompanionConversation] = [:]
   public var transcripts: [String: CompanionTranscript] = [:]
   public var transcriptRecency: [String] = []
+  public var pinnedTranscriptIDs: Set<String>?
+  public var dirtyTranscriptIDs: Set<String>?
+  public var ownedConversationIDs: Set<String>?
   public var commands: [MobileCommandRecord] = []
   public var launches: [MobileLaunchRecord] = []
   public var chatDrafts: [String: MobileChatDraft] = [:]
@@ -60,7 +66,7 @@ public actor MobileStore {
     public var transcriptCount: Int
     public var transcriptBytes: Int
     public var noteBytes: Int
-    public init(transcriptCount: Int = 20, transcriptBytes: Int = 16 * 1_024 * 1_024, noteBytes: Int = 64 * 1_024 * 1_024) {
+    public init(transcriptCount: Int = .max, transcriptBytes: Int = .max, noteBytes: Int = .max) {
       self.transcriptCount = transcriptCount; self.transcriptBytes = transcriptBytes; self.noteBytes = noteBytes
     }
   }
@@ -104,8 +110,103 @@ public actor MobileStore {
   }
   public func snapshot() -> MobileStoreState { state }
   public func protectOpenNote(_ id: String?) { protectedNoteID = id }
+  public func setTranscriptPinned(_ id: String, _ pinned: Bool) throws {
+    try transaction { next in
+      if next.pinnedTranscriptIDs == nil { next.pinnedTranscriptIDs = [] }
+      if pinned { next.pinnedTranscriptIDs?.insert(id) } else { next.pinnedTranscriptIDs?.remove(id) }
+    }
+  }
+  public func cacheTranscriptPage(_ page: CompanionTranscript) throws {
+    var merged = page
+    if let existing = state.transcripts[page.conversationID] {
+      let messageIDs = Set(existing.messages.map(\.id)), activityIDs = Set(existing.activities.map(\.id))
+      merged.messages = page.messages.filter { !messageIDs.contains($0.id) } + existing.messages
+      merged.activities = page.activities.filter { !activityIDs.contains($0.id) } + existing.activities
+      merged.activeRunID = existing.activeRunID
+      merged.runs = (page.runs ?? []).filter { row in existing.runs?.contains { $0.id == row.id } != true } + (existing.runs ?? [])
+    }
+    try cache(merged, preservingOlderPages: false)
+  }
+
+  /// Unpairing removes authority, not writing. Retain the previous identity only
+  /// to distinguish a same-database reconnect from an explicit database change.
+  public func detachWorkspace() throws {
+    try transaction { next in
+      next.detachedWorkspaceID = next.workspaceID ?? next.detachedWorkspaceID
+      next.workspaceID = nil
+    }
+  }
+
+  public func recoverPairingTransition() async throws {
+    if let target = state.pairingTransitionWorkspaceID { try await finishPairingTransition(target) }
+  }
+
+  /// Called only by explicit pairing, never by ordinary synchronization. The
+  /// backup stays inside this device's app container and contains no Keychain data.
+  public func prepareForPairing(_ id: String) async throws {
+    guard !id.isEmpty else { throw Failure.wrongWorkspace }
+    try await recoverPairingTransition()
+    let previous = state.workspaceID ?? state.detachedWorkspaceID
+    if previous == nil || previous == id {
+      try transaction { next in next.workspaceID = id; next.detachedWorkspaceID = nil }
+      return
+    }
+    let backup = file.deletingLastPathComponent().appendingPathComponent("Pairing Recovery", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+    // Copy the committed index and immutable bodies before changing any store.
+    for source in [file, file.appendingPathExtension("bodies"), file.appendingPathExtension("execution"),
+                   file.appendingPathExtension("execution.bodies"), file.appendingPathExtension("calendar"),
+                   file.appendingPathExtension("artifacts")] where FileManager.default.fileExists(atPath: source.path) {
+      try FileManager.default.copyItem(at: source, to: backup.appendingPathComponent(source.lastPathComponent))
+    }
+    try transaction { $0.pairingTransitionWorkspaceID = id }
+    try await finishPairingTransition(id)
+  }
+
+  private func finishPairingTransition(_ id: String) async throws {
+    // Each participant records its target and is idempotent. The main index is
+    // the commit marker; startup resumes it before any sync or agent execution.
+    try await journal.moveDeviceWorkspace(to: id, deviceID: state.deviceID)
+    try await calendar.moveLocalWriting(to: id)
+    try await artifacts.moveDeviceArtifacts(to: id, deviceID: state.deviceID)
+    let history = await journal.snapshot()
+    try transaction { next in
+      next.outbox = []
+      for key in next.folders.keys.sorted() {
+        next.folders[key]?.revision = 0
+        next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .createFolder,
+          resourceID: key, title: next.folders[key]!.name)))
+      }
+      next.notes = next.notes.filter { $0.value.contentIncluded }
+      for key in next.notes.keys.sorted() {
+        next.notes[key]?.revision = 0
+        next.outbox.append(.init(mutation: Self.mutation(for: next.notes[key]!, kind: .createNote, deviceID: next.deviceID)))
+      }
+      next.bases = [:]; next.deletedNotes = []; next.uncachedNoteIDs = []
+      next.pendingNoteDeletions = nil; next.pendingFolderDeletions = nil
+      next.localRevisionParents = [:]
+      // Old workspace commands must never be replayed against the new database.
+      next.commands = []; next.launches = []
+      next.conversations = history.conversations; next.transcripts = history.transcripts
+      next.executionConversationIDs = Set(history.conversations.keys)
+      next.ownedConversationIDs = Set(history.conversations.keys)
+      next.centralConversationIDs = []; next.centralDeletedConversationIDs = []
+      next.transcriptRecency = next.transcriptRecency.filter { history.conversations[$0] != nil }
+      next.chatDrafts = next.chatDrafts.filter { $0.key == "new-chat" || history.conversations[$0.key] != nil }
+      next.pinnedTranscriptIDs = next.pinnedTranscriptIDs?.intersection(history.conversations.keys)
+      next.dirtyTranscriptIDs = []
+      next.cursor = 0; next.hasLibrarySnapshot = false
+      next.workspaceID = id; next.detachedWorkspaceID = nil; next.pairingTransitionWorkspaceID = nil
+    }
+  }
+
+  public func bindWorkspace(_ id: String) throws {
+    try transaction { next in try Self.checkWorkspace(id, state: &next) }
+  }
   public func verifyWorkspace(_ id: String) throws {
-    guard state.workspaceID == nil || state.workspaceID == id else { throw Failure.wrongWorkspace }
+    guard state.pairingTransitionWorkspaceID == nil,
+      (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
   }
   public func cacheNote(_ note: CompanionNote) throws {
     try transaction { next in
@@ -262,9 +363,9 @@ public actor MobileStore {
     }
   }
   /// Marking submitted is itself durable. A retry must resend exactly these bytes and ID.
-  public func nextMutation() throws -> CompanionMutation? {
+  public func nextMutation(excludingOperationIDs: Set<String> = []) throws -> CompanionMutation? {
     guard let index = state.outbox.firstIndex(where: { entry in
-      state.conflicts[entry.mutation.resourceID] == nil &&
+      !excludingOperationIDs.contains(entry.mutation.operationID) && state.conflicts[entry.mutation.resourceID] == nil &&
       !(entry.mutation.folderID.map { parent in state.outbox.contains { $0.mutation.kind == .createFolder && $0.mutation.resourceID == parent } } ?? false)
     }) else { return nil }
     let result = state.outbox[index].mutation
@@ -328,6 +429,8 @@ public actor MobileStore {
       for note in snapshot.notes { Self.remoteNote(note, state: &next) }
       let pendingFolders = next.folders.filter { id, _ in next.outbox.contains { $0.mutation.resourceID == id } }
       next.folders = Dictionary(uniqueKeysWithValues: snapshot.folders.filter { next.pendingFolderDeletions?[$0.id] == nil }.map { ($0.id, $0) }).merging(pendingFolders) { _, local in local }
+      let changedIDs = snapshot.conversations.filter { next.conversations[$0.id] != $0 }.map(\.id)
+      next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union(changedIDs)
       let incomingIDs = Set(snapshot.conversations.map(\.id))
       let missingIDs = (next.centralConversationIDs ?? []).subtracting(incomingIDs)
       next.centralDeletedConversationIDs = (next.centralDeletedConversationIDs ?? []).union(missingIDs).subtracting(incomingIDs)
@@ -335,6 +438,7 @@ public actor MobileStore {
       let execution = next.conversations.filter { next.executionConversationIDs?.contains($0.key) == true && next.centralDeletedConversationIDs?.contains($0.key) != true }
       next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) }).merging(execution) { _, local in local }
       next.cursor = snapshot.cursor
+      next.hasLibrarySnapshot = true
       try enforceNoteBudget(&next)
     }
   }
@@ -348,6 +452,7 @@ public actor MobileStore {
           if change.operation == .delete { Self.remoteDeletion(change.resourceID, state: &next) }
           else if let note = change.note { Self.remoteNote(note, state: &next) }
         case .folder:
+          if next.outbox.contains(where: { $0.mutation.resourceID == change.resourceID }) { break }
           if change.operation == .delete { next.folders.removeValue(forKey: change.resourceID) }
           else if let folder = change.folder, next.pendingFolderDeletions?[folder.id] == nil { next.folders[folder.id] = folder }
         case .conversation:
@@ -355,11 +460,13 @@ public actor MobileStore {
             next.conversations.removeValue(forKey: change.resourceID); next.transcripts.removeValue(forKey: change.resourceID)
             next.centralDeletedConversationIDs = (next.centralDeletedConversationIDs ?? []).union([change.resourceID])
           } else if let conversation = change.conversation {
+            next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union([conversation.id])
             next.conversations[conversation.id] = conversation
             next.centralConversationIDs = (next.centralConversationIDs ?? []).union([conversation.id])
             next.centralDeletedConversationIDs?.remove(conversation.id)
           }
-        case .transcript, .providers: break
+        case .transcript: next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union([change.resourceID])
+        case .providers: break
         }
       }
       next.cursor = max(next.cursor, page.cursor)
@@ -370,7 +477,11 @@ public actor MobileStore {
   /// journal cursor may commit before a cache write; restarting never loses data.
   public func restoreExecutionProjection() async throws {
     let history = await journal.snapshot()
+    let ownerIDs = Set(history.conversationWorkspaceIDs.compactMap { id, workspaceID in
+      history.workspaces[workspaceID].map { WorkspaceJournal.isLocalExecutionOwner($0, deviceID: state.deviceID) } == true ? id : nil
+    })
     try transaction { next in
+      next.ownedConversationIDs = ownerIDs
       for id in history.deletedConversationIDs {
         next.conversations.removeValue(forKey: id); next.transcripts.removeValue(forKey: id)
         next.executionConversationIDs?.remove(id)
@@ -381,7 +492,7 @@ public actor MobileStore {
         next.executionConversationIDs = (next.executionConversationIDs ?? []).union([conversation.id])
       }
     }
-    let recent = history.conversations.values.sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }.prefix(budget.transcriptCount)
+    let recent = history.conversations.values.sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }
     for conversation in recent.reversed() where state.centralDeletedConversationIDs?.contains(conversation.id) != true {
       if let transcript = history.transcripts[conversation.id] { try cache(transcript) }
     }
@@ -403,28 +514,41 @@ public actor MobileStore {
     }
     if let transcript { try cache(transcript) }
   }
-  public func cache(_ transcript: CompanionTranscript) throws {
-    guard state.transcripts[transcript.conversationID] != transcript else { return }
+  public func cache(_ transcript: CompanionTranscript, preservingOlderPages: Bool = true) throws {
+    if state.transcripts[transcript.conversationID] == transcript {
+      if preservingOlderPages { try transaction { $0.dirtyTranscriptIDs?.remove(transcript.conversationID) } }
+      return
+    }
     try transaction { next in
+      if preservingOlderPages { next.dirtyTranscriptIDs?.remove(transcript.conversationID) }
       var bounded = transcript
+      let protectedIDs = (next.pinnedTranscriptIDs ?? []).union(next.ownedConversationIDs ?? [])
+      if protectedIDs.contains(transcript.conversationID), let previous = next.transcripts[transcript.conversationID] {
+        let ids = Set(bounded.messages.map(\.id)), activities = Set(bounded.activities.map(\.id))
+        let removed = Set(bounded.removedMessageIDs ?? [])
+        bounded.messages = previous.messages.filter { !ids.contains($0.id) && (!removed.contains($0.id) || $0.role == "user") } + bounded.messages
+        bounded.activities = previous.activities.filter { !activities.contains($0.id) } + bounded.activities
+        if preservingOlderPages && transcript.olderCursor != nil { bounded.olderCursor = previous.olderCursor }
+      }
       // Tool output must not evict the surrounding conversation. Detailed
       // projections are durable in the workspace journal and loaded on demand.
       bounded.activities = bounded.activities.map { CompanionTranscriptCompaction.activity($0) }
       // Evict old turns coherently only after compacting tool details.
-      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.messages.isEmpty {
+      while try budget.transcriptBytes != .max && !protectedIDs.contains(transcript.conversationID) && JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.messages.isEmpty {
         let removed = bounded.messages.removeFirst()
         if let runID = removed.runID, !bounded.messages.contains(where: { $0.runID == runID }) {
           bounded.activities.removeAll { $0.runID == runID }
           bounded.runs?.removeAll { $0.id == runID }
         }
       }
-      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.activities.isEmpty { bounded.activities.removeFirst() }
-      while try JSONEncoder().encode(bounded).count > budget.transcriptBytes && bounded.runs?.isEmpty == false { bounded.runs?.removeFirst() }
+      while try budget.transcriptBytes != .max && !protectedIDs.contains(transcript.conversationID) && JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.activities.isEmpty { bounded.activities.removeFirst() }
+      while try budget.transcriptBytes != .max && !protectedIDs.contains(transcript.conversationID) && JSONEncoder().encode(bounded).count > budget.transcriptBytes && bounded.runs?.isEmpty == false { bounded.runs?.removeFirst() }
       next.transcripts[transcript.conversationID] = bounded
       next.transcriptRecency.removeAll { $0 == transcript.conversationID }
       next.transcriptRecency.insert(transcript.conversationID, at: 0)
-      while try next.transcriptRecency.count > budget.transcriptCount || JSONEncoder().encode(next.transcripts).count > budget.transcriptBytes {
-        guard let removed = next.transcriptRecency.popLast() else { break }
+      while try next.transcriptRecency.count > budget.transcriptCount || (budget.transcriptBytes != .max && JSONEncoder().encode(next.transcripts).count > budget.transcriptBytes) {
+        guard let index = next.transcriptRecency.lastIndex(where: { !protectedIDs.contains($0) }) else { break }
+        let removed = next.transcriptRecency.remove(at: index)
         next.transcripts.removeValue(forKey: removed)
       }
     }
@@ -498,8 +622,9 @@ public actor MobileStore {
           folderID: note.folderID, title: note.title, content: note.content)
   }
   private static func checkWorkspace(_ id: String, state: inout MobileStoreState) throws {
-    guard state.workspaceID == nil || state.workspaceID == id else { throw Failure.wrongWorkspace }
-    state.workspaceID = id
+    guard state.pairingTransitionWorkspaceID == nil,
+      (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
+    state.workspaceID = id; state.detachedWorkspaceID = nil
   }
   private static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
     if state.deletedNotes.contains(note.id), state.bases[note.id]?.revision ?? 0 >= note.revision { return }
@@ -535,6 +660,7 @@ public actor MobileStore {
     } else { state.notes.removeValue(forKey: id) }
   }
   func enforceNoteBudget(_ next: inout MobileStoreState, protecting: String? = nil) throws {
+    guard budget.noteBytes != .max else { return }
     func bytes(_ state: MobileStoreState) -> Int {
       let documents = state.notes.values.reduce(0) { $0 + $1.content.utf8.count }
         + state.bases.values.reduce(0) { $0 + $1.content.utf8.count }

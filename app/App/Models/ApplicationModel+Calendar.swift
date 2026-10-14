@@ -21,7 +21,7 @@ extension ApplicationModel {
             }
             if let raw = command.options["workspace"] {
                 guard raw == "local" || UUID(uuidString: raw) != nil else { throw WorkspaceToolError.invalid("Unknown workspace.") }
-                config.workspaceID = raw == "local" ? nil : UUID(uuidString: raw)
+                config.workspaceID = raw == "local" ? source.remoteWorkspaceID : UUID(uuidString: raw)
             }
             if config.runtimeKind != existing.configuration.runtimeKind || config.workspaceID != existing.configuration.workspaceID {
                 let defaults = calendarTaskDefaults(runtime: config.runtimeKind, workspaceID: config.workspaceID).configuration
@@ -42,6 +42,7 @@ extension ApplicationModel {
             config.selectionWorkspace = config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
                 ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
         }
+        config.nativeWorkingDirectory = try await folderWorkingDirectory(folderID: config.folderID, workspaceID: config.workspaceID, explicit: command.options["directory"].map { URL(fileURLWithPath: $0) }).path
         config.title = title
         let prompt = try command.options["prompt"] ?? existing?.prompt ?? command.required("prompt")
         let mode: WorkspaceCalendarTask.SessionMode
@@ -71,7 +72,14 @@ extension ApplicationModel {
         defer { isCreatingCalendarItem = false }
         do {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-            try await database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: draft,
+            var resolvedDraft = draft
+            if var task = resolvedDraft.task {
+                guard AgentRuntimeKind.allCases.contains(task.configuration.runtimeKind) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
+                task.configuration.nativeWorkingDirectory = try await folderWorkingDirectory(folderID: task.configuration.folderID,
+                    workspaceID: task.configuration.workspaceID).path
+                resolvedDraft.task = task
+            }
+            try await database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: resolvedDraft,
                 creating: event == nil, expectedRevision: event?.calendar.revision, detaching: occurrence)
             await refreshWorkspace()
             if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties:["action":event == nil ? "create":"edit","item_category":"calendar"]) }
@@ -109,7 +117,7 @@ extension ApplicationModel {
             ?? WorkspaceSessionTools(enabled: settings.enabledByDefault)
         tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(prompt: "", configuration: .init(runtimeKind: runtime, workspaceID: workspaceID, title: title,
-            model: selections.model, thinking: selections.thinking, permission: runtime == .pi ? nil : selections.permission,
+            model: selections.model, thinking: selections.thinking, permission: selections.permission,
             usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
             selectionWorkspace: scope, nativeWorkingDirectory: directory, tools: tools))
     }
@@ -131,34 +139,17 @@ extension ApplicationModel {
             }
             return try await instance.calendarTaskMetadata(directory: directory, model: config.model)
         }
-        if config.runtimeKind == .openclaw {
-            let agent = (localCLIAgents + remoteWorkspaceAgents).first {
-                $0.runtimeKind == .openclaw && (config.workspaceID == nil ? $0.governingPlane == .wovenmatterMacOS : $0.runtimeDeviceID == config.workspaceID)
-            }
-            guard let agent, let store = dashboardStore, isOpenClawGatewayLinked(agentID: agent.id) else {
-                throw WorkspaceToolError.invalid("Connect OpenClaw in this workspace's settings to load its models.")
-            }
-            return try await store.calendarOpenClawMetadata(agentID: agent.id, model: config.model)
-        }
         let launch: LocalACPRuntimeLaunchConfiguration
         if let workspaceID = config.workspaceID {
             guard let remote = remoteWorkspaces.configuration(id: workspaceID), remoteWorkspaces.isHarnessReady(config.runtimeKind, in: remote) else {
                 throw ApplicationModelError.remoteHarnessUnavailable
             }
-            if config.runtimeKind == .hermes {
-                guard let connection = remoteHermesConnections[workspaceID] else { throw WorkspaceToolError.invalid("Connect Hermes in this workspace's settings first.") }
-                launch = .init(runtimeKind: .hermes, executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [],
-                    environment: ["WOVENMATTER_HERMES_CONNECTION": try JSONEncoder().encode(connection).base64EncodedString()],
-                    processWorkingDirectoryURL: localACPWorkspaceLaunchConfiguration?.rootURL)
-            } else {
-                launch = try RemoteHarnessLaunchResolver.resolve(configuration: remote, runtimeKind: config.runtimeKind,
-                    processWorkingDirectory: localACPWorkspaceLaunchConfiguration?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser,
-                    workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: remote)),
-                    workingDirectory: URL(fileURLWithPath: directory)).launch
-            }
+            launch = try RemoteHarnessLaunchResolver.resolve(configuration: remote, runtimeKind: config.runtimeKind,
+                processWorkingDirectory: localACPWorkspaceLaunchConfiguration?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser,
+                workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: remote)),
+                workingDirectory: URL(fileURLWithPath: directory)).launch
         } else {
             guard let local = localACPLaunchConfigurations[config.runtimeKind] else { throw ApplicationModelError.localACPRuntimeUnavailable }
-            if config.runtimeKind == .hermes { try await requireLocalHermesLink() }
             launch = .init(runtimeKind: local.runtimeKind, executableURL: local.executableURL,
                 arguments: local.arguments, environment: local.environment,
                 environmentKeysToRemove: local.environmentKeysToRemove,
@@ -199,33 +190,60 @@ extension ApplicationModel {
         if config.runtimeKind == .opencode, config.workspaceID == nil, openCode?.isEnabled != true {
             throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
         }
+        guard var path = config.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
+            throw WorkspaceToolError.invalid("The task has no captured working directory. Edit it before running.")
+        }
+        let owner = try await executionWorkspaceIdentity(workspaceID: config.workspaceID)
+        try dispatchFence.check()
+        let snapshot = try await store.database.workspaceOverview()
+        try dispatchFence.check()
+        var folderID = config.folderID
+        if let requestedFolderID = folderID {
+            if let folder = snapshot.folders.first(where: { $0.id == requestedFolderID }) {
+                guard folder.executionWorkspaceID == owner, folder.rootPath == path else {
+                    throw WorkspaceToolError.invalid("The task's folder does not match its captured workspace and directory.")
+                }
+            } else {
+                // Removing UI grouping leaves the scheduled execution root intact.
+                folderID = nil
+            }
+        }
         let scope = config.selectionWorkspace ?? config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
-            ?? "local:" + (config.nativeWorkingDirectory ?? "")
+            ?? "local:" + path
         let selections = SessionSelections(model: config.model, thinking: config.thinking,
-            permission: config.runtimeKind == .pi ? nil : config.permission, tools: config.tools.enabled.map(\.rawValue).sorted())
+            permission: config.permission, tools: config.tools.enabled.map(\.rawValue).sorted())
         sessionSelectionPreferences.stageCalendarSelections(id: run.sessionID, harness: config.runtimeKind.rawValue,
             workspace: scope, selections: selections,
             usesProductPermissionDefault: config.usesProductPermissionDefault ?? false)
-        let existing = try await store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID })
+        let existing = snapshot.conversations.first(where: { $0.id == run.sessionID })
+        if existing == nil, (try? await store.database.localACPSession(conversationID: run.sessionID)) != nil {
+            throw WorkspaceToolError.invalid("The task's session was deleted. Edit the task to use a new session.")
+        }
+        let scratchBinding = try await store.database.sessionScratchDirectory(id: run.sessionID)
+        let isDraft: Bool
+        if existing == nil { isDraft = true }
+        else { isDraft = try await store.database.canChooseSessionFolder(id: run.sessionID) }
+        if config.folderID == nil, scratchBinding != nil || isDraft {
+            let scratch = try await store.database.reserveSessionScratchDirectory(id: run.sessionID,
+                workspaceID: owner, workspaceRoot: path, firstMessage: run.task.prompt)
+            try await ensureChatScratchDirectory(scratch.rootPath, workspaceID: config.workspaceID, workspaceRoot: path)
+            path = scratch.rootPath
+            if let existing { try await prepareUngroupedLaunch(conversation: existing, firstMessage: run.task.prompt) }
+        }
+        let capturedRoot = WorkspaceFolderLocation(workspaceID: owner, rootPath: path, managed: false)
         try dispatchFence.check()
         if existing == nil {
-            // A deleted destination is not silently recreated under an old ID.
-            let deleted = try? await store.database.localACPSession(conversationID: run.sessionID)
-            try dispatchFence.check()
-            if deleted != nil {
-                throw WorkspaceToolError.invalid("The task's session was deleted. Edit the task to use a new session.")
-            }
             let created: String?
-            let directory = config.nativeWorkingDirectory.map { URL(fileURLWithPath: $0) }
+            let directory = URL(fileURLWithPath: path)
             if let workspaceID = config.workspaceID {
                 guard let target = remoteWorkspaces.readyChatTargets.first(where: { $0.configuration.id == workspaceID && $0.harness.id == config.runtimeKind }) else {
                     throw ApplicationModelError.remoteHarnessUnavailable
                 }
                 created = await createRemoteACPSession(target: target, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID, folderID: folderID, calendarExecutionRoot: capturedRoot)
             } else {
                 created = await createLocalACPSession(runtimeKind: config.runtimeKind, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID, folderID: folderID, calendarExecutionRoot: capturedRoot)
             }
             try dispatchFence.check()
             guard created == run.sessionID else { throw WorkspaceToolError.invalid(localRunError ?? "The scheduled session could not be created.") }
@@ -241,13 +259,18 @@ extension ApplicationModel {
         let active = try await store.database.isCalendarRunActive(run.id)
         try dispatchFence.check()
         guard active else { throw CancellationError() }
-        if conversation.folderID != config.folderID {
-            guard try await store.database.moveConversation(id: run.sessionID, toFolderID: config.folderID) else {
-                throw WorkspaceToolError.invalid("The scheduled session's folder could not be updated.")
-            }
+        guard !conversation.isArchived,
+              let persisted = try await store.database.sessionExecutionRoot(id: run.sessionID),
+              persisted.workspaceID == owner, persisted.rootPath == path else {
+            throw WorkspaceToolError.invalid("The scheduled session's captured execution root is unavailable or differs from this task.")
         }
         try dispatchFence.check()
-        if config.runtimeKind == .openclaw { try await prepareCreatedOpenClawSession(conversation, configuration: config) }
+        // A removed folder can remain in the saved conversation association.
+        // Its captured owner and cwd were verified above; do not move the session.
+        guard conversation.folderID == folderID
+            || (folderID == nil && conversation.folderID == config.folderID) else {
+            throw WorkspaceToolError.invalid("The scheduled session's folder is fixed. Edit the task to use a new session.")
+        }
         try dispatchFence.check()
         try await store.database.setSessionTools(config.tools, sessionID: run.sessionID, confirmedPausingTimers: true)
         try dispatchFence.check()

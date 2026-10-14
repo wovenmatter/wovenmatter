@@ -22,7 +22,7 @@ struct BuiltInDurableLifecycleTests {
     let lease = ConfigurationTestProcessLease(), client = BackgroundDriverFixture()
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease,
       clientFactory: { _, _ in client.driver() })
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
     if mode == "prompt" || mode == "nextPrompt" {
       _ = try await coordinator.accept(conversationID: conversation, content: "Primary input",
         launch: launch(), workspace: workspace)
@@ -79,7 +79,7 @@ struct BuiltInDurableLifecycleTests {
         })
     })
     _ = try await coordinator.accept(conversationID: conversation, content: "Committed work",
-      launch: launch(), workspace: .init(rootURL: directory, repositoriesURL: directory))
+      launch: launch(), workspace: .init(rootURL: directory))
     for _ in 0..<100 {
       if let status = try await database.conversationContent(id: conversation).runs.first?.status,
          ["failed", "uncertain"].contains(status) { break }

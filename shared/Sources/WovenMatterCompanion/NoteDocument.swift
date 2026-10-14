@@ -173,31 +173,104 @@ public struct NoteRichTextBlock: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var style: NoteParagraphStyle
   public var runs: [NoteTextRun]
+  public var list: NoteListFormatting?
 
   public init(
     id: String = UUID().uuidString.lowercased(),
     style: NoteParagraphStyle = .paragraph,
-    runs: [NoteTextRun] = []
+    runs: [NoteTextRun] = [],
+    list: NoteListFormatting? = nil
   ) {
     self.id = id
     self.style = style
     self.runs = runs
+    self.list = list
   }
 
   public init(
     id: String = UUID().uuidString.lowercased(),
     style: NoteParagraphStyle = .paragraph,
-    text: String
+    text: String,
+    list: NoteListFormatting? = nil
   ) {
-    self.init(id: id, style: style, runs: text.isEmpty ? [] : [NoteTextRun(text: text)])
+    self.init(id: id, style: style, runs: text.isEmpty ? [] : [NoteTextRun(text: text)], list: list)
   }
 
   public var plainText: String { runs.map(\.text).joined() }
 
   public func normalized() -> NoteRichTextBlock {
     var copy = self
-    copy.runs = NoteTextRun.mergingAdjacent(runs.filter { !$0.text.isEmpty })
+    copy.runs = NoteTextRun.mergingAdjacent(runs.filter {
+      !$0.text.isEmpty || $0.databaseLink != nil
+    }.map { $0.normalized() })
+    if style != .numberedList && style != .bulletedList { copy.list = nil }
     return copy
+  }
+}
+
+extension NoteRichTextBlock {
+  /// Apply a scalar only while the original linked fragments are still unchanged.
+  /// Native formatting can split one value into several runs sharing its identity.
+  public mutating func refreshDatabaseValue(
+    id: String,
+    expectedRuns: [NoteTextRun],
+    value: String
+  ) -> Bool {
+    let indices = runs.indices.filter { runs[$0].databaseValueID == id }
+    guard !indices.isEmpty, indices.map({ runs[$0] }) == expectedRuns else { return false }
+    var remainder = value[...]
+    for (position, index) in indices.enumerated() {
+      let length = position == indices.count - 1 ? remainder.count
+        : min(runs[index].text.count, remainder.count)
+      let end = remainder.index(remainder.startIndex, offsetBy: length)
+      runs[index].text = String(remainder[..<end])
+      remainder = remainder[end...]
+    }
+    return true
+  }
+}
+
+/// Native list structure is optional so earlier documents retain their flat-list rendering.
+public struct NoteListFormatting: Codable, Equatable, Sendable {
+  public var levels: [NoteTextList]
+  public var headIndent: Double
+  public var firstLineHeadIndent: Double
+  public var tabStops: [NoteListTabStop]
+  public var defaultTabInterval: Double
+
+  public init(levels: [NoteTextList], headIndent: Double, firstLineHeadIndent: Double,
+              tabStops: [NoteListTabStop] = [], defaultTabInterval: Double = 0) {
+    self.levels = levels
+    self.headIndent = headIndent
+    self.firstLineHeadIndent = firstLineHeadIndent
+    self.tabStops = tabStops
+    self.defaultTabInterval = defaultTabInterval
+  }
+}
+
+public struct NoteTextList: Codable, Equatable, Hashable, Sendable {
+  /// Paragraphs sharing a native list keep its identity, including across child lists.
+  public var id: String
+  public var markerFormat: String
+  public var options: UInt
+  public var startingItemNumber: Int
+
+  public init(id: String = UUID().uuidString.lowercased(), markerFormat: String,
+              options: UInt = 0, startingItemNumber: Int = 1) {
+    self.id = id
+    self.markerFormat = markerFormat
+    self.options = options
+    self.startingItemNumber = startingItemNumber
+  }
+}
+
+public struct NoteListTabStop: Codable, Equatable, Sendable {
+  public var alignment: Int
+  public var location: Double
+
+  public init(alignment: Int, location: Double) {
+    self.alignment = alignment
+    self.location = location
   }
 }
 
@@ -223,6 +296,10 @@ public struct NoteTextRun: Codable, Equatable, Sendable {
   public var foregroundHex: String?
   public var highlightHex: String?
   public var link: String?
+  /// A scalar query renders in place; its retained text remains readable offline.
+  public var databaseLink: DatabaseArtifactLink?
+  /// Shared by attributed fragments of one inline value, independent of formatting.
+  public var databaseValueID: String?
 
   public init(
     text: String,
@@ -233,7 +310,9 @@ public struct NoteTextRun: Codable, Equatable, Sendable {
     underline: Bool = false,
     foregroundHex: String? = nil,
     highlightHex: String? = nil,
-    link: String? = nil
+    link: String? = nil,
+    databaseLink: DatabaseArtifactLink? = nil,
+    databaseValueID: String? = nil
   ) {
     self.text = text
     self.fontFamily = fontFamily
@@ -244,6 +323,19 @@ public struct NoteTextRun: Codable, Equatable, Sendable {
     self.foregroundHex = foregroundHex
     self.highlightHex = highlightHex
     self.link = link
+    self.databaseLink = databaseLink
+    self.databaseValueID = databaseLink == nil ? nil
+      : databaseValueID ?? UUID().uuidString.lowercased()
+  }
+
+  fileprivate func normalized() -> Self {
+    var copy = self
+    if databaseLink == nil {
+      copy.databaseValueID = nil
+    } else if databaseValueID?.isEmpty != false {
+      copy.databaseValueID = UUID().uuidString.lowercased()
+    }
+    return copy
   }
 
   fileprivate static func mergingAdjacent(_ runs: [NoteTextRun]) -> [NoteTextRun] {

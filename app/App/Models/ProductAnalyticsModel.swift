@@ -1,3 +1,4 @@
+import CompanionClient
 import Foundation
 import Observation
 import WovenMatterClient
@@ -8,7 +9,7 @@ import WovenMatterDashboardStore
 final class ProductAnalyticsModel {
   private(set) var preference: ProductAnalyticsPreference? {
     didSet {
-      if interface { disclosurePresented = !localDisclosureAcknowledged }
+      if interface, client == nil { disclosurePresented = !localDisclosureAcknowledged }
     }
   }
   private(set) var log: [ProductAnalyticsLogEntry] = []
@@ -16,6 +17,8 @@ final class ProductAnalyticsModel {
   var disclosurePresented = false
   private let defaults: UserDefaults
   init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+  private var client: MobileProductAnalytics?
+  private var clientDisclosed = false
   private var database: WorkspaceDatabase?
   private var rpc: BackendRPCClient?
   private var task: Task<Void, Never>?
@@ -32,7 +35,8 @@ final class ProductAnalyticsModel {
   }
   // The library acknowledgement does not replace this frontend’s disclosure.
   private var localDisclosureAcknowledged: Bool {
-    disclosureKey.map { defaults.bool(forKey: $0) } ?? false
+    if client != nil { return clientDisclosed }
+    return disclosureKey.map { defaults.bool(forKey: $0) } ?? false
   }
   private var session = URLSession(configuration: .ephemeral)
   static let updateReceiptKey = "wovenmatter.analytics.pending-update.v1"
@@ -51,6 +55,18 @@ final class ProductAnalyticsModel {
     }
   }
   func configure(rpc: BackendRPCClient) { self.rpc = rpc }
+  /// The secondary Mac relays updater events through its central library too.
+  /// Its interface/open and disclosure lifecycle belongs to MobileAnalyticsModel.
+  func configure(client: MobileProductAnalytics) async {
+    self.client = client
+    database = nil
+    rpc = nil
+    task?.cancel()
+    task = nil
+    session.invalidateAndCancel()
+    interface = true
+    await refresh()
+  }
   func openInterface() async {
     interface = true
     await refresh()
@@ -63,7 +79,13 @@ final class ProductAnalyticsModel {
   }
   func refresh() async {
     do {
-      if let rpc {
+      if let client {
+        let state = await client.snapshot()
+        clientDisclosed = state.disclosed
+        locallyDisabled = state.pendingEnabled != nil || state.preference?.collects != true
+        preference = state.preference
+        log = Array(state.log.reversed())
+      } else if let rpc {
         preference = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
           from: await rpc.call(method: "analytics.preference", payload: Data()))
@@ -120,6 +142,10 @@ final class ProductAnalyticsModel {
     } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
   }
   func record(_ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:]) async {
+    if let client {
+      try? await client.record(name, properties: properties, platform: "macos")
+      return
+    }
     guard !locallyDisabled, !disclosurePresented, !interface || localDisclosureAcknowledged,
       let preference, preference.collects else {
       return
@@ -142,7 +168,9 @@ final class ProductAnalyticsModel {
   private func enqueue(_ event: ProductAnalyticsEvent) async -> Bool {
     let epoch = generation
     do {
-      if let rpc {
+      if let client, let preference {
+        return try await client.enqueueUpdateReceipt(event, analyticsID: preference.analyticsID)
+      } else if let rpc {
         let acknowledgement = try JSONDecoder().decode(
           ProductAnalyticsAcknowledgement.self,
           from: await rpc.call(
@@ -159,7 +187,8 @@ final class ProductAnalyticsModel {
     } catch { /* Analytics must never interrupt a user action. */ }
     return false
   }
-  func prepareUpdateInstallation(_ manifest: WovenMatterReleaseManifest) -> UUID {
+  func prepareUpdateInstallation(_ manifest: WovenMatterReleaseManifest) async -> UUID {
+    await refresh()
     let installationID = UUID()
     defaults.removeObject(forKey: Self.updateReceiptKey)
     guard !locallyDisabled, localDisclosureAcknowledged, let preference,

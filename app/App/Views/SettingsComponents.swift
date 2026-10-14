@@ -837,35 +837,7 @@ struct SettingsThemePreview: View {
 }
 
 struct SettingsInputModifier: ViewModifier {
-    @Environment(\.dashboardTheme) private var theme
-    @FocusState private var focused: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .textFieldStyle(.plain)
-            .font(.system(size: 13))
-            .padding(.horizontal, 12)
-            .frame(minHeight: 40)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .focused($focused)
-            .background(theme.palette.workspace)
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
-                    style: .continuous
-                )
-                .stroke(
-                    focused ? theme.palette.themeRing : DashboardPalette.mutedForeground.opacity(0.3),
-                    lineWidth: focused ? 1.5 : 1
-                )
-            }
-    }
+    func body(content: Content) -> some View { content.dashboardInput() }
 }
 
 extension View {

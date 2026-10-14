@@ -12,12 +12,3 @@ test('unsupported and secret-bearing forms are rejected before presentation',()=
   for(const field of [{type:'string',format:'password'},{type:'string',pattern:'.*'},{type:'object',properties:{}},{type:'string',_meta:{secret:true}}])assert.throws(()=>clientInteraction(form({count:field})))
   assert.throws(()=>clientInteraction({...form({count:{type:'string'}}),params:{mode:'url',url:'https://example.test/login'}}))
 })
-test('Cursor questions and plan decisions map to native wire responses',()=>{
-  const question={method:'cursor/ask_question',params:{toolCallId:'tool',questions:[{id:'choose',prompt:'Pick',options:[{id:'a',label:'A'},{id:'b',label:'B'}],allowMultiple:true}]}}
-  assert.deepEqual(clientInteractionResponse(question,{answers:{choose:['a','b']}}),{answers:{choose:['a','b']}})
-  assert.deepEqual(clientInteractionResponse(question,{cancelled:true}),{answers:{}})
-  assert.throws(()=>clientInteractionResponse(question,{answers:{choose:['c']}}))
-  const plan={method:'cursor/create_plan',params:{toolCallId:'plan',plan:'# Steps',todos:[]}}
-  assert.deepEqual(clientInteractionResponse(plan,{optionID:'accept'}),{accepted:true})
-  assert.deepEqual(clientInteractionResponse(plan,{cancelled:true}),{accepted:false})
-})

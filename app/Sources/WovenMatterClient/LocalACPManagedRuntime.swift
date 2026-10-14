@@ -535,6 +535,7 @@ public actor LocalACPRuntimeInstaller {
         _ definition: LocalACPRuntimeDefinition,
         fetch: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata
     ) async throws -> LocalACPInstallerPreview {
+        guard AgentRuntimeKind.allCases.contains(definition.runtimeKind) else { throw LocalACPRuntimeInstallError.notInstallable }
         if let selector = definition.cliNpmPackageSpec {
             guard let separator = selector.lastIndex(of: "@"), separator != selector.startIndex else {
                 throw LocalACPRuntimeInstallError.unpinnedPackage
@@ -574,6 +575,7 @@ public actor LocalACPRuntimeInstaller {
         expectedSourceSHA256: String? = nil,
         expectedPackageSpec: String? = nil
     ) async throws -> URL {
+        guard AgentRuntimeKind.allCases.contains(definition.runtimeKind) else { throw LocalACPRuntimeInstallError.notInstallable }
         let lock = try RuntimeInstallationLock(directory: installPrefix)
         defer { lock.release() }
         return switch component {
@@ -602,9 +604,6 @@ public actor LocalACPRuntimeInstaller {
             let version = String(packageSpec[packageSpec.index(after: packageSpec.lastIndex(of: "@")!)...])
             if definition.runtimeKind == .opencode, !OpenCodeConnection.supportsVersion(version) {
                 throw OpenCodeError.incompatible(version)
-            }
-            if definition.runtimeKind == .pi, !version.hasPrefix("1.") || version.contains("-") {
-                throw LocalACPRuntimeInstallError.confirmationRequired
             }
             return try await installNpmPackage(
                 packageSpec,
@@ -649,7 +648,7 @@ public actor LocalACPRuntimeInstaller {
     }
 
     public func installPackage(_ package: String, version: String, executableName: String) async throws -> URL {
-        guard ["@agentclientprotocol/codex-acp", "@agentclientprotocol/claude-agent-acp", "@earendil-works/pi-coding-agent", "openclaw"].contains(package),
+        guard ["@agentclientprotocol/codex-acp", "@agentclientprotocol/claude-agent-acp"].contains(package),
               Self.isExactSemanticVersion(version) else { throw LocalACPRuntimeInstallError.unpinnedPackage }
         let lock = try RuntimeInstallationLock(directory: installPrefix)
         defer { lock.release() }

@@ -385,7 +385,7 @@ final class WorkspaceAgentToolsModel {
             }
             cliPath = resource.path
         }
-        return AgentCLIContext(executablePath: cliPath, socketPath: remote == nil ? path : nil, captureID: captureID)
+        return AgentCLIContext(executablePath: cliPath, socketPath: remote == nil ? path : nil, captureID: captureID, sessionID: sessionID)
     }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
@@ -426,7 +426,7 @@ final class WorkspaceAgentToolsModel {
             case .history:
                 result = .init(result: try await database.queryAgentHistory(historyQuery(command), callerID: callerID,
                     allWorkspace: command.options["all-workspace"] != nil))
-            case .notes: result = try await notes(command, request: request, callerID: callerID)
+            case .notes: result = try await command.isDatabaseCommand ? sessionHandler(callerID, command, request) : notes(command, request: request, callerID: callerID)
             case .sessions:
                 if command.action == "list" || command.action == "status" {
                     var query = try historyQuery(command)

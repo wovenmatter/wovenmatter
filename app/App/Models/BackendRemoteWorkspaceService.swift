@@ -21,7 +21,7 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case confirmHarness(UUID?, AgentRuntimeKind?, String?), cancelHarness(UUID?, AgentRuntimeKind?, String?)
     case signIn(UUID, AgentRuntimeKind, String), authorizationCode(UUID, String), cancelSignIn(UUID)
     case databases(UUID), createDatabase(UUID, name: String, preference: AgentDatabasePreference)
-    case databasePreference(UUID, String, AgentDatabasePreference), databaseData(UUID, DatabaseArtifactLink)
+    case databaseData(UUID, DatabaseArtifactLink)
 }
 
 struct BackendRemoteWorkspaceResponse: Codable {
@@ -83,7 +83,6 @@ struct BackendRemoteWorkspaceService {
         case .cancelSignIn(let id): model.cancelHarnessSignIn(configuration: try workspace(id))
         case .databases(let id): databases = try await model.databases(for: workspace(id))
         case .createDatabase(let id, let name, let preference): database = try await model.createDatabase(name: name, preference: preference, in: workspace(id))
-        case .databasePreference(let id, let databaseID, let preference): try await model.setDatabasePreference(preference, databaseID: databaseID, in: workspace(id))
         case .databaseData(let id, let link): data = try await model.databaseData(for: link, in: workspace(id))
         }
         return .init(snapshot: model.backendSnapshot(), databases: databases, database: database, databaseData: data)

@@ -140,10 +140,13 @@ extension CompanionModel {
     return CompanionAgentLauncher.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
       workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known)
   }
+  var launcherGroups: [CompanionAgentGroup] {
+    CompanionAgentGroup.list(agents: launcherAgents, workspaces: executionWorkspaces)
+  }
   func launchAgent(_ launcher: CompanionAgentLauncher) async {
     guard let current = launcherAgents.first(where: { $0.id == launcher.id }), current.isAvailable else { return }
     if let latest = current.latestConversation(in: conversations, owner: { executionOwner(of: $0) }) {
-      await selectConversation(latest.id)
+      await selectConversation(latest.id, workspaceID: current.workspaceID)
     } else {
       await startNewChat(with: current)
     }
@@ -190,12 +193,28 @@ extension CompanionModel {
     if let workspaceID = conversationWorkspaceIDs[conversationID] { return workspaceID == deviceWorkspaceID ? "local" : workspaceID }
     return "central"
   }
-  var selectedExecutionWorkspaceID: String { selectedConversationID.map { executionOwner(of: $0) } ?? executionWorkspaceID }
+  /// All entry points resolve the same agent identity, including Folders and pending requests.
+  func preferredExecutionRoute(for conversationID: String) -> String {
+    let owner = executionOwner(of: conversationID)
+    guard owner != "local", let provider = state.conversations[conversationID]?.providerID else { return owner }
+    return launcherAgents.first { agent in
+      agent.isAvailable && ((agent.workspaceID == owner && agent.providerID == provider)
+        || agent.conversationRoutes[owner]?.contains(provider) == true)
+    }?.workspaceID ?? owner
+  }
+  /// A transport fallback never changes which workspace owns retained history.
+  func executionRoute(for conversationID: String) -> String {
+    if let route = selectedConversationRoute, route.conversationID == conversationID { return route.workspaceID }
+    return executionOwner(of: conversationID)
+  }
+  var selectedExecutionWorkspaceID: String {
+    selectedConversationID.map { executionRoute(for: $0) } ?? executionWorkspaceID
+  }
   func executionAvailable(for conversationID: String) -> Bool {
-    switch executionOwner(of: conversationID) {
+    switch executionRoute(for: conversationID) {
     case "local": return !fixture
     case "central": return online
-    default: return workspaceReachable[executionOwner(of: conversationID)] == true
+    default: return workspaceReachable[executionRoute(for: conversationID)] == true
     }
   }
   var executionName: String {
@@ -611,11 +630,14 @@ extension CompanionModel {
   func sceneChanged(_ phase: ScenePhase) {
     switch phase {
     case .active:
+      connectionDidBecomeActive()
       endExecutionBackgroundTask()
       if !fixture && !isolatedTestHost { startDeviceScheduler() }
     case .inactive:
+      connectionForeground = false
       stopDeviceScheduler()
     case .background:
+      connectionForeground = false
       stopDeviceScheduler()
       beginFallbackExecutionBackgroundTask()
     @unknown default: break

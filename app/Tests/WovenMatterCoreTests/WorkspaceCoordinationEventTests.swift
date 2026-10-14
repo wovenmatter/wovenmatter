@@ -11,7 +11,7 @@ struct WorkspaceCoordinationEventTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let a = try await db.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let b = try await db.createLocalACPSession(runtimeKind: .pi, title: "Worker", ownerDeviceID: UUID())
+    let b = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
     return (db, dir, a, b)
   }
 
@@ -191,7 +191,7 @@ extension WorkspaceCoordinationEventTests {
     let (db, dir, deletedCoordinator, worker) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
     let liveCoordinator = try await db.createLocalACPSession(runtimeKind: .codex, title: "Live coordinator", ownerDeviceID: UUID())
-    let liveWorker = try await db.createLocalACPSession(runtimeKind: .pi, title: "Live worker", ownerDeviceID: UUID())
+    let liveWorker = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Live worker", ownerDeviceID: UUID())
     try await db.beginCoordination(sourceID: deletedCoordinator, targetID: worker, purpose: "Stale")
     try await db.beginCoordination(sourceID: liveCoordinator, targetID: liveWorker, purpose: "Live")
     let stale = try await db.beginLocalACPRun(conversationID: worker, content: "Stale coordinator")

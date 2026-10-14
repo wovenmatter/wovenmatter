@@ -75,6 +75,21 @@ public actor MobileProductAnalytics {
     state.log = Array(state.log.suffix(500))
     try persist()
   }
+  /// Durable updater acknowledgements keep the original UUID on retry. A privacy
+  /// rejection consumes the receipt without retaining it for later backfill.
+  public func enqueueUpdateReceipt(_ event: ProductAnalyticsEvent, analyticsID: String) throws -> Bool {
+    guard state.disclosed, state.pendingEnabled == nil, let preference = state.preference,
+      preference.analyticsID == analyticsID,
+      event.name == .updateInstallCompleted,
+      let value = event.validated(preference: preference) else { return true }
+    if state.log.contains(where: { $0.id == value.id }) { return true }
+    state.events.append(value)
+    state.events = Array(state.events.suffix(1000))
+    state.log.append(.init(event: value, status: "pending"))
+    state.log = Array(state.log.suffix(500))
+    try persist()
+    return true
+  }
   public func recordCommand(_ command: CompanionCommand) throws {
     let name: ProductAnalyticsEvent.Name
     switch command.kind {

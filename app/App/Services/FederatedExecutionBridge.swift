@@ -84,7 +84,7 @@ extension ApplicationModel {
     /// federation. The database fence precedes enrollment; every retry uses the
     /// immutable adoption request, so a lost acknowledgement never creates a run.
     func adoptRegisteredRemoteConversationIfNeeded(_ conversation: WorkspaceConversationRecord) async throws {
-        guard !isBackendFrontend, !isLibraryClient, !adoptedExecutionConversations.contains(conversation.id),
+        guard !conversation.isArchived, !isBackendFrontend, !isLibraryClient, !adoptedExecutionConversations.contains(conversation.id),
               let workspaceID = conversation.remoteWorkspaceID,
               let configuration = remoteWorkspaces.configuration(id: workspaceID),
               let store = dashboardStore,
@@ -130,7 +130,8 @@ extension ApplicationModel {
         let client = try centralExecutionClient()
         try await client.refresh(conversationID: conversationID)
         try dispatchFence.check()
-        let active = try await database.companionFederatedTranscript(conversationID: conversationID)?.activeRunID
+        // The owner's live state can be newer than its central publication.
+        let active = client.transcripts[conversationID]?.activeRunID
         if requiresIdle && active != nil { throw LocalACPSessionDatabaseError.runAlreadyActive }
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }
         var prompt = input.text

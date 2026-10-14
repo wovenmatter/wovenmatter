@@ -67,9 +67,8 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
     let source = request["source"] as? String ?? ""
     let tools = request["tools"] as? [[String: Any]] ?? []
     let state = request["state"] as? [String: Any] ?? [:]
-    let concurrency = policy.concurrentTools
     Task { [weak self] in
-      do { _ = try await webView.callAsyncJavaScript("window.__wovenRun(source, tools, state, concurrency)", arguments: ["source":source,"tools":tools,"state":state,"concurrency":concurrency], in: nil, contentWorld: .page) }
+      do { _ = try await webView.callAsyncJavaScript("window.__wovenRun(source, tools, state)", arguments: ["source":source,"tools":tools,"state":state], in: nil, contentWorld: .page) }
       catch { self?.finish(.failure(error)) }
     }
   }
@@ -96,7 +95,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
       finish(.failure(PiDurableRuntimeError.unavailable(body["message"] as? String ?? "Code execution failed.")))
     } else if kind == "tool" || kind == "checkpoint" {
       let name = body["name"] as? String ?? ""
-      guard pending.count < policy.concurrentTools, let id = body["id"] as? String, pending[id] == nil,
+      guard let id = body["id"] as? String, pending[id] == nil,
             (kind == "checkpoint" ? pending.isEmpty : allowed.contains(name)), let tool else {
         finish(.failure(PiDurableRuntimeError.unavailable("Code requested an unavailable tool."))); return
       }
@@ -142,7 +141,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
     let worker;
     window.__wovenStop = () => { worker?.terminate(); worker = null; };
     window.__wovenReply = response => worker?.postMessage({type:'reply',...response});
-    window.__wovenRun = (source, definitions, initialState, concurrency) => {
+    window.__wovenRun = (source, definitions, initialState) => {
       const boot = async function() {
         let next = 0, started = false;
         const waiting = new Map();
@@ -166,18 +165,11 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
             if (outputBytes > 524288) throw new Error('Code text output exceeds 512 KiB.');
             output.push({type:'text',text:text??'undefined'});
           };
-          const tools = Object.create(null), queued = [];
-          const drain = () => {
-            while (waiting.size < value.concurrency && queued.length) queued.shift()();
-          };
+          const tools = Object.create(null);
           const send = message => new Promise((resolve,reject) => {
-            queued.push(() => {
-              const id = String(++next);
-              const settle = fn => result => { fn(result); drain(); };
-              waiting.set(id,{resolve:settle(resolve),reject:settle(reject)});
-              self.postMessage({...message,id});
-            });
-            drain();
+            const id = String(++next);
+            waiting.set(id,{resolve,reject});
+            self.postMessage({...message,id});
           });
           for (const definition of value.tools) {
             tools[definition.name] = args => send({type:'tool',name:definition.name,arguments:args??{}});
@@ -185,14 +177,14 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
           const store = (key, data) => { state[String(key)] = JSON.parse(JSON.stringify(data)); };
           const load = key => state[String(key)];
           const checkpoint = async () => {
-            if (waiting.size || queued.length) throw new Error('Await pending tools before checkpointing.');
+            if (waiting.size) throw new Error('Await pending tools before checkpointing.');
             await send({type:'checkpoint',arguments:JSON.parse(JSON.stringify(state))});
           };
           try {
             const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
             const fn = new AsyncFunction('tools','ALL_TOOLS','text','store','load','checkpoint','yield_control',value.source);
             await fn(Object.freeze(tools),value.tools,text,store,load,checkpoint,yield_control);
-            if (waiting.size || queued.length) throw new Error('Await every tool call before returning from code.');
+            if (waiting.size) throw new Error('Await every tool call before returning from code.');
             self.postMessage({type:'done',result:{content:output,state}});
           } catch (error) {
             self.postMessage({type:'failure',message:String(error?.message??error)});
@@ -203,7 +195,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
       worker = new Worker(url); URL.revokeObjectURL(url);
       worker.onmessage = event => window.webkit.messageHandlers.wovenCodeMode.postMessage(event.data);
       worker.onerror = event => window.webkit.messageHandlers.wovenCodeMode.postMessage({type:'failure',message:event.message??'Code worker failed.'});
-      worker.postMessage({type:'run',source,tools:definitions,state:initialState,concurrency});
+      worker.postMessage({type:'run',source,tools:definitions,state:initialState});
     };
   })();
   </script>

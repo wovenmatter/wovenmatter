@@ -7,6 +7,14 @@ enum CompanionFederationAPI {
                      database: WorkspaceDatabase, commands: any CompanionCommandServing) async throws -> CompanionHTTPResponse {
     func value(_ key: String) -> String? { query.first(where: { $0.name == key })?.value }
     let parts = path.split(separator: "/").map(String.init)
+    func ownsClientWorkspace(_ id: String) async throws -> Bool {
+      guard let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id }) else { return false }
+      return !workspace.deleted && workspace.kind != .linux && workspace.ownerDeviceID == device.id
+        && (workspace.executionDeviceID == nil || workspace.executionDeviceID == device.id)
+    }
+    func rejectedRelay() -> CompanionHTTPResponse {
+      .error("wrong_owner", "This client may publish only its own on-device history and saved artifacts.", status: 403)
+    }
     if request.method == "GET" {
       switch path {
       case "/v1/federation/identity": return try .json(try await database.companionLibraryIdentity())
@@ -44,15 +52,23 @@ enum CompanionFederationAPI {
         return try .json(try await database.registerCompanionExecutionWorkspace(registration, deviceID: device.id))
       case "/v1/federation/journal":
         let batch = try JSONDecoder().decode(CompanionJournalBatch.self, from: request.body)
+        for workspaceID in Set(batch.entries.map(\.workspaceID)) {
+          guard try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
+        }
         return try .json(try await database.ingestCompanionJournal(batch, deviceID: device.id))
       case "/v1/federation/artifacts/register":
         let registration = try JSONDecoder().decode(CompanionArtifactRegistration.self, from: request.body)
+        guard try await ownsClientWorkspace(registration.manifest.workspaceID) else { return rejectedRelay() }
         return try .json(try await database.registerCompanionArtifact(registration, deviceID: device.id))
       case "/v1/federation/artifacts/chunk":
         let chunk = try JSONDecoder().decode(CompanionArtifactChunk.self, from: request.body)
+        guard let workspaceID = try await database.companionArtifactTransfer(id: chunk.id)?.manifest.workspaceID,
+              try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
         return try .json(try await database.appendCompanionArtifactChunk(chunk, deviceID: device.id))
       case "/v1/federation/artifacts/commit":
         let commit = try JSONDecoder().decode(CompanionArtifactCommit.self, from: request.body)
+        guard let workspaceID = try await database.companionArtifactTransfer(id: commit.id)?.manifest.workspaceID,
+              try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
         return try .json(try await database.commitCompanionArtifact(commit, deviceID: device.id))
       default: break
       }

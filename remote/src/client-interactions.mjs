@@ -15,19 +15,6 @@ function choices(field,multiple=false) {
 }
 export function clientInteraction(message) {
   const p=message.params??{}
-  if(message.method==='cursor/create_plan') {
-    if(!bounded(p.plan)||typeof p.toolCallId!=='string'||!Array.isArray(p.todos))throw invalid()
-    return {kind:'approval',title:p.name??'Proposed plan',detail:p.plan,options:[choice('accept','Accept plan'),choice('reject','Decline')],questions:[]}
-  }
-  if(message.method==='cursor/ask_question') {
-    if(typeof p.toolCallId!=='string'||!Array.isArray(p.questions)||!p.questions.length||p.questions.length>64)throw invalid()
-    const questions=p.questions.map(item=>{
-      if(!bounded(item.id)||!bounded(item.prompt)||!Array.isArray(item.options)||item.options.length>256||item.options.some(option=>!bounded(option.id)||!bounded(option.label)))throw invalid()
-      return {id:item.id,prompt:item.prompt,options:item.options.length?item.options:[choice('ok','OK')],allowsMultiple:item.allowMultiple===true,allowsFreeText:false,required:true}
-    })
-    if(new Set(questions.map(item=>item.id)).size!==questions.length)throw invalid()
-    return {kind:'question',title:p.title??'Agent question',options:[],questions}
-  }
   if(message.method!=='elicitation/create')return null
   const schema=p.requestedSchema
   if(p.mode!=='form'||!bounded(p.message)||!object(schema)||schema.type!=='object'||!object(schema.properties)
@@ -62,8 +49,7 @@ export function clientInteraction(message) {
 export function clientInteractionResponse(message,response) {
   const view=clientInteraction(message)
   if(!view)throw invalid()
-  if(message.method==='cursor/create_plan')return {accepted:!response.cancelled&&response.optionID==='accept'}
-  if(response.cancelled)return message.method==='elicitation/create'?{action:'cancel'}:{answers:{}}
+  if(response.cancelled)return {action:'cancel'}
   const answers=response.answers??{}
   if(!object(answers)||Object.keys(answers).some(id=>!view.questions.some(question=>question.id===id)))throw invalid()
   const result={}
@@ -72,7 +58,6 @@ export function clientInteractionResponse(message,response) {
     if(!Array.isArray(selected)||selected.some(value=>!bounded(value))||(!question.allowsMultiple&&selected.length>1)||new Set(selected).size!==selected.length)throw invalid()
     if(!selected.length){if(question.required)throw invalid();continue}
     if(!question.allowsFreeText&&selected.some(value=>!question.options.some(option=>option.id===value)))throw invalid()
-    if(message.method==='cursor/ask_question'){result[question.id]=question.allowsMultiple?selected:selected[0];continue}
     const field=message.params.requestedSchema.properties[question.id],value=selected[0]
     if(field.type==='array') {
       if(selected.length<(field.minItems??0)||selected.length>(field.maxItems??Infinity))throw invalid()
@@ -89,5 +74,5 @@ export function clientInteractionResponse(message,response) {
       result[question.id]=value
     }
   }
-  return message.method==='elicitation/create'?{action:'accept',content:result}:{answers:result}
+  return {action:'accept',content:result}
 }

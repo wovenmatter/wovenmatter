@@ -71,21 +71,4 @@ struct AgentInteractionBrokerTests {
         #expect(answer == .planAccepted(true) || answer == .planAccepted(false))
     }
 
-    @Test(arguments: AgentRuntimeKind.allCases)
-    func allRoutesDescribeActualDelivery(runtime: AgentRuntimeKind) {
-        let negotiated = LocalACPClient.activeInputRoute(runtimeKind: runtime, steeringSupported: true)
-        let unadvertised = LocalACPClient.activeInputRoute(runtimeKind: runtime, steeringSupported: false)
-        switch runtime {
-        case .codex, .claudeCode, .defaultAgent:
-            #expect(negotiated == .acpSteering); #expect(unadvertised == .unsupported)
-        case .grokBuild:
-            #expect(negotiated == .grokInterjection); #expect(unadvertised == .grokInterjection)
-        case .hermes:
-            #expect(negotiated == .hermesGateway); #expect(unadvertised == .hermesGateway)
-        case .cursor, .opencode, .openclaw:
-            #expect(negotiated == .concurrentPrompt); #expect(unadvertised == .concurrentPrompt)
-        case .pi:
-            #expect(negotiated == .piRPC); #expect(unadvertised == .piRPC)
-        }
-    }
 }

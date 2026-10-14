@@ -26,16 +26,14 @@ struct LibraryPane: View {
       List {
         CompanionInlineError(model: model)
         if !savedArtifacts.isEmpty {
-          Section("Saved artifacts") {
+          Group {
             ForEach(savedArtifacts.filter { item in
               !item.deleted && (search.isEmpty || item.title.localizedCaseInsensitiveContains(search)) &&
               (kind.isEmpty || kind == "photo" && item.mediaType.hasPrefix("image/") || kind == "file" && !item.mediaType.hasPrefix("image/"))
             }) { item in
-              Button { Task { await openSavedArtifact(item) } } label: {
-                VStack(alignment: .leading, spacing: 5) {
-                  Label(item.title, systemImage: item.mediaType.hasPrefix("image/") ? "photo" : "doc")
-                }
-              }
+              NavigationLink {
+                SavedArtifactDetailsPane(model: model, artifact: item)
+              } label: { Label(item.title, systemImage: item.mediaType.hasPrefix("image/") ? "photo" : "doc") }
             }
           }
         }
@@ -74,16 +72,6 @@ struct LibraryPane: View {
       guard generation == loadGeneration, !Task.isCancelled else { return }
       items = more ? items + values : values; hasMore = next
     } catch { if generation == loadGeneration, !Task.isCancelled { failure = error.localizedDescription } }
-  }
-  private func openSavedArtifact(_ item: CompanionArtifactManifest) async {
-    do {
-      guard let source = await model.store?.artifacts.localURL(id: item.id) else { throw DeviceExecutionError.unavailable("This artifact is still downloading. Reconnect to the central library to finish synchronization.") }
-      let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SavedArtifact-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      let name = URL(fileURLWithPath: item.title).lastPathComponent
-      let destination = directory.appendingPathComponent(name.isEmpty || name == "." || name == ".." ? "Artifact" : name)
-      try FileManager.default.copyItem(at: source, to: destination); preview = destination
-    } catch { model.errorMessage = error.localizedDescription }
   }
   private func open(_ item: CompanionLibraryItem) async {
     do { preview = try await model.exportFile(.libraryFile(id: item.id)) }
@@ -144,6 +132,7 @@ struct ItemManagementSheet: View {
   var body: some View {
     Group {
       Form {
+        Group {
         CompanionInlineError(model: model)
         if busy { ProgressView("Saving…") }
         Section("Title") {
@@ -164,7 +153,8 @@ struct ItemManagementSheet: View {
           Button(isNote ? "Export original document" : "Export full run") { Task { await export(original: true) } }
         }
         Section { Button("Move to Trash", role: .destructive) { confirmTrash = true } }
-      }.disabled(busy || !(isNote ? model.online : model.executionAvailable(for: id)))
+        }.disabled(busy || !(isNote ? model.online : model.executionAvailable(for: id)))
+      }
         .navigationTitle(isNote ? "Note details" : "Conversation details")
         .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .confirmationDialog("Move this item to Trash?", isPresented: $confirmTrash, titleVisibility: .visible) {

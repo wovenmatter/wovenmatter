@@ -15,6 +15,40 @@ struct WorkspaceNoteActionsTests {
     func close() { try? FileManager.default.removeItem(at: root) }
   }
 
+  @Test func nestedListsPersistThroughDatabaseAndStyleChanges() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let parent = NoteTextList(id: "parent-list", markerFormat: "{decimal}.", startingItemNumber: 5)
+    let child = NoteTextList(id: "child-list", markerFormat: "{hyphen}")
+    let nested = NoteListFormatting(levels: [parent, child], headIndent: 72, firstLineHeadIndent: 0,
+                                    tabStops: [.init(alignment: 0, location: 47), .init(alignment: 4, location: 72)])
+    let document = NoteDocument(blocks: [
+      .richText(.init(id: "parent", style: .numberedList, text: "Abstraction",
+                     list: .init(levels: [parent], headIndent: 28, firstLineHeadIndent: 6))),
+      .richText(.init(id: "child", style: .numberedList, text: "Layers", list: nested))
+    ])
+    let id = try await f.db.createNote(folderID: nil, title: "Nested", content: document.encoded())
+    _ = try await f.db.updateNote(id: id, title: "Nested", content: document.encoded())
+    let stored = try await f.db.readNoteForEditing(id: id)
+    #expect(stored.document == document)
+    let exported = try document.exported(title: "Nested", format: .document)
+    #expect(try JSONDecoder().decode(NoteDocument.self, from: exported.data) == document)
+
+    var styled = document
+    _ = try styled.apply([.setParagraphStyle(blockID: "child", style: .numberedList)])
+    #expect(styled == document)
+    _ = try styled.apply([.setParagraphStyle(blockID: "child", style: .bulletedList)])
+    guard case .richText(let changed) = styled.blocks[1] else { Issue.record("Missing child"); return }
+    #expect(changed.style == .bulletedList && changed.list == nil)
+    guard case .richText(let unchanged) = styled.blocks[0] else { Issue.record("Missing parent"); return }
+    #expect(unchanged.list?.levels == [parent])
+
+    let old = #"{"version":2,"kind":"note","blocks":[{"type":"richText","value":{"id":"old","style":"numberedList","runs":[]}}],"html":""}"#
+    let decoded = try JSONDecoder().decode(NoteDocument.self, from: Data(old.utf8))
+    guard case .richText(let oldList) = decoded.blocks[0] else { Issue.record("Missing old list"); return }
+    #expect(oldList.style == .numberedList && oldList.list == nil)
+    #expect(NoteDocument.decode(try decoded.encoded()) == decoded)
+  }
+
   @Test func staleRevisionCannotRenameTrashOrExportNewerContent() async throws {
     let f = try await Fixture(); defer { f.close() }
     let id = try await f.db.createNote(folderID: nil, title: "Original", content: "Original content")
@@ -143,6 +177,31 @@ struct WorkspaceNoteActionsTests {
     let linked = NoteDocument(databaseLink: .init(sourceID: "source", databaseID: "db", relativePath: "file",
       sqliteQuery: String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)))
     #expect(throws: WorkspaceExportError.tooLarge) { try linked.exported(title: "Linked", format: .document) }
+  }
+
+  @Test func inlineValueLinksSurviveStorageAndUseExistingEditExportBounds() throws {
+    let link = DatabaseArtifactLink(sourceID: "device:test", databaseID: "sales", relativePath: "data.sqlite",
+                                   sqliteQuery: "SELECT sum(amount) FROM sales")
+    var wireRun = NoteTextRun(text: "", databaseLink: link)
+    wireRun.databaseValueID = nil // Agents may omit identity in their JSON edits.
+    let document = NoteDocument(blocks: [.richText(.init(id: "summary", runs: [.init(text: "Total: "), wireRun]))])
+    let stored = NoteDocument.decode(try document.encoded())
+    guard case .richText(let text) = stored.blocks[0], let value = text.runs.last else {
+      Issue.record("Missing inline value"); return
+    }
+    #expect(value.databaseLink == link && value.databaseValueID != nil && value.text.isEmpty)
+    #expect(NoteDocument.decode(try stored.encoded()) == stored)
+    #expect(stored.plainText == "Total: ")
+
+    var excessive = value
+    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: 64 * 1_024 + 1)
+    #expect(throws: RemoteNoteEditError.operationTooLarge) {
+      try RemoteNoteEditEnvelope.validate(operations: [.replaceBlock(id: "summary", block: .richText(.init(runs: [excessive])))],
+                                          noteKind: .note)
+    }
+    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)
+    let oversized = NoteDocument(blocks: [.richText(.init(runs: [excessive]))])
+    #expect(throws: WorkspaceExportError.tooLarge) { try oversized.exported(title: "Inline", format: .document) }
   }
 
   @Test func cancelledExportNeverTouchesAnExistingDestination() async throws {

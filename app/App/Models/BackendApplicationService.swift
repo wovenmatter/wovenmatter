@@ -40,7 +40,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case exportNote(id: String, format: WorkspaceNoteExportFormat, expectedRevision: String)
     case sessionMetadata(conversationID: String)
     case createSession(runtime: AgentRuntimeKind, workspaceID: UUID?, conversationID: UUID,
-                       workingDirectory: URL?, title: String?, nativeWorkspaceID: String?)
+                       workingDirectory: URL?, title: String?, nativeWorkspaceID: String?, folderID: String?)
     case sendMessage(conversationID: String, input: AgentMessageInput, noteID: String?)
     case sendMessageFenced(conversationID: String, input: AgentMessageInput, noteID: String?, admission: AgentDispatchAdmission)
     case cancelSessionFenced(conversationID: String, admission: AgentDispatchAdmission)
@@ -193,7 +193,13 @@ final class BackendApplicationService {
         case .companion(let action):
             let host = model.companionHost
             switch action {
-            case .status: break
+            case .status: await host.refreshStatus()
+            case .discover: await host.refreshDiscovery()
+            case .approvePairing(let id): await host.approvePairing(id: id)
+            case .denyPairing(let id): await host.denyPairing(id: id)
+            case .invitePairing(let peer): await host.invitePairing(peer: peer)
+            case let .setExecutionAccess(deviceID, workspaceID, enabled):
+                await host.setExecutionAccess(deviceID: deviceID, workspaceID: workspaceID, enabled: enabled)
             case .start: await host.start()
             case .stop: host.stopSharing()
             case .createCode: await host.createPairingCode()
@@ -238,10 +244,10 @@ final class BackendApplicationService {
             return try await .init(noteExport: store.exportNote(id: id, format: format, expectedRevision: revision))
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
-            return .init(metadata: model.localACPSessionMetadata[id] ?? model.openClawGatewaySessionMetadata[id])
+            return .init(metadata: model.localACPSessionMetadata[id])
         case let .workspaceMutation(mutation):
             return try await executeWorkspaceMutation(mutation)
-        case let .createSession(runtime, workspaceID, conversationID, directory, title, nativeWorkspaceID):
+        case let .createSession(runtime, workspaceID, conversationID, directory, title, nativeWorkspaceID, folderID):
             let id: String?
             if let workspaceID {
                 guard let configuration = model.remoteWorkspaces.configuration(id: workspaceID),
@@ -250,10 +256,10 @@ final class BackendApplicationService {
                 }
                 id = await model.createRemoteACPSession(target: .init(configuration: configuration, harness: harness),
                     requestedConversationID: conversationID, nativeWorkingDirectory: directory,
-                    initialTitle: title, nativeWorkspaceID: nativeWorkspaceID)
+                    initialTitle: title, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID)
             } else {
                 id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: conversationID,
-                    nativeWorkingDirectory: directory, initialTitle: title, nativeWorkspaceID: nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: title, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID)
             }
             guard let id else { throw BackendRPCError.remote(model.localRunError ?? "The session could not be created.") }
             return .init(conversationID: id)

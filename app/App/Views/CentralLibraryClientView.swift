@@ -58,6 +58,7 @@ struct CentralLibraryClientView: View {
         .task {
             await model.initialize()
             await model.analytics.openInterface()
+            await model.configureUpdateAnalytics(application.analytics)
             await model.run()
         }
         .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) { ProductAnalyticsDisclosureView(errorMessage: model.analytics.errorMessage) { enabled in Task { await model.analytics.setEnabled(enabled,disclose:true) } } }
@@ -181,6 +182,7 @@ struct CentralLibraryClientView: View {
                 Spacer(); if conversation.activeRunID != nil { ProgressView().controlSize(.mini) }
             }.padding(.vertical, 5)
         }.buttonStyle(.plain)
+
     }
 }
 
@@ -239,7 +241,7 @@ private struct LibraryClientNotePane: View {
                 Button { details = true } label: { Image(systemName: "ellipsis") }.buttonStyle(DashboardIconButtonStyle()).help("Note details")
             }.padding(22)
             if model.state.uncachedNoteIDs.contains(note.id) {
-                ContentUnavailableView("Not downloaded", systemImage: "arrow.down.circle", description: Text("Reconnect to the central Mac to download this note."))
+                ContentUnavailableView("Not downloaded", systemImage: "arrow.down.circle", description: Text("Reconnect to the central database to download this note."))
             } else if !cache.isEditable(noteID: note.id, source: source.content) {
                 Text("This document uses a newer format. Update Woven Matter to edit it.").padding()
             } else if hasLinkedData {
@@ -299,7 +301,7 @@ private struct LibraryClientChatPane: View {
             VStack(alignment: .leading, spacing: 10) {
                 if model.selectedConversationID == nil {
                     Picker("Execution workspace", selection: Binding(get: { model.selectedExecutionWorkspaceID }, set: { id in Task { await model.selectExecutionWorkspace(id) } })) {
-                        Text("Central Mac").tag("central")
+                        Text("Central database").tag("central")
                         ForEach(model.executionWorkspaces) { workspace in Text(workspace.name).tag(workspace.id) }
                     }
                     Picker("Agent workspace", selection: $model.selectedProviderID) {
@@ -380,7 +382,7 @@ private struct LibraryClientLinkedPreview: View {
         let key = requestKey
         data = nil; error = nil; loading = true
         defer { if requestKey == key { loading = false } }
-        guard model.online else { error = "Connect to your central Mac to preview this linked data."; return }
+        guard model.online else { error = "Connect to your central database to preview this linked data."; return }
         do {
             let result = try await model.linkedData(note: note, tableID: tableID)
             guard !Task.isCancelled, requestKey == key else { return }

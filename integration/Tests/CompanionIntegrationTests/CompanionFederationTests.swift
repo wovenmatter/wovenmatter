@@ -65,10 +65,12 @@ struct CompanionFederationTests {
     let url = directory.appendingPathComponent("workspace.sqlite"); let db = try await WorkspaceDatabase(url: url)
     let workspace = try await register(db, grants: [observer]); let event = creation(workspace)
     let batch = CompanionJournalBatch(libraryID: workspace.libraryID, entries: [event])
-    let result = try await db.ingestCompanionJournal(batch, deviceID: observer)
+    await #expect(throws: CompanionAPIError.self) { try await db.ingestCompanionJournal(batch, deviceID: observer) }
+    let result = try await db.ingestCompanionJournal(batch, deviceID: owner)
     #expect(result.cursor == 1 && result.acceptedEventIDs == [event.eventID])
     let restarted = try await WorkspaceDatabase(url: url)
     #expect(try await restarted.ingestCompanionJournal(batch, deviceID: owner) == result)
+    #expect(try await restarted.companionSnapshot().conversations.map(\.id) == [event.conversationID])
     var forged = event; forged.conversation?.title = "Conflicting replay"
     await #expect(throws: CompanionAPIError.self) { try await restarted.ingestCompanionJournal(.init(libraryID: workspace.libraryID, entries: [forged]), deviceID: owner) }
     let next = creation(workspace, sequence: 2); let gap = creation(workspace, sequence: 4)
@@ -136,10 +138,12 @@ struct CompanionFederationTests {
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let identity = try await db.companionLibraryIdentity(); let remoteID = UUID()
     let descriptor = CompanionExecutionWorkspace(id: remoteID.uuidString.lowercased(), libraryID: identity.libraryID,
-      ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Remote")
+      ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Remote", executionDeviceID: uuid())
     _ = try await db.registerCompanionExecutionWorkspace(.init(workspace: descriptor), deviceID: identity.hostDeviceID)
     let conversationID = try await db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remoteID,
       remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID())
+    try await db.saveSessionExecutionRoot(id: conversationID, folderID: nil,
+      location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace")
     try await db.updateLocalACPSessionID(conversationID: conversationID, sessionID: "native-existing")
     let run = try await db.beginLocalACPRun(conversationID: conversationID, content: "Preserve this history")
     await #expect(throws: CompanionAPIError.self) {
@@ -152,6 +156,7 @@ struct CompanionFederationTests {
     }
     let transfer = try await db.prepareCompanionExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     #expect(transfer.nativeSessionID == "native-existing" && transfer.knownRunIDs == [run.runID])
+    #expect(transfer.nativeWorkingDirectory == "/workspace/projects/existing")
     #expect(try await db.companionExecutionOwner(conversationID: conversationID) == descriptor.id)
     await #expect(throws: CompanionAPIError.self) {
       try await db.beginLocalACPRun(conversationID: conversationID, content: "Legacy execution must stay fenced")
@@ -162,7 +167,12 @@ struct CompanionFederationTests {
     #expect(repeated.knownRunIDs == transfer.knownRunIDs)
     let event = CompanionJournalEntry(workspaceID: descriptor.id, originSequence: 1, conversationID: conversationID,
       runID: run.runID, kind: .conversation, conversation: transfer.conversation)
-    _ = try await db.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
+    await #expect(throws: CompanionAPIError.self) {
+      try await db.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
+    }
+    let publisher = try await db.issueCompanionWorkspacePublisher(workspaceID: descriptor.id,
+      endpoint: URL(string: "https://central.test.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+    _ = try await db.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: publisher.executionDeviceID)
     #expect(try await db.companionExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {

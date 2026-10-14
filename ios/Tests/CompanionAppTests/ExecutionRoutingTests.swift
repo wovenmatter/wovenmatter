@@ -41,9 +41,84 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
   func events(after: Int64) async throws -> CompanionJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
   func conversations() async throws -> [CompanionConversation] { [] }
   func transcript(_ id: String) async throws -> CompanionTranscript { .init(conversationID: id) }
+  func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+    guard case .exportConversation = request else { throw MobileConnectionError.invalidResponse }
+    return .file(.init(name: "conversation.md", mimeType: "text/markdown", data: Data("direct export".utf8)))
+  }
 }
 
 final class ExecutionRoutingTests: XCTestCase {
+  @MainActor func testFallbackRouteControlsTheChatWithoutChangingHistoryOwnership() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    try await store.bindWorkspace("library")
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.state = await store.snapshot()
+    let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.central.v1"])
+    try await store.journal.bind(libraryID: "library")
+    try await store.journal.upsertWorkspace(workspace, pending: false)
+    let direct = ExecutionTestWorkspace(workspace)
+    model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: direct)
+    let id = UUID().uuidString.lowercased(), runID = UUID().uuidString.lowercased()
+    model.selectedConversationID = id
+    model.selectedConversationRoute = (id, workspace.id)
+    model.workspaceReachable[workspace.id] = true; model.online = false
+    XCTAssertEqual(model.executionOwner(of: id), "central")
+    XCTAssertTrue(model.executionAvailable(for: id))
+    await model.submitExecutionCommand(.init(deviceID: model.state.deviceID, kind: .stop, conversationID: id, runID: runID))
+    await model.respond(.init(id: "approval", conversationID: id, runID: runID, kind: .approval, title: "Approve"), response: .init(optionID: "allow"))
+    let configured = await model.perform(.configureSession(id: id, model: "model", thinking: "high", permission: nil))
+    XCTAssertTrue(configured)
+    let exported = try await model.workspace(.exportConversation(id: id, format: "markdown"))
+    XCTAssertEqual(exported, .file(.init(name: "conversation.md", mimeType: "text/markdown", data: Data("direct export".utf8))))
+    let commands = await direct.commands
+    XCTAssertEqual(commands.map(\.kind), [.stop, .respond, .workspace])
+    XCTAssertTrue(commands.allSatisfy { $0.workspaceID == workspace.id && $0.conversationID == id })
+    XCTAssertEqual(model.executionOwner(of: id), "central")
+    XCTAssertEqual(model.executionRoute(for: "another-chat"), "central")
+    // The reverse fallback uses central transport while preserving the direct owner.
+    model.conversationWorkspaceIDs[id] = workspace.id
+    model.selectedConversationRoute = (id, "central"); model.online = true
+    XCTAssertEqual(model.executionOwner(of: id), workspace.id)
+    XCTAssertEqual(model.executionRoute(for: id), "central")
+    XCTAssertTrue(model.executionAvailable(for: id))
+  }
+
+  @MainActor func testFolderAndPendingRequestEntryPointsResolveOnlyTheSameAgent() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    try await store.bindWorkspace("library")
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.state = await store.snapshot()
+    let central = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "central-owner", kind: .mac, name: "Central", capabilities: ["history.central.v1"])
+    let other = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "other-owner", kind: .mac, name: "Another Mac")
+    try await store.journal.bind(libraryID: "library")
+    for workspace in [central, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
+    let provider = CompanionProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
+    model.executionWorkspaces = [other, central]
+    model.providers = [provider]; model.workspaceProviders = [central.id: [provider], other.id: [provider]]
+    model.workspaceReachable = [central.id: true, other.id: true]; model.online = false
+    let id = UUID().uuidString.lowercased()
+    model.state.conversations[id] = .init(id: id, title: "Existing", providerID: provider.id, runtimeKind: provider.runtimeKind)
+    // Folders and Pending Requests both select a conversation without an explicit route.
+    await model.selectConversation(id)
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, central.id)
+    XCTAssertEqual(model.executionOwner(of: id), "central")
+    model.workspaceReachable[central.id] = false
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central", "An unrelated Mac cannot substitute for this agent")
+    model.conversationWorkspaceIDs[id] = central.id; model.online = true
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central")
+    model.conversationWorkspaceIDs[id] = other.id
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id)
+    model.workspaceReachable[other.id] = false
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id, "Central access cannot substitute for another Mac's own session")
+  }
+
   @MainActor func testHomeLauncherKeepsExactWorkspaceAndDimsDisconnectedAgents() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

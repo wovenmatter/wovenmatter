@@ -5,24 +5,6 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct CompanionRunControlTests {
-    @Test func gatewaySessionCreationUsesLinkedAgentWithoutAnyACPLaunch() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let agentID = UUID(), requestedConversationID = UUID()
-        let conversationID = requestedConversationID.uuidString.lowercased()
-        try await database.saveOpenClawGatewayLink(.init(agentID: agentID, location: .localAgentWorkspace,
-            endpoint: .init(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)))
-        let created = try await database.createLocalACPSession(runtimeKind: .openclaw, title: "Gateway fixture",
-            ownerDeviceID: UUID(), requestedConversationID: requestedConversationID, gatewayAgentID: agentID)
-        #expect(created == conversationID)
-        let session = try await database.openClawGatewaySession(conversationID: created)
-        #expect(session.agentID == agentID)
-        #expect(session.sessionKey == "agent:main:wovenmatter:\(conversationID)")
-        #expect(try await database.localACPSession(conversationID: created).runtimeKind == .openclaw)
-    }
-
     @Test func recoveryCopyRetainsUnknownBytesAndRetryCannotResurrectDeletedCopy() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -57,6 +39,8 @@ struct CompanionRunControlTests {
         let id = requestedConversationID.uuidString.lowercased()
         let conversationID = try await database.createLocalACPSession(runtimeKind: runtime, title: "Companion fixture", ownerDeviceID: UUID(), requestedConversationID: requestedConversationID)
         #expect(conversationID == id)
+        try await database.saveSessionExecutionRoot(id: id, folderID: nil,
+            location: .init(workspaceID: "device:fixture", rootPath: directory.path, managed: false), defaultPath: directory.path)
         let gate = CompanionPromptGate()
         let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
             LocalACPSessionDriver(initializeSession: { _, _, _, _ in
@@ -76,7 +60,7 @@ struct CompanionRunControlTests {
             cancel: { await gate.release() }, shutdown: { await gate.release() })
         })
         let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-fake-provider"), arguments: [])
-        let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory, repositoriesURL: directory)
+        let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
         let noteID = try await database.createNote(folderID: nil, title: "Offline idea", content: "Capture once")
         let note = try #require(try await database.companionNote(id: noteID))
         let reference = AgentMessageReferenceDraft(kind: .note, resourceID: noteID,

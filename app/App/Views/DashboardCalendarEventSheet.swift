@@ -189,7 +189,7 @@ struct DashboardCalendarEventSheet: View {
                 LabeledContent("Access", value: task.configuration.permission ?? "Agent default")
                 LabeledContent("Tools", value: WorkspaceToolGroup.allCases.filter { task.configuration.tools.enabled.contains($0) }.map(\.title).joined(separator: ", "))
                 LabeledContent("Work location", value: task.configuration.workspaceID.map { model.remoteWorkspaces.configuration(id: $0)?.name ?? "Unavailable workspace" } ?? "Local workspace")
-                LabeledContent("Session folder", value: task.configuration.folderID.map { id in model.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder" } ?? "All Workspace")
+                LabeledContent("Session folder", value: task.configuration.folderID.map { id in model.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder" } ?? "All Workspaces")
                 if let directory = task.configuration.nativeWorkingDirectory { LabeledContent("Directory", value: directory).textSelection(.enabled) }
                 if draft.recurrence != nil { LabeledContent("Session", value: task.sessionMode.title) }
                 Text("Prompt").fontWeight(.medium)

@@ -36,6 +36,21 @@ extension WorkspaceDatabaseConnection {
         is_pinned INTEGER NOT NULL DEFAULT 0, origin_device_id TEXT,
         created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS folder_execution_roots (
+        folder_id TEXT PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL, root_path TEXT NOT NULL,
+        managed INTEGER NOT NULL, reference_paths TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE IF NOT EXISTS session_scratch_directories (
+        session_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        workspace_root TEXT NOT NULL, root_path TEXT NOT NULL,
+        UNIQUE(workspace_id, root_path)
+      );
+      CREATE TABLE IF NOT EXISTS execution_workspace_defaults (workspace_id TEXT PRIMARY KEY, default_path TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_execution_roots (
+        conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        root_path TEXT NOT NULL, folder_locked INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE IF NOT EXISTS notes (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT '', folder_id TEXT,
         title TEXT NOT NULL DEFAULT 'Untitled Note', content TEXT NOT NULL DEFAULT '',
@@ -206,7 +221,6 @@ extension WorkspaceDatabaseConnection {
         revision INTEGER NOT NULL DEFAULT 1,
         title TEXT NOT NULL,
         acp_session_id TEXT, model TEXT, thinking TEXT, permission TEXT,
-        buzz_workspace_link_id TEXT, buzz_agent_id TEXT,
         remote_workspace_id TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
@@ -250,34 +264,10 @@ extension WorkspaceDatabaseConnection {
       AFTER DELETE ON dashboard_conversations BEGIN
         DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;
       END;
-      CREATE TABLE IF NOT EXISTS desktop_buzz_workspace_links (
-        id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL,
-        local_workspace_url TEXT NOT NULL,
-        local_agent_store_url TEXT NOT NULL,
-        is_enabled INTEGER NOT NULL DEFAULT 1
-          CHECK (is_enabled IN (0, 1)),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS desktop_buzz_agent_enrollments (
-        id TEXT PRIMARY KEY,
-        workspace_link_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        handle_snapshot TEXT NOT NULL,
-        display_name_snapshot TEXT NOT NULL,
-        harness_identifier TEXT NOT NULL,
-        runtime_kind TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE (workspace_link_id, agent_id),
-        FOREIGN KEY (workspace_link_id)
-          REFERENCES desktop_buzz_workspace_links(id) ON DELETE CASCADE
-      );
       CREATE TABLE IF NOT EXISTS desktop_openclaw_gateway_links (
         agent_id TEXT PRIMARY KEY,
         location TEXT NOT NULL CHECK (location IN (
-          'buzz_local', 'local_agent_workspace', 'remote_workspace'
+          'local_agent_workspace', 'remote_workspace'
         )),
         endpoint_url TEXT NOT NULL,
         authorization TEXT NOT NULL CHECK (authorization IN (
@@ -365,10 +355,6 @@ extension WorkspaceDatabaseConnection {
         ON dashboard_runs(conversation_id, assistant_message_id);
       CREATE INDEX IF NOT EXISTS desktop_cache_notes_user_updated
         ON notes(user_id, deleted_at, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS desktop_buzz_workspace_links_name
-        ON desktop_buzz_workspace_links(display_name);
-      CREATE INDEX IF NOT EXISTS desktop_buzz_agent_enrollments_workspace
-        ON desktop_buzz_agent_enrollments(workspace_link_id, display_name_snapshot);
       CREATE INDEX IF NOT EXISTS desktop_openclaw_gateway_sessions_agent
         ON desktop_openclaw_gateway_sessions(agent_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_jobs_state
@@ -386,6 +372,8 @@ extension WorkspaceDatabaseConnection {
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
       try createCompanionSchemaUnlocked()
+      // Prior sessions stay in history but have no supported execution root.
+      try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE desktop_owned=1 AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations WHERE id=dashboard_conversations.id)")
     }
   }
 
@@ -445,6 +433,8 @@ extension WorkspaceDatabaseConnection {
       """)
     for table in [
       "folders",
+      "folder_execution_roots",
+      "session_execution_roots",
       "surface_profiles",
       "dashboard_agents",
       "dashboard_conversations",
@@ -456,8 +446,6 @@ extension WorkspaceDatabaseConnection {
       "desktop_local_acp_sessions",
       "desktop_opencode_sessions",
       "desktop_opencode_submissions",
-      "desktop_buzz_workspace_links",
-      "desktop_buzz_agent_enrollments",
       "desktop_openclaw_gateway_links",
       "desktop_openclaw_gateway_sessions",
       "desktop_openclaw_cron_jobs",

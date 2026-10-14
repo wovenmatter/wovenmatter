@@ -5,8 +5,7 @@ accounts. Account/status links in Usage, Pi Durable, and General lead here.
 
 The page groups **Model providers**, **Web search**, and **Local models**.
 Expand a provider, then its subscription or API-key section. OpenAI, Anthropic,
-Grok/xAI, OpenRouter, and OpenCode connections power Pi Durable. Cursor is for
-Usage limits only and keeps its single native account on this Mac.
+Grok/xAI, OpenRouter, and OpenCode connections power Pi Durable.
 
 Save up to four connections per type. Saved rows show account identity or a key
 label and date added, never the secret. Older connections show “Existing

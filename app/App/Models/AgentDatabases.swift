@@ -4,13 +4,11 @@ import WovenMatterCore
 enum DashboardDatabaseSourceKind: String, CaseIterable, Codable, Sendable {
     case local
     case remote
-    case buzz
 
     var displayName: String {
         switch self {
         case .local: "Local workspace"
         case .remote: "Remote workspaces"
-        case .buzz: "Buzz workspaces"
         }
     }
 }
@@ -22,6 +20,9 @@ struct DashboardAgentDatabase: Equatable, Identifiable, Codable, Sendable {
     let preference: AgentDatabasePreference
     let localURL: URL?
     let isExternal: Bool
+    var revision: Int64 = 0
+    var updatedAt: String? = nil
+    var offline: Bool = false
 
     var id: String { "\(sourceID):\(databaseID)" }
 }

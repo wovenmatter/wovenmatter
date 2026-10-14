@@ -45,6 +45,8 @@ public final class CompanionWorkspaceAPI {
     private let authentication: CompanionAuthentication
     private let commands: any CompanionCommandServing
     private let isActive: @MainActor @Sendable () -> Bool
+    private let onCancelPairing: @MainActor @Sendable (CompanionPairedDevice) async throws -> Void
+    private let discovery: @MainActor @Sendable () -> CompanionDiscoveryAdvertisement?
     private let onPair: @MainActor @Sendable () async -> Void
     private let onMutation: @MainActor @Sendable () -> Void
     private let onRequest: @MainActor @Sendable () -> Void
@@ -53,6 +55,10 @@ public final class CompanionWorkspaceAPI {
     public init(database: WorkspaceDatabase, authentication: CompanionAuthentication,
                 commands: any CompanionCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
+                onCancelPairing: @escaping @MainActor @Sendable (CompanionPairedDevice) async throws -> Void = { _ in
+                    throw CompanionAPIError(code: "unavailable", message: "Revoke this device from the central Mac settings.")
+                },
+                discovery: @escaping @MainActor @Sendable () -> CompanionDiscoveryAdvertisement? = { nil },
                 onPair: @escaping @MainActor @Sendable () async -> Void = {},
                 onMutation: @escaping @MainActor @Sendable () -> Void = {},
                 onRequest: @escaping @MainActor @Sendable () -> Void = {},
@@ -61,7 +67,7 @@ public final class CompanionWorkspaceAPI {
                 }) {
         self.database = database; self.authentication = authentication; self.commands = commands
         self.isActive = isActive; self.onPair = onPair; self.onMutation = onMutation; self.onRequest = onRequest
-        self.linkedData = linkedData
+        self.linkedData = linkedData; self.discovery = discovery; self.onCancelPairing = onCancelPairing
     }
 
     public func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
@@ -73,7 +79,56 @@ public final class CompanionWorkspaceAPI {
             var path = target.path
             if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
             let workspaceID = try await database.companionWorkspaceID()
+            if path == "/v1/discovery", request.method == "GET", let advertisement = discovery() {
+                return try .json(advertisement)
+            }
+            if path == "/v1/pairing/request", request.method == "POST" {
+                guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
+                let pending = try JSONDecoder().decode(CompanionPairingApprovalRequest.self, from: request.body)
+                let result = try await authentication.requestPairing(pending, workspaceID: workspaceID)
+                return try .json(result)
+            }
+            if path == "/v1/pairing/result", request.method == "POST" {
+                guard request.body.count <= 1_024 else { return .error("too_large", "The pairing request is too large.", status: 413) }
+                let poll = try JSONDecoder().decode(CompanionPairingPoll.self, from: request.body)
+                return try .json(try await authentication.pairingResult(poll))
+            }
+            if path == "/v1/pairing/cancel", request.method == "POST" {
+                guard request.body.count <= 1_024 else { return .error("too_large", "The pairing request is too large.", status: 413) }
+                let poll = try JSONDecoder().decode(CompanionPairingPoll.self, from: request.body)
+                if let principal = try await authentication.preparePairingCancellation(poll) {
+                    try await onCancelPairing(principal)
+                }
+                try await authentication.cancelPairing(poll, revokeApproved: false)
+                await onPair()
+                return try .json(["cancelled": true])
+            }
+            if path.hasPrefix("/v1/federation/publisher/") {
+                guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else {
+                    return .error("version_mismatch", "Update Woven Matter on both devices.", status: 426)
+                }
+                guard isActive() else { return .error("unavailable", "Companion sharing stopped.", status: 503) }
+                let response = try await CompanionWorkspacePublisherAPI.handle(request, path: path, database: database)
+                guard isActive() else { return .error("unavailable", "Companion sharing stopped.", status: 503) }
+                if request.method == "POST", response.status == 200 { onMutation() }
+                return response
+            }
+            if request.method == "POST", path == "/v1/pair/preview" {
+                guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
+                let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
+                return try .json(try await authentication.previewPairing(command, workspaceID: workspaceID))
+            }
+            if request.method == "POST", path == "/v1/pair/confirm" {
+                guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version),
+                    request.headers["x-woven-workspace"] == workspaceID, let bearer = request.bearer else {
+                    return .error("unauthorized", "Complete pairing on this device.", status: 401)
+                }
+                try await authentication.confirmPairing(bearer: bearer, workspaceID: workspaceID)
+                await onPair()
+                return try .json(["confirmed": true])
+            }
             if request.method == "POST", path == "/v1/pair" {
+                guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
                 let result = try await authentication.pair(command, workspaceID: workspaceID)
                 await onPair()
@@ -83,7 +138,11 @@ public final class CompanionWorkspaceAPI {
                 return .error("version_mismatch", "Update Woven Matter on both devices to compatible versions.", status: 426)
             }
             guard let bearer = request.bearer else { return .error("unauthorized", "Pair this iPhone in Mac Settings.", status: 401) }
-            let device = try await authentication.authenticate(bearer: bearer)
+            let metadata: CompanionDeviceMetadata?
+            if let rawKind = request.headers["x-woven-device-kind"], let kind = CompanionDeviceKind(rawValue: rawKind) {
+                metadata = .init(kind: kind, osVersion: request.headers["x-woven-os-version"], appVersion: request.headers["x-woven-app-version"])
+            } else { metadata = nil }
+            let device = try await authentication.authenticate(bearer: bearer, metadata: metadata)
             guard isActive() else {
                 return .error("unavailable", "Companion sharing stopped before this request was accepted.", status: 503)
             }
@@ -94,6 +153,12 @@ public final class CompanionWorkspaceAPI {
             if path == "/v1/analytics/preference", request.method == "GET" { return try .json(await commands.analyticsPreference()) }
             if path == "/v1/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
             if path == "/v1/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
+            if request.method == "POST", path == "/v1/pair/unpair" {
+                try await onCancelPairing(device)
+                if await authentication.isCurrent(device) { try await authentication.revoke(deviceID: device.id, expected: device) }
+                await onPair()
+                return try .json(["unpaired": true])
+            }
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
             if path.hasPrefix("/v1/federation/") {
@@ -117,6 +182,7 @@ public final class CompanionWorkspaceAPI {
             }
             if request.method == "GET" {
                 switch path {
+                case "/v1/devices": return try .json(await authentication.deviceConnections())
                 case "/v1/hello":
                     return try .json(CompanionHello(workspaceID: workspaceID,
                         hostName: Host.current().localizedName ?? "Woven Matter Mac",

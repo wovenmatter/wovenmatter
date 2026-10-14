@@ -46,7 +46,7 @@ future documentation updates:
 | Harness catalog | [catalog.json](../../harnesses/catalog.json) |
 | Settings and navigation | [SettingsView.swift](../../app/App/Views/SettingsView.swift) |
 | Panels | [ChatPanelLayout.swift](../../app/Sources/WovenMatterCore/ChatPanelLayout.swift) |
-| Workspace layout | [initialize-workspace.sh](../../harnesses/initialize-workspace.sh) and [LocalACPWorkspace.swift](../../app/Sources/WovenMatterClient/LocalACPWorkspace.swift) |
+| Workspace layout | [LocalACPWorkspace.swift](../../app/Sources/WovenMatterClient/LocalACPWorkspace.swift) |
 | Notes and agent access | [ApplicationModel.swift](../../app/App/ApplicationModel.swift) and [NoteEditingProtocol.swift](../../app/Sources/WovenMatterCore/NoteEditingProtocol.swift) |
 | Saved conversations and imports | [WorkspaceDatabase.swift](../../app/Sources/WovenMatterDashboardStore/WorkspaceDatabase.swift) |
 | Remote connection and lifecycle | [RemoteWorkspaceClient.swift](../../app/Sources/WovenMatterClient/RemoteWorkspaceClient.swift) and [remote-workspace.sh](../../scripts/remote-workspace.sh) |

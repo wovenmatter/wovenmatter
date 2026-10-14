@@ -15,13 +15,15 @@ struct WorkspaceConversationActionsTests {
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
       chat = try await db.createLocalACPSession(runtimeKind: .codex, title: "New Codex chat", ownerDeviceID: UUID())
+      try await db.saveSessionExecutionRoot(id: chat, folderID: nil, location: location, defaultPath: root.path)
     }
+    var location: WorkspaceFolderLocation { .init(workspaceID: "device:test", rootPath: root.path, managed: false) }
     func close() { try? FileManager.default.removeItem(at: root) }
   }
 
   @Test func pinRenameAndMoveSurviveReopening() async throws {
     let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Research")
+    let folder = try await f.db.createFolder(name: "Research", location: f.location)
     let original = try #require(try await f.db.workspaceOverview().conversations.first)
     let revision = try await f.db.dashboardRevision()
     try await f.db.mutateConversation(id: f.chat, mutation: .setPinned(true))
@@ -98,7 +100,7 @@ struct WorkspaceConversationActionsTests {
 
   @Test func trashRejectsActiveWorkThenRestoresRetainedMessagesAndPin() async throws {
     let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Saved folder")
+    let folder = try await f.db.createFolder(name: "Saved folder", location: f.location)
     _ = try await f.db.moveConversation(id: f.chat, toFolderID: folder)
     try await f.db.mutateConversation(id: f.chat, mutation: .setPinned(true))
     let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep this message")
@@ -192,7 +194,7 @@ struct WorkspaceConversationActionsTests {
 
   @Test func trashCancelsClaimedUnsentDeliveriesPermanently() async throws {
     let f = try await Fixture(); defer { f.close() }
-    let other = try await f.db.createLocalACPSession(runtimeKind: .pi, title: "Sender", ownerDeviceID: UUID())
+    let other = try await f.db.createLocalACPSession(runtimeKind: .claudeCode, title: "Sender", ownerDeviceID: UUID())
     let id = UUID().uuidString.lowercased()
     _ = try await f.db.reserveToolDelivery(sourceID: other, targetID: f.chat, text: "Deferred work", requestID: id)
     #expect(try await f.db.claimToolDelivery(id: id) != nil)
@@ -265,7 +267,7 @@ struct WorkspaceConversationActionsTests {
     let text = String(decoding: data, as: UTF8.self)
     #expect(text.contains("Tool output") && text.contains("end of history") && text.contains("retained"))
     #expect(json?["schemaVersion"]?.intValue == 1)
-    let other = try await f.db.createLocalACPSession(runtimeKind: .pi, title: "Other chat", ownerDeviceID: UUID())
+    let other = try await f.db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other chat", ownerDeviceID: UUID())
     let unrelated = try await f.db.beginLocalACPRun(conversationID: other, content: "Other private content")
     try await f.db.completeLocalACPRun(runID: unrelated.runID)
     #expect(!String(decoding: try await f.db.conversationExport(id: f.chat, format: .fullRun), as: UTF8.self).contains("Other private content"))
@@ -296,7 +298,7 @@ struct WorkspaceConversationActionsTests {
 
   @Test func restoreDoesNotAdoptAFolderThatChangedOwnership() async throws {
     let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Original")
+    let folder = try await f.db.createFolder(name: "Original", location: f.location)
     _ = try await f.db.moveConversation(id: f.chat, toFolderID: folder)
     try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
     try await f.db.write { connection in try connection.transaction {
@@ -337,4 +339,31 @@ struct WorkspaceConversationActionsTests {
     #expect(try await f.db.conversationContent(id: f.chat).messages.first?.content == "Small message")
   }
 
+}
+
+
+extension WorkspaceConversationActionsTests {
+  @Test func activityOnlyCompletionKeepsIdentityWithoutInventedAssistantText() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let db = try await WorkspaceDatabase(url: directory.appending(path: "test.sqlite"))
+    let conversation = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Command", ownerDeviceID: UUID())
+    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "/notify")
+    try await db.upsertDeviceOwnedRunActivity(runID: run.runID,
+      activity: AgentRunActivity(id: "notice", kind: .activity, title: "Notification", content: "Command complete"))
+    try await db.completeLocalACPAssistantMessage(runID: run.runID, assistantMessageID: run.assistantMessageID)
+    try await db.completeLocalACPRun(runID: run.runID)
+    let page = try await db.conversationHistoryPage(id: conversation, limit: 100)
+    let assistant = try #require(page.messages.first { $0.id == run.assistantMessageID })
+    #expect(assistant.content.isEmpty)
+    #expect(assistant.status == "completed")
+    #expect(page.runs.first?.assistantMessageID == assistant.id)
+    #expect(page.activities.first?.activity.content == "Command complete")
+    #expect(AssistantTranscriptProjection(messageID: assistant.id, content: assistant.content,
+      activities: page.activities.map(\.activity)).body.isEmpty)
+    let failure = try await db.beginLocalACPRun(conversationID: conversation, content: "/fail")
+    try await db.completeLocalACPRun(runID: failure.runID, error: "Command failed")
+    #expect(try await db.conversationContent(id: conversation).messages.first { $0.id == failure.assistantMessageID }?.content == "Command failed")
+  }
 }

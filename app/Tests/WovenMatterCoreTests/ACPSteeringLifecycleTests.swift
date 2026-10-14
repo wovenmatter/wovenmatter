@@ -27,7 +27,7 @@ struct ACPSteeringLifecycleTests {
         await f.coordinator.shutdown()
     }
 
-    @Test(arguments: ["uncertain", "uncertain-acp-relay", "uncertain-pi-relay"])
+    @Test(arguments: ["uncertain", "uncertain-acp-relay", "uncertain-native-relay"])
     func uncertainNativeReceiptKeepsTheDurableInput(text: String) async throws {
         let f = try await SteeringFixture()
         defer { f.remove() }
@@ -180,7 +180,7 @@ private struct SteeringFixture {
     func start() async throws -> LocalACPRunIdentifiers {
         try await coordinator.accept(conversationID: id, content: "start",
             launch: .init(runtimeKind: .codex, executableURL: URL(filePath: "/fixture"), arguments: []),
-            workspace: .init(rootURL: root, repositoriesURL: root), onPermission: { _ in "allow" })
+            workspace: .init(rootURL: root), onPermission: { _ in "allow" })
     }
     func messages() async throws -> [WorkspaceMessageRecord] { try await database.conversationContent(id: id).messages }
     func execute(_ sql: String) throws {
@@ -230,7 +230,7 @@ private actor SteeringDriver {
         try await beforeAdmission?()
         received.append(text)
         if text == "uncertain-acp-relay" { throw LocalACPClientError.deliveryUncertain("Lost receipt") }
-        if text == "uncertain-pi-relay" { throw PiRPCClientError.deliveryUncertain("Lost receipt") }
+        if text == "uncertain-native-relay" { throw LocalACPClientError.deliveryUncertain("Lost receipt") }
         if text == "uncertain" { throw LocalACPClientError.processExited }
         if text.hasPrefix("preflight") {
             try await event?(.assistantChunk(text == "preflight" ? "accepted output" : "rejected output"))

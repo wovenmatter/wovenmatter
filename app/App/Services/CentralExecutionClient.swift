@@ -5,9 +5,9 @@ import CompanionClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-/// The authoritative Mac is also a client of foreign execution owners. It imports
-/// immutable history into its existing database and never starts a local runtime
-/// merely because an imported conversation has the same harness name.
+/// The authoritative Mac is also an observer of foreign execution owners.
+/// Direct control keeps a separate validated history cache; only an execution
+/// owner's publisher can add that history to the authoritative database.
 @MainActor @Observable
 final class CentralExecutionClient {
     typealias Provision = @MainActor (String) async throws -> CompanionExecutionCredential
@@ -42,14 +42,21 @@ final class CentralExecutionClient {
     }
 
     func workspace(conversationID: String) async throws -> CompanionExecutionWorkspace? {
-        let descriptor = try await database.companionConversationExecutionWorkspace(conversationID: conversationID)
+        var descriptor = try await database.companionConversationExecutionWorkspace(conversationID: conversationID)
+        if descriptor == nil {
+            let cached = await commandJournal.snapshot()
+            if !cached.deletedConversationIDs.contains(conversationID), let owner = cached.conversationWorkspaceIDs[conversationID] {
+                descriptor = try await database.companionExecutionWorkspaces().first { $0.id == owner && !$0.deleted }
+            }
+        }
         if let descriptor { workspaceByConversation[conversationID] = descriptor }
         else { workspaceByConversation.removeValue(forKey: conversationID) }
         return descriptor
     }
 
-    /// Background library ingestion does not depend on a selected conversation.
-    /// Only enrolled endpoints participate; this never launches a workspace.
+    /// Background observer refresh does not depend on a selected conversation.
+    /// Only enrolled endpoints participate; this never launches a workspace or
+    /// publishes another execution owner's history.
     func refreshRegisteredWorkspaces() async {
         guard !backgroundRefreshInProgress else { return }
         backgroundRefreshInProgress = true
@@ -100,9 +107,16 @@ final class CentralExecutionClient {
         } catch {
             if case MobileConnectionError.revoked = error { transports.removeValue(forKey: descriptor.id) }
             onlineWorkspaces.remove(descriptor.id); errors[descriptor.id] = error.localizedDescription
-            // Keep the last projection visible when its execution owner is offline.
-            if let saved = try? await database.companionFederatedTranscript(conversationID: conversationID) {
+            // An observer may be ahead of the owner's last central publication.
+            // Prefer that durable cache only while its origin cursor is newer.
+            let cached = await commandJournal.snapshot()
+            let publishedCursor = (try? await database.companionExecutionOriginCursor(workspaceID: descriptor.id)) ?? 0
+            if (cached.directCursors[descriptor.id] ?? 0) > publishedCursor, let saved = cached.transcripts[conversationID] {
+                transcripts[conversationID] = Self.markCursor(saved, origin: "owner")
+            } else if let saved = try? await database.companionFederatedTranscript(conversationID: conversationID) {
                 transcripts[conversationID] = Self.markCursor(saved, origin: "library")
+            } else if let saved = cached.transcripts[conversationID] {
+                transcripts[conversationID] = Self.markCursor(saved, origin: "owner")
             }
             throw error
         }
@@ -149,32 +163,30 @@ final class CentralExecutionClient {
 
     private func replay(workspace: CompanionExecutionWorkspace) async throws {
         let identity = try await database.companionLibraryIdentity()
+        guard workspace.libraryID == identity.libraryID else { throw WorkspaceJournal.Failure.wrongLibrary }
         let transport = try await transport(for: workspace)
-        var imported = false
+        try await commandJournal.upsertWorkspace(workspace, pending: false)
+        var changed = false
         for _ in 0..<100 {
-            let cursor = try await database.companionExecutionOriginCursor(workspaceID: workspace.id)
+            let cursor = await commandJournal.snapshot().directCursors[workspace.id] ?? 0
             let page = try await transport.events(after: cursor)
-            guard page.libraryID == identity.libraryID, page.cursor == cursor + Int64(page.entries.count),
-                  !page.hasMore || !page.entries.isEmpty else { throw WorkspaceJournal.Failure.replayGap }
-            for (index, entry) in page.entries.enumerated() {
-                guard entry.workspaceID == workspace.id, entry.originSequence == cursor + Int64(index) + 1 else { throw WorkspaceJournal.Failure.replayGap }
-            }
-            // A concurrent phone relay may already have inserted these events.
-            // Central ingestion compares their identities and bytes atomically.
-            var offset = 0
-            while offset < page.entries.count {
-                var batch: [CompanionJournalEntry] = [], bytes = 0
-                for entry in page.entries.dropFirst(offset).prefix(CompanionFederationProtocol.maximumBatchEntries) {
-                    let size = try JSONEncoder().encode(entry).count
-                    if !batch.isEmpty && bytes + size > 7 * 1_024 * 1_024 { break }
-                    batch.append(entry); bytes += size
-                }
-                _ = try await database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: batch), deviceID: identity.hostDeviceID)
-                offset += batch.count; imported = true
-            }
+            // Validates library, contiguous workspace sequence, immutable event
+            // identities and projection ownership in one durable transaction.
+            // Omitting localDeviceID keeps every received event cache-only.
+            try await commandJournal.receiveWorkspace(page, workspaceID: workspace.id)
+            changed = changed || !page.entries.isEmpty
             if !page.hasMore { break }
         }
-        if imported { await onChange() }
+        let cached = await commandJournal.snapshot()
+        for (id, owner) in cached.conversationWorkspaceIDs where owner == workspace.id {
+            if cached.deletedConversationIDs.contains(id) {
+                workspaceByConversation.removeValue(forKey: id); transcripts.removeValue(forKey: id)
+            } else {
+                workspaceByConversation[id] = workspace
+                if let transcript = cached.transcripts[id] { transcripts[id] = Self.markCursor(transcript, origin: "owner") }
+            }
+        }
+        if changed { await onChange() }
     }
 
     @discardableResult

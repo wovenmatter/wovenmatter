@@ -8,6 +8,33 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CompanionFacadeTests {
+    @Test(arguments: ["local", "remote"])
+    func executionPolicyCoversCentralCommandRoutesAndKeepsLibraryActionsShared(route: String) async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let identity = try await fixture.database.companionLibraryIdentity()
+        let localID = UUID().uuidString.lowercased()
+        for (id, kind) in [(localID, CompanionExecutionWorkspace.Kind.mac), (fixture.remote.id.uuidString.lowercased(), .linux)] {
+            _ = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: id, libraryID: identity.libraryID,
+                ownerDeviceID: identity.hostDeviceID, kind: kind, name: "Policy target", executionDeviceID: kind == .mac ? identity.hostDeviceID : nil)), deviceID: identity.hostDeviceID)
+        }
+        let target = route == "remote" ? fixture.remote.id.uuidString.lowercased() : localID
+        try await fixture.database.setCompanionWorkspaceAccess(deviceID: fixture.device, workspaceID: target, enabled: false, authorizedBy: identity.hostDeviceID)
+        let create = CompanionCommand(deviceID: fixture.device, kind: .createSession,
+            conversationID: UUID().uuidString.lowercased(), providerID: fixture.providerID(route))
+        do {
+            _ = try await fixture.model.companionCommands.execute(create, deviceID: fixture.device)
+            Issue.record("Execution was accepted despite device policy")
+        } catch let error as CompanionAPIError { #expect(error.code == "execution_disabled") }
+        #expect(await fixture.recorder.deliveries.isEmpty)
+        let noteID = try await fixture.database.createNote(folderID: nil, title: "Shared", content: "Retained")
+        let note = try #require(try await fixture.database.companionNote(id: noteID))
+        let edit = CompanionCommand(deviceID: fixture.device, kind: .workspace,
+            workspaceAction: .note(id: noteID, action: "rename", revision: String(note.revision), title: "Shared rename", folderID: nil))
+        let receipt = try await fixture.model.companionCommands.execute(edit, deviceID: fixture.device)
+        #expect(receipt.status == .completed)
+        #expect(try await fixture.database.companionNote(id: noteID)?.title == "Shared rename")
+    }
+
     // OpenCode uses its native coordinator, covered by OpenCodeCoordinatorTests.
     // Every remaining runtime still traverses the real facade and launch routing.
     @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode }, [false, true])
@@ -15,6 +42,9 @@ struct CompanionFacadeTests {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
         let folder = try await fixture.database.createFolder(name: "Ideas")
+        try await fixture.database.bindFolderExecutionRoot(id: folder, location: .init(
+            workspaceID: try await fixture.model.executionWorkspaceIdentity(workspaceID: remote ? fixture.remote.id : nil),
+            rootPath: fixture.directory.path, managed: false))
         let conversationID = UUID().uuidString.lowercased()
         let provider = remote ? "remote:\(fixture.remote.id.uuidString.lowercased()):\(runtime.rawValue)" : "local:\(runtime.rawValue)"
         let create = CompanionCommand(deviceID: fixture.device, kind: .createSession,
@@ -52,7 +82,7 @@ struct CompanionFacadeTests {
 
     @Test func mobileStopFencesPreparationAndAdvancesBackendRevisionOnlyForItsRun() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let id = try await fixture.createConversation(gateway: false)
+        let id = try await fixture.createConversation()
         let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Active"))
         let backend = BackendApplicationService(model: fixture.model)
         fixture.model.backendApplicationService = backend
@@ -71,11 +101,11 @@ struct CompanionFacadeTests {
         #expect(try await fixture.database.activeRunID(conversationID: id) == nil)
     }
 
-    @Test(arguments: [false, true])
-    func openNoteDoesNotPreventDesktopSteering(gateway: Bool) async throws {
+    @Test
+    func openNoteDoesNotPreventDesktopSteering() async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
-        let id = try await fixture.createConversation(gateway: gateway)
+        let id = try await fixture.createConversation()
         let raw = try NoteDocument(blocks: [.richText(.init(text: "Keep the existing grant"))]).encoded()
         let noteID = try await fixture.database.createNote(folderID: nil, title: "Open note", content: raw)
         let note = try #require(try await fixture.database.workspaceOverview().notes.first)
@@ -86,7 +116,7 @@ struct CompanionFacadeTests {
         let conversation = try #require(try await fixture.database.workspaceOverview().conversations.first(where: { $0.id == id }))
         #expect(await fixture.model.sendAgentMessage(conversation: conversation, input: .init(text: "Desktop follow-up"), note: note))
         let desktop = try #require(await fixture.recorder.deliveries.first)
-        #expect(desktop.route == (gateway ? .gateway : .localACP))
+        #expect(desktop.route == .localACP)
         #expect(desktop.delivery == "Desktop follow-up")
         let desktopCLI = try #require(desktop.input.cliContext)
         #expect(try await fixture.database.inputContext(id: desktopCLI.captureID, callerID: id) == noteID)
@@ -108,14 +138,16 @@ struct CompanionFacadeTests {
         #expect(await fixture.model.canonicalActiveRunID(conversationID: id) == run.runID)
     }
 
-    @Test(arguments: ["local", "remote", "gateway"])
+    @Test(arguments: ["local", "remote"])
     func folderDeletedDuringCreateAwaitLeavesNoSessionAndRetryIsStable(route: String) async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
         let folder = try await fixture.database.createFolder(name: "Will be deleted")
+        try await fixture.database.bindFolderExecutionRoot(id: folder, location: .init(
+            workspaceID: try await fixture.model.executionWorkspaceIdentity(workspaceID: route == "remote" ? fixture.remote.id : nil),
+            rootPath: fixture.directory.path, managed: false))
         let id = UUID().uuidString.lowercased()
-        let providerID = route == "gateway" ? "gateway:\(fixture.gatewayID.uuidString.lowercased())"
-            : route == "remote" ? "remote:\(fixture.remote.id.uuidString.lowercased()):codex" : "local:codex"
+        let providerID = route == "remote" ? "remote:\(fixture.remote.id.uuidString.lowercased()):codex" : "local:codex"
         let command = CompanionCommand(deviceID: fixture.device, kind: .createSession,
             conversationID: id, providerID: providerID, folderID: folder)
         await fixture.recorder.holdCreation()
@@ -155,19 +187,22 @@ struct CompanionFacadeTests {
         #expect(capability.activeInputMode == "unsupported" && !capability.canSteer && !capability.canStop)
     }
 
-    @Test(arguments: ["local", "remote", "gateway"])
+    @Test(arguments: ["local", "remote"])
     func newPhoneSessionsConfirmCapturedDefaultsAndEnforceTheirTools(route: String) async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
-        let runtime: AgentRuntimeKind = route == "gateway" ? .openclaw : .codex
+        let runtime: AgentRuntimeKind = .codex
         let scope = route == "remote" ? "remote:" + fixture.remote.id.uuidString.lowercased()
             : "local:" + fixture.directory.standardizedFileURL.path
         let desired = SessionSelections(model: "requested-model", thinking: "high", permission: "fixture-permission", tools: ["history"])
         fixture.model.sessionSelectionPreferences.saveDefaults(desired, harness: runtime.rawValue, workspace: scope)
         await fixture.recorder.confirmModelAs("provider-confirmed-model")
+        let folder = try await fixture.database.createFolder(name: "Preferences fixture", location: .init(
+            workspaceID: try await fixture.model.executionWorkspaceIdentity(workspaceID: route == "remote" ? fixture.remote.id : nil),
+            rootPath: fixture.directory.path, managed: false))
         let id = UUID().uuidString.lowercased()
         let create = CompanionCommand(deviceID: fixture.device, kind: .createSession, conversationID: id,
-            providerID: fixture.providerID(route))
+            providerID: fixture.providerID(route), folderID: folder)
         let receipt = try await fixture.model.companionCommands.execute(create, deviceID: fixture.device)
         #expect(receipt.status == .completed, "\(receipt.message ?? "No create error")")
         let applied = try #require(fixture.model.sessionSelectionPreferences.conversation(id: id))
@@ -181,10 +216,6 @@ struct CompanionFacadeTests {
         #expect(configurations.count == 1)
         #expect(configurations.first?.selections == SessionSelections(model: desired.model,
             thinking: desired.thinking, permission: desired.permission))
-        if route == "gateway" {
-            let native = try #require(await fixture.recorder.gatewayCreations.first)
-            #expect(native.agentID == fixture.gatewayID && native.directory == fixture.directory && native.recover)
-        }
         fixture.model.sessionSelectionPreferences.saveDefaults(.init(model: "later-default", tools: ["notes"]),
             harness: runtime.rawValue, workspace: scope)
         #expect(try await fixture.model.companionCommands.execute(create, deviceID: fixture.device) == receipt)
@@ -197,7 +228,7 @@ struct CompanionFacadeTests {
         let sent = try await fixture.model.companionCommands.execute(send, deviceID: fixture.device)
         #expect(sent.status == .completed, "\(sent.message ?? "No send error")")
         let delivery = try #require(await fixture.recorder.deliveries.first)
-        #expect(delivery.route == (route == "gateway" ? .gateway : .localACP))
+        #expect(delivery.route == .localACP)
         #expect(delivery.context == nil && delivery.input.references.first?.contentSnapshot == raw)
         #expect(delivery.input.cliContext != nil)
         #expect(try await fixture.database.sessionTools(id).enabled == [.history])
@@ -239,7 +270,7 @@ struct CompanionFacadeTests {
     @Test func controlsNeverReadHistoricalMessageBodiesAndTranscriptRemainsPaged() async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
-        let id = try await fixture.createConversation(gateway: false)
+        let id = try await fixture.createConversation()
         let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Current")
         // Thousands of historical bodies make any accidental full-content lookup visible
         // in the actual SQL trace; the assertion does not rely on machine timing.
@@ -290,7 +321,6 @@ struct CompanionFacadeTests {
     let model: ApplicationModel
     let recorder = FacadeRecorder()
     let device = UUID().uuidString.lowercased()
-    let gatewayID = UUID()
     let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid")
     init() async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-facade-\(UUID())")
@@ -305,18 +335,11 @@ struct CompanionFacadeTests {
             configureSession: { id, selections, workspace in
                 try await recorder.configureSession(id, selections: selections, directory: workspace?.rootURL.path)
             },
-            createGatewaySession: { agentID, key, directory, recover in
-                await recorder.createGatewaySession(agentID, key: key, directory: directory, recover: recover)
-            },
-            patchGatewaySession: { id, preferences in try await recorder.patchGatewaySession(id, preferences: preferences) },
-            gatewaySessionMetadata: { id in try await recorder.gatewayMetadata(id) },
             beforeSessionCreation: { await recorder.beforeCreation() }))
         await recorder.configure(database: store.database)
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
             localUsageService: LocalUsageService(homeDirectory: directory.appending(path: "ProviderFixtureHome"),
                 usageDatabaseURL: directory.appending(path: "usage.sqlite")))
-        try await database.saveOpenClawGatewayLink(.init(agentID: gatewayID, location: .localAgentWorkspace,
-            endpoint: .init(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService), status: OpenClawGatewayConnectionStatus.ready.rawValue))
         let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)
         let harnesses: [RemoteHarnessStatus] = try AgentRuntimeKind.allCases.map { runtime in
             try decode("""
@@ -332,16 +355,13 @@ struct CompanionFacadeTests {
         try await model.configureCompanionFixture(directory: directory)
     }
     func providerID(_ route: String) -> String {
-        route == "gateway" ? "gateway:\(gatewayID.uuidString.lowercased())"
-            : route == "remote" ? "remote:\(remote.id.uuidString.lowercased()):codex" : "local:codex"
+        route == "remote" ? "remote:\(remote.id.uuidString.lowercased()):codex" : "local:codex"
     }
-    func createConversation(gateway: Bool) async throws -> String {
-        if gateway {
-            return try await database.createLocalACPSession(runtimeKind: .openclaw, title: "Gateway",
-                ownerDeviceID: UUID(), gatewayAgentID: gatewayID)
-        }
+    func createConversation() async throws -> String {
         return try await database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remote.id,
-            remoteWorkspaceName: remote.name, title: "Remote", ownerDeviceID: UUID())
+            remoteWorkspaceName: remote.name, title: "Remote", ownerDeviceID: UUID(),
+            executionRoot: .init(folderID: nil, location: .init(workspaceID: "remote:" + remote.id.uuidString.lowercased(),
+                rootPath: directory.path, managed: false), defaultPath: "/workspace"))
     }
     func remove() {
         model.agentTools?.stop()
@@ -365,24 +385,14 @@ actor FacadeRecorder {
         let selections: SessionSelections
         let directory: String?
     }
-    struct GatewayCreation: Sendable {
-        let agentID: UUID
-        let key: String
-        let directory: URL
-        let recover: Bool
-    }
     var deliveries: [Delivery] = []
     var configurations: [Configuration] = []
-    var gatewayCreations: [GatewayCreation] = []
     private var confirmedModel: String?
     private var configurationRejected = false
     private var database: WorkspaceDatabase!
     private var creationHeld = false
     private var creationArrived = false
     private var release: CheckedContinuation<Void, Never>?
-    private var gatewayCreationHeld = false
-    private var gatewayCreationArrived = false
-    private var gatewayRelease: CheckedContinuation<Void, Never>?
     func configure(database: WorkspaceDatabase) { self.database = database }
     func accept(_ route: DashboardRunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
                 _ delivery: String?, _ context: AgentNoteContext?) async throws -> LocalACPRunIdentifiers {
@@ -420,31 +430,6 @@ actor FacadeRecorder {
         try await database.updateLocalACPSessionConfiguration(conversationID: id,
             model: confirmed.model, thinking: confirmed.thinking, permission: confirmed.permission)
         return confirmed
-    }
-    func createGatewaySession(_ agentID: UUID, key: String, directory: URL, recover: Bool) async {
-        gatewayCreations.append(.init(agentID: agentID, key: key, directory: directory, recover: recover))
-        guard gatewayCreationHeld else { return }
-        gatewayCreationArrived = true
-        await withCheckedContinuation { gatewayRelease = $0 }
-    }
-    func holdGatewayCreation() { gatewayCreationHeld = true }
-    func waitForGatewayCreation() async throws {
-        for _ in 0..<200 {
-            if gatewayCreationArrived { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw FixtureError.creationTimedOut
-    }
-    func releaseGatewayCreation() { gatewayCreationHeld = false; gatewayRelease?.resume(); gatewayRelease = nil }
-    func patchGatewaySession(_ id: String, preferences: OpenClawSessionPreferences) async throws -> OpenClawSessionPreferences {
-        let result = try await configureSession(id, selections: SessionSelections(model: preferences.model,
-            thinking: preferences.thinkingLevel, permission: preferences.permissionMode), directory: nil)
-        return .init(model: result.model, thinkingLevel: result.thinking, permissionMode: result.permission)
-    }
-    func gatewayMetadata(_ id: String) async throws -> LocalACPSessionMetadata {
-        let session = try await database.localACPSession(conversationID: id)
-        return LocalACPSessionMetadata(sessionKey: id, model: session.model, thinking: session.thinking,
-            modelOptions: [session.model].compactMap { $0 }, thinkingLevels: [], slashCommands: [], permission: session.permission)
     }
     func holdCreation() { creationHeld = true }
     func beforeCreation() async {

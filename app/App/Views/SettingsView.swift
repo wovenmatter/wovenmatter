@@ -23,18 +23,12 @@ private enum SettingsSection: Equatable {
     case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case companion
-    case openClaw
+    case workspaces
     case openCode
-    case hermes
-    case hermesWorkspace(UUID?)
-    case hermesAgent(UUID)
     case openCodeAgent(UUID?)
     case openCodeWorkspace(UUID?)
-    case openClawWorkspace(UUID?)
-    case openClawAgent(UUID)
     case localWorkspace
     case remoteWorkspaces
-    case buzzWorkspaces
     case usage
 }
 
@@ -42,9 +36,11 @@ struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var executionOnly = false
+    var clientContext: CentralLibraryClientModel?
+    var applicationContext: ApplicationModel?
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
-    @State private var providerReturnSection: SettingsSection = .openClaw
+    @State private var providerReturnSection: SettingsSection = .openCode
 
     private var theme: DashboardTheme {
         DashboardTheme(rawValue: storedTheme) ?? .green
@@ -59,14 +55,20 @@ struct SettingsView: View {
             case .landing:
                 landing
             case .companion:
-                SettingsCompanionView(model: model, host: model.companionHost,
+                SettingsCompanionView(model: applicationContext ?? model, host: (applicationContext ?? model).companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
+            case .workspaces:
+                SettingsDeviceWorkspacesView(application: applicationContext ?? model, client: clientContext,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing },
+                    onLocalSettings: { section = .localWorkspace }, onRemoteSettings: { section = .remoteWorkspaces })
             case .defaultAgent(let scope, let origin):
                 SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
                 SettingsGeneralView(
-                    model: model,
+                    model: applicationContext ?? model,
+                    clientAnalytics: clientContext?.analytics,
+                    showsBackgroundExecution: clientContext == nil,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
@@ -82,26 +84,6 @@ struct SettingsView: View {
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = origin.section }
                 )
-            case .openClaw:
-                SettingsOpenClawView(
-                    model: model,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing },
-                    onOpenAgent: { providerReturnSection = .openClaw; section = .openClawAgent($0) }
-                )
-            case .hermes:
-                SettingsHermesView(model: model, reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing },
-                    onOpenAgent: { providerReturnSection = .hermes; section = .hermesAgent($0) })
-            case .hermesWorkspace(let workspaceID):
-                SettingsHermesView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
-                    onOpenAgent: { providerReturnSection = .hermesWorkspace(workspaceID); section = .hermesAgent($0) })
-            case .hermesAgent(let agentID):
-                SettingsHermesAgentView(model: model, agentID: agentID,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = providerReturnSection })
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
@@ -114,18 +96,6 @@ struct SettingsView: View {
             case .openCodeAgent(let workspaceID):
                 SettingsOpenCodeAgentView(model: model, workspaceID: workspaceID,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { section = providerReturnSection })
-            case .openClawWorkspace(let workspaceID):
-                SettingsOpenClawView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
-                    onOpenAgent: { providerReturnSection = .openClawWorkspace(workspaceID); section = .openClawAgent($0) })
-            case .openClawAgent(let agentID):
-                SettingsOpenClawAgentView(
-                    model: model,
-                    agentID: agentID,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = providerReturnSection }
-                )
             case .localWorkspace:
                 SettingsLocalWorkspaceView(
                     model: model,
@@ -157,12 +127,6 @@ struct SettingsView: View {
                     },
                     onBack: { section = .landing }
                 )
-            case .buzzWorkspaces:
-                SettingsBuzzWorkspacesView(
-                    model: model,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing }
-                )
             case .usage:
                 SettingsUsageView(
                     model: model,
@@ -178,13 +142,12 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
-        .onAppear { openPendingHermesSettings(); openPendingDefaultAgentSettings(); openPendingConnections() }
+        .onAppear { openPendingDefaultAgentSettings(); openPendingConnections() }
         .onChange(of: model.pendingConnectionsScope) { _, _ in openPendingConnections() }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             section = .connections(event.object as? String ?? "global")
         }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
-        .onChange(of: model.pendingHermesSettingsAgentID) { _, _ in openPendingHermesSettings() }
     }
 
     private func openPendingDefaultAgentSettings() {
@@ -195,13 +158,6 @@ struct SettingsView: View {
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
         section = .connections(scope); model.pendingConnectionsScope = nil
-    }
-
-    private func openPendingHermesSettings() {
-        guard let agentID = model.pendingHermesSettingsAgentID else { return }
-        providerReturnSection = .hermes
-        section = .hermesAgent(agentID)
-        model.dismissPendingHermesSettings()
     }
 
     private var landing: some View {
@@ -220,9 +176,9 @@ struct SettingsView: View {
                 }
                 if !executionOnly {
                 SettingsDestinationRow(
-                    title: "Devices",
-                    detail: "Connect Macs, iPhones, and iPads to one central library over Tailscale.",
-                    icon: { Image(systemName: "iphone").font(.system(size: 15)) },
+                    title: "Device Connections",
+                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
                     action: { section = .companion }
                 )
                 }
@@ -238,7 +194,7 @@ struct SettingsView: View {
                 SettingsDestinationRow(
                     title: AgentRuntimeKind.defaultAgent.displayName,
                     detail: "Conversation defaults, subagents, providers, and models.",
-                    icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
+                    icon: { DashboardHarnessLogoIcon(logo: .defaultAgent, size: 15) },
                     action: { section = .defaultAgent("global", .landing) }
                 )
                 SettingsDestinationRow(
@@ -248,6 +204,10 @@ struct SettingsView: View {
                     action: { section = .localWorkspace }
                 )
                 if !executionOnly {
+                SettingsDestinationRow(title: "Workspaces", detail: "Local, Mac, and Linux agent workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .panelsTopLeft, size: 15) }, action: { section = .workspaces })
+                }
+                if !executionOnly && clientContext == nil {
                 SettingsDestinationRow(
                     title: "Remote agent workspaces",
                     detail: "Agents and files on remote Linux machines.",
@@ -274,43 +234,11 @@ struct SettingsView: View {
                     action: { section = .harness(.grokBuild, nil, .landing) }
                 )
                 SettingsDestinationRow(
-                    title: "Cursor",
-                    detail: "Local runtime status and workspace settings.",
-                    icon: { DashboardHarnessLogoIcon(logo: .cursor, size: 15) },
-                    action: { section = .harness(.cursor, nil, .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "OpenClaw",
-                    detail: "Agent names and connections.",
-                    icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
-                    action: { section = .openClaw }
-                )
-                SettingsDestinationRow(
-                    title: "Hermes",
-                    detail: "Agent names and connections.",
-                    icon: { DashboardHarnessLogoIcon(logo: .hermes, size: 15) },
-                    action: { section = .hermes }
-                )
-                SettingsDestinationRow(
                     title: "OpenCode",
                     detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
-                SettingsDestinationRow(
-                    title: "Pi",
-                    detail: "Local runtime status and workspace settings.",
-                    icon: { DashboardHarnessLogoIcon(logo: .pi, size: 15) },
-                    action: { section = .harness(.pi, nil, .landing) }
-                )
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Buzz agent workspaces",
-                    detail: "Connect agents from local Buzz workspaces.",
-                    icon: { DashboardLucideIcon(glyph: .radioTower, size: 15) },
-                    action: { section = .buzzWorkspaces }
-                )
-                }
                 if !executionOnly {
                 SettingsDestinationRow(
                     title: "Usage",
@@ -330,8 +258,6 @@ struct SettingsView: View {
     ) -> SettingsSection {
         switch runtimeKind {
         case .defaultAgent: .defaultAgent(workspaceID?.uuidString.lowercased() ?? "local", origin)
-        case .openclaw: .openClawWorkspace(workspaceID)
-        case .hermes: .hermesWorkspace(workspaceID)
         case .opencode: .openCodeWorkspace(workspaceID)
         default: .harness(runtimeKind, workspaceID, origin)
         }

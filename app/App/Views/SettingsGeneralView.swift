@@ -1,10 +1,13 @@
 import AppKit
+import CompanionClient
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
+    var clientAnalytics: MobileAnalyticsModel?
+    var showsBackgroundExecution = true
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
@@ -36,13 +39,17 @@ struct SettingsGeneralView: View {
             credentialAccessCard
             appearanceCard
             sidebarLayoutCard
-            backgroundExecutionCard
+            if showsBackgroundExecution { backgroundExecutionCard }
             idleSleepProtectionCard
             closedLidProtectionCard
             dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
-            ProductAnalyticsSettingsCard(analytics:model.analytics)
+            if let clientAnalytics {
+                MobileAnalyticsSettingsCard(analytics: clientAnalytics)
+            } else {
+                ProductAnalyticsSettingsCard(analytics: model.analytics)
+            }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -330,7 +337,7 @@ struct SettingsGeneralView: View {
                     releaseUpdateState = .ready(release)
                     return
                 }
-                let installationID = model.analytics.prepareUpdateInstallation(release.manifest)
+                let installationID = await model.analytics.prepareUpdateInstallation(release.manifest)
                 try await model.prepareBackendForUpdate()
                 try await releaseUpdateInstaller.beginInstallation(of: release, installationID: installationID)
                 WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()

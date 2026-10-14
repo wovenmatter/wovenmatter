@@ -23,6 +23,9 @@ extension WorkspaceDatabaseConnection {
         // started another run. Enrollment itself is idempotent at that owner.
         return saved
       }
+      guard let root = try sessionExecutionRoot(id: conversationID), root.workspaceID == "remote:" + workspaceID else {
+        throw federationError("adoption_unavailable", "This archived conversation has no execution root. Start a new chat.")
+      }
       let session = try prepareUnlocked("SELECT runtime_kind,acp_session_id,model,thinking,permission FROM desktop_local_acp_sessions WHERE conversation_id=? AND remote_workspace_id=?")
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session); try bind(workspaceID, at: 2, to: session)
@@ -53,7 +56,7 @@ extension WorkspaceDatabaseConnection {
       let adoption = try CompanionExecutionAdoption(workspaceID: workspaceID, conversation: conversation,
         runtimeKind: text(session, column: 0), nativeSessionID: nativeID, model: optionalText(session, column: 2),
         thinking: optionalText(session, column: 3), permission: optionalText(session, column: 4),
-        knownRunIDs: companionIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]))
+        knownRunIDs: companionIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]), nativeWorkingDirectory: root.rootPath)
       let saved = try prepareUnlocked("INSERT INTO companion_execution_adoptions(conversation_id,workspace_id,payload) VALUES (?,?,?)")
       defer { sqlite3_finalize(saved) }
       try bind(conversationID, at: 1, to: saved); try bind(workspaceID, at: 2, to: saved)
@@ -62,7 +65,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  private func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> CompanionTranscript {
+  func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> CompanionTranscript {
     let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)

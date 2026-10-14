@@ -30,7 +30,7 @@ public struct CompanionExecutionWorkspace: Codable, Equatable, Identifiable, Sen
   public var name: String
   public var endpoint: URL?
   public var capabilities: [String]
-  /// Only the owner and these explicitly granted devices may submit origin history.
+  /// Legacy observer enrollment metadata. Never grants origin-publication authority.
   public var journalDeviceIDs: [String]
   public var revision: Int64
   public var deleted: Bool
@@ -52,6 +52,17 @@ public struct CompanionWorkspaceRegistration: Codable, Equatable, Sendable {
 
 /// Immutable records emitted by one execution owner. Runtime checkpoints and
 /// working files are intentionally excluded. Importing a receipt never executes it.
+public struct CompanionRetainedExecution: Codable, Equatable, Sendable {
+  public var source: String
+  public var nativeSessionID: String
+  public var runtimeKind: String
+  public var runID: String
+  public var status: String
+  public init(source: String, nativeSessionID: String, runtimeKind: String, runID: String, status: String) {
+    self.source = source; self.nativeSessionID = nativeSessionID; self.runtimeKind = runtimeKind; self.runID = runID; self.status = status
+  }
+}
+
 public struct CompanionJournalEntry: Codable, Equatable, Identifiable, Sendable {
   public enum Kind: String, Codable, Sendable { case conversation, transcript, receipt, deletedConversation, restoredConversation, nativeRecord }
   public var id: String { eventID }
@@ -65,12 +76,13 @@ public struct CompanionJournalEntry: Codable, Equatable, Identifiable, Sendable 
   public var transcript: CompanionTranscript?
   public var receipt: CompanionCommandReceipt?
   public var nativeRecord: CompanionNativeRecordPart?
+  public var retainedExecution: CompanionRetainedExecution?
   public init(eventID: String = UUID().uuidString.lowercased(), workspaceID: String, originSequence: Int64,
               conversationID: String, runID: String? = nil, kind: Kind,
-              conversation: CompanionConversation? = nil, transcript: CompanionTranscript? = nil, receipt: CompanionCommandReceipt? = nil, nativeRecord: CompanionNativeRecordPart? = nil) {
+              conversation: CompanionConversation? = nil, transcript: CompanionTranscript? = nil, receipt: CompanionCommandReceipt? = nil, nativeRecord: CompanionNativeRecordPart? = nil, retainedExecution: CompanionRetainedExecution? = nil) {
     self.eventID = eventID; self.workspaceID = workspaceID; self.originSequence = originSequence
     self.conversationID = conversationID; self.runID = runID; self.kind = kind
-    self.nativeRecord = nativeRecord
+    self.nativeRecord = nativeRecord; self.retainedExecution = retainedExecution
     self.conversation = conversation; self.transcript = transcript; self.receipt = receipt
   }
 }
@@ -193,10 +205,12 @@ public struct CompanionExecutionAdoption: Codable, Equatable, Sendable {
   public var model: String?
   public var thinking: String?
   public var permission: String?
+  public var nativeWorkingDirectory: String?
   public var knownRunIDs: [String]?
   public init(workspaceID: String, conversation: CompanionConversation, runtimeKind: String, nativeSessionID: String,
-              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil) {
+              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil) {
     self.workspaceID = workspaceID; self.conversation = conversation; self.runtimeKind = runtimeKind
+    self.nativeWorkingDirectory = nativeWorkingDirectory
     self.knownRunIDs = knownRunIDs
     self.nativeSessionID = nativeSessionID; self.model = model; self.thinking = thinking; self.permission = permission
   }

@@ -20,7 +20,11 @@ import SwiftUI
           model.sceneChanged(phase)
           if phase == .active { Task { await model.analytics.openInterface() } }
         }
-        .onOpenURL { url in Task { await model.pair(url: url) } }
+        .onOpenURL { url in
+          guard url.scheme == "wovenmatter", url.host == "pair" else { return }
+          model.tab = .settings; model.pairingPresented = true
+          Task { await model.pair(url: url) }
+        }
     }
   }
 }
@@ -199,18 +203,21 @@ struct HomePane: View {
             HStack(spacing: 12) { quickActions }
             VStack(spacing: 12) { quickActions }
           }.padding(.vertical, 12)
-          let agents = model.launcherAgents
+          let groups = model.launcherGroups
           GroupLabel(text: "Agents")
-          ForEach(agents.filter { $0.workspaceID == "local" }) { agent in agentRow(agent) }
-          let macAgents = agents.filter(\.isLocalMac)
-          if !macAgents.isEmpty {
+          ForEach(groups.first(where: { $0.id == "local" })?.agents ?? []) { agent in agentRow(agent) }
+          if let mac = groups.first(where: { $0.id == "central" }) {
             GroupLabel(text: "Local agent workspace")
-            ForEach(macAgents) { agent in agentRow(agent) }
+            workspaceAgents(mac)
           }
-          let remoteAgents = agents.filter { $0.workspaceID != "local" && !$0.isLocalMac }
-          if !remoteAgents.isEmpty {
+          ForEach(groups.filter { $0.id != "central" && $0.workspace?.kind == .mac }) { mac in
+            GroupLabel(text: mac.name)
+            workspaceAgents(mac)
+          }
+          let remote = groups.filter { $0.id != "local" && $0.id != "central" && $0.workspace?.kind != .mac }
+          if !remote.isEmpty {
             GroupLabel(text: "Remote workspaces")
-            ForEach(remoteAgents) { agent in agentRow(agent) }
+            ForEach(remote) { workspaceAgents($0) }
           }
           Divider().padding(.horizontal, 14).padding(.vertical, 18)
           ForEach([CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
@@ -219,6 +226,15 @@ struct HomePane: View {
           }
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
+    }
+  }
+  @ViewBuilder private func workspaceAgents(_ group: CompanionAgentGroup) -> some View {
+    if group.agents.isEmpty, let workspace = group.workspace {
+      SettingsNavigationRow(title: workspace.name, icon: workspace.kind == .mac ? .monitor : .container) {
+        WorkspaceSettingsPane(model: model, workspace: workspace)
+      }
+    } else {
+      ForEach(group.agents) { agent in agentRow(agent) }
     }
   }
   @ViewBuilder private var quickActions: some View {
@@ -357,6 +373,7 @@ struct CompanionSettingsPane: View {
           SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
           SettingsNavigationRow(title: "Pi Durable", icon: .bot) { DeviceAgentSettingsPane(model: model) }
           SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Device Connections", icon: .monitor) { PairingPane(model: model) }
           SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }
           SettingsNavigationRow(title: "Usage Settings", icon: .barChart) { UsageSettingsPane(model: model) }
         }.padding(.horizontal, 18).padding(.bottom, 24)
@@ -432,30 +449,39 @@ struct WorkspacesSettingsPane: View {
         NavigationLink { DeviceAgentSettingsPane(model: model) } label: {
           Label(model.deviceWorkspaceName, glyph: .terminal)
         }
-      }
-      Section {
-        NavigationLink { HostedInferenceSettingsPane(model: model) } label: { Label("Tailscale inference", glyph: .plug) }
-      }
-      Section("Central library") {
-        NavigationLink { PairingPane(model: model) } label: { Label(model.credential == nil ? "Pair a Mac" : "Mac pairing", systemImage: "qrcode") }
-        if model.credential != nil {
-          Button(model.connecting ? "Syncing…" : "Sync now") { Task { await model.refresh() } }.disabled(model.connecting)
+        if model.credential != nil || model.state.workspaceID != nil {
+          NavigationLink { CentralWorkspaceSettingsPane(model: model) } label: {
+            Label("Central database", glyph: .monitor).opacity(model.online ? 1 : 0.5)
+          }
         }
-        if !model.state.conflicts.isEmpty || !model.unresolvedCommands.isEmpty || model.state.launches.contains(where: { !$0.accepted }) {
-          NavigationLink("Review pending changes") { SyncRecoveryPane(model: model) }
-        }
-      }
-      if !model.executionWorkspaces.isEmpty {
-        Section("Connected workspaces") {
-          ForEach(model.executionWorkspaces) { workspace in
-            NavigationLink { WorkspaceSettingsPane(model: model, workspace: workspace) } label: {
-              Label(workspace.name, glyph: workspace.kind == .ios ? .terminal : .container)
-            }
+        ForEach(model.executionWorkspaces) { workspace in
+          NavigationLink { WorkspaceSettingsPane(model: model, workspace: workspace) } label: {
+            Label(workspace.name, glyph: workspace.kind == .mac ? .monitor : .container)
+              .opacity(model.workspaceReachable[workspace.id] == true ? 1 : 0.5)
           }
         }
       }
-      if model.errorMessage != nil { Section { CompanionInlineError(model: model) } }
-    }.listStyle(.insetGrouped).scrollContentBackground(.hidden).mobileNavigationPage("Workspaces")
+    }.listStyle(.insetGrouped).mobileNavigationPage("Workspaces")
+      .task { await model.refreshExecutionWorkspaces(force: true) }
+  }
+}
+
+private struct CentralWorkspaceSettingsPane: View {
+  @Bindable var model: CompanionModel
+  var body: some View {
+    List {
+      Section {
+        LabeledContent("Connection", value: model.online ? "Connected" : "Disconnected")
+        if let endpoint = model.credential?.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
+      }
+      Section("Agents") {
+        ForEach(model.launcherAgents.filter { $0.workspaceID == "central" }) { agent in
+          Button { Task { await model.launchAgent(agent) } } label: {
+            Label { Text(agent.name) } icon: { MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 22) }
+          }.disabled(!agent.isAvailable)
+        }
+      }
+    }.listStyle(.insetGrouped).mobileNavigationPage("Central database")
   }
 }
 
@@ -464,28 +490,33 @@ private struct WorkspaceSettingsPane: View {
   let workspace: CompanionExecutionWorkspace
   var body: some View {
     List {
-      if let endpoint = workspace.endpoint { Section("Address") { Text(endpoint.absoluteString).textSelection(.enabled) } }
+      Section {
+        LabeledContent("Connection", value: model.workspaceReachable[workspace.id] == true ? "Connected" : "Disconnected")
+        if let endpoint = workspace.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
+      }
       Section("Agents") {
-        ForEach((model.workspaceProviders[workspace.id] ?? []).filter { $0.available && $0.canStart }) { provider in
-          Button { Task { await model.launchAgent(.init(workspaceID: workspace.id, workspaceName: workspace.name, providerID: provider.id, name: provider.displayName, runtimeKind: provider.runtimeKind)) } } label: {
-            Label { Text(provider.displayName) } icon: { MobileAgentIcon(runtimeKind: provider.runtimeKind, size: 22) }
-          }.disabled(model.workspaceReachable[workspace.id] != true)
+        ForEach(model.launcherAgents.filter { $0.workspaceID == workspace.id }) { agent in
+          Button { Task { await model.launchAgent(agent) } } label: {
+            Label { Text(agent.name) } icon: { MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 22) }
+          }.disabled(!agent.isAvailable)
         }
       }
-      if model.errorMessage != nil { Section { CompanionInlineError(model: model) } }
       Section {
         Button("Refresh device access") { Task { await model.renewWorkspaceAccess(workspace.id) } }.disabled(!model.online)
-        if let problem = model.workspaceProblems[workspace.id] { Text(problem).foregroundStyle(DashboardPalette.danger) }
+        if let problem = model.workspaceProblems[workspace.id] { Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
       }
-    }.listStyle(.insetGrouped).scrollContentBackground(.hidden).mobileNavigationPage(workspace.name)
+    }.listStyle(.insetGrouped).mobileNavigationPage(workspace.name)
   }
 }
 
-private struct SyncRecoveryPane: View {
+struct SyncRecoveryPane: View {
   @Bindable var model: CompanionModel
   var body: some View {
     List {
       CompanionInlineError(model: model)
+      if (model.synchronizationStatus.lanes[.calendar]?.conflictCount ?? 0) > 0 {
+        NavigationLink("Calendar conflicts") { CalendarPane(model: model) }
+      }
       ForEach(Array(model.state.conflicts.keys).sorted(), id: \.self) { id in
         Button(model.state.notes[id]?.title ?? "Note conflict") { Task { await model.openNote(id) } }
       }

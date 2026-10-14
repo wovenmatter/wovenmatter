@@ -1,8 +1,14 @@
 # Conversations
 
-Choose **New chat** and select an agent. WovenMatter groups agents by their local,
-remote, or linked Buzz workspace. Choose where you want the work to run, then
-select a model and thinking level where the harness offers those controls.
+Choose **New chat** and select an agent. Agent names in the sidebar open their
+most recent chat; the separate plus starts a new chat with that agent in the
+selected folder. Woven groups agents by their local or remote workspace. Select
+a model and thinking level where the harness offers them.
+
+Before the first message, the composer's folder selector lists **All Workspaces**
+and the sidebar folders. Folders belonging to another execution workspace are
+disabled. All Workspaces gives each chat its own blank scratch directory. The
+first message fixes the folder and working directory; use a new chat for another root.
 
 ## Models, thinking, tools, and permissions
 
@@ -17,8 +23,8 @@ workspace and harness defaults are retained. New conversations use this order:
    harnesses; the harness's own default for other selections.
 
 New conversations start with Full access unless you choose a different policy
-or have a previously saved default. Existing and imported conversations keep their current policy.
-Pi has no permission setting.
+or have a previously saved default. Existing and imported conversations keep
+their current policy.
 
 Existing conversations keep their selections when defaults change. Defaults are
 independent for each control, so a saved workspace default can override the model
@@ -46,23 +52,14 @@ Only supported choices appear. A harness may also offer more specific policies:
   edits**, **Auto**, and **Full access** modes. Auto appears only when supported.
 - Grok Build offers its native approval policies. Changing the policy reconnects
   the same conversation before the next message.
-- OpenClaw offers **Ask for approval**, **Auto**, and **Full access**. Auto uses
-  OpenClaw's command reviewer within the session workspace.
-- Hermes offers **Ask for approval** and **Full access** in the composer. Ask
-  restores the profile's approval policy. Choose **Ask for approval** or **Smart
-  approvals** in Hermes Settings; that choice applies to every conversation
-  using that profile. Smart approvals uses Hermes's native reviewer. A profile
-  or process that already forces Full access cannot be restricted by the
-  conversation control.
 - OpenCode offers **Ask for approval**, **Auto-accept edits**, and **Full access**.
-  Cursor offers **Ask for approval** and **Full access**. These apply to the
+  These apply to the
   conversation while WovenMatter is connected. They do not run a smart reviewer
   or save permissions for other conversations. Native deny rules remain in
   effect; questions and sign-in steps still need your response. Returning to Ask
   stops accepting new requests and preserves permissions already allowed by the
   harness.
-- Pi has no permission selector. WovenMatter does not manage Pi permission
-  extensions.
+
 
 Wait for a settings change to finish before sending. If a saved choice is no
 longer available, choose a supported value before continuing the conversation.
@@ -104,11 +101,15 @@ you return to work across your harnesses. WovenMatter saves conversation
 transcripts in its local SQLite database alongside your notes and other items.
 
 Reopen a conversation to review the work or continue a supported session.
-Reconnect an unavailable agent before sending another request. Shared workspace
-files let different harnesses work on the same material; each conversation
-retains its own harness and session connection.
+Reconnect an unavailable agent before sending another request. Agents in the
+same project can work on its files; each conversation retains its own harness,
+execution workspace, and working directory.
 
-OpenClaw, Hermes, and local OpenCode settings also offer session imports.
+Sessions from the former workspace layout remain readable as archived history.
+Their composer is disabled and they cannot be resumed. Start a new chat to
+continue working; existing project files are preserved.
+
+Local OpenCode settings also offer session imports.
 Available history and import limits depend on the integration. Imported sessions
 retain their original working directory where supplied by the harness.
 

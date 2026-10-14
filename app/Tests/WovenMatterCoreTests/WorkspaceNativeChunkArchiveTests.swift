@@ -67,7 +67,7 @@ struct WorkspaceNativeChunkArchiveTests {
     #expect(nativeRows.count == chunks.count + manifests.count)
     let exactQuery = WorkspaceHistoryQuery(command: "events", conversationID: conversation, harness: "defaultAgent",
       sourceID: "remote:host:store", nativeSessionID: "7", nativeRecordID: chunks[0].id)
-    let reader = try await reopened.createLocalACPSession(runtimeKind: .pi, title: "Reader", ownerDeviceID: UUID())
+    let reader = try await reopened.createLocalACPSession(runtimeKind: .claudeCode, title: "Reader", ownerDeviceID: UUID())
     try await reopened.setSessionTools(.init(enabled: []), sessionID: reader)
     await #expect(throws: (any Error).self) { try await reopened.queryAgentHistory(exactQuery, callerID: reader) }
     try await reopened.setSessionTools(.init(enabled: [.history]), sessionID: reader)

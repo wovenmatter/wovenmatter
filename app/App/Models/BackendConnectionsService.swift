@@ -32,7 +32,6 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var providers: [DefaultAgentSettingsModel.Provider]
     var searchConfigured: Bool
     var accounts: [String: [ProviderConnectionAccounts.Account]]
-    var cursorAccountStatus: String
     var signInProvider: String?
     var signInOutcome: DefaultAgentSettingsModel.SignInOutcome?
     var busy: Bool
@@ -50,7 +49,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         catalogIncludesAllModels = model.catalogIncludesAllModels
         resolvedDefaultModelID = model.resolvedDefaultModelID
         searchConfigured = model.searchConfigured; accounts = model.accounts
-        cursorAccountStatus = model.cursorAccountStatus; signInProvider = model.signInProvider
+        signInProvider = model.signInProvider
         signInOutcome = model.signInOutcome
         busy = model.busy; error = model.error; notice = model.notice
         signInURL = model.signInURL; signInCode = model.signInCode
@@ -96,8 +95,6 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             case "reconnect": await model.reconnectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
             case "signOut": await model.signOut(c.provider ?? "", remote: c.remote)
             case "claude": model.signInClaude(remote: c.remote)
-            case "cursorStatus": await model.refreshCursorStatus()
-            case "cursorSignIn": model.signInCursor()
             case "scope": model.changeScope(c.value ?? "global")
             case "cancel": model.cancel()
             case "respond": model.respond(c.value ?? "")

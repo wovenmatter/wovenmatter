@@ -18,8 +18,8 @@ struct CompanionToolBridgeTests {
     await #expect(throws: (any Error).self) {
       try await fixture.database.authorizeCompanionTool(spoof, deviceID: fixture.deviceID)
     }
-    let relayed = try await fixture.importSession(kind: .linux, executionDeviceID: UUID().uuidString.lowercased())
-    spoof.conversationID = relayed
+    let foreign = try await fixture.importSession(kind: .linux, executionDeviceID: UUID().uuidString.lowercased())
+    spoof.conversationID = foreign
     await #expect(throws: (any Error).self) {
       try await fixture.database.authorizeCompanionTool(spoof, deviceID: fixture.deviceID)
     }
@@ -179,13 +179,28 @@ struct CompanionToolBridgeTests {
     static func importSession(database: WorkspaceDatabase, deviceID: String, conversationID: String,
                               kind: CompanionExecutionWorkspace.Kind, executionDeviceID: String?) async throws {
       let identity = try await database.companionLibraryIdentity()
+      // Linux registration belongs to the central host; its execution owner
+      // publishes history using a scoped grant, never through the observing phone.
+      let registrar = kind == .linux ? identity.hostDeviceID : deviceID
       let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-        id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: deviceID,
-        kind: kind, name: "Device", executionDeviceID: executionDeviceID)), deviceID: deviceID)
-      _ = try await database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [
+        id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: registrar,
+        kind: kind, name: "Device", executionDeviceID: executionDeviceID)), deviceID: registrar)
+      let batch = CompanionJournalBatch(libraryID: identity.libraryID, entries: [
         .init(workspaceID: workspace.id, originSequence: 1, conversationID: conversationID, kind: .conversation,
-          conversation: .init(id: conversationID, title: "Phone agent", runtimeKind: "piDurable"))
-      ]), deviceID: deviceID)
+          conversation: .init(id: conversationID, title: "Device agent", runtimeKind: "piDurable"))
+      ])
+      if kind == .linux {
+        let grant = try await database.issueCompanionWorkspacePublisher(workspaceID: workspace.id,
+          endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+        let path = "/v1/federation/publisher/journal"
+        let request = CompanionHTTPRequest(method: "POST", target: path,
+          headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": identity.libraryID],
+          body: try JSONEncoder().encode(batch))
+        #expect(try await CompanionWorkspacePublisherAPI.handle(request, path: path, database: database).status == 200)
+      } else {
+        _ = try await database.ingestCompanionJournal(batch, deviceID: executionDeviceID ?? deviceID)
+      }
+      #expect(try await database.companionExecutionOwner(conversationID: conversationID) == workspace.id)
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
   }

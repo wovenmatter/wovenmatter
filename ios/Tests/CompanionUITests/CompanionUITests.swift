@@ -53,6 +53,24 @@ final class CompanionUITests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
+  @MainActor func testPairingLivesInSettingsOutsideExecutionWorkspaces() {
+    let app = launch(tab: "Settings")
+    app.buttons["Workspaces"].tap()
+    XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Pair with Mac"].exists)
+    XCTAssertFalse(app.buttons["Mac pairing"].exists)
+    XCTAssertFalse(app.buttons["Tailscale inference"].exists)
+    app.navigationBars["Workspaces"].buttons.firstMatch.tap()
+    app.buttons["Device Connections"].tap()
+    XCTAssertTrue(app.navigationBars["Device Connections"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["pairing-scan"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["pairing-link"].exists)
+    XCTAssertTrue(app.buttons["pairing-connect"].exists)
+    XCTAssertFalse(app.buttons["Done"].exists)
+    XCTAssertFalse(app.buttons["Sync status"].exists)
+    XCTAssertFalse(app.buttons["Keep Offline"].exists)
+  }
+
   @MainActor func testNewChatChooserAndKeyboardDismissal() {
     let app = launch(tab: "Home")
     app.buttons["action-new-chat"].tap()
@@ -118,8 +136,16 @@ final class CompanionUITests: XCTestCase {
     let app = launch()
     app.buttons["New folder"].tap()
     let name = "Offline " + String(UUID().uuidString.prefix(6))
-    app.alerts.textFields["Folder name"].typeText(name)
-    app.alerts.buttons["Create"].tap()
+    let alert = app.alerts["New folder"]
+    let field = alert.textFields["Folder name"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    field.tap()
+    field.typeText(name)
+    XCTAssertEqual(field.value as? String, name)
+    // One tap must submit while the keyboard is open, without a second tap to
+    // compensate for the app's outside-tap keyboard dismissal gesture.
+    alert.buttons["Create"].tap()
+    XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
     XCTAssertTrue(app.buttons["back-folders"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["This folder is empty. Add a note or start a chat."].exists)
     app.buttons["back-folders"].tap()

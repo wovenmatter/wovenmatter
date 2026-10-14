@@ -24,10 +24,10 @@ struct LibraryClientLibraryPane: View {
         ["": "All", "file": "Files", "link": "Links", "photo": "Photos"][$0] ?? $0
       }.accessibilityLabel("Library item kind").padding()
       List {
-        if !model.online { Text("Connect to your central Mac to browse the Library.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if !model.online { Text("Connect to your central database to browse the Library.").foregroundStyle(DashboardPalette.mutedForeground) }
         if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
         if !model.artifacts.isEmpty {
-          Section("Saved artifacts") {
+          Group {
             ForEach(model.artifacts.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { artifact in
               Button(artifact.title) { Task {
                 do { preview = try await model.artifactURL(artifact) }
@@ -83,7 +83,7 @@ struct LibraryClientTrashPane: View {
     VStack {
       LibraryClientPaneHeader(title: "Trash") { EmptyView() }
       List {
-        if !model.online { Text("Connect to your central Mac to restore notes and conversations.") }
+        if !model.online { Text("Connect to your central database to restore notes and conversations.") }
         if let failure { Text(failure) }
         ForEach(items) { item in
           HStack {
@@ -201,7 +201,7 @@ struct LibraryClientSessionSettingsSheet: View {
             selection("Permission", value: $permission, options: settings.permissions)
             Button("Apply settings") { Task { await apply() } }.disabled(!settings.canConfigure)
             if !settings.canConfigure { Text("Wait for the active run to finish before changing settings.").font(.caption) }
-            if settings.models.isEmpty { Text("Options appear after this agent has connected on the central Mac.").font(.caption) }
+            if settings.models.isEmpty { Text("Options appear after this agent has connected on the central database.").font(.caption) }
           }
           Section("Workspace tools") {
             ForEach(settings.availableTools) { tool in

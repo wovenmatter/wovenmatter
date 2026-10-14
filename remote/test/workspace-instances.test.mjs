@@ -10,7 +10,6 @@ const info = { url: 'http://127.0.0.1:43210', pid: 1234, password: 'host-secret'
 function fixture(overrides = {}) {
   return createWorkspaceInstances({
     workspaceRoot: '/remote/project', environment: () => ({ PATH: '/host/bin', HOME: '/host/home' }), acquireLock: async () => () => {},
-    gateway: { status: () => ({ state: 'stopped', lastError: 'token=secret' }), start: async () => {}, stop: async () => {} },
     readFile: async () => JSON.stringify(info), signal: () => {}, installCLI: () => {},
     fetch: async (_url, options) => {
       assert.equal(_url.pathname, '/api/info')
@@ -21,11 +20,10 @@ function fixture(overrides = {}) {
   })
 }
 
-test('host registration credentials never appear in status; gateway stderr is sanitized', async () => {
+test('host registration credentials never appear in status', async () => {
   const instances = fixture()
   assert.equal((await instances.status('opencode')).state, 'running')
   assert.equal(JSON.stringify(await instances.status('opencode')).includes('host-secret'), false)
-  assert.equal(JSON.stringify(await instances.status('openclaw')).includes('token=secret'), false)
   assert.equal(instances.registrationPath, '/remote/project/.woven-matter/opencode-state/opencode/service.json')
 })
 
@@ -92,14 +90,7 @@ test('stop verifies service and registration identity before signaling only its 
   await assert.rejects(changed.action('opencode', 'stop'), /identity_changed/)
 })
 
-test('host gateway lifecycle callbacks are independent from OpenCode', async () => {
-  const actions = []
-  const instances = fixture({ gateway: { status: () => ({ state: 'running', pid: 42 }), start: async () => actions.push('start'), stop: async () => actions.push('stop') } })
-  await instances.action('openclaw', 'start'); await instances.action('openclaw', 'stop')
-  assert.deepEqual(actions, ['start', 'stop'])
-  assert.equal(await instances.hasActiveRuntime('openclaw'), true)
-  assert.equal(await instances.hasActiveRuntime('claude'), false)
-})
+
 
 test('streaming proxy uses host Basic auth, strips client bearer and cookies, preserves SSE', async () => {
   let recorded

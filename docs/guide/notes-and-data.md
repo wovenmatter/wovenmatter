@@ -77,31 +77,57 @@ restoration. If the document changed while you were reviewing, refresh before
 trying again.
 
 WovenMatter retains up to 50 versions and 20 MB per document, within a 256 MB
-workspace limit. This covers notes, spreadsheets, and HTML; externally linked
-data files are not versioned.
+workspace limit. This covers notes, spreadsheets, and HTML. Document versions
+do not version the underlying managed databases.
 
 ## Curate data with your agents
 
-Use **Databases** to browse **All**, **Local**, or **Remote** locations. Select
-a workspace to create a named database folder and choose its data preference.
-Each database is a folder under `databases/<name>/` where agents can keep data.
-These folders are separate from the app's central SQLite database.
+Use **Databases** to browse **All**, **Local**, or **Remote** workspaces. Select a
+connected workspace and choose **New database**. Each named database is a
+managed SQLite file with its own identity and one writable workspace owner.
+Agents create tables, collect data, and change the dataset schema through
+Woven's database tools. A database can contain multiple tables.
 
-Choose no format preference, JSON, or SQLite to guide how agents store the data.
-The preference is saved in `.wovenmatter/database.json` inside the folder.
-Agents still control the files they write.
+Dataset files live in Woven's application or service storage, separate from
+project directories and the internal history/settings SQLite database. They
+can be linked from notes and artifacts in any UI folder. Ordinary editing of
+external JSON or SQLite files is not the managed database workflow.
 
-For example, have an agent collect research into a database folder, then use a
-spreadsheet or HTML artifact to present it. Notes, tables, and HTML can link to
-JSON or read-only SQLite query results. Remote data is read through the workspace
-connection and stays on its host.
+Remote agents, including scheduled agents, write on their owning workspace even
+when the Mac is disconnected, provided that host and service keep running.
+Woven syncs complete readable replicas when the app opens or reconnects and
+during normal background refresh. Offline views show the last complete synced
+data and its freshness. The owner remains authoritative; replicas do not merge
+writes back to it.
+
+## Copy a database
+
+Select a database, choose **Copy to workspace**, and select an available
+writable destination and a name. This creates an independent database with a new
+identity and destination owner. It does not merge future changes with the
+original. Existing artifact links continue using the original until you relink
+them.
+
+If the source is offline, Woven can copy its last complete synced snapshot. Check
+the displayed freshness before copying. The destination must be available.
 
 ## Read linked data
 
-Reconnect an offline remote workspace before reading its data. Older workspace
-services may need an update in Settings before database operations are available.
+Use **Database** in the note toolbar to choose a workspace, named database, and
+SQL query. For notes, add a new linked table or select an existing table. A
+spreadsheet presents the linked result in its first table. HTML receives the
+query result as `window.wovenMatterData`.
 
-Remote links must stay inside the workspace's database root and cannot follow
-symlinks or point to external folders. If a read exceeds the service's limits,
-reduce the data or query. See [Remote database limits](../reference/REMOTE_DATABASES.md)
-for sizes, row limits, and supported queries.
+Ask an agent to add a live inline value when a single number or text value
+belongs in a note. Its query must return exactly one row and one column. The
+Database popover can edit existing inline-value links; directly editing a linked
+value's text removes that link.
+
+Linked tables, values, spreadsheets, and HTML refresh after committed changes
+and replica sync. Woven preserves surrounding prose and unrelated document
+layout; linking data does not automatically rewrite the rest of a note. Offline
+state and last-updated information appear with linked data.
+
+A broken query or schema link shows an error. Ask your agent to fix the query or
+link; Woven does not automatically repair the dataset. Use smaller queries when
+you reach the [remote database limits](../reference/REMOTE_DATABASES.md).

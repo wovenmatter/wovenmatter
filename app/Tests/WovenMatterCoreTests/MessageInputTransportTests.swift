@@ -3,6 +3,18 @@ import Testing
 import WovenMatterCore
 
 struct MessageInputTransportTests {
+  @Test("CLI context preserves optional conversation identity outside message text")
+  func conversationIdentityMetadata() throws {
+    let previous = Data(#"{"executablePath":"/fixture/wovenmatter","captureID":"capture"}"#.utf8)
+    #expect(try JSONDecoder().decode(AgentCLIContext.self, from: previous).sessionID == nil)
+    let context = AgentCLIContext(executablePath: "/fixture/wovenmatter", socketPath: nil,
+      captureID: "capture", sessionID: "e104d853-5c61-414c-9a1c-fb369ff08f9c")
+    let input = AgentMessageInput(text: "Only this message", cliContext: context)
+    let restored = try JSONDecoder().decode(AgentMessageInput.self, from: JSONEncoder().encode(input))
+    #expect(restored.cliContext == context)
+    #expect(restored.transportText() == "Only this message")
+  }
+
   @Test("transport preserves raw text without references and separates file bytes")
   func textAndFiles() {
     let input = AgentMessageInput(text: "  draft \n", attachments: [.file(

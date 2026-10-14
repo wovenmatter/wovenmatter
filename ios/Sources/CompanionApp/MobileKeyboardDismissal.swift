@@ -22,10 +22,14 @@ struct MobileKeyboardDismissal: UIViewRepresentable {
     func detach() { observedWindow?.removeGestureRecognizer(tap); observedWindow = nil }
     @objc private func dismissKeyboard() { observedWindow?.endEditing(false) }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-      var current = touch.view
-      while let view = current {
-        if view is UITextField || (view as? UITextView)?.isEditable == true { return false }
-        current = view.superview
+      var current: UIResponder? = touch.view
+      while let responder = current {
+        // System alerts own their text fields and action taps. Resigning their
+        // editor here changes the alert layout during the action's touch and
+        // can turn the first Create tap into keyboard dismissal alone.
+        if responder is UIAlertController || responder is UITextField ||
+            (responder as? UITextView)?.isEditable == true { return false }
+        current = responder.next
       }
       return true
     }

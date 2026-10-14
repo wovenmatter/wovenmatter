@@ -4,50 +4,6 @@ import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { createTaskExecutor } from '../src/task-gateway-runner.mjs'
 
-function cursorFixture(permission, args = ['--acp']) {
-  const messages=[],launches=[]
-  const launch=(command,args,options)=>{
-    launches.push({command,args,options})
-    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
-    const frame=value=>child.stdout.write(JSON.stringify(value)+'\n')
-    child.kill=()=>{queueMicrotask(()=>child.emit('exit',0));return true}
-    child.stdin=new Writable({write(bytes,_encoding,done){
-      const message=JSON.parse(String(bytes));messages.push(message)
-      setImmediate(()=>{
-        if(message.method==='initialize')frame({id:message.id,result:{protocolVersion:1}})
-        else if(message.method==='session/new')frame({id:message.id,result:{sessionId:'cursor-native'}})
-        else if(message.method==='session/prompt')frame({id:message.id,result:{stopReason:'end_turn'}})
-        else assert.fail('unexpected Cursor native method '+message.method)
-      });done()
-    }})
-    return child
-  }
-  const execute=createTaskExecutor({workspaceRoot:'/workspace',environment:()=>({WOVENMATTER_SESSION_TOKEN:'connected-owner',WOVENMATTER_TOOL_SOCKET:'connected-socket',WOVENMATTER_CONTEXT_ID:'connected-context',WOVENMATTER_NOTE_ID:'connected-note',WOVENMATTER_SOCKET:'connected-cli-socket',WOVENMATTER_CLI:'connected-cli',HOME:'/home'}),catalog:new Map([['cursor',{id:'cursor',transport:'acp',command:'cursor-agent',arguments:args}]]),launch})
-  const context={run:{id:'run',title:'Fixture',task:{prompt:'fixture only',configuration:{runtimeKind:'cursor',permission}}},signal:new AbortController().signal,publish:()=>{},bindSession:()=>{}}
-  return {execute,context,messages,launches}
-}
-
-test('scheduled Cursor uses its exact native launch policies while retaining other arguments and credential scopes',async()=>{
-  for(const permission of ['native-default','force']){
-    const fixture=cursorFixture(permission,['--acp','--force','-f','--yolo','--model','native-model'])
-    await fixture.execute(fixture.context)
-    assert.deepEqual(fixture.launches[0].args,[...(permission==='force'?['--force']:[]),'--acp','--model','native-model'])
-    assert.equal(fixture.launches[0].options.env.WOVENMATTER_SESSION_TOKEN,undefined)
-    assert.equal(fixture.launches[0].options.env.WOVENMATTER_TOOL_SOCKET,undefined)
-    for(const key of ['WOVENMATTER_CONTEXT_ID','WOVENMATTER_NOTE_ID','WOVENMATTER_SOCKET','WOVENMATTER_CLI'])assert.equal(fixture.launches[0].options.env[key],undefined)
-    assert.equal(fixture.messages.filter(x=>x.method==='session/prompt').length,1)
-    assert.equal(fixture.messages.some(x=>x.method==='session/set_mode'||x.method==='session/set_config_option'),false)
-  }
-})
-
-test('scheduled Cursor rejects removed aliases before starting its native process',async()=>{
-  for(const permission of ['normal','auto','full']){
-    const fixture=cursorFixture(permission)
-    await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true)
-    assert.equal(fixture.launches.length,0)
-  }
-})
-
 test('scheduled ACP archives full current updates before bounded presentation and excludes other sessions/configuration',async()=>{
   const updates=[],source='🙂漢字'+'x'.repeat(2*1024*1024)
   const launch=()=>{

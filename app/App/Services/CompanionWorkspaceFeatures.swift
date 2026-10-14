@@ -203,7 +203,7 @@ extension CompanionCommandService {
         // come from the Mac's already-negotiated session metadata.
         let saved = try? await store.database.localACPSession(conversationID: id)
         let metadata = model.openCodeModel(for: id)?.metadata(id)
-            ?? model.openClawGatewaySessionMetadata[id] ?? model.localACPSessionMetadata[id]
+            ?? model.localACPSessionMetadata[id]
         let tools = try await store.database.sessionTools(id)
         func options(_ values: [String]?, _ labels: [String: SessionOptionMetadata]?, current: String?) -> [CompanionSelection] {
             var ids = values ?? []

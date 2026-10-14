@@ -47,7 +47,9 @@ when an intentional design change is accepted.
   Keep their content and Cursor's controls at the same indentation as the content
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
-  logos, matching nearby icon sizes and stroke weights.
+  logos, matching nearby icon sizes and stroke weights. Pi Durable’s color and
+  black-and-white variants share the same circular black badge, padding, and mark
+  bounds.
 - **Asset and browser toolbars:** keep the tab strip and address row the same
   height, with matching button frames and minimal space between hover fills and
   dividers. Use the shared asset-toolbar metrics, including for tab-close and
@@ -61,10 +63,29 @@ when an intentional design change is accepted.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16`) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep agent/harness logos in their original colors. Shared controls use the sidebar foreground environment only inside the rails.
 - **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
-  styling quiet. Shared controls distinguish enabled hover, press, selection,
+  styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
+  for a neutral border without a colored focus ring. Clicking noninteractive
+  content inside a form releases text focus without closing it.
+  Shared controls distinguish enabled hover, press, selection,
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
+- **Text inputs:** use `DashboardSearchField` for search, `.dashboardInput()` for
+  new text/secure fields, and `.settingsInput()` in desktop settings. These use
+  plain native editing on the theme-whisper surface, matching sidebar chat search.
+  Never use `.textFieldStyle(.roundedBorder)`, native blue focus outlines, or a
+  custom bright focus border on app forms. Do not disable focus or keyboard
+  navigation to hide a ring. Inspect both focused and unfocused states in Green
+  and Cognac, including secure fields and pairing dialogs. Native system dialogs
+  and document content are outside this rule.
+- **Notes:** keep the header controls in this order from left to right: Undo,
+  Redo, Version history, Database, Format note, Microphone. Use the same compact
+  icon button style and frames for the microphone and adjacent controls, without
+  a divider. The note-body count sits at the bottom right, starts with words, and
+  switches between words and characters when clicked. Keep it in one compact
+  24-point bottom gutter outside the scrolling text, without stacking additional
+  editor or footer padding beneath the note. Align the count button's right
+  edge with the header controls using the same 12-point side inset.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.

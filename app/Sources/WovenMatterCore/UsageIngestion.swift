@@ -1,7 +1,7 @@
 import Foundation
 
-/// The shared, append-only contract used by Woven Matter and local Buzz
-/// workspaces. A cursor is opaque to clients and advances only
+/// The append-only contract used by Woven Matter.
+/// A cursor is opaque to clients and advances only
 /// after every preceding event has been durably persisted by the producer.
 public enum UsageIngestionProtocolName {
   public static let version = "wovenmatter.usage-ingestion.v1"
@@ -18,7 +18,6 @@ public enum UsageIngestionLimits {
 
 public enum UsageIngestionSourceKind: String, Codable, Equatable, Sendable {
   case wovenMatter = "woven-matter"
-  case buzzWorkspace = "buzz-workspace"
 }
 
 public struct UsageIngestionSource: Codable, Equatable, Sendable {

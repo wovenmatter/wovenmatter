@@ -69,7 +69,7 @@ Stream writers serialize their buffer transitions across awaits. Accepted chunks
 and terminal run cleanup finish even when the driving task is cancelled. Tool toggles
 perform their read/modify/write sequence in one writer transaction. Refresh generations
 and pagination identity checks prevent older async results replacing newer UI
-state. ACP prompt handlers and initial instructions are reserved before outbound
+state. ACP prompt handlers are reserved before outbound
 history waits. Gateway events serialize per run and merge stream updates without
 overwriting concurrent steering or cancellation. Connection lifecycle checks run
 after database waits as well as network waits. Note-edit replies trigger a fresh

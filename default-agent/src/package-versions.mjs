@@ -17,10 +17,11 @@ export function compareVersions(a, b) {
   }
   return 0;
 }
-export async function latestSupportedPackage(name, { major, minor, prerelease = false, executable, signal, fetchImplementation = fetch } = {}) {
+export async function latestSupportedPackage(name, { major, minor, minimum, prerelease = false, executable, signal, fetchImplementation = fetch } = {}) {
   const supported = version => releaseVersion(version) && (prerelease || !version.includes('-'))
     && (major === undefined || Number(version.split('.')[0]) === major)
-    && (minor === undefined || Number(version.split('.')[1]) === minor);
+    && (minor === undefined || Number(version.split('.')[1]) === minor)
+    && (minimum === undefined || compareVersions(version, minimum) >= 0);
   const usable = metadata => metadata && !metadata.deprecated && (executable === undefined
     || typeof metadata.bin === 'string' || typeof metadata.bin?.[executable] === 'string');
   const request = async suffix => {

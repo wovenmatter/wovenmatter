@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import WovenMatterCore
 
@@ -56,6 +55,12 @@ struct DashboardDatabasesView: View {
     @State private var showsCreateDatabase = false
     @State private var creationSourceID: String?
     @State private var isCreatingDatabase = false
+    @State private var databaseToCopy: DashboardAgentDatabase?
+    @State private var isCopyingDatabase = false
+
+    private var writableSources: [DashboardDatabaseSource] {
+        model.databasesSnapshot.sources.filter(\.allowsCreation)
+    }
 
     private var selectedSource: DashboardDatabaseSource? {
         filteredSources.first { $0.id == selectedSourceID }
@@ -99,7 +104,7 @@ struct DashboardDatabasesView: View {
             DashboardCreateDatabaseSheet(
                 workspaceName: model.databasesSnapshot.sources.first { $0.id == creationSourceID }?.name ?? "Workspace",
                 isCreating: isCreatingDatabase, error: model.databaseError
-            ) { name, preference in
+            ) { name in
                 guard let sourceID = creationSourceID, !isCreatingDatabase else { return }
                 isCreatingDatabase = true
                 Task {
@@ -107,7 +112,7 @@ struct DashboardDatabasesView: View {
                     if let id = await model.createDatabase(
                         sourceID: sourceID,
                         name: name,
-                        preference: preference
+                        preference: .sqlite
                     ) {
                         await model.analytics.record(.contentChanged, properties: ["action": "create", "item_category": "database"])
                         selectedSourceID = sourceID
@@ -121,10 +126,37 @@ struct DashboardDatabasesView: View {
             }
             .interactiveDismissDisabled(isCreatingDatabase)
         }
+        .sheet(item: $databaseToCopy) { database in
+            DashboardCopyDatabaseSheet(
+                database: database,
+                destinations: writableSources,
+                isCopying: isCopyingDatabase,
+                error: model.databaseError
+            ) { destinationSourceID, name in
+                guard !isCopyingDatabase else { return }
+                isCopyingDatabase = true
+                Task {
+                    defer { isCopyingDatabase = false }
+                    if let id = await model.copyDatabase(
+                        database: database,
+                        destinationSourceID: destinationSourceID,
+                        name: name
+                    ) {
+                        selectedSourceID = destinationSourceID
+                        selectedDatabaseID = id
+                        databaseToCopy = nil
+                    }
+                }
+            } onCancel: {
+                model.clearDatabaseError()
+                databaseToCopy = nil
+            }
+            .interactiveDismissDisabled(isCopyingDatabase)
+        }
         .alert(
             "Database Error",
             isPresented: Binding(
-                get: { !showsCreateDatabase && model.databaseError != nil },
+                get: { !showsCreateDatabase && databaseToCopy == nil && model.databaseError != nil },
                 set: { if !$0 { model.clearDatabaseError() } }
             )
         ) {
@@ -168,19 +200,14 @@ struct DashboardDatabasesView: View {
             .buttonStyle(DashboardIconButtonStyle())
             .disabled(model.isRefreshingDatabases)
             .help("Refresh databases")
-            Menu {
-                Button("New database") {
-                    beginCreatingDatabase()
-                }
-                .disabled(selectedSource?.allowsCreation != true)
-                if selectedSource?.allowsExternalLinks == true {
-                    Button("Link existing folder…") { chooseExternalDatabase() }
-                }
-            } label: {
-                Label("Add", systemImage: "plus")
+            Button(action: beginCreatingDatabase) {
+                Label("New database", systemImage: "plus")
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
             .disabled(selectedSource?.allowsCreation != true)
+            .help(selectedSource?.allowsCreation == true
+                ? "Create a database owned by this workspace."
+                : "Connect the owning workspace to create a database.")
         }
         .padding(.horizontal, 32)
         .padding(.top, 56)
@@ -205,7 +232,8 @@ struct DashboardDatabasesView: View {
                                     .lineLimit(1)
                                 Text(source.error == nil
                                     ? "\(source.databases.count) \(source.databases.count == 1 ? "database" : "databases")"
-                                    : "Unavailable")
+                                    : source.databases.isEmpty ? "Unavailable"
+                                        : "Offline · \(source.databases.count) \(source.databases.count == 1 ? "database" : "databases")")
                                     .font(.caption)
                                     .foregroundStyle(source.error == nil
                                         ? DashboardPalette.mutedForeground
@@ -236,11 +264,23 @@ struct DashboardDatabasesView: View {
         if let source = filteredSources.first(where: { $0.id == selectedSourceID }) {
             VStack(spacing: 0) {
                 sourceHeader(source)
-                if let error = source.error {
+                if let error = source.error, source.databases.isEmpty {
                     unavailableSource(source, error: error)
                 } else if source.databases.isEmpty {
                     emptySource(source)
                 } else {
+                    if let error = source.error {
+                        HStack(spacing: 8) {
+                            DashboardLucideIcon(glyph: .alertTriangle, size: 13)
+                            Text("Owner offline. Showing the last complete synced data.")
+                                .font(.system(size: 11))
+                            Spacer()
+                        }
+                        .foregroundStyle(DashboardPalette.warning)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .help(error)
+                    }
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(source.databases) { database in
@@ -277,12 +317,6 @@ struct DashboardDatabasesView: View {
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .lineLimit(1)
                     .textSelection(.enabled)
-                if source.kind == .remote {
-                    Text("Linked data: JSON or read-only SQLite")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .help("Only folders inside this workspace’s databases folder are available. Linked folders are not supported.")
-                }
             }
             Spacer()
             Text(source.kind.displayName)
@@ -293,7 +327,7 @@ struct DashboardDatabasesView: View {
                 .background(DashboardPalette.muted, in: Capsule())
         }
         .padding(.horizontal, 24)
-        .frame(minHeight: source.kind == .remote ? 82 : 66)
+        .frame(minHeight: 66)
         .background(theme.palette.workspace)
         .overlay(alignment: .bottom) { Divider().overlay(theme.palette.border) }
     }
@@ -313,12 +347,10 @@ struct DashboardDatabasesView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(database.name)
                         .font(.system(size: 13.5, weight: .semibold))
-                    HStack(spacing: 6) {
-                        Text(database.preference.displayName)
-                        if database.isExternal { Text("External folder") }
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(DashboardDatabaseFreshness.description(database))
+                        .font(.system(size: 11))
+                        .foregroundStyle(database.offline
+                            ? DashboardPalette.warning : DashboardPalette.mutedForeground)
                 }
                 Spacer()
                 if database.id == selectedDatabaseID {
@@ -342,35 +374,21 @@ struct DashboardDatabasesView: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(database.name).font(.system(size: 13, weight: .semibold))
-                Text(database.localURL?.path ?? "databases/\(database.name) · Remote workspace")
+                Text(DashboardDatabaseFreshness.description(database))
                     .font(.system(size: 10.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(database.offline
+                        ? DashboardPalette.warning : DashboardPalette.mutedForeground)
                     .lineLimit(1)
-                    .textSelection(.enabled)
             }
             Spacer()
-            if database.localURL != nil || selectedSource?.kind == .remote {
-                Picker("Data preference", selection: Binding(
-                    get: { database.preference },
-                    set: { preference in
-                        Task {
-                            await model.updateDatabasePreference(
-                                preference,
-                                database: database
-                            )
-                        }
-                    }
-                )) {
-                    ForEach(AgentDatabasePreference.allCases, id: \.self) {
-                        Text($0.displayName).tag($0)
-                    }
-                }
-                .frame(width: 160)
-                .disabled(model.updatingDatabasePreferenceIDs.contains(database.id))
-                if let url = database.localURL {
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                }
+            Button("Copy to workspace…") {
+                model.clearDatabaseError()
+                databaseToCopy = database
             }
+            .disabled(writableSources.isEmpty || (database.offline && database.localURL == nil))
+            .help(writableSources.isEmpty
+                ? "Connect a destination workspace to create a copy."
+                : "Create an independent database. Existing artifact links keep using the original.")
         }
         .padding(.horizontal, 24)
         .frame(minHeight: 72)
@@ -383,8 +401,8 @@ struct DashboardDatabasesView: View {
             Label("No databases yet", systemImage: "cylinder")
         } description: {
             Text(source.allowsCreation
-                ? (source.kind == .remote ? "Create a database for this workspace." : "Create a database or link a folder.")
-                : "No database folders in this workspace.")
+                ? "Create a managed database owned by this workspace."
+                : "Connect the workspace to create a database.")
         } actions: {
             if source.allowsCreation {
                 Button("New database") {
@@ -429,28 +447,10 @@ struct DashboardDatabasesView: View {
         }
     }
 
-    private func chooseExternalDatabase() {
-        let panel = NSOpenPanel()
-        panel.title = "Link a database folder"
-        panel.message = "The folder stays in place. Woven Matter adds an alias in the local databases folder."
-        panel.prompt = "Link folder"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        Task {
-            guard await panel.begin() == .OK, let url = panel.url else { return }
-            if let id = await model.registerExternalDatabase(url) {
-                selectedSourceID = "local"
-                selectedDatabaseID = id
-            }
-        }
-    }
-
     private func sourceGlyph(_ kind: DashboardDatabaseSourceKind) -> DashboardLucideGlyph {
         switch kind {
         case .local: .monitor
         case .remote: .container
-        case .buzz: .radioTower
         }
     }
 }
@@ -473,7 +473,7 @@ private enum DashboardDatabaseFilter: String, CaseIterable, Identifiable {
     func includes(_ kind: DashboardDatabaseSourceKind) -> Bool {
         switch self {
         case .all: true
-        case .local: kind == .local || kind == .buzz
+        case .local: kind == .local
         case .remote: kind == .remote
         }
     }
@@ -481,12 +481,11 @@ private enum DashboardDatabaseFilter: String, CaseIterable, Identifiable {
 
 private struct DashboardCreateDatabaseSheet: View {
     @State private var name = ""
-    @State private var preference = AgentDatabasePreference.none
     @FocusState private var nameFocused: Bool
     let workspaceName: String
     let isCreating: Bool
     let error: String?
-    let onCreate: (String, AgentDatabasePreference) -> Void
+    let onCreate: (String) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -495,18 +494,13 @@ private struct DashboardCreateDatabaseSheet: View {
                 .font(.system(size: 18, weight: .semibold))
             Text("Create in \(workspaceName).")
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
             TextField("Database name", text: $name)
-                .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
-            Picker("Data preference", selection: $preference) {
-                ForEach(AgentDatabasePreference.allCases, id: \.self) {
-                    Text($0.displayName).tag($0)
-                }
-            }
-            Text("The agent can choose a format. JSON and SQLite are preferences, not requirements.")
+                .dashboardQuietTextInput()
+            Text("Agents create and update tables through Woven Matter’s database tools.")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
             if let error {
                 Text(error)
                     .font(.system(size: 11.5))
@@ -518,13 +512,107 @@ private struct DashboardCreateDatabaseSheet: View {
                 Button("Cancel", action: onCancel)
                     .disabled(isCreating)
                     .keyboardShortcut(.cancelAction)
-                Button(isCreating ? "Creating…" : "Create") { onCreate(name, preference) }
+                Button(isCreating ? "Creating…" : "Create") { onCreate(name) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(isCreating || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .font(.system(size: 13))
+        .foregroundStyle(DashboardPalette.foreground)
         .padding(22)
         .frame(width: 420)
+        .dashboardFormFocusDismissal { nameFocused = false }
         .onAppear { nameFocused = true }
+    }
+}
+
+private struct DashboardCopyDatabaseSheet: View {
+    let database: DashboardAgentDatabase
+    let destinations: [DashboardDatabaseSource]
+    let isCopying: Bool
+    let error: String?
+    let onCopy: (String, String) -> Void
+    let onCancel: () -> Void
+    @State private var destinationSourceID = ""
+    @State private var name = ""
+    @FocusState private var nameFocused: Bool
+
+    private var canCopy: Bool {
+        destinations.contains { $0.id == destinationSourceID && $0.allowsCreation }
+            && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Copy to Workspace")
+                .font(.system(size: 18, weight: .semibold))
+            Text("Create an independent copy of \(database.name). Existing artifact links keep using the original database.")
+                .font(.system(size: 12))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            if database.offline {
+                Text("The owner is offline. This copy uses the last complete synced snapshot.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.warning)
+            }
+            Text(DashboardDatabaseFreshness.description(database))
+                .font(.system(size: 11))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Picker("Destination workspace", selection: $destinationSourceID) {
+                ForEach(destinations) { Text($0.name).tag($0.id) }
+            }
+            TextField("Database name", text: $name)
+                .focused($nameFocused)
+                .dashboardQuietTextInput()
+            if let error {
+                Text(error)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .disabled(isCopying)
+                    .keyboardShortcut(.cancelAction)
+                Button(isCopying ? "Copying…" : "Copy") {
+                    onCopy(destinationSourceID, name)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isCopying || !canCopy)
+            }
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(DashboardPalette.foreground)
+        .padding(22)
+        .frame(width: 440)
+        .dashboardFormFocusDismissal { nameFocused = false }
+        .onAppear {
+            name = "\(database.name) copy"
+            destinationSourceID = destinations.first { $0.id != database.sourceID }?.id
+                ?? destinations.first?.id ?? ""
+            nameFocused = true
+        }
+        .onChange(of: destinations) { _, sources in
+            if !sources.contains(where: { $0.id == destinationSourceID }) {
+                destinationSourceID = sources.first?.id ?? ""
+            }
+        }
+    }
+}
+
+/// Dataset timestamps describe the committed source data, including offline replicas.
+enum DashboardDatabaseFreshness {
+    static func description(_ database: DashboardAgentDatabase) -> String {
+        let prefix = database.offline ? "Offline · " : ""
+        guard let updatedAt = database.updatedAt else {
+            return database.offline ? "Offline · Last synced snapshot" : "Managed SQLite database"
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: updatedAt)
+            ?? ISO8601DateFormatter().date(from: updatedAt)
+        let label = date?.formatted(date: .abbreviated, time: .shortened) ?? updatedAt
+        return "\(prefix)Data updated \(label)"
     }
 }

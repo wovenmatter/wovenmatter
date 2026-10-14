@@ -1,65 +1,84 @@
 # Workspaces and storage
 
-All agents within a workspace work from the same root. They can use the same
-files, instructions, research, and plans, whichever harness you choose.
-WovenMatter saves your conversations, notes, and other items in one local SQLite
-database, including conversations with agents in remote workspaces.
+Each project folder has one owning execution workspace and one fixed root
+directory. Conversations, notes, and assets are organized in Woven's internal
+SQLite history store; project files stay in their execution workspace.
+
+## Create a project folder
+
+Choose **New folder** in the sidebar, select its workspace, and enter a name.
+The owning workspace must be connected. **Create New** makes a blank directory
+with that name under the managed workspace root: `~/.woven-matter` on your Mac
+or `/home/.woven-matter` in a remote container.
+
+For **This Mac**, **Link Existing** lets you choose an existing project directory.
+Woven preserves its files and project instructions. New projects receive no
+preset directories, `AGENTS.md`, or `CLAUDE.md`.
+
+The workspace and root are fixed at creation. **Rename** changes the folder's
+name in Woven without renaming its directory. **Remove folder** asks whether to
+remove only the UI folder or also its directory and contents. The directory
+choice is available only for managed roots; external project directories are
+preserved. Conversations and notes remain in Woven.
+
+## Chats and reference locations
+
+**New chat** starts a draft with the selected agent in the current folder. The
+small plus beside a folder opens its agent chooser. Before the first message,
+use the composer's folder selector to choose a folder owned by that agent's
+workspace or **All Workspaces**. Sending the first message fixes the folder and
+working directory. **New chat** opens the agent chooser. Clicking an agent's name
+opens its most recent chat; the separate plus starts a new chat with that agent
+in the selected folder. Folder plus buttons open the chooser for that folder;
+the **All Workspaces** plus starts the same flow without assigning a folder.
+
+Each chat in All Workspaces uses its own directory under `~/.woven-matter/scratch` on
+the Mac or `/home/.woven-matter/scratch` in its remote workspace. Woven creates
+the directory when the chat launches, with a date, the first words of its initial
+message, and a short chat ID. The directory starts blank. Retries, resumes and
+title changes keep the same directory; deleting the chat keeps its working files.
+Scratch is reserved for these chat directories. Older sidebar folders become
+fixed to the selected execution workspace on first use, with a directory named
+for the folder. Existing files are preserved and these legacy roots are never
+marked for managed physical deletion. An unsent draft can still choose
+a project folder before its first message. Sessions
+from the former workspace layout remain readable as archived history and cannot
+be resumed; start a new chat for further work. Their existing files remain in
+place.
+
+Use a folder's **Reference locations** menu to link or unlink additional files
+and directories on the same execution workspace. Agents are told the available
+locations and use their harness's existing permissions. Woven does not inject
+instruction files from every reference location. Unlinking is not operating
+system permission revocation.
+
+Copy files explicitly when moving work between devices. There are no live
+cross-device project mounts or bidirectional folder synchronization.
 
 ## Where your work lives
 
 | Location | Contents |
 | --- | --- |
-| `~/.woven-matter` on your Mac | Shared local agent files and instructions |
-| `/home/.woven-matter` in each remote container | That workspace's shared agent files and instructions |
-| WovenMatter's Application Support folder | The app's SQLite database, including conversations and notes |
-| Each harness's home or service | Its credentials, configuration, and independently maintained history |
+| Managed root or linked directory | Project files and your project instructions |
+| Woven's Application Support folder on the Mac | Internal conversations, notes, schedules and settings; separate managed dataset files and remote replicas |
+| Remote service storage in the persistent container home | That workspace's managed dataset files |
+| Each harness's home or service | Credentials, configuration, and independently maintained history |
 
-The app's central work history and each workspace's files have different roles.
-Remote files stay on their host; saving transcripts centrally does not synchronize
-folders between workspaces. Agents use shared workspace files and the note tools
-provided for their conversation, rather than editing the app's SQLite store directly.
+Each named database is a separate SQLite file with one writable owner. Its
+schema belongs to the dataset and can contain multiple tables. These databases
+are linkable from any folder or artifact; they are separate from project roots
+and Woven's internal history/settings schema. See [Notes and data](notes-and-data.md).
 
-## Shared folder layout
-
-The [workspace tree](../../README.md#workspace-layout) shows the initial layout.
-`repos` holds repository checkouts and `databases` holds named data folders.
-Use `guides`, `plans`, `research`, and `work_logs` for work you want to keep,
-`outbox` for deliverables, and `scratch` for temporary work, experiments, and reusable scripts.
-Use `skills` for skills shared across harnesses in this workspace.
-
-`AGENTS.md` contains a managed instruction block. Initialization updates that
-block and preserves the text outside it. New workspaces get a `CLAUDE.md` link
-to `AGENTS.md`; an existing file or link is preserved.
-
-In **Settings → Local agent workspace**, use **Choose repositories folder** or
-**Choose databases folder** to link folders you already use. These controls and
-**Open workspace** remain available if setup fails. Existing folders and links
-are shared by development and regular builds; startup reads them without resetting
-their destinations. Populated default folders also work normally.
-
-When you replace a populated default folder, the app asks before changing it.
-**Copy files and relink** keeps the original folder as a backup and copies its
-contents into the selected destination. **Keep backup only** preserves the original
-folder without copying. Neither option overwrites an existing destination item;
-name conflicts remain in the backup and are listed afterward. Use **Open backup**
-to review or move those files. Cancelling keeps the current folder in use.
-If a copy fails, the original folder stays in use. Completed copies may remain
-in the destination, but an incomplete repository is not left under its final name;
-you can fix the reported error and retry.
-
-Workspace folders use lowercase names. Updates migrate older spellings and
-`.scratch` while preserving files and links. If files conflict, both copies are
-kept; the migrated copy receives a `.migrated-N` suffix.
+Woven adds a short tool-discovery instruction block only to Woven-launched
+sessions, alongside native harness prompts and your project instructions. It
+does not overwrite project instruction files or user-global instructions.
 
 ## Remote storage
 
-Each remote workspace is a complete Linux container with a persistent home.
-Several harnesses share that home, and several workspaces can run on one host.
-Updates and recreation preserve the named home volume. Removing the container
-and removing its data are separate choices.
+Each remote workspace is a Linux container with a persistent home. Updates and
+recreation preserve its named home volume. Removing the container and removing
+its data are separate choices. Remote project files stay on their host;
+centrally saved transcripts do not synchronize them.
 
-Back up both your workspace files and WovenMatter's local data. Keeping a volume
-across container updates does not protect it from loss of the host or disk.
-
-Optional Buzz links connect existing local Buzz workspaces. Their files stay in
-those workspaces, and linking them does not create a remote container.
+Back up both your project files and Woven's application/service data. Keeping a
+volume across updates does not protect it from loss of the host or disk.

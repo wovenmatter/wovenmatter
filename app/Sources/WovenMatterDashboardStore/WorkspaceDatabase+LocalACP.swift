@@ -12,8 +12,6 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
   public let model: String?
   public let thinking: String?
   public let permission: String?
-  public let buzzWorkspaceLinkID: UUID?
-  public let buzzAgentID: String?
   public let remoteWorkspaceID: UUID?
 
   public init(
@@ -24,8 +22,6 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
     model: String? = nil,
     thinking: String? = nil,
     permission: String? = nil,
-    buzzWorkspaceLinkID: UUID? = nil,
-    buzzAgentID: String? = nil,
     remoteWorkspaceID: UUID? = nil
   ) {
     self.conversationID = conversationID
@@ -35,8 +31,6 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
     self.model = model
     self.thinking = thinking
     self.permission = permission
-    self.buzzWorkspaceLinkID = buzzWorkspaceLinkID
-    self.buzzAgentID = buzzAgentID
     self.remoteWorkspaceID = remoteWorkspaceID
   }
 }
@@ -124,12 +118,18 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
-    hermesImport: HermesSessionImport? = nil,
     requestedConversationID: UUID? = nil,
-    gatewayAgentID: UUID? = nil,
-    folderID: String? = nil
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) throws -> String {
-    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID, gatewayAgentID: gatewayAgentID, folderID: folderID) }
+    try transaction {
+      let id = try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
+      if let executionRoot {
+        try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
+          location: executionRoot.location, defaultPath: executionRoot.defaultPath)
+      }
+      return id
+    }
   }
 
   @discardableResult
@@ -140,10 +140,8 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
-    hermesImport: HermesSessionImport? = nil,
     requestedConversationID: UUID? = nil,
-    gatewayAgentID: UUID? = nil,
-    folderID: String? = nil
+    allowMissingCalendarFolder: Bool = false
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
@@ -151,47 +149,26 @@ extension WorkspaceDatabaseConnection {
           ) else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
-    let operatorID = try localMutationOperatorIDUnlocked()
-    try validateFolderUnlocked(id: folderID, operatorID: operatorID)
     if openCodeAssociation != nil && runtimeKind != .opencode { throw LocalACPSessionDatabaseError.runtimeUnavailable }
     if let snapshot = importedOpenCodeSnapshot {
       guard let link = openCodeAssociation, snapshot.info["id"].text == link.sessionID,
             snapshot.olderCursor == nil else { throw WorkspaceDatabaseError.corruptRow }
     }
-    if hermesImport != nil && runtimeKind != .hermes { throw LocalACPSessionDatabaseError.runtimeUnavailable }
 
-      if let imported = hermesImport {
-        let requested = HermesGatewayClient.parseIdentity(imported.identity)
-        guard requested.home != nil, !requested.storedID.isEmpty else { throw WorkspaceDatabaseError.corruptRow }
-        let existing = try prepareUnlocked("SELECT conversation_id, acp_session_id FROM desktop_local_acp_sessions WHERE runtime_kind='hermes' AND acp_session_id IS NOT NULL")
-        defer { sqlite3_finalize(existing) }
-        while sqlite3_step(existing) == SQLITE_ROW {
-          let linked = HermesGatewayClient.parseIdentity(try text(existing, column: 1))
-          if linked.storedID == requested.storedID && (linked.home == nil || linked.home == requested.home) {
-            return try text(existing, column: 0)
-          }
-        }
-      }
       if let link = openCodeAssociation {
         let existing = try prepareUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?")
         defer { sqlite3_finalize(existing) }
         try bind(link.connectionID, at: 1, to: existing); try bind(link.sessionID, at: 2, to: existing)
         if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
       }
-      let agentID: String
-      if let gatewayAgentID {
-        guard runtimeKind == .openclaw else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
-        let linked = try prepareUnlocked("SELECT 1 FROM desktop_openclaw_gateway_links WHERE agent_id = ?")
-        defer { sqlite3_finalize(linked) }
-        try bind(gatewayAgentID.uuidString.lowercased(), at: 1, to: linked)
-        guard sqlite3_step(linked) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
-        agentID = gatewayAgentID.uuidString.lowercased()
-      } else {
-        agentID = try ensureLocalCLIAgentUnlocked(
-          runtimeKind: runtimeKind, ownerDeviceID: ownerDeviceID,
-          operatorID: operatorID, status: .ready, updatedAt: createdAt
-        )
-      }
+      let operatorID = try localMutationOperatorIDUnlocked()
+      let agentID = try ensureLocalCLIAgentUnlocked(
+        runtimeKind: runtimeKind,
+        ownerDeviceID: ownerDeviceID,
+        operatorID: operatorID,
+        status: .ready,
+        updatedAt: createdAt
+      )
       let conversationID = (requestedConversationID ?? UUID()).uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
@@ -204,9 +181,9 @@ extension WorkspaceDatabaseConnection {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned, folder_id
+          created_at, updated_at, desktop_owned
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1, ?)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -219,7 +196,6 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
-      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -239,20 +215,7 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 7, to: session)
       try bind(timestamp, at: 8, to: session)
       try stepDone(session)
-      try adoptReservedSessionOriginUnlocked(conversationID)
-      if gatewayAgentID != nil {
-        let gateway = try prepareUnlocked("""
-          INSERT INTO desktop_openclaw_gateway_sessions
-            (conversation_id, agent_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-          """)
-        defer { sqlite3_finalize(gateway) }
-        try bind(conversationID, at: 1, to: gateway)
-        try bind(agentID, at: 2, to: gateway)
-        try bind("agent:main:wovenmatter:\(conversationID)", at: 3, to: gateway)
-        try bind(timestamp, at: 4, to: gateway)
-        try bind(timestamp, at: 5, to: gateway)
-        try stepDone(gateway)
-      }
+      try adoptReservedSessionOriginUnlocked(conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
       if let link = openCodeAssociation {
         let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
@@ -264,122 +227,6 @@ extension WorkspaceDatabaseConnection {
         try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
           kind: "import.snapshot", payload: String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self), completeness: "native-export"))
         try saveOpenCodeSnapshotUnlocked(snapshot, conversationID: conversationID, fallbackTitle: sessionTitle)
-      }
-      if let imported = hermesImport {
-        try markSessionImportedUnlocked(conversationID: conversationID)
-        var nativeBatch = try imported.nativeArchiveBatch()
-        let nativeHome = HermesGatewayClient.parseIdentity(imported.identity).home ?? ""
-        let homeParts = nativeHome.split(separator: "/")
-        let sourceScope = homeParts.count > 1 && homeParts[0] == "remote-workspaces"
-          && UUID(uuidString: String(homeParts[1])) != nil
-          ? "remote:" + String(homeParts[1]).lowercased() : "local"
-        nativeBatch.sourceID = sourceScope + ":" + nativeBatch.sourceID
-        try recordNativeRunRecordsUnlocked(nativeBatch, conversationID: conversationID, agentID: agentID, harness: "hermes")
-        let touch = try prepareUnlocked("UPDATE dashboard_conversations SET last_message_at = MAX(last_message_at, (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = ?)), updated_at = ? WHERE id = ?")
-        defer { sqlite3_finalize(touch) }
-        try bind(conversationID, at: 1, to: touch); try bind(Self.timestamp(Date()), at: 2, to: touch)
-        try bind(conversationID, at: 3, to: touch); try stepDone(touch)
-        let association = try prepareUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=? WHERE conversation_id=?")
-        defer { sqlite3_finalize(association) }
-        try bind(imported.identity, at: 1, to: association); try bind(conversationID, at: 2, to: association); try stepDone(association)
-        let message = try prepareUnlocked("""
-          INSERT INTO dashboard_messages (id, conversation_id, role, message_source, content, status,
-            governing_plane, authority_kind, authority_device_id, authority_agent_id, created_at, updated_at, desktop_owned)
-          VALUES (?, ?, ?, 'hermes_history', ?, 'completed', 'wovenmatter_macos', 'device_owned', ?, ?, ?, ?, 1)
-          """)
-        defer { sqlite3_finalize(message) }
-        var seen: Set<Double> = []
-        var previousDate = createdAt.addingTimeInterval(-0.001)
-        var toolOwners: [String: String] = [:]
-        var checklistCalls: [String: (ownerID: String, function: HermesValue)] = [:]
-        var checklistRevision: Double = 0
-        let importedSessionID = HermesGatewayClient.parseIdentity(imported.identity).storedID
-        var lastAssistantID: String?
-        for row in imported.messages {
-          try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "hermes",
-            kind: "import.message", payload: row.json, completeness: "native-export"))
-          guard let rowID = row["id"].number, rowID >= 1, rowID <= 9_007_199_254_740_991, rowID.rounded() == rowID, seen.insert(rowID).inserted,
-                ["user", "assistant", "system", "tool"].contains(row["role"].text) else { throw WorkspaceDatabaseError.corruptRow }
-          let date = max(Date(timeIntervalSince1970: row["timestamp"].number ?? createdAt.timeIntervalSince1970), previousDate.addingTimeInterval(0.001))
-          previousDate = date
-          let rowTime = Self.timestamp(date)
-          let nativeMessageID = "hermes-" + conversationID + "-" + String(Int64(rowID))
-          let role = row["role"].text
-          let ownsChecklist = row["session_id"].isNull || row["session_id"].string == importedSessionID
-          let toolResult = role == "tool"
-          let toolID = row["tool_call_id"].string ?? row["tool_id"].string
-          let ownerID = toolResult ? (toolID.flatMap { toolOwners[$0] } ?? lastAssistantID ?? nativeMessageID) : nativeMessageID
-          let body = toolResult ? "" : row["content"].string ?? (row["content"].isNull ? "" : row["content"].json)
-          if !toolResult || ownerID == nativeMessageID {
-            sqlite3_reset(message); sqlite3_clear_bindings(message)
-            try bind(ownerID, at: 1, to: message)
-            try bind(conversationID, at: 2, to: message); try bind(toolResult ? "assistant" : role, at: 3, to: message)
-            try bind(body, at: 4, to: message); try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: message)
-            try bind(agentID, at: 6, to: message); try bind(rowTime, at: 7, to: message); try bind(rowTime, at: 8, to: message)
-            try stepDone(message)
-          }
-          if role == "assistant" { lastAssistantID = ownerID }
-          var activities: [AgentRunActivity] = []
-          if let reasoning = row["reasoning"].string ?? row["reasoning_content"].string, !reasoning.isEmpty {
-            activities.append(AgentRunActivity(id: nativeMessageID + ":reasoning", kind: .thought, content: reasoning))
-          }
-          if case .array(let calls) = row["tool_calls"] {
-            for (index, call) in calls.enumerated() {
-              let callID = call["id"].string ?? "\(nativeMessageID):tool:\(index)"
-              toolOwners[callID] = ownerID
-              let function = call["function"].isNull ? call : call["function"]
-              if role == "assistant", ownsChecklist, let nativeCallID = call["id"].string, !nativeCallID.isEmpty {
-                checklistCalls[nativeCallID] = (ownerID, function)
-              }
-              activities.append(AgentRunActivity(id: callID, kind: .tool, phase: "start",
-                title: function["name"].string, status: "unknown", toolName: function["name"].string,
-                rawInputJSON: function["arguments"].isNull ? nil : function["arguments"].json, rawPayloadJSON: call.json))
-            }
-          }
-          if toolResult {
-            activities.append(AgentRunActivity(id: toolID ?? nativeMessageID, kind: .tool, phase: "result",
-              title: row["name"].string, status: row["is_error"].bool ? "failed" : "completed", toolName: row["name"].string,
-              content: row["content"].string, rawOutputJSON: row["content"].json, rawPayloadJSON: row.json))
-            if ownsChecklist, let toolID, let paired = checklistCalls.removeValue(forKey: toolID),
-               paired.ownerID == ownerID, !row["is_error"].bool,
-               row["name"].isNull || row["name"].string == paired.function["name"].string {
-              let call = paired.function
-              let args = call["arguments"].string.flatMap { try? HermesValue.decode(Data($0.utf8)) } ?? call["arguments"]
-              let result = row["content"].string.flatMap { try? HermesValue.decode(Data($0.utf8)) } ?? row["content"]
-              if let checklist = HermesGatewayClient.checklistUpdate(["name": call["name"], "args": args, "result": result]),
-                 let revision = result["revision"].number, revision > checklistRevision {
-                checklistRevision = revision
-                activities.append(checklist)
-              }
-            }
-          }
-          if !activities.isEmpty {
-            let runID = ownerID + ":run"
-            let run = try prepareUnlocked("""
-              INSERT INTO dashboard_runs(id, conversation_id, user_id, agent_id, agent_codename,
-                governing_plane, authority_kind, authority_device_id, authority_agent_id,
-                assistant_message_id, status, started_at, completed_at, created_at, updated_at, desktop_owned)
-              SELECT ?, c.id, c.user_id, c.agent_id, c.agent_codename, c.governing_plane, c.authority_kind,
-                c.authority_device_id, c.authority_agent_id, ?, 'running', ?, ?, ?, ?, 1
-              FROM dashboard_conversations c WHERE c.id = ?
-              ON CONFLICT(id) DO UPDATE SET status = 'running', completed_at = excluded.completed_at
-              """)
-            defer { sqlite3_finalize(run) }
-            for (index, value) in [runID, ownerID, rowTime, rowTime, rowTime, rowTime, conversationID].enumerated() {
-              try bind(value, at: Int32(index + 1), to: run)
-            }
-            try stepDone(run)
-            for activity in activities {
-              try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: date)
-            }
-            let finish = try prepareUnlocked("UPDATE dashboard_runs SET status = 'completed' WHERE id = ?")
-            defer { sqlite3_finalize(finish) }
-            try bind(runID, at: 1, to: finish); try stepDone(finish)
-            let link = try prepareUnlocked("UPDATE dashboard_messages SET run_id = ? WHERE id = ?")
-            defer { sqlite3_finalize(link) }
-            try bind(runID, at: 1, to: link); try bind(ownerID, at: 2, to: link); try stepDone(link)
-          }
-        }
       }
       return conversationID
   }
@@ -394,9 +241,17 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
-    folderID: String? = nil
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) throws -> String {
-    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, folderID: folderID) }
+    try transaction {
+      let id = try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
+      if let executionRoot {
+        try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
+          location: executionRoot.location, defaultPath: executionRoot.defaultPath)
+      }
+      return id
+    }
   }
 
   @discardableResult
@@ -409,15 +264,11 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
-    folderID: String? = nil,
     allowMissingCalendarFolder: Bool = false
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
-
-    let operatorID = try localMutationOperatorIDUnlocked()
-    try validateFolderUnlocked(id: folderID, operatorID: operatorID)
 
       if let link = openCodeAssociation {
         guard runtimeKind == .opencode,
@@ -430,6 +281,7 @@ extension WorkspaceDatabaseConnection {
         try bind(link.sessionID, at: 2, to: existing)
         if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
       }
+      let operatorID = try localMutationOperatorIDUnlocked()
       let agentID = try ensureRemoteHarnessAgentUnlocked(
         runtimeKind: runtimeKind,
         remoteWorkspaceID: remoteWorkspaceID,
@@ -452,9 +304,9 @@ extension WorkspaceDatabaseConnection {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned, folder_id
+          created_at, updated_at, desktop_owned
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1, ?)
+          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -467,7 +319,6 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
-      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -509,8 +360,7 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("""
         SELECT session.conversation_id, session.runtime_kind,
           session.title, session.acp_session_id, session.model,
-          session.thinking, session.buzz_workspace_link_id,
-          session.buzz_agent_id, session.remote_workspace_id, session.permission
+          session.thinking, session.remote_workspace_id, session.permission
         FROM desktop_local_acp_sessions AS session
         JOIN dashboard_conversations AS conversation
           ON conversation.id = session.conversation_id
@@ -531,11 +381,8 @@ extension WorkspaceDatabaseConnection {
         acpSessionID: optionalText(statement, column: 3),
         model: optionalText(statement, column: 4),
         thinking: optionalText(statement, column: 5),
-        permission: optionalText(statement, column: 9),
-        buzzWorkspaceLinkID: optionalText(statement, column: 6)
-          .flatMap(UUID.init(uuidString:)),
-        buzzAgentID: optionalText(statement, column: 7),
-        remoteWorkspaceID: optionalText(statement, column: 8)
+        permission: optionalText(statement, column: 7),
+        remoteWorkspaceID: optionalText(statement, column: 6)
           .flatMap(UUID.init(uuidString:))
       )
     }
@@ -686,7 +533,7 @@ extension WorkspaceDatabaseConnection {
         JOIN desktop_local_acp_sessions AS session
           ON session.conversation_id = conversation.id
         WHERE conversation.id = ? AND conversation.desktop_owned = 1
-          AND conversation.deleted_at IS NULL
+          AND conversation.deleted_at IS NULL AND conversation.is_archived = 0
         """)
       defer { sqlite3_finalize(context) }
       try bind(conversationID, at: 1, to: context)
@@ -821,8 +668,6 @@ extension WorkspaceDatabaseConnection {
       try bind(conversationID, at: 4, to: conversation)
       try stepDone(conversation)
 
-      try recordOpenClawInputUnlocked(conversationID: conversationID, localRunID: identifiers.runID,
-        remoteRunID: identifiers.runID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
     }
   }
@@ -1145,8 +990,6 @@ extension WorkspaceDatabaseConnection {
       try bind(authority.conversationID, at: 4, to: conversation)
       try stepDone(conversation)
 
-      try recordOpenClawInputUnlocked(conversationID: authority.conversationID, localRunID: runID,
-        remoteRunID: identifiers.userMessageID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
   }
 
@@ -1964,11 +1807,11 @@ extension WorkspaceDatabase {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
-    hermesImport: HermesSessionImport? = nil,
     requestedConversationID: UUID? = nil,
-    gatewayAgentID: UUID? = nil, folderID: String? = nil
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) async throws -> String {
-    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID, gatewayAgentID: gatewayAgentID, folderID: folderID) }
+    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot) }
   }
 
   @discardableResult
@@ -1980,9 +1823,11 @@ extension WorkspaceDatabase {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
-    requestedConversationID: UUID? = nil, folderID: String? = nil
+    requestedConversationID: UUID? = nil,
+    allowMissingCalendarFolder: Bool = false,
+    executionRoot: SessionCreationRoot? = nil
   ) async throws -> String {
-    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, folderID: folderID) }
+    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot) }
   }
 
   @discardableResult

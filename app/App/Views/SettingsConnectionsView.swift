@@ -85,19 +85,6 @@ struct SettingsConnectionsView: View {
             }
             DisclosureGroup("OpenRouter") { connectionContent("openrouter").padding(.leading, 12) }
             DisclosureGroup("OpenCode") { connectionContent("opencode-go").padding(.leading, 12) }
-            DisclosureGroup("Cursor") {
-                VStack(alignment: .leading, spacing: 8) {
-                Text(agent.cursorAccountStatus).font(.callout).foregroundStyle(.secondary)
-                Button("Refresh status") { Task { await agent.refreshCursorStatus() } }.buttonStyle(SettingsQuietButtonStyle())
-                Text("Usage limits only. Not available to Pi Durable.").font(.callout).foregroundStyle(.secondary)
-                Text("One account on this Mac. Signing in replaces the current account.").font(.caption).foregroundStyle(.secondary)
-                Button("Sign in to Cursor") { agent.signInCursor() }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(agent.busy || remote != nil)
-                if agent.signInProvider == "cursor" { signInSection }
-                else { completedSignInSection(for: "cursor") }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 24)
-            }
         }
     }
     private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {

@@ -40,7 +40,7 @@ They keep public APIs and domain-specific private helpers together.
 
 | Prior idea | Decision and reason |
 | --- | --- |
-| PR56: nine ApplicationModel extension files | Replace only the independent usage responsibility with a state-owning model. The proposed Buzz, OpenClaw, Hermes, OpenCode, LocalACP, messaging, workspace and conversation-change extensions otherwise share application state and would widen many private setters/helpers. Keep these coupled operations together for now. |
+| PR56: nine ApplicationModel extension files | Replace only the independent usage responsibility with a state-owning model. The proposed OpenClaw, Hermes, OpenCode, LocalACP, messaging, workspace and conversation-change extensions otherwise share application state and would widen many private setters/helpers. Keep these coupled operations together for now. |
 | PR56: database domain extensions | Reuse the responsibility-based organization, extracting exact current-main implementations. Keep private lock/connection behind narrow primitives rather than exposing both across the module. |
 | PR56: Agents includes surface preferences, Hermes results and ownership | Move surface/ownership operations to Workspace; give Hermes persistence its own domain. Agents owns identity, reconciliation and display metadata. |
 | PR56: Notes includes folders/calendar, LocalACP includes mediated note editing | Group folders/calendar with workspace navigation and keep note recovery beside note editing. Session/run writes call the note-context helper inside their original transaction. |
@@ -102,16 +102,6 @@ except the explicitly documented access qualifiers and lock/row-count access.
 - `localCLIAgentID`, `remoteHarnessAgentID`, `deterministicAgentID`, `ensureRemoteHarnessAgentUnlocked`.
 - `ensureRemoteHarnessAgent`, `ensureLocalCLIAgentUnlocked`, `reconcileLocalCLIAgentCatalog`, `dashboardAgents`.
 - `renameOpenClawAgent`, `renameHermesAgent`, `renameOpenCodeAgent`, `agentRuntimeMetadata`.
-
-### WorkspaceDatabase+Buzz.swift
-
-Public value/error types: `BuzzWorkspaceDatabaseError`, `BuzzLocalAgentLaunchSource`.
-
-- `upsertBuzzWorkspaceLink`, `upsertBuzzWorkspaceLinkUnlocked`, `buzzWorkspaceLinks`, `buzzWorkspaceLinksUnlocked`.
-- `deleteBuzzWorkspaceLink`, `enrollBuzzWorkspaceAgent`, `buzzWorkspaceAgentEnrollments`, `removeBuzzWorkspaceAgentEnrollment`.
-- `buzzWorkspaceSnapshot`, `buzzLocalAgentLaunchSource`, `buzzBoundLocalACPConversationIDs`, `buzzWorkspaceLink`.
-- `buzzWorkspaceAgentEnrollment`, `reconcileBuzzWorkspaceAgentUnlocked`, `reconcileBuzzWorkspaceAgent`, `retireBuzzWorkspaceAgent`.
-- `createBuzzLocalACPSession`.
 
 ### WorkspaceDatabase+Conversations.swift
 

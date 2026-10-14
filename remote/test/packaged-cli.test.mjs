@@ -6,8 +6,9 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { spawnSync } from 'node:child_process'
 
-test('deployed service layout loads CLI integrations and installs a standalone OpenClaw plugin', async t => {
+test('deployed service layout loads retained CLI integrations and shared instructions', async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'woven-packaged-cli-')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   // Match remote/Dockerfile's COPY destinations without building an image.
@@ -41,17 +42,16 @@ test('deployed service layout loads CLI integrations and installs a standalone O
   assert.ok(existsSync(launched[1]))
   await relay.stopAll()
 
-  const { prepareOpenClawResults } = await load('prepare-openclaw-results.mjs')
-  await prepareOpenClawResults({ environment: { HOME: home }, execute: async () => ({ stdout: '{}' }) })
-  // A copied plugin must still load after the original service/app is removed.
-  rmSync(service, { recursive: true, force: true })
-  const plugin = await import(pathToFileURL(join(home, '.wovenmatter/wovenmatter-scheduled-results/index.mjs')))
-  const methods = new Map()
-  plugin.default.register({ pluginConfig: { directory: join(root, 'results') }, on() {},
-    registerGatewayMethod: (name, callback) => methods.set(name, callback) })
-  let ready
-  methods.get('wovenmatter.cli.bind')({ params: { sessionKey: 'native', inputID: 'input',
-    context: { executablePath: '/app/wovenmatter', captureID: 'capture' } },
-    respond: (ok, result) => { assert.equal(ok, true); ready = result.ready } })
-  assert.equal(ready, true)
+  const instructions = await import(pathToFileURL(join(service, 'harnesses/cli/instructions.mjs')))
+  assert.match(instructions.wovenInstructions, /wovenmatter help/)
+  // SDK updates copy src into an independent generation. Its worker still
+  // points at the central shipped resource, without copying model instructions.
+  const generation = join(root, 'generation/src')
+  cpSync(resolve(import.meta.dirname, '../../default-agent/src/woven-instructions.mjs'),
+    join(generation, 'woven-instructions.mjs'))
+  const loaded = spawnSync(process.execPath, ['--input-type=module', '--eval',
+    `const { wovenInstructions } = await import(${JSON.stringify(pathToFileURL(join(generation, 'woven-instructions.mjs')).href)}); process.stdout.write(wovenInstructions);`],
+    { env: { ...process.env, WOVENMATTER_INSTRUCTIONS_FILE: join(service, 'harnesses/woven-instructions.txt') }, encoding: 'utf8' })
+  assert.equal(loaded.status, 0, loaded.stderr)
+  assert.equal(loaded.stdout, instructions.wovenInstructions)
 })

@@ -122,6 +122,95 @@ struct DashboardRevealRailButton: View {
     }
 }
 
+/// Observe clicks in this form's native window without consuming control events.
+/// Native text fields do not reliably deliver their surrounding SwiftUI tap gesture.
+private struct DashboardFormFocusDismissalMonitor: NSViewRepresentable {
+    let onDismiss: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.update(view: view, onDismiss: onDismiss)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.update(view: view, onDismiss: onDismiss)
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    @MainActor
+    final class Coordinator {
+        private weak var view: NSView?
+        private var eventMonitor: Any?
+        private var onDismiss: () -> Void = {}
+
+        func update(view: NSView, onDismiss: @escaping () -> Void) {
+            self.view = view
+            self.onDismiss = onDismiss
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+                [weak self] event in
+                guard let self, let view = self.view, let window = view.window else { return event }
+                guard event.window === window,
+                      let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return event }
+                let field = (editor.delegate as? NSView) ?? editor
+                let fieldPoint = field.convert(event.locationInWindow, from: nil)
+                guard !field.bounds.contains(fieldPoint) else { return event }
+                self.onDismiss()
+                window.endEditing(for: nil)
+                window.makeFirstResponder(nil)
+                return event
+            }
+        }
+
+        func stop() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+        }
+    }
+}
+
+private struct DashboardQuietTextInputModifier: ViewModifier {
+    @Environment(\.dashboardTheme) private var theme
+    let font: Font
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .font(font)
+            .foregroundStyle(DashboardPalette.foreground)
+            .focusEffectDisabled()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(theme.palette.input, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius)
+                    .stroke(theme.palette.border, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
+extension View {
+    func dashboardFormFocusDismissal(_ onDismiss: @escaping () -> Void) -> some View {
+        background {
+            DashboardFormFocusDismissalMonitor(onDismiss: onDismiss)
+                .allowsHitTesting(false)
+        }
+    }
+
+    func dashboardQuietTextInput(font: Font = .system(size: 13)) -> some View {
+        modifier(DashboardQuietTextInputModifier(font: font))
+    }
+}
+
 struct DashboardFolderNamePopover: View {
     let title: String
     let actionTitle: String
@@ -139,8 +228,8 @@ struct DashboardFolderNamePopover: View {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
             TextField("Folder name", text: $name)
-                .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
+                .dashboardQuietTextInput()
                 .onSubmit {
                     if canCommit { onCommit() }
                 }
@@ -155,6 +244,7 @@ struct DashboardFolderNamePopover: View {
         }
         .padding(16)
         .frame(width: 280)
+        .dashboardFormFocusDismissal { nameFocused = false }
         .task { nameFocused = true }
     }
 }
@@ -216,13 +306,15 @@ struct DashboardRailRow: View {
     var onRename: (() -> Void)? = nil
     var exportMenuTitle: String? = nil
     var onExport: (() -> Void)? = nil
+    var referenceMenuTitle: String? = nil
+    var onManageReferences: (() -> Void)? = nil
     var destructiveMenuTitle: String? = nil
     var onDelete: (() -> Void)? = nil
     let action: () -> Void
 
     private var hasContextMenu: Bool {
         onTogglePin != nil || onMoveUp != nil || onMoveDown != nil
-            || onRename != nil || onExport != nil || onDelete != nil
+            || onRename != nil || onExport != nil || onManageReferences != nil || onDelete != nil
     }
 
     var body: some View {
@@ -300,6 +392,9 @@ struct DashboardRailRow: View {
                 }
                 if let renameMenuTitle, let onRename {
                     Button(renameMenuTitle, action: onRename)
+                }
+                if let referenceMenuTitle, let onManageReferences {
+                    Button(referenceMenuTitle, action: onManageReferences)
                 }
                 if let exportMenuTitle, let onExport {
                     Divider()
@@ -382,7 +477,6 @@ struct DashboardConversationRow: View {
     let isRunning: Bool
     @Binding var detailCardState: DashboardConversationDetailCardState
     let folders: [WorkspaceFolderRecord]
-    let onMoveConversation: (String, String?) -> Void
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let action: () -> Void
 
@@ -490,7 +584,6 @@ struct DashboardConversationRow: View {
             conversation: conversation,
             folders: folders,
             isRunning: isRunning,
-            onMove: onMoveConversation,
             onAction: onConversationAction
         ))
         .onDisappear {
@@ -533,7 +626,7 @@ struct DashboardConversationRow: View {
     }
 }
 
-/// Hover pop-out for a workspace chat row, including names for OpenClaw agents.
+/// Hover pop-out for a workspace chat row.
 struct DashboardConversationHoverCard: View {
     let presentation: DashboardConversationRowPresentation
 
@@ -548,7 +641,7 @@ struct DashboardConversationHoverCard: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 hoverRow(icon: .folder, text: meta.folderLabel)
-                if let agent = presentation.agent, agent.runtimeKind == .openclaw || agent.runtimeKind == .hermes || agent.runtimeKind == .opencode {
+                if let agent = presentation.agent, agent.runtimeKind == .opencode {
                     hoverRow(icon: .bot, text: dashboardAgentDisplayName(agent))
                 }
                 if let runtime = meta.runtimeLabel {
@@ -561,9 +654,6 @@ struct DashboardConversationHoverCard: View {
                     )
                 }
                 hoverRow(icon: meta.locationKind.glyph, text: meta.locationLabel)
-                if let workspace = meta.buzzWorkspaceLabel {
-                    hoverRow(icon: .panelTop, text: workspace)
-                }
                 if presentation.conversation.isScheduledTask {
                     Text("Scheduled Task")
                         .font(.system(size: 12))
@@ -772,7 +862,7 @@ func dashboardAgentGlyph(
         if key.contains("spark") { return .sparkles }
         if key.contains("brain") { return .brain }
         if key.contains("user") { return .userRound }
-        if key.contains("cpu") || agent.runtimeKind == .pi { return .cpu }
+        if key.contains("cpu") { return .cpu }
         return agent.executionLocation == .local ? .monitor : .bot
     }
 }

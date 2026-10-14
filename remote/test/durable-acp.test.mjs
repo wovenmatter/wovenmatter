@@ -180,27 +180,6 @@ test('natural process exit settles interrupted prompts and survives service rest
 })
 
 
-test('Pi prompt settlement and failed turns remain recoverable after reconnect', async t => {
-  const f = await fixture(t)
-  f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
-  const call = (op, body = {}) => f.call(op, { harnessID: 'pi', ...body })
-  await call('attach')
-  await call('message', { deliveryID: 'pi-prompt', message: {
-    type: 'prompt', id: 'p1', message: 'fixture', _meta: { wovenRunID: 'pi-run' },
-  } })
-  assert.equal(JSON.parse(f.received())._meta, undefined)
-  f.child.stdout.write(JSON.stringify({type: 'response', id: 'p1', success: true}) + '\n')
-  f.child.stdout.write(JSON.stringify({type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: 'Hello'}}) + '\n')
-  f.child.stdout.write(JSON.stringify({type: 'message_end', message: {role: 'assistant', content: [{type: 'text', text: 'Hello'}], stopReason: 'error', errorMessage: 'fixture failure'}}) + '\n')
-  f.child.stdout.write(JSON.stringify({type: 'agent_settled'}) + '\n')
-  await new Promise(resolve => setImmediate(resolve))
-  const attached = await call('attach')
-  assert.equal(attached.snapshot.busy, false)
-  assert.deepEqual(attached.snapshot.recoveredRuns, [{runID: 'pi-run', content: 'Hello', error: 'fixture failure'}])
-  assert.equal(f.launches(), 1)
-})
-
-
 test('stream output batches disk sync while terminal receipt flushes the complete recovery', async t => {
   const f = await fixture(t)
   let syncs = 0
@@ -363,37 +342,6 @@ for (const latestFailed of [false, true]) test(`concurrent ACP recovery follows 
   assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: '', ...(latestFailed ? { error: 'turn failed' } : {}) }])
 })
 
-for (const rejected of [false, true]) test(`Pi steering preflight retains one recovery through an old settlement (rejected=${rejected})`, async t => {
-  const f = await fixture(t)
-  f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
-  const call = (op, body = {}) => f.call(op, { harnessID: 'pi', ...body })
-  const emit = message => f.child.stdout.write(JSON.stringify(message) + '\n')
-  const tick = () => new Promise(resolve => setImmediate(resolve))
-  await call('attach')
-  const prompt = id => ({ deliveryID: id, message: { type: 'prompt', id, message: id, _meta: { wovenRunID: 'run' }, ...(id === 'first' ? {} : { streamingBehavior: 'steer' }) } })
-  await call('message', prompt('first'))
-  emit({ type: 'response', id: 'first', success: true })
-  emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'before ' } })
-  await tick()
-  await call('message', prompt('second'))
-  assert.equal((await call('message', prompt('second'))).duplicate, true)
-  emit({ type: 'agent_settled' })
-  await tick()
-  assert.equal((await call('attach')).snapshot.busy, true)
-  emit({ type: 'response', id: 'second', success: !rejected, ...(rejected ? { error: 'rejected' } : {}) })
-  if (!rejected) emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'after' } })
-  await tick()
-  if (rejected) {
-    await call('message', { deliveryID: 'state', message: { type: 'get_state', id: 'state' } })
-    emit({ type: 'response', id: 'state', success: true, data: { isStreaming: false, isCompacting: false, pendingMessageCount: 0 } })
-  } else emit({ type: 'agent_settled' })
-  await tick()
-  const done = (await call('attach')).snapshot
-  assert.equal(done.busy, false)
-  assert.deepEqual(done.recoveredRuns, [{ runID: 'run', content: rejected ? 'before ' : 'before after' }])
-  assert.equal(f.received().includes('_meta'), false)
-})
-
 test('late same-run ACP continuation extends recovery instead of duplicating or losing its prefix', async t => {
   const f = await fixture(t)
   await f.call('attach')
@@ -425,11 +373,10 @@ test('late Codex steering reclaims completed recovery before starting its detach
   assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [{ runID: 'run', content: 'before after' }])
 })
 
-for (const mode of ['codex', 'codex-paged', 'pi']) test(`stdio relay forwards continuation output after its last request receipt (${mode})`, { timeout: 5000 }, async t => {
+for (const mode of ['codex', 'codex-paged']) test(`stdio relay forwards continuation output after its last request receipt (${mode})`, { timeout: 5000 }, async t => {
   const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
   const f = await fixture(t)
-  const pi = mode === 'pi', count = mode === 'codex-paged' ? 260 : 1
-  if (pi) f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
+  const count = mode === 'codex-paged' ? 260 : 1
   const input = new PassThrough(), output = new PassThrough(), observed = []
   let buffer = ''
   output.on('data', bytes => {
@@ -453,47 +400,38 @@ for (const mode of ['codex', 'codex-paged', 'pi']) test(`stdio relay forwards co
     })])
     return { ok: true, json: async () => result }
   }
-  const running = runStdioRelay({ channelID: 'session', harnessID: pi ? 'pi' : 'test', token: 'fixture', input, output, request })
+  const running = runStdioRelay({ channelID: 'session', harnessID: 'test', token: 'fixture', input, output, request })
   t.after(async () => { input.end(); await running })
   const writeInput = message => input.write(JSON.stringify(message) + '\n')
   const native = () => f.received().trim().split('\n').filter(Boolean).map(JSON.parse)
-  const emit = message => f.child.stdout.write(JSON.stringify(pi ? message : { jsonrpc: '2.0', ...message }) + '\n')
+  const emit = message => f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
   const status = type => emit({ method: 'session/update', params: { sessionId: 'native', update: { _meta: { codex: { threadStatus: { type } } } } } })
-  const text = value => emit(pi ? { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: value } }
-    : { method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } } })
-  writeInput(pi ? { type: 'prompt', id: 1, message: 'start', _meta: { wovenRunID: 'run' } }
-    : { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } })
+  const text = value => emit({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } } })
+  writeInput({ jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } })
   await until(() => native().length === 1)
   const original = native()[0].id
-  if (pi) { emit({ type: 'response', id: original, success: true }); emit({ type: 'agent_start' }) }
-  else status('active')
+  status('active')
   text('before')
   await until(() => observed.some(message => JSON.stringify(message).includes('before')))
-  writeInput(pi ? { type: 'prompt', id: 2, streamingBehavior: 'steer', message: 'continue', _meta: { wovenRunID: 'run' } }
-    : { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenRunID: 'run' } } })
+  writeInput({ jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenRunID: 'run' } } })
   await until(() => native().length === 2)
   const steering = native()[1].id
-  if (pi) {
-    emit({ type: 'agent_settled' }); emit({ type: 'response', id: steering, success: true })
-  } else {
-    emit({ id: original, result: { stopReason: 'end_turn' } }); status('idle'); status('active')
-    emit({ id: steering, result: { outcome: 'startedNewTurn' } })
-  }
+  emit({ id: original, result: { stopReason: 'end_turn' } }); status('idle'); status('active')
+  emit({ id: steering, result: { outcome: 'startedNewTurn' } })
   await until(() => observed.some(message => message.id === 2))
   await new Promise(resolve => setImmediate(resolve))
-  if (pi) emit({ type: 'agent_start' })
   for (let i = 0; i < count; i++) text('continued')
-  if (pi) emit({ type: 'agent_settled' }); else status('idle')
+  status('idle')
   await until(() => observed.filter(message => JSON.stringify(message).includes('continued')).length === count)
   input.end()
   await running
   assert.equal(native().length, 2)
   await f.relay.stopAll()
   // Drain the natural-close journal entry queued by the fake child as well.
-  await f.call('poll', { harnessID: pi ? 'pi' : 'test' })
+  await f.call('poll', { harnessID: 'test' })
 })
 
-for (const pi of [false, true]) test(`stdio relay distinguishes a lost dispatch receipt from native rejection (pi=${pi})`, { timeout: 5000 }, async () => {
+test('stdio relay distinguishes a lost dispatch receipt from native rejection', { timeout: 5000 }, async () => {
   const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
   const input = new PassThrough(), output = new PassThrough()
   let result
@@ -503,41 +441,19 @@ for (const pi of [false, true]) test(`stdio relay distinguishes a lost dispatch 
     if (url.endsWith('/message')) throw new Error('connection lost after dispatch')
     return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
   }
-  input.write(JSON.stringify(pi ? { type: 'prompt', id: 1, streamingBehavior: 'steer', message: 'continue' }
-    : { jsonrpc: '2.0', id: 1, method: '_session/steering', params: { sessionId: 'native' } }) + '\n')
-  await runStdioRelay({ channelID: 'session', harnessID: pi ? 'pi' : 'test', token: 'fixture', input, output, request })
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: '_session/steering', params: { sessionId: 'native' } }) + '\n')
+  await runStdioRelay({ channelID: 'session', harnessID: 'test', token: 'fixture', input, output, request })
   assert.equal(result.id, 1)
-  assert.equal(pi ? result._meta.deliveryUncertain : result.error.data.deliveryUncertain, true)
+  assert.equal(result.error.data.deliveryUncertain, true)
 })
 
-test('explicit Stop during Pi preflight retires the workspace-owned process before reattachment', async t => {
-  const f = await fixture(t)
-  f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
-  const call = (operation, body = {}) => f.call(operation, { harnessID: 'pi', ...body })
-  await call('attach')
-  await call('message', { deliveryID: 'prompt', message: { type: 'prompt', id: 'p1', message: 'start', _meta: { wovenRunID: 'run' } } })
-  await call('message', { deliveryID: 'steer', message: { type: 'prompt', id: 'p2', streamingBehavior: 'steer', message: 'continue', _meta: { wovenRunID: 'run' } } })
-  const stopped = await call('message', { deliveryID: 'stop', message: { type: 'abort', id: 'stop', _meta: { wovenStopPreflight: true } } })
-  assert.equal(stopped.stoppedPreflight, true)
-  assert.equal(f.relay.hasActiveRuntime('pi'), false)
-  const attached = await call('attach')
-  assert.equal(attached.state, 'stopped')
-  assert.equal(attached.snapshot.busy, false)
-  assert.match(attached.snapshot.recoveredRuns[0].error, /stopped before completion/)
-})
-for (const harnessID of ['test', 'pi']) {
+for (const harnessID of ['test']) {
   test(`${harnessID} reconnect waits for restored approval beyond the load deadline`, { timeout: 2000 }, async () => {
     const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
     const input = new PassThrough(), output = new PassThrough()
-    const pi = harnessID === 'pi'
-    const approval = pi
-      ? { type: 'extension_ui_request', id: 'approval', method: 'confirm', title: 'Resume approval' }
-      : { jsonrpc: '2.0', id: 'approval', method: 'session/request_permission', params: { sessionId: 'native' } }
-    const reply = pi
-      ? { type: 'extension_ui_response', id: 'approval', confirmed: true }
-      : { jsonrpc: '2.0', id: 'approval', result: { outcome: { outcome: 'selected', optionId: 'allow' } } }
-    const state = { session: { sessionId: 'native' }, piState: { sessionId: 'native' },
-      busy: true, pendingRequests: [approval], recoveredRuns: [{ runID: 'saved-run', content: 'Done' }] }
+    const approval = { jsonrpc: '2.0', id: 'approval', method: 'session/request_permission', params: { sessionId: 'native' } }
+    const reply = { jsonrpc: '2.0', id: 'approval', result: { outcome: { outcome: 'selected', optionId: 'allow' } } }
+    const state = { session: { sessionId: 'native' }, busy: true, pendingRequests: [approval], recoveredRuns: [{ runID: 'saved-run', content: 'Done' }] }
     let settle
     const settled = new Promise(resolve => { settle = resolve })
     const messages = [], delivered = []
@@ -566,17 +482,16 @@ for (const harnessID of ['test', 'pi']) {
       }
       return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: structuredClone(state), events: [] }) }
     }
-    input.write(JSON.stringify(pi ? { type: 'get_state', id: 1 }
-      : { jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
     await runStdioRelay({ channelID: 'approval', harnessID, token: 'fixture', input, output, request, loadTimeout: 0 })
     assert.deepEqual(delivered, [reply], 'reattachment must only forward the approval, never a new prompt')
     const result = messages.find(message => message.id === 1)
     assert.equal(result.error, undefined)
-    assert.deepEqual((pi ? result.data : result.result)._meta.recoveredRuns, state.recoveredRuns)
+    assert.deepEqual(result.result._meta.recoveredRuns, state.recoveredRuns)
   })
 }
 
-for (const notifyOnly of [false, true]) {
+for (const notifyOnly of [false]) {
   test(`reconnect still times out without a pending dialog (notify only: ${notifyOnly})`, async () => {
     const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
     const input = new PassThrough(), output = new PassThrough()
@@ -590,18 +505,17 @@ for (const notifyOnly of [false, true]) {
     })
     const request = async (url, options) => {
       if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', events: [],
-        snapshot: { session: { sessionId: 'native' }, piState: { sessionId: 'native' }, busy: true,
-          pendingRequests: notifyOnly ? [{ type: 'extension_ui_request', id: 'notice', method: 'notify', message: 'Working' }] : [] } }) }
+        snapshot: { session: { sessionId: 'native' }, busy: true,
+          pendingRequests: [] } }) }
       assert.ok(url.endsWith('/poll'), 'timed-out recovery must not send a prompt')
       return await new Promise((_, reject) => {
         if (options.signal.aborted) reject(options.signal.reason)
         else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
       })
     }
-    input.write(JSON.stringify(notifyOnly ? { type: 'get_state', id: 1 }
-      : { jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
-    await runStdioRelay({ channelID: 'busy', harnessID: notifyOnly ? 'pi' : 'test', token: 'fixture', input, output, request, loadTimeout: 0 })
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
+    await runStdioRelay({ channelID: 'busy', harnessID: 'test', token: 'fixture', input, output, request, loadTimeout: 0 })
     const result = messages.find(message => message.id === 1)
-    assert.match(notifyOnly ? result.error : result.error.message, /still running/)
+    assert.match(result.error.message, /still running/)
   })
 }

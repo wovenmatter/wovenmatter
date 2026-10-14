@@ -79,6 +79,30 @@ CPU-specific native binary dependency.
   behavior are unavailable. Memory pressure can terminate the WebKit process;
   native code reports that interruption and keeps prior workspace files intact.
 
+## Pi Durable code mode scheduling and watchdog
+
+Code mode forwards awaited native calls as Pi Durable SDK-owned tool tasks. There
+is no custom numeric tool-call concurrency ceiling in the worker, native bridge,
+or SDK adapter, and no total tool-call budget. Independent calls can run together
+using `Promise.all`; the SDK retains validation, hooks, task ownership, cancellation,
+and recovery. Model tool rounds retain the SDK's native parallel/sequential policy.
+Existing serialization for whole-conversation code checkpoints and per-workspace
+file publication protects shared state; it is not a global tool concurrency cap.
+Old saved `concurrentTools` values are ignored and are no longer written.
+
+The JavaScript code worker has a **120-second responsiveness watchdog**. Its timer
+resets on worker heartbeats; waiting for native tools, approvals, or inference is
+not a two-minute task deadline. Long synchronous computations can keep running by
+periodically calling `await yield_control()`. Explicit Stop still cancels work.
+Saved watchdog values below 120 seconds are upgraded, and longer saved values are
+retained. The separate Python startup watchdog above is unchanged.
+
+**Decision to revisit:** 120 seconds is the current chosen responsiveness budget,
+not a settled performance requirement. Reassess it using physical iPhone/iPad
+measurements of long computations, false interruptions, cancellation latency,
+battery and thermal behavior. iOS suspension and WebKit process termination remain
+separate lifecycle constraints; this watchdog does not grant background runtime.
+
 ## Reproducibility and licensing
 
 ```sh

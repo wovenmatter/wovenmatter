@@ -9,7 +9,7 @@ extension WorkspaceDatabaseConnection {
     defer { sqlite3_finalize(ownership) }
     try bind(entry.conversationID, at: 1, to: ownership)
     let existingCode = sqlite3_step(ownership)
-    let exists = existingCode == SQLITE_ROW
+    var exists = existingCode == SQLITE_ROW
     guard exists || existingCode == SQLITE_DONE else { throw stepError() }
     if exists {
       guard try text(ownership, column: 0) == workspace.id else { throw federationError("wrong_owner", "This conversation belongs to another execution workspace.") }
@@ -17,10 +17,12 @@ extension WorkspaceDatabaseConnection {
       // tombstone remains until an explicit restore, so one late record cannot
       // stall the entire origin's contiguous journal or resurrect the view.
     } else {
-      guard entry.kind == .conversation,
-            try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_conversations WHERE id = ?", bindings: [entry.conversationID]) == 0 else {
-        throw federationError("unknown_conversation", "Archive the conversation identity before its execution records; existing local identities cannot be claimed.")
-      }
+      guard entry.kind == .conversation else { throw federationError("unknown_conversation", "Archive the conversation identity before its execution records.") }
+    }
+    let collidesWithLocalConversation = !exists ? try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_conversations WHERE id = ?", bindings: [entry.conversationID]) != 0 : false
+    if entry.retainedExecution != nil || collidesWithLocalConversation {
+      try acceptRetainedExecutionIdentityUnlocked(entry, workspace: workspace)
+      exists = true
     }
     if let runID = entry.runID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
     let now = Self.timestamp(Date())
@@ -36,6 +38,7 @@ extension WorkspaceDatabaseConnection {
       if let runID = conversation.activeRunID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
       conversation.workspaceID = workspace.id; conversation.libraryID = workspace.libraryID
       if exists {
+        if entry.retainedExecution != nil { conversation.activeRunID = try federationConversationUnlocked(entry.conversationID)?.activeRunID }
         let canonical = try prepareUnlocked("SELECT title,folder_id,is_pinned FROM dashboard_conversations WHERE id=?")
         defer { sqlite3_finalize(canonical) }
         try bind(entry.conversationID, at: 1, to: canonical)
@@ -132,7 +135,8 @@ extension WorkspaceDatabaseConnection {
           """, values: [runID, entry.conversationID, try localMutationOperatorIDUnlocked(), workspace.executionDeviceID ?? workspace.ownerDeviceID,
                          workspace.ownerDeviceID, now, now])
       }
-      if let previous = transcript.activeRunID, previous != incoming.activeRunID {
+      let activeRunID = incoming.activeRunID ?? (entry.runID != nil && entry.runID != transcript.activeRunID ? transcript.activeRunID : nil)
+      if let previous = transcript.activeRunID, previous != activeRunID {
         let terminal = incoming.messages.last(where: { $0.runID == previous && $0.role == "assistant" })?.status ?? "completed"
         let status = ["completed", "failed", "cancelled", "interrupted"].contains(terminal) ? terminal : "completed"
         try companionExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=? WHERE id=?", values: [status, now, now, previous])
@@ -164,12 +168,12 @@ extension WorkspaceDatabaseConnection {
         let left = $0.element.sequence ?? Int64.max, right = $1.element.sequence ?? Int64.max
         return left == right ? $0.offset < $1.offset : left < right
       }.map(\.element)
-      transcript.activeRunID = incoming.activeRunID
+      transcript.activeRunID = activeRunID
       let statement = try prepareUnlocked("UPDATE companion_execution_conversations SET transcript = ? WHERE id = ?")
       defer { sqlite3_finalize(statement) }
       try bind(JSONEncoder().encode(transcript), at: 1, to: statement); try bind(entry.conversationID, at: 2, to: statement); try stepDone(statement)
       if var conversation = try federationConversationUnlocked(entry.conversationID) {
-        conversation.activeRunID = incoming.activeRunID
+        conversation.activeRunID = activeRunID
         if let message = incoming.messages.last { conversation.preview = String(message.content.prefix(300)) }
         conversation.updatedAt = now
         let update = try prepareUnlocked("UPDATE companion_execution_conversations SET conversation = ? WHERE id = ?")

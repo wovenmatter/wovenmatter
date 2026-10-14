@@ -51,7 +51,7 @@ struct ProgramStatusTests {
     #expect(status.status?.message == (access == "limited" ? nil : "Private diagnostic"))
   }
 
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .pi])
+  @Test(arguments: [AgentRuntimeKind.defaultAgent])
   func failedAdvisoryPersistenceCannotFailNativeSettlement(kind: AgentRuntimeKind) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -72,7 +72,7 @@ struct ProgramStatusTests {
     })
     _ = try await coordinator.accept(conversationID: session, content: "Work",
       launch: .init(runtimeKind: kind, executableURL: URL(filePath: "/fixture"), arguments: []),
-      workspace: .init(rootURL: directory, repositoriesURL: directory))
+      workspace: .init(rootURL: directory))
     for _ in 0..<200 {
       if try await database.conversationContent(id: session).runs.first?.status != "running" { break }
       try await Task.sleep(for: .milliseconds(10))
@@ -138,7 +138,7 @@ struct ProgramStatusTests {
     #expect(records.resolvedRecords.first { $0.id == "children/1" }?.app == "pi-durable")
   }
 
-  @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode })
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
   func persistenceIsBoundToActiveRunAcrossHarnesses(kind: AgentRuntimeKind) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -146,6 +146,8 @@ struct ProgramStatusTests {
     let url = directory.appending(path: "workspace.sqlite")
     let database = try await WorkspaceDatabase(url: url)
     let session = try await database.createLocalACPSession(runtimeKind: kind, title: "Worker", ownerDeviceID: UUID())
+    try await database.saveSessionExecutionRoot(id: session, folderID: nil,
+      location: .init(workspaceID: "device:fixture", rootPath: directory.path, managed: false), defaultPath: directory.path)
     try await database.setSessionTools(.init(enabled: [.sessions]), sessionID: session)
     let run = try await database.beginLocalACPRun(conversationID: session, content: "Work")
     try await database.recordProgramStatus(.init(state: .working, message: "Compacting context"), runID: run.runID)
@@ -200,7 +202,7 @@ struct ProgramStatusTests {
     #expect(try await status()?.state == .done)
   }
 
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .pi, .cursor, .grokBuild, .hermes, .openclaw])
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
   func coordinatorBindsReportsAndDecisionLifetimes(kind: AgentRuntimeKind) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -222,7 +224,7 @@ struct ProgramStatusTests {
     })
     _ = try await coordinator.accept(conversationID: session, content: "Work",
       launch: .init(runtimeKind: kind, executableURL: URL(filePath: "/fixture"), arguments: []),
-      workspace: .init(rootURL: directory, repositoriesURL: directory),
+      workspace: .init(rootURL: directory),
       onPermission: { _ in
         let status = try? await database.workspaceOverview().conversations.first { $0.id == session }?.programStatus?.status
         #expect(status?.state == .blocked && status?.kind == .permission)

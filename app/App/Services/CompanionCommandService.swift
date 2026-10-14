@@ -35,9 +35,18 @@ final class CompanionCommandService: CompanionCommandServing {
         guard let database = model.dashboardStore?.database, let tools = model.agentTools else {
             throw CommandError.unavailable
         }
+        try await requireToolExecutionAccess(request.request, callerID: request.conversationID, deviceID: deviceID)
         if toolDispatcher == nil { toolDispatcher = CompanionToolDispatcher(database: database) }
-        return try await toolDispatcher!.execute(request, deviceID: deviceID) { request, callerID in
-            await tools.handle(request, callerID: callerID)
+        return try await toolDispatcher!.execute(request, deviceID: deviceID) { [self] request, callerID in
+            // Reservation awaits SQLite; a device policy may change before the
+            // accepted operation actually reaches the provider/executor.
+            do { try await requireToolExecutionAccess(request, callerID: callerID, deviceID: deviceID) }
+            catch let error as CompanionAPIError {
+                return .init(success: false, error: error.message, code: error.code, requestID: request.requestID)
+            } catch {
+                return .init(success: false, error: error.localizedDescription, code: "execution_authorization_failed", requestID: request.requestID)
+            }
+            return await tools.handle(request, callerID: callerID)
         }
     }
 
@@ -77,7 +86,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 available: available, canStart: available,
                 canResume: definition?.capabilities.contains("resume") == true,
                 canSteer: false, canStop: available,
-                supportsApprovals: runtime != .pi, supportsQuestions: runtime == .cursor,
+                supportsApprovals: true, supportsQuestions: runtime == .claudeCode,
                 activeInputMode: "notNegotiated",
                 unavailableReason: available ? nil : "Enable and configure this agent on the Mac."
             )
@@ -86,12 +95,6 @@ final class CompanionCommandService: CompanionCommandServing {
             provider(runtime, id: "local:\(runtime.rawValue)", name: runtime.displayName,
                      route: "This Mac", available: model.canStartCanonicalLocalSession(runtime))
         }
-        for enrollment in model.buzzWorkspaceSnapshot.enrollments {
-            guard let runtime = enrollment.runtimeKind else { continue }
-            result.append(provider(runtime, id: "buzz:\(enrollment.id.uuidString.lowercased())",
-                                   name: enrollment.displayNameSnapshot, route: "Linked workspace",
-                                   available: model.launchableBuzzWorkspaceEnrollmentIDs.contains(enrollment.id)))
-        }
         for workspace in model.remoteWorkspaces.workspaces {
             for runtime in AgentRuntimeKind.allCases {
                 result.append(provider(runtime,
@@ -99,19 +102,6 @@ final class CompanionCommandService: CompanionCommandServing {
                     name: runtime.displayName, route: workspace.name,
                     available: model.remoteWorkspaces.isHarnessReady(runtime, in: workspace)))
             }
-        }
-        let agents = model.localCLIAgents + model.buzzWorkspaceAgents + model.remoteWorkspaceAgents
-        for link in model.openClawGatewayLinks {
-            let name = agents.first(where: { $0.id == link.agentID })?.displayName ?? "OpenClaw"
-            let available = model.canStartCanonicalGatewaySession(agentID: link.agentID)
-            result.append(CompanionProvider(
-                id: "gateway:\(link.agentID.uuidString.lowercased())", runtimeKind: AgentRuntimeKind.openclaw.rawValue,
-                displayName: name, routeName: "OpenClaw Gateway", available: available,
-                canStart: available, canResume: true, canSteer: false,
-                canStop: true, supportsApprovals: true, supportsQuestions: false,
-                activeInputMode: "gatewaySend",
-                unavailableReason: available ? nil : "Enable this workspace and reconnect its Gateway on the Mac."
-            ))
         }
         return result
     }
@@ -127,15 +117,8 @@ final class CompanionCommandService: CompanionCommandServing {
         }
         guard let runtime = conversation.localRuntimeKind else { throw CommandError.unknownProvider }
         let routeID: String
-        if model.isOpenClawGatewayConversation(conversationID),
-           let session = try? await model.dashboardStore?.database.openClawGatewaySession(conversationID: conversationID) {
-            routeID = "gateway:\(session.agentID.uuidString.lowercased())"
-        } else if let workspaceID = conversation.remoteWorkspaceID {
+        if let workspaceID = conversation.remoteWorkspaceID {
             routeID = "remote:\(workspaceID.uuidString.lowercased()):\(runtime.rawValue)"
-        } else if let enrollment = model.buzzWorkspaceSnapshot.enrollments.first(where: {
-            $0.id.uuidString.lowercased() == conversation.agentID?.lowercased()
-        }) {
-            routeID = "buzz:\(enrollment.id.uuidString.lowercased())"
         } else {
             routeID = "local:\(runtime.rawValue)"
         }
@@ -144,9 +127,6 @@ final class CompanionCommandService: CompanionCommandServing {
         if runtime == .opencode {
             capability.activeInputMode = "unsupported"
             capability.canSteer = false
-        } else if model.isOpenClawGatewayConversation(conversationID) {
-            capability.activeInputMode = "gatewaySend"
-            capability.canSteer = active
         } else if let mode = await model.dashboardStore?.localACPActiveInputCapability(conversationID: conversationID) {
             capability.activeInputMode = mode == .grokInterjection ? "grokInterjectionWithConcurrentFallback" : mode.rawValue
             capability.canSteer = active && mode != .unsupported
@@ -232,10 +212,103 @@ final class CompanionCommandService: CompanionCommandServing {
             }
         }
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        try await requireExecutionAccess(command, deviceID: deviceID)
         return try await dispatcher(for: store).execute(command) { [self] original in
+            try await requireExecutionAccess(command, deviceID: deviceID)
             var receipt = original
             try await dispatch(command, receipt: &receipt)
             return receipt
+        }
+    }
+
+    /// Map CLI execution to the same authority boundary as UI commands. Shared
+    /// library tools and read-only session inspection do not require execution
+    /// access. Existing session destinations always come from stored ownership.
+    private func requireToolExecutionAccess(_ request: WovenMatterToolRequest, callerID: String, deviceID: String) async throws {
+        let tool = try WovenMatterToolCommand(request.arguments)
+        guard !tool.wantsHelp else { return }
+        let command: CompanionCommand
+        switch (tool.group, tool.action) {
+        case (.sessions, "create"):
+            let workspace: String
+            if let explicit = tool.options["workspace"] { workspace = explicit }
+            else { workspace = try await conversation(callerID).remoteWorkspaceID?.uuidString.lowercased() ?? "local" }
+            let route: String
+            if workspace == "local" { route = "local:" }
+            else {
+                guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
+                route = "remote:\(id.uuidString.lowercased()):"
+            }
+            command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
+        case (.sessions, "send"), (.sessions, "manage"), (.sessions, "release"), (.sessions, "notifications"):
+            command = .init(deviceID: deviceID, kind: .send,
+                conversationID: try tool.required("id", allowPositional: true))
+        case (.calendar, "create"), (.calendar, "update"), (.calendar, "copy"), (.calendar, "detach"):
+            // Ordinary calendar edits stay shared. A scheduled task is an
+            // execution request even when this edit only changes its time.
+            guard tool.options["regular-event"] == nil else { return }
+            var existing: WorkspaceCalendarTask?
+            if tool.action != "create" {
+                guard let database = model.dashboardStore?.database else { throw CommandError.unavailable }
+                existing = try await database.calendarEvent(id: tool.required("id", allowPositional: true), callerID: callerID).calendar.task
+            }
+            guard existing != nil || tool.options["prompt"] != nil else { return }
+            let workspace: String
+            if let explicit = tool.options["workspace"] { workspace = explicit }
+            else if let existing { workspace = existing.configuration.workspaceID?.uuidString.lowercased() ?? "local" }
+            else { workspace = try await conversation(callerID).remoteWorkspaceID?.uuidString.lowercased() ?? "local" }
+            let route: String
+            if workspace == "local" { route = "local:" }
+            else {
+                guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
+                route = "remote:\(id.uuidString.lowercased()):"
+            }
+            command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
+        case (.executor, "execute"), (.executor, "cancel"):
+            command = .init(deviceID: deviceID, kind: .createSession, providerID: "local:")
+        default: return
+        }
+        try await requireExecutionAccess(command, deviceID: deviceID)
+    }
+
+    /// Execution policy applies equally to direct grants and the legacy central
+    /// command route. Resolve existing sessions from stored ownership, never from
+    /// a workspace identifier supplied by the requesting client.
+    private func requireExecutionAccess(_ command: CompanionCommand, deviceID: String) async throws {
+        guard let database = model.dashboardStore?.database else { throw CommandError.unavailable }
+        let denied = Set(try await database.companionWorkspaceAccessPolicies()
+            .filter { $0.deviceID == deviceID && !$0.enabled }.map(\.workspaceID))
+        guard !denied.isEmpty else { return }
+        var conversationID = command.conversationID
+        if command.kind == .workspace {
+            switch command.workspaceAction {
+            case .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
+            case .saveCalendar(_, _, let draft):
+                guard let task = draft.task else { return }
+                let route: String
+                if let workspace = task.workspaceID {
+                    guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
+                    route = "remote:\(id.uuidString.lowercased()):"
+                } else { route = "local:" }
+                try await requireExecutionAccess(.init(deviceID: deviceID, kind: .createSession, providerID: route), deviceID: deviceID)
+                return
+            default: return // Library edits remain shared independently of execution.
+            }
+        }
+        let identity = try await database.companionLibraryIdentity()
+        let localID = try await database.companionExecutionWorkspaces().first {
+            $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID && !$0.deleted
+        }?.id
+        var target = localID
+        if command.kind == .createSession {
+            let route = command.providerID ?? command.routeID ?? ""
+            if route.hasPrefix("remote:") { target = route.split(separator: ":").dropFirst().first.map(String.init) }
+        } else if let conversationID {
+            if let owner = try await database.companionExecutionOwner(conversationID: conversationID) { target = owner }
+            else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
+        }
+        if let target, denied.contains(target) {
+            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Device Connections on the central Mac.")
         }
     }
 
@@ -266,14 +339,8 @@ final class CompanionCommandService: CompanionCommandServing {
                   let runtime = AgentRuntimeKind(rawValue: provider.runtimeKind)
             else { throw CommandError.unknownProvider }
             let id: String?
-            if providerID.hasPrefix("gateway:"), let agentID = UUID(uuidString: String(providerID.dropFirst(8))) {
-                id = try await model.createCanonicalGatewaySession(agentID: agentID, conversationID: requestedID, folderID: command.folderID)
-            } else if providerID.hasPrefix("local:") {
+            if providerID.hasPrefix("local:") {
                 id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
-            } else if providerID.hasPrefix("buzz:"),
-                      let enrollmentID = UUID(uuidString: String(providerID.dropFirst(5))),
-                      let enrollment = model.buzzWorkspaceSnapshot.enrollments.first(where: { $0.id == enrollmentID }) {
-                id = await model.createBuzzWorkspaceLocalACPSession(enrollment: enrollment, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
             } else if let target = model.remoteWorkspaces.readyChatTargets.first(where: {
                 "remote:\($0.configuration.id.uuidString.lowercased()):\($0.harness.id.rawValue)" == providerID
             }) {

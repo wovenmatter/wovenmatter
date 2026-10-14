@@ -43,6 +43,31 @@ extension CompanionTransportTests {
     }
   }
 
+  func testRealSupervisorReapsChildWhenHelperReceivesTerminationSignal() async throws {
+    let fixture = try await SupervisorFixture.build()
+    defer { fixture.remove() }
+    for terminationSignal in [SIGTERM, SIGINT, SIGHUP] {
+      for resistant in [false, true] {
+        let suffix = "\(terminationSignal)-\(resistant)"
+        let pidFile = fixture.directory.appendingPathComponent("signal-child-\(suffix).pid")
+        let report = fixture.directory.appendingPathComponent("signal-reaped-\(suffix).txt")
+        let helper = try fixture.launch(arguments: [CompanionServeSupervisor.argument, fixture.executable.path,
+          resistant ? "--fixture-resistant-child" : "--fixture-cooperative-child", pidFile.path],
+          childPIDFile: pidFile, reapReport: report)
+        defer { helper.cleanup(childPIDFile: pidFile) }
+        try await waitForFixture { FileManager.default.fileExists(atPath: pidFile.path) }
+        let childPID = try fixturePID(at: pidFile)
+        XCTAssertEqual(kill(helper.process.processIdentifier, terminationSignal), 0)
+        try await waitForFixture { !helper.process.isRunning }
+        XCTAssertEqual(helper.process.terminationStatus, 0)
+        XCTAssertEqual(helper.process.terminationReason, .exit)
+        XCTAssertEqual(try String(contentsOf: report, encoding: .utf8), "-1:\(ECHILD)")
+        XCTAssertEqual(kill(childPID, 0), -1, "A terminated helper must not leave its Serve child holding a route")
+        XCTAssertEqual(errno, ESRCH)
+      }
+    }
+  }
+
   func testRealSupervisorStopsAfterAbruptParentDeathWithoutCleanupHandlers() async throws {
     let fixture = try await SupervisorFixture.build()
     defer { fixture.remove() }

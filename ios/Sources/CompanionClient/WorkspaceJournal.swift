@@ -58,6 +58,30 @@ public actor WorkspaceJournal {
     if state.conversationOwners == nil { state.conversationOwners = state.conversationWorkspaceIDs }
   }
   public func snapshot() -> WorkspaceJournalState { state }
+  /// Cached observer history never becomes a publisher queue. Legacy relay flags
+  /// are removed atomically, without deleting any origin record or projection.
+  public func prepareOwnerPublication(deviceID: String) throws {
+    try transaction { next in
+      next.pendingEventIDs = next.pendingEventIDs.filter { id in
+        guard let entry = next.entries[id], let workspace = next.workspaces[entry.workspaceID] else { return true }
+        return Self.isLocalExecutionOwner(workspace, deviceID: deviceID)
+      }
+      next.pendingRegistrations = next.pendingRegistrations.filter { id in
+        guard let workspace = next.workspaces[id] else { return false }
+        return Self.isLocalExecutionOwner(workspace, deviceID: deviceID)
+      }
+    }
+  }
+  public static func isLocalExecutionOwner(_ workspace: CompanionExecutionWorkspace, deviceID: String) -> Bool {
+    workspace.kind != .linux && workspace.ownerDeviceID == deviceID &&
+      (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID
+  }
+  public func pendingOwnerEntries(deviceID: String) -> [CompanionJournalEntry] {
+    state.pendingEntries.filter { entry in
+      state.workspaces[entry.workspaceID].map { Self.isLocalExecutionOwner($0, deviceID: deviceID) } == true
+    }
+  }
+
   /// Full activity data is read only when expanded or explicitly queried.
   public func activityDetails(conversationID: String, activityID: String) throws -> CompanionActivity? {
     guard var activity = state.transcripts[conversationID]?.activities.first(where: { $0.id == activityID }) else { return nil }
@@ -74,6 +98,30 @@ public actor WorkspaceJournal {
           let text = String(data: data, encoding: .utf8) else { throw Failure.reusedIdentity }
     activity.projectionJSON = text
     return activity
+  }
+
+  /// Transfer only history produced on this device. Cached observers never
+  /// become publishers when the user attaches to a different central database.
+  public func moveDeviceWorkspace(to libraryID: String, deviceID: String) throws {
+    guard state.libraryID != libraryID else { return }
+    try transaction { next in
+      let owned = Set(next.workspaces.values.filter { Self.isLocalExecutionOwner($0, deviceID: deviceID) }.map(\.id)).union([deviceID])
+      next.workspaces = next.workspaces.filter { owned.contains($0.key) }
+      for id in next.workspaces.keys {
+        next.workspaces[id]?.libraryID = libraryID; next.workspaces[id]?.revision = 0
+      }
+      next.entries = next.entries.filter { owned.contains($0.value.workspaceID) }
+      let conversations = Set(next.conversationWorkspaceIDs.filter { owned.contains($0.value) }.keys)
+      next.conversationOwners = next.conversationWorkspaceIDs.filter { conversations.contains($0.key) }
+      next.conversations = next.conversations.filter { conversations.contains($0.key) }
+      next.transcripts = next.transcripts.filter { conversations.contains($0.key) }
+      next.deletedConversationIDs.formIntersection(conversations)
+      next.commands = next.commands.filter { owned.contains($0.value.command.workspaceID ?? "") }
+      next.originSequences = next.originSequences.filter { owned.contains($0.key) }
+      next.pendingEventIDs = Set(next.entries.keys); next.pendingRegistrations = Set(next.workspaces.keys)
+      next.centralWorkspaceRevisions = [:]; next.centralCursor = 0; next.directCursors = [:]
+      next.libraryID = libraryID
+    }
   }
 
   public func bind(libraryID: String) throws {
@@ -287,14 +335,21 @@ public actor WorkspaceJournal {
       next.centralCursor = page.cursor
     }
   }
-  public func receiveWorkspace(_ page: CompanionJournalPage, workspaceID: String) throws {
+  public func receiveWorkspace(_ page: CompanionJournalPage, workspaceID: String, localDeviceID: String? = nil) throws {
     try transaction { next in
       guard next.libraryID == page.libraryID else { throw Failure.wrongLibrary }
       let cursor = next.directCursors[workspaceID] ?? 0
       guard page.cursor == cursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
       for (index, entry) in page.entries.enumerated() {
         guard entry.workspaceID == workspaceID, entry.originSequence == cursor + Int64(index) + 1 else { throw Failure.replayGap }
-        try Self.insert(entry, into: &next); next.pendingEventIDs.insert(entry.eventID)
+        try Self.insert(entry, into: &next)
+        // A secondary Mac consumes its own native execution journal through this
+        // same local transport. Only that exact owner queues publication; a
+        // remote observer merely caches the immutable entries.
+        if let localDeviceID, let workspace = next.workspaces[workspaceID],
+           Self.isLocalExecutionOwner(workspace, deviceID: localDeviceID) {
+          next.pendingEventIDs.insert(entry.eventID)
+        }
       }
       next.directCursors[workspaceID] = page.cursor
     }
@@ -416,7 +471,8 @@ public actor WorkspaceClient {
     centralHistory = workspace.capabilities.contains("history.central.v1")
     if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID { throw WorkspaceJournal.Failure.wrongLibrary }
     if await store.journal.snapshot().workspaces[workspaceID] == nil {
-      try await store.journal.upsertWorkspace(workspace, pending: !centralHistory)
+      let deviceID = await store.snapshot().deviceID
+      try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
     }
   }
   public func startConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
@@ -480,7 +536,7 @@ public actor WorkspaceClient {
     for _ in 0..<100 {
       let cursor = await store.journal.snapshot().directCursors[workspaceID] ?? 0
       let page = try await transport.events(after: cursor)
-      try await store.journal.receiveWorkspace(page, workspaceID: workspaceID)
+      try await store.journal.receiveWorkspace(page, workspaceID: workspaceID, localDeviceID: store.snapshot().deviceID)
       try await store.restoreExecutionProjection()
       if !page.hasMore { break }
     }

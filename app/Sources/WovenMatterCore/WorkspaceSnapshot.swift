@@ -12,10 +12,18 @@ public struct WorkspaceFolderRecord: Codable, Equatable, Identifiable, Sendable 
   public let icon: String?
   public let position: Int
   public let isPinned: Bool
+  public let executionWorkspaceID: String?
+  public let rootPath: String?
+  public let managedRoot: Bool
+  public let referencePaths: [String]
 
   enum CodingKeys: String, CodingKey {
     case id, name, icon, position
     case isPinned = "is_pinned"
+    case executionWorkspaceID = "execution_workspace_id"
+    case rootPath = "root_path"
+    case managedRoot = "managed_root"
+    case referencePaths = "reference_paths"
   }
 
   public init(from decoder: any Decoder) throws {
@@ -25,6 +33,20 @@ public struct WorkspaceFolderRecord: Codable, Equatable, Identifiable, Sendable 
     icon = try values.decodeIfPresent(String.self, forKey: .icon)
     position = try values.decode(Int.self, forKey: .position)
     isPinned = try values.sqliteBool(forKey: .isPinned)
+    executionWorkspaceID = try values.decodeIfPresent(String.self, forKey: .executionWorkspaceID)
+    rootPath = try values.decodeIfPresent(String.self, forKey: .rootPath)
+    managedRoot = try values.sqliteBoolIfPresent(forKey: .managedRoot) ?? false
+    referencePaths = try values.decodeIfPresent([String].self, forKey: .referencePaths) ?? []
+  }
+}
+
+/// A local workspace is identified by its device, never the caller-relative word "local".
+public struct WorkspaceFolderLocation: Codable, Equatable, Sendable {
+  public let workspaceID: String
+  public let rootPath: String
+  public let managed: Bool
+  public init(workspaceID: String, rootPath: String, managed: Bool) {
+    self.workspaceID = workspaceID; self.rootPath = rootPath; self.managed = managed
   }
 }
 

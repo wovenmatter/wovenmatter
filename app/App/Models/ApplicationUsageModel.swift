@@ -547,7 +547,7 @@ final class ApplicationUsageModel {
             range: range,
             refreshLimits: true,
             reason: .credentialChanged,
-            explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+            explicitCredentialAccess: [.codex, .claude, .grok].contains(provider),
             interactiveProvider: provider == .openRouter ? nil : provider
         )
     }
@@ -574,7 +574,7 @@ final class ApplicationUsageModel {
             range: range,
             refreshLimits: true,
             reason: .credentialChanged,
-            explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+            explicitCredentialAccess: [.codex, .claude, .grok].contains(provider),
             interactiveProvider: provider == .openRouter ? nil : provider
         )
     }
@@ -690,7 +690,7 @@ final class ApplicationUsageModel {
                     range: currentUsageRange,
                     refreshLimits: true,
                     reason: .credentialChanged,
-                    explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+                    explicitCredentialAccess: [.codex, .claude, .grok].contains(provider),
                     interactiveProvider: provider == .openRouter ? nil : provider
                 )
             } catch {
@@ -763,15 +763,10 @@ final class ApplicationUsageModel {
         case .grok:
             executableName = "grok"
             arguments = ["login", "--oauth"]
-        case .cursor:
-            executableName = LocalACPRuntimeResolver.resolveExecutable(
-                named: "cursor-agent"
-            ) == nil ? "agent" : "cursor-agent"
-            arguments = ["login"]
         case .openCodeGo:
             executableName = "opencode"
             arguments = ["auth", "login", "--provider", "opencode-go"]
-        case .openRouter, .unknown:
+        case .cursor, .openRouter, .unknown:
             return nil
         }
         guard let executable = LocalACPRuntimeResolver.resolveExecutable(
