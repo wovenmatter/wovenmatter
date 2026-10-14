@@ -3,21 +3,37 @@ import WovenMatterCore
 
 extension ApplicationModel {
     @discardableResult
-    func mutateConversationGoal(id: String, mutation: WorkspaceGoalMutation) async throws -> WorkspaceGoal? {
+    func mutateConversationGoal(id: String, mutation: WorkspaceGoalMutation,
+                                dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WorkspaceGoal? {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let starts: Bool
+        switch mutation { case .set, .resume: starts = true; default: starts = false }
+        let fence = starts ? suppliedFence ?? beginAgentDispatch(conversationID: id) : nil
+        defer { if let fence, suppliedFence == nil { finishAgentDispatch(conversationID: id, fence: fence) } }
+        if starts { try await waitForAgentStop(conversationID: id); try fence?.check() }
         if case .set = mutation { try await applyPendingSessionSelections(conversationID: id) }
-        let previousGoal = try await database.sessionGoals().first { $0.sessionID == id }
-        let goal = try await database.mutateGoal(sessionID: id, mutation: mutation)
-        if case .pause = mutation { try await beginAgentStop(conversationID: id).value }
-        // Changing or removing a goal stops any old goal work before another objective starts.
-        if case .edit = mutation { try await beginAgentStop(conversationID: id).value }
-        if case .clear = mutation, previousGoal?.status == .active { try await beginAgentStop(conversationID: id).value }
+        let stops: Bool
+        switch mutation { case .pause, .clear, .edit: stops = true; default: stops = false }
+        let goal: WorkspaceGoal?
+        if stops {
+            // Install the barrier before any await, and keep the mutation inside
+            // it so a later Resume or user input observes the whole operation.
+            let barrier = beginAgentStop(conversationID: id, afterStop: {
+                _ = try await database.mutateGoal(sessionID: id, mutation: mutation)
+            })
+            try await barrier.value
+            goal = try await database.sessionGoals().first { $0.sessionID == id }
+        } else {
+            try fence?.check()
+            goal = try await database.mutateGoal(sessionID: id, mutation: mutation, dispatchFence: fence)
+        }
         try await agentTools?.reload()
         await backendApplicationService?.invalidations.publish(scopes: [.settings], conversationIDs: [id])
         return goal
     }
 
-    func handleConversationGoalCommand(_ command: WorkspaceGoalCommand, conversationID: String) async throws -> Bool {
+    func handleConversationGoalCommand(_ command: WorkspaceGoalCommand, conversationID: String,
+                                       dispatchFence: AgentDispatchFence) async throws -> Bool {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let goal = try await database.sessionGoals().first { $0.sessionID == conversationID }
         let mutation: WorkspaceGoalMutation
@@ -35,7 +51,7 @@ extension ApplicationModel {
             default: mutation = .clear(id: goal.id)
             }
         }
-        _ = try await mutateConversationGoal(id: conversationID, mutation: mutation)
+        _ = try await mutateConversationGoal(id: conversationID, mutation: mutation, dispatchFence: dispatchFence)
         return true
     }
 

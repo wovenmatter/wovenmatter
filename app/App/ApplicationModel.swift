@@ -2184,7 +2184,8 @@ final class ApplicationModel {
     /// Invalidate old preparation synchronously, then order native cancellation
     /// before every new user, tool, and scheduled input for this conversation.
     @discardableResult
-    func beginAgentStop(conversationID: String, retainFailure: Bool = true) -> Task<Void, any Error> {
+    func beginAgentStop(conversationID: String, retainFailure: Bool = true,
+                        afterStop: (@MainActor @Sendable () async throws -> Void)? = nil) -> Task<Void, any Error> {
         executorRuntime.cancel(conversationID)
         cancelPendingAgentDispatch(conversationID: conversationID)
         for permissionID in pendingLocalACPPermissions.filter({ $0.conversationID == conversationID }).map(\.id) {
@@ -2193,6 +2194,7 @@ final class ApplicationModel {
         cancelLocalACPInteractions(conversationID: conversationID)
         return agentStops.begin(conversationID: conversationID, retainFailure: retainFailure) { [self] in
             try await stopBackendAgentDispatch(conversationID: conversationID)
+            try await afterStop?()
         }
     }
 
@@ -2265,11 +2267,11 @@ final class ApplicationModel {
         var goalObjective: String?
         if input.historyDeliveryID == nil, let command = WorkspaceGoalCommand(input.text), WorkspaceGoal.supports(conversation.localRuntimeKind) {
             if case .set(let objective) = command {
-                _ = try await handleConversationGoalCommand(command, conversationID: conversation.id)
+                _ = try await handleConversationGoalCommand(command, conversationID: conversation.id, dispatchFence: dispatchFence)
                 goalObjective = objective
             } else {
                 guard input.attachments.isEmpty else { throw WorkspaceToolError.invalid("Send attachments with a goal objective or an ordinary message.") }
-                return try await handleConversationGoalCommand(command, conversationID: conversation.id)
+                return try await handleConversationGoalCommand(command, conversationID: conversation.id, dispatchFence: dispatchFence)
             }
         }
 

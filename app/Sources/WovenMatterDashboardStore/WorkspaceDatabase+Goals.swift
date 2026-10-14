@@ -269,8 +269,12 @@ extension WorkspaceDatabaseConnection {
                 }
                 if goal.tokenBudget.map({ (goal.tokensUsed ?? 0) >= $0 }) ?? false || goal.turnBudget.map({ goal.completedTurns >= $0 }) ?? false {
                     goal.status = .budgetLimited; goal.evidence = "The goal budget was reached. Increase or remove it to resume."
-                } else if goal.tokenBudget != nil && goal.completedTurns > 0 && goal.tokensUsed == nil {
-                    goal.status = .blocked; goal.evidence = "This runtime did not report token usage. Remove the token budget or resolve usage reporting before resuming."
+                } else if goal.tokenBudget != nil, try historyRowsUnlocked("""
+                    SELECT 1 FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id
+                    LEFT JOIN workspace_goal_usage u ON u.goal_id=g.goal_id AND u.run_id=g.run_id
+                    WHERE g.goal_id=? AND r.status='completed' AND u.run_id IS NULL LIMIT 1
+                    """, values: [goal.id]).isEmpty == false {
+                    goal.status = .blocked; goal.evidence = "This runtime did not report token usage for a completed goal turn. Remove the token budget or resolve usage reporting before resuming."
                 }
                 if goal != original { goal.updatedAt = now; try saveGoalUnlocked(goal) }
                 guard goal.status == .active else { continue }
@@ -297,8 +301,13 @@ extension WorkspaceDatabaseConnection {
 extension WorkspaceDatabase {
     public func sessionGoals() async throws -> [WorkspaceGoal] { try await read { try $0.sessionGoals() } }
     public func mutateGoal(sessionID: String, mutation: WorkspaceGoalMutation, callerID: String? = nil,
-                           requestID: String? = nil) async throws -> WorkspaceGoal? {
-        try await write { try $0.mutateGoal(sessionID: sessionID, mutation: mutation, callerID: callerID, requestID: requestID) }
+                           requestID: String? = nil, dispatchFence: AgentDispatchFence? = nil) async throws -> WorkspaceGoal? {
+        try await write { connection in
+            // Stop may arrive while this job waits for the writer. Once this
+            // synchronous job starts, a later Stop's pause is ordered after it.
+            try dispatchFence?.check()
+            return try connection.mutateGoal(sessionID: sessionID, mutation: mutation, callerID: callerID, requestID: requestID)
+        }
     }
     public func pauseActiveGoals(sessionID: String? = nil, reason: String? = nil) async throws {
         try await finishWrite { try $0.pauseActiveGoals(sessionID: sessionID, reason: reason) }

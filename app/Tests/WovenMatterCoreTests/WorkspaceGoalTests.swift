@@ -89,6 +89,46 @@ struct WorkspaceGoalTests {
         #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
     }
 
+    @Test func stoppedPreparationCannotSetOrResumeAGoal() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fence = AgentDispatchFence()
+        fence.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await db.mutateGoal(sessionID: session,
+                mutation: .set(objective: "Delayed goal", tokenBudget: nil, turnBudget: nil), dispatchFence: fence)
+        }
+        #expect(try await db.sessionGoals().isEmpty)
+        let goal = try await create(db, session)
+        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
+        let entered = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let writer = Task {
+            try await db.write { _ in
+                entered.continuation.yield(())
+                release.wait()
+            }
+        }
+        var iterator = entered.stream.makeAsyncIterator()
+        await iterator.next()
+        let delayedFence = AgentDispatchFence()
+        let delayedResume = Task {
+            try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id), dispatchFence: delayedFence)
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while db.workerMetrics[0].pending < 2 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(db.workerMetrics[0].pending == 2)
+        delayedFence.cancel()
+        release.signal()
+        try await writer.value
+        await #expect(throws: CancellationError.self) { try await delayedResume.value }
+        #expect(try await db.sessionGoals().first?.status == .paused)
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+    }
+
     @Test func verifiedCompletionAndProgressGovernContinuation() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -144,6 +184,22 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.status == .budgetLimited)
         #expect(try await db.sessionGoals().first?.tokensUsed == 110)
         await #expect(throws: (any Error).self) { try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id)) }
+    }
+
+    @Test func aLaterTurnWithoutUsageCannotSilentlyBypassTheTokenBudget() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session, tokens: 100)
+        try await run(db, session: session, id: "reported-turn")
+        try await db.recordGoalUsage(runID: "reported-turn", tokens: 40)
+        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
+        _ = try await db.claimToolDelivery(id: delivery.id)
+        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+        try await run(db, session: session, id: "unreported-turn")
+        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Progress with missing usage"))
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .blocked)
+        #expect(try await db.sessionGoals().first?.tokensUsed == 40)
     }
 
     @Test func queuedInputAndActiveNativeRunsTakePrecedence() async throws {
