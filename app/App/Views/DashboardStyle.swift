@@ -134,7 +134,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .grok: "harness-grok"
         case .openClaw: "harness-openclaw"
         case .hermes: "harness-hermes"
-        case .defaultAgent: "lucide-bot-s15"
+        case .defaultAgent: DashboardPiDurableLogoStyle.defaultStyle.assetName
         case .pi: "harness-pi"
         case .cursor: "harness-cursor"
         case .openCode: "harness-opencode"
@@ -179,6 +179,35 @@ enum DashboardCodexLogoStyle: String, CaseIterable, Sendable {
     }
 }
 
+enum DashboardPiDurableLogoStyle: String, CaseIterable, Sendable {
+    case color
+    case monochrome
+
+    static let storageKey = "wovenmatter.piDurableLogoStyle"
+    static let defaultStyle = DashboardPiDurableLogoStyle.color
+
+    var assetName: String {
+        switch self {
+        case .color: "harness-pi-primary"
+        case .monochrome: "harness-pi"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .color: "Color"
+        case .monochrome: "Black and White"
+        }
+    }
+
+    var next: DashboardPiDurableLogoStyle {
+        switch self {
+        case .color: .monochrome
+        case .monochrome: .color
+        }
+    }
+}
+
 struct DashboardHarnessLogoIcon: View {
     let logo: DashboardHarnessLogo
     var size: CGFloat
@@ -192,14 +221,25 @@ struct DashboardHarnessLogoIcon: View {
         DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
+    @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
+        DashboardPiDurableLogoStyle.defaultStyle.rawValue
+
+    private var piDurableLogoStyle: DashboardPiDurableLogoStyle {
+        DashboardPiDurableLogoStyle(rawValue: storedPiDurableLogoStyle) ?? .defaultStyle
+    }
+
     private var assetName: String {
-        logo == .codex ? codexLogoStyle.assetName : logo.assetName
+        switch logo {
+        case .codex: codexLogoStyle.assetName
+        case .defaultAgent: piDurableLogoStyle.assetName
+        default: logo.assetName
+        }
     }
 
     private var usesTemplateRendering: Bool {
         #if os(iOS)
         // The original monochrome marks need a contrasting tint on dark surfaces.
-        if colorScheme == .dark && [.defaultAgent, .grok, .hermes].contains(logo) { return true }
+        if colorScheme == .dark && [.grok, .hermes].contains(logo) { return true }
         #endif
         return logo == .codex ? codexLogoStyle.usesTemplateRendering : logo.usesTemplateRendering
     }

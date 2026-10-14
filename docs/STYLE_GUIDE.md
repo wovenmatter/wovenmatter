@@ -47,7 +47,9 @@ when an intentional design change is accepted.
   Keep their content and Cursor's controls at the same indentation as the content
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
-  logos, matching nearby icon sizes and stroke weights.
+  logos, matching nearby icon sizes and stroke weights. Pi Durable’s color and
+  black-and-white variants share the same circular black badge, padding, and mark
+  bounds.
 - **Asset and browser toolbars:** keep the tab strip and address row the same
   height, with matching button frames and minimal space between hover fills and
   dividers. Use the shared asset-toolbar metrics, including for tab-close and

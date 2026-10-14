@@ -19,8 +19,7 @@ struct MobileAgentIcon: View {
   var size: CGFloat
   var body: some View {
     if let logo = runtimeKind.flatMap({ DashboardHarnessLogo.resolve(harnessIdentifier: $0) }) {
-      if logo == .defaultAgent { DashboardLucideIcon(glyph: .bot, size: size) }
-      else { DashboardHarnessLogoIcon(logo: logo, size: size) }
+      DashboardHarnessLogoIcon(logo: logo, size: size)
     } else { DashboardLucideIcon(glyph: .cpu, size: size) }
   }
 }
