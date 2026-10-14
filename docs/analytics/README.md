@@ -115,8 +115,9 @@ phones or retain more precise geography.
 
 ## Website and GitHub acquisition
 
-The companion website PR adds `/privacy`, a browser opt-out and a small explicit
-analytics module. It excludes query strings/fragments and sends only public route,
+The companion website PR adds `/privacy` and a small explicit analytics module.
+Analytics disclosure and the library-wide opt-in/opt-out controls are in the app;
+the website has no analytics preference control. It excludes query strings/fragments and sends only public route,
 referrer domain and named download/GitHub-link events. It respects DNT and GPC.
 Random browser/session IDs are separate from the app UUID. Development/preview
 hosts do not send analytics. Download click/redirect events measure intent,
