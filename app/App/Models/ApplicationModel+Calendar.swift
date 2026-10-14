@@ -155,8 +155,6 @@ extension ApplicationModel {
             if config.runtimeKind == .hermes { try await requireLocalHermesLink() }
             launch = .init(runtimeKind: local.runtimeKind, executableURL: local.executableURL,
                 arguments: local.arguments, environment: local.environment,
-                environmentKeysToRemove: local.environmentKeysToRemove,
-                environmentKeyPrefixesToRemove: local.environmentKeyPrefixesToRemove,
                 processWorkingDirectoryURL: URL(fileURLWithPath: directory),
                 requestedPermission: local.requestedPermission, wrappedCommand: local.wrappedCommand)
         }

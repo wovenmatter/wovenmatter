@@ -755,17 +755,6 @@ public actor LocalACPClient {
             ?? workingDirectory
         var environment = ProcessInfo.processInfo.environment
         for (key, value) in launch.environment { environment[key] = value }
-        let removedKeys = Set(
-            launch.environmentKeysToRemove.map { $0.uppercased() }
-        )
-        let removedPrefixes = launch.environmentKeyPrefixesToRemove
-            .map { $0.uppercased() }
-            .filter { !$0.isEmpty }
-        environment = environment.filter { key, _ in
-            let upperKey = key.uppercased()
-            return !removedKeys.contains(upperKey)
-                && !removedPrefixes.contains(where: upperKey.hasPrefix)
-        }
         environment["WOVENMATTER_LOCAL_ACP"] = "1"
         process.environment = environment
 

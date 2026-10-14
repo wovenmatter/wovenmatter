@@ -308,10 +308,6 @@ public actor DashboardStore {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     var environment = ProcessInfo.processInfo.environment
-    for key in base.environmentKeysToRemove { environment.removeValue(forKey: key) }
-    for prefix in base.environmentKeyPrefixesToRemove {
-      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
-    }
     environment.merge(base.environment) { _, configured in configured }
     let configuration = try OpenClawLocalGatewayConfiguration(environment: environment)
     let identity = "local-config:" + configuration.configURL.standardizedFileURL.path
@@ -326,15 +322,12 @@ public actor DashboardStore {
       // Keep the user's authentication, bind and Tailscale settings. Never force
       // another listener or use --force against an existing OpenClaw service.
       arguments: ["gateway", "--port", String(configuration.port)],
-      environment: launchEnvironment,
-      environmentKeysToRemove: base.environmentKeysToRemove,
-      environmentKeyPrefixesToRemove: base.environmentKeyPrefixesToRemove
+      environment: launchEnvironment
     )
     try await prepareLocalOpenClawResults(executable: base.executableURL, environment: environment.merging(launchEnvironment) { _, value in value })
     _ = try await localOpenClawGateways.ensure(
       agentID: agentID, identity: identity, launch: launch,
-      workingDirectory: workingDirectory, configuredPort: configuration.port,
-      reuseExistingListener: true
+      workingDirectory: workingDirectory, configuredPort: configuration.port
     )
     let endpoint = OpenClawGatewayEndpointResolver.localAgentWorkspace(port: configuration.port)
     try await openClawGateway.configureTransport(agentID: agentID, endpoint: endpoint,

@@ -212,7 +212,7 @@ private actor SteeringDriver {
     func setBeforeAdmission(_ action: @escaping @Sendable () async throws -> Void) { beforeAdmission = action }
     nonisolated func makeDriver() -> LocalACPSessionDriver {
         LocalACPSessionDriver(
-            initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false, configuration: .init()) },
+            initializeSession: { _, _, _ in .init(sessionID: "native", loadedExistingSession: false, configuration: .init()) },
             prompt: { _, event, permission, _ in try await self.prompt(event, permission: permission) },
             configuration: { .init() }, setConfiguration: { _, _ in .init() },
             activeInput: { input in try await self.steer(input.text) },

@@ -62,7 +62,7 @@ struct ProgramStatusTests {
       try connection.toolsExecuteUnlocked("CREATE TRIGGER reject_advisory BEFORE INSERT ON desktop_program_status BEGIN SELECT RAISE(FAIL,'Fixture advisory failure'); END", [])
     }
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      LocalACPSessionDriver(initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false) },
+      LocalACPSessionDriver(initializeSession: { _, _, _ in .init(sessionID: "native", loadedExistingSession: false) },
         prompt: { _, event, _, _ in
           try await event?(.sessionIdentity("native"))
           try await event?(.programStatus(.init(state: .working), runID: nil))
@@ -209,7 +209,7 @@ struct ProgramStatusTests {
     let session = try await database.createLocalACPSession(runtimeKind: kind, title: "Worker", ownerDeviceID: UUID())
     let identity = ProgramStatusRunIdentity()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      LocalACPSessionDriver(initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false) },
+      LocalACPSessionDriver(initializeSession: { _, _, _ in .init(sessionID: "native", loadedExistingSession: false) },
         prompt: { _, event, permission, interaction in
           try await event?(.sessionIdentity("native"))
           try await event?(.programStatus(.init(state: .done, id: "foreign"), runID: "other-run"))

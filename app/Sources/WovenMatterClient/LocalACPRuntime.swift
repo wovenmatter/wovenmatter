@@ -324,8 +324,6 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
     public let executableURL: URL
     public let arguments: [String]
     public let environment: [String: String]
-    public let environmentKeysToRemove: [String]
-    public let environmentKeyPrefixesToRemove: [String]
     public let processWorkingDirectoryURL: URL?
     public let requestedPermission: String?
     public let wrappedCommand: LocalACPRuntimeWrappedCommand?
@@ -335,8 +333,6 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
         executableURL: URL,
         arguments: [String],
         environment: [String: String] = [:],
-        environmentKeysToRemove: [String] = [],
-        environmentKeyPrefixesToRemove: [String] = [],
         processWorkingDirectoryURL: URL? = nil,
         requestedPermission: String? = nil,
         wrappedCommand: LocalACPRuntimeWrappedCommand? = nil
@@ -345,8 +341,6 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
         self.executableURL = executableURL
         self.arguments = arguments
         self.environment = environment
-        self.environmentKeysToRemove = environmentKeysToRemove
-        self.environmentKeyPrefixesToRemove = environmentKeyPrefixesToRemove
         self.processWorkingDirectoryURL = processWorkingDirectoryURL
         self.requestedPermission = requestedPermission
         self.wrappedCommand = wrappedCommand

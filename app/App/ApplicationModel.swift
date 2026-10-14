@@ -2970,8 +2970,6 @@ final class ApplicationModel {
         if let inheritedRoot {
             var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
                 executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
-                environmentKeysToRemove: launch.environmentKeysToRemove,
-                environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
                 processWorkingDirectoryURL: inheritedRoot)
             scopedLaunch.historyRecorder = launch.historyRecorder
             return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,

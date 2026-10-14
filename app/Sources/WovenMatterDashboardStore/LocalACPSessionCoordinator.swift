@@ -6,8 +6,7 @@ struct LocalACPSessionDriver: Sendable {
     let initializeSession: @Sendable (
         _ workingDirectory: URL,
         _ existingSessionID: String?,
-        _ title: String?,
-        _ systemPrompt: String?
+        _ title: String?
     ) async throws -> LocalACPInitializedSession
     let prompt: @Sendable (
         _ input: AgentMessageInput,
@@ -38,8 +37,7 @@ struct LocalACPSessionDriver: Sendable {
         initializeSession: @escaping @Sendable (
             _ workingDirectory: URL,
             _ existingSessionID: String?,
-            _ title: String?,
-            _ systemPrompt: String?
+            _ title: String?
         ) async throws -> LocalACPInitializedSession,
         prompt: @escaping @Sendable (
             _ input: AgentMessageInput,
@@ -112,8 +110,8 @@ struct LocalACPSessionDriver: Sendable {
         if launch.runtimeKind == .hermes {
             let client = HermesGatewayClient(launch: launch)
             return Self(
-                initializeSession: { cwd, existing, title, context in
-                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title, systemPrompt: context)
+                initializeSession: { cwd, existing, title in
+                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title, systemPrompt: nil)
                 },
                 prompt: { input, event, permission, interaction in
                     try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction)
@@ -144,12 +142,12 @@ struct LocalACPSessionDriver: Sendable {
                 workingDirectory: workingDirectory
             )
             return Self(
-                initializeSession: { workingDirectory, existingSessionID, title, systemPrompt in
+                initializeSession: { workingDirectory, existingSessionID, title in
                     try await client.initializeSession(
                         workingDirectory: workingDirectory,
                         existingSessionID: existingSessionID,
                         title: title,
-                        systemPrompt: systemPrompt
+                        systemPrompt: nil
                     )
                 },
                 prompt: { input, onEvent, onPermission, onInteraction in
@@ -201,12 +199,12 @@ struct LocalACPSessionDriver: Sendable {
             awaitIdle = nil
         }
         return Self(
-            initializeSession: { workingDirectory, existingSessionID, title, systemPrompt in
+            initializeSession: { workingDirectory, existingSessionID, title in
                 try await client.initializeSession(
                     workingDirectory: workingDirectory,
                     existingSessionID: existingSessionID,
                     title: title,
-                    systemPrompt: systemPrompt
+                    systemPrompt: nil
                 )
             },
             prompt: { input, onEvent, onPermission, onInteraction in
@@ -435,7 +433,6 @@ public actor LocalACPSessionCoordinator {
         noteContext: AgentNoteContext? = nil,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String? = nil,
         onPermission: PermissionHandler? = nil,
         onInteraction: InteractionHandler? = nil,
         dispatchFence: AgentDispatchFence? = nil
@@ -447,7 +444,6 @@ public actor LocalACPSessionCoordinator {
             noteContext: noteContext,
             launch: launch,
             workspace: workspace,
-            systemPrompt: systemPrompt,
             onPermission: onPermission,
             onInteraction: onInteraction,
             dispatchFence: dispatchFence
@@ -462,7 +458,6 @@ public actor LocalACPSessionCoordinator {
         noteContext: AgentNoteContext? = nil,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String? = nil,
         onPermission: PermissionHandler? = nil,
         onInteraction: InteractionHandler? = nil,
         dispatchFence: AgentDispatchFence? = nil
@@ -474,7 +469,6 @@ public actor LocalACPSessionCoordinator {
             noteContext: noteContext,
             launch: launch,
             workspace: workspace,
-            systemPrompt: systemPrompt,
             onPermission: onPermission,
             onInteraction: onInteraction,
             dispatchFence: dispatchFence
@@ -489,7 +483,6 @@ public actor LocalACPSessionCoordinator {
         noteContext: AgentNoteContext? = nil,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?,
         onPermission: PermissionHandler?,
         onInteraction: InteractionHandler?,
         dispatchFence: AgentDispatchFence? = nil
@@ -564,7 +557,6 @@ public actor LocalACPSessionCoordinator {
                     input: deliveryInput,
                     launch: launch,
                     workspace: workspace,
-                    systemPrompt: systemPrompt,
                     onPermission: onPermission,
                     onInteraction: onInteraction,
                     leaseAcquisition: leaseAcquisition,
@@ -586,7 +578,6 @@ public actor LocalACPSessionCoordinator {
         input: AgentMessageInput,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?,
         onPermission: PermissionHandler?,
         onInteraction: InteractionHandler?,
         leaseAcquisition: LocalACPProcessLeaseAcquisition?,
@@ -610,7 +601,6 @@ public actor LocalACPSessionCoordinator {
                 descriptor: descriptor,
                 launch: launch,
                 workspace: workspace,
-                systemPrompt: systemPrompt,
                 runID: run.runID
             )
             if durableRunIDs.contains(run.runID), let workspaceID = descriptor.remoteWorkspaceID {
@@ -853,8 +843,7 @@ public actor LocalACPSessionCoordinator {
     public func configuration(
         conversationID: String,
         launch: LocalACPRuntimeLaunchConfiguration,
-        workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String? = nil
+        workspace: LocalACPWorkspaceLaunchConfiguration
     ) async throws -> LocalACPSessionConfiguration {
         try ensureNoPermissionMutation(conversationID: conversationID)
         let leaseAcquisition = try await acquireOperationLease()
@@ -870,8 +859,7 @@ public actor LocalACPSessionCoordinator {
         let client = try await acquireSession(
             descriptor: descriptor,
             launch: launch,
-            workspace: workspace,
-            systemPrompt: systemPrompt
+            workspace: workspace
         )
         do {
             let configuration = await client.configuration()
@@ -893,15 +881,13 @@ public actor LocalACPSessionCoordinator {
         thinking: String? = nil,
         permission: String? = nil,
         launch: LocalACPRuntimeLaunchConfiguration,
-        workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String? = nil
+        workspace: LocalACPWorkspaceLaunchConfiguration
     ) async throws -> LocalACPSessionConfiguration {
         guard model != nil || thinking != nil || permission != nil else {
             return try await configuration(
                 conversationID: conversationID,
                 launch: launch,
-                workspace: workspace,
-                systemPrompt: systemPrompt
+                workspace: workspace
             )
         }
         try ensureNoPermissionMutation(conversationID: conversationID)
@@ -941,7 +927,6 @@ public actor LocalACPSessionCoordinator {
             descriptor: descriptor,
             launch: launch,
             workspace: workspace,
-            systemPrompt: systemPrompt,
             requiredSessionID: permission != nil && permission != stored.permission ? stored.acpSessionID : nil
         )
         do {
@@ -983,7 +968,7 @@ public actor LocalACPSessionCoordinator {
                         thinking: configuration.thinking, permission: permission)
                     client = try await acquireSession(
                         descriptor: replacement, launch: launch, workspace: workspace,
-                        systemPrompt: systemPrompt, requiredSessionID: sessionID
+                        requiredSessionID: sessionID
                     )
                     configuration = await client.configuration()
                 }
@@ -1414,7 +1399,6 @@ public actor LocalACPSessionCoordinator {
         descriptor: LocalACPSessionDescriptor,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?,
         runID: String? = nil,
         requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
@@ -1440,7 +1424,6 @@ public actor LocalACPSessionCoordinator {
                 descriptor: descriptor,
                 launch: launch,
                 workspace: workspace,
-                systemPrompt: systemPrompt,
                 runID: runID,
                 requiredSessionID: requiredSessionID
             )
@@ -1470,7 +1453,6 @@ public actor LocalACPSessionCoordinator {
         descriptor: LocalACPSessionDescriptor,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?,
         runID: String?,
         requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
@@ -1488,7 +1470,6 @@ public actor LocalACPSessionCoordinator {
                     descriptor: descriptor,
                     launch: launch,
                     workspace: workspace,
-                    systemPrompt: systemPrompt,
                     runID: runID,
                     requiredSessionID: requiredSessionID
                 )
@@ -1679,7 +1660,6 @@ public actor LocalACPSessionCoordinator {
         descriptor: LocalACPSessionDescriptor,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?,
         runID: String? = nil,
         requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
@@ -1687,7 +1667,7 @@ public actor LocalACPSessionCoordinator {
         let thinking = descriptor.thinking
         let observationID = UUID()
         let (started, initialized) = try await startInitializedSession(
-            descriptor: descriptor, launch: launch, workspace: workspace, systemPrompt: systemPrompt)
+            descriptor: descriptor, launch: launch, workspace: workspace)
         do {
             try Task.checkCancellation()
             guard !isShutDown else {
@@ -1827,8 +1807,7 @@ public actor LocalACPSessionCoordinator {
     private func startInitializedSession(
         descriptor: LocalACPSessionDescriptor,
         launch: LocalACPRuntimeLaunchConfiguration,
-        workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?
+        workspace: LocalACPWorkspaceLaunchConfiguration
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
         let cliConnection: AgentCLIContext?
         if let provider = cliConnectionProvider { cliConnection = try await provider(descriptor.conversationID) }
@@ -1837,8 +1816,6 @@ public actor LocalACPSessionCoordinator {
         var launch = LocalACPRuntimeLaunchConfiguration(
             runtimeKind: launch.runtimeKind, executableURL: launch.executableURL,
             arguments: launch.arguments, environment: launch.environment,
-            environmentKeysToRemove: launch.environmentKeysToRemove,
-            environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL,
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
@@ -1854,8 +1831,7 @@ public actor LocalACPSessionCoordinator {
             let initialized = try await initializeSession(
                 started,
                 descriptor: descriptor,
-                workspace: workspace,
-                systemPrompt: systemPrompt
+                workspace: workspace
             )
             return (started, initialized)
         } catch {
@@ -1877,8 +1853,7 @@ public actor LocalACPSessionCoordinator {
                     recovered,
                     descriptor: descriptor,
                     usesPersistedSessionID: false,
-                    workspace: workspace,
-                    systemPrompt: systemPrompt
+                    workspace: workspace
                 )
                 return (recovered, initialized)
             } catch {
@@ -1892,8 +1867,7 @@ public actor LocalACPSessionCoordinator {
         _ client: LocalACPSessionDriver,
         descriptor: LocalACPSessionDescriptor,
         usesPersistedSessionID: Bool = true,
-        workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String?
+        workspace: LocalACPWorkspaceLaunchConfiguration
     ) async throws -> LocalACPInitializedSession {
         let sessionID = usesPersistedSessionID
             ? descriptor.acpSessionID
@@ -1911,8 +1885,7 @@ public actor LocalACPSessionCoordinator {
             return try await client.initializeSession(
                 workspace.rootURL,
                 sessionID,
-                descriptor.title,
-                systemPrompt
+                descriptor.title
             )
         } onCancel: {
             Task {

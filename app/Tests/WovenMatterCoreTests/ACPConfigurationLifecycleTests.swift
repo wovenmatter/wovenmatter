@@ -145,7 +145,7 @@ private final class SelectorDriverState: @unchecked Sendable {
   func driver() -> LocalACPSessionDriver {
     lock.withLock { startCount += 1 }
     return LocalACPSessionDriver(
-      initializeSession: { [self] _, existing, _, _ in
+      initializeSession: { [self] _, existing, _ in
         #expect(existing == expectedExistingSessionID)
         return LocalACPInitializedSession(
           sessionID: "fixture-session",

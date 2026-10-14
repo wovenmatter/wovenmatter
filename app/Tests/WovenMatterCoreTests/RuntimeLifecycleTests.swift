@@ -102,7 +102,7 @@ struct RuntimeLifecycleTests {
     let state = FakeGatewayProcess()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
       let process = state.launch()
-      return LocalACPSessionDriver(initializeSession: { _, _, _, _ in
+      return LocalACPSessionDriver(initializeSession: { _, _, _ in
         await gate.pause()
         try Task.checkCancellation()
         return LocalACPInitializedSession(sessionID: "fixture", loadedExistingSession: false)
@@ -174,7 +174,7 @@ struct RuntimeLifecycleTests {
     let late = LocalACPSessionConfiguration(model: "late", thinking: "late", thinkingOptions: ["high"])
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
       let process = state.launch()
-      return LocalACPSessionDriver(initializeSession: { _, _, _, _ in
+      return LocalACPSessionDriver(initializeSession: { _, _, _ in
         LocalACPInitializedSession(sessionID: "fixture", loadedExistingSession: false, configuration: initial)
       }, prompt: { _, _, _, _ in .endTurn }, configuration: { late },
       setConfiguration: { _, _ in await gate.pause(); return late }, cancel: {}, shutdown: { process.terminate() })

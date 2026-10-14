@@ -108,8 +108,6 @@ public actor HermesGatewayClient {
         if let pinnedHome = previous?.home { environment["HERMES_HOME"] = pinnedHome }
         var scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
             arguments: launch.arguments, environment: environment,
-            environmentKeysToRemove: launch.environmentKeysToRemove,
-            environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL)
         scoped.historyRecorder = launch.historyRecorder
         let (profileHome, client) = try await connectTransport(scoped)
