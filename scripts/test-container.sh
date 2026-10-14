@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'printf "Container smoke failed at line %s\n" "$LINENO" >&2' ERR
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -61,6 +62,7 @@ wait_for_health() {
 
 wait_for_health "$port_a" "$token_a"
 wait_for_health "$port_b" "$token_b"
+printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port_a}/v1/health")" = 401 ]
 [ "$(docker inspect -f '{{.State.Running}}' "$container_a")" = true ]
 [ "$(docker inspect -f '{{.State.Running}}' "$container_b")" = true ]
@@ -70,6 +72,7 @@ wait_for_health "$port_b" "$token_b"
 [ "$(docker exec "$container_a" sh -c 'test -w /home && printf writable')" = writable ]
 
 docker exec "$container_a" sh -c 'printf persistent > "$HOME/.woven-matter/smoke-marker"'
+printf '%s\n' 'Checking storage reporting and restart/update preservation.'
 status="$(scripts/remote-workspace.sh status "$workspace_a")"
 jq -e '
   .storageKind == "named-volume"
@@ -88,6 +91,7 @@ wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
 delete_status="$(scripts/remote-workspace.sh delete "$workspace_a")"
+printf '%s\n' 'Checking explicit data deletion and legacy storage safety.'
 jq -e '.persistentDataRemoved == false' <<< "$delete_status" >/dev/null
 docker volume inspect "$volume_a" >/dev/null
 WOVENMATTER_API_TOKEN="$token_a" \
