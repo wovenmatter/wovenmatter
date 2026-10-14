@@ -422,7 +422,8 @@ struct GeneralSettingsPane: View {
       Section("Appearance") {
         DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
           DashboardTheme(rawValue: $0)?.title ?? $0
-        }.accessibilityLabel("Theme").listRowBackground(Color.clear)
+        }.accessibilityElement(children: .contain)
+          .accessibilityLabel("Theme").listRowBackground(Color.clear)
       }
       Section("About") {
         LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
