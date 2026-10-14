@@ -18,10 +18,10 @@ struct SettingsLocalWorkspaceView: View {
         ) {
             SettingsWorkspaceSidebarVisibilityControl(.localWorkspace)
             workspaceCard
+            runtimesCard
             SettingsSignInStatusCard(statuses: model.localSignInStatuses, checking: model.checkingLocalSignIn, error: model.localSignInError, scope: "local") {
                 Task { await model.refreshLocalSignInStatus() }
             }
-            runtimesCard
         }
         .task { await model.openCode?.resolveExecutable(); model.refreshRuntimeInventory() }
         .confirmationDialog(
@@ -80,16 +80,26 @@ struct SettingsLocalWorkspaceView: View {
     }
 
     private var workspaceCard: some View {
-        SettingsCard(title: "Workspace") {
-            Text(model.localACPWorkspaceAvailability.detail)
-            if let path = model.localACPWorkspaceAvailability.rootPath {
-                Text(path).font(.caption.monospaced()).textSelection(.enabled)
+        SettingsCard(title: "Workspace", detail: "Create a blank project or link an existing directory from the sidebar.") {
+            SettingsInset {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Local agent workspace")
+                            .font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        SettingsPill(model.localACPWorkspaceAvailability.isReady ? "Ready" : "Setup required",
+                            tone: model.localACPWorkspaceAvailability.isReady ? .neutral : .warning)
+                    }
+                    if let path = model.localACPWorkspaceAvailability.rootPath {
+                        SettingsValueRow(label: "Agent home", value: path)
+                    }
+                    if !model.localACPWorkspaceAvailability.isReady {
+                        SettingsNote(model.localACPWorkspaceAvailability.detail)
+                    }
+                }
             }
-            Text("Each folder owns one project directory. Link an existing directory or create a blank project from the sidebar.")
-                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }
     }
-
 
     private var runtimesCard: some View {
         SettingsCard(title: "Runtimes") {
@@ -103,7 +113,9 @@ struct SettingsLocalWorkspaceView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(AgentRuntimeKind.defaultAgent.displayName).font(.system(size: 13, weight: .medium))
-                                Text("Included with Woven Matter.").font(.callout).foregroundStyle(.secondary)
+                                Text("Included with Woven Matter.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(DashboardPalette.mutedForeground)
                             }
                             Spacer()
                             Button("Settings") { onMore(.defaultAgent) }.buttonStyle(SettingsQuietButtonStyle())
@@ -149,17 +161,17 @@ struct SettingsLocalWorkspaceView: View {
                             }
                             if availability?.isReady == true && !databaseIsReady,
                                let error = model.localACPAgentReconciliationError {
-                                Text(error).font(.system(size: 11))
+                                Text(error).font(.system(size: 11.5))
                                     .foregroundStyle(DashboardPalette.mutedForeground)
                             }
                             if let inventory {
                                 Text(inventory.summary)
-                                    .font(.system(size: 11))
+                                    .font(.system(size: 11.5))
                                     .foregroundStyle(DashboardPalette.mutedForeground)
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
                                 if model.checkedRuntimeKinds.contains(definition.runtimeKind), inventory.latestUnavailable {
-                                    Text("Couldn’t check for updates.").font(.system(size: 11))
+                                    Text("Couldn’t check for updates.").font(.system(size: 11.5))
                                         .foregroundStyle(DashboardPalette.mutedForeground)
                                 }
                             }
@@ -257,7 +269,7 @@ struct SettingsLocalWorkspaceView: View {
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                     if model.checkedRuntimeKinds.contains(.opencode), model.runtimeInventories[.opencode]?.latestUnavailable == true {
-                        Text("Couldn’t check for updates.").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text("Couldn’t check for updates.").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     if model.openCode?.installationFailures ?? 0 >= 2 {
                         Button("Copy diagnostic") {

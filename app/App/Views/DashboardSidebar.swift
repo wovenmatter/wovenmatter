@@ -1049,8 +1049,8 @@ struct DashboardNewFolderPopover: View {
                 .pickerStyle(.segmented)
             }
             TextField("Folder name", text: $name)
-                .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
+                .dashboardQuietTextInput()
                 .onSubmit { if canCreate { create() } }
             if linksExistingDirectory {
                 Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
@@ -1058,16 +1058,16 @@ struct DashboardNewFolderPopover: View {
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text("Woven uses this directory as the project root. Existing files are preserved.")
-                    .font(.system(size: 11))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             } else {
                 Text("Creates a blank directory in this workspace. Later renaming changes only its name in Woven.")
-                    .font(.system(size: 11))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
             if !ownerIsAvailable {
                 Text("Connect this workspace before creating a folder.")
-                    .font(.system(size: 11))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.danger)
             }
             HStack {
@@ -1078,8 +1078,11 @@ struct DashboardNewFolderPopover: View {
                     .disabled(!canCreate)
             }
         }
+        .font(.system(size: 13))
+        .foregroundStyle(DashboardPalette.foreground)
         .padding(16)
         .frame(width: 340)
+        .dashboardFormFocusDismissal { nameFocused = false }
         .task { nameFocused = true }
     }
 
@@ -1111,6 +1114,7 @@ struct DashboardFolderReferencesPopover: View {
     let onChange: ([String]) -> Void
     @State private var paths: [String]
     @State private var newPath = ""
+    @FocusState private var pathFocused: Bool
 
     init(folder: WorkspaceFolderRecord, isOnThisMac: Bool, onClose: @escaping () -> Void,
          onChange: @escaping ([String]) -> Void) {
@@ -1123,16 +1127,16 @@ struct DashboardFolderReferencesPopover: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Reference Locations").font(.system(size: 14, weight: .semibold))
             if let rootPath = folder.rootPath {
-                Text("Root: \(rootPath)").font(.system(size: 11)).textSelection(.enabled)
+                Text("Root: \(rootPath)").font(.system(size: 11.5)).textSelection(.enabled)
             }
             Text("Additional locations on this workspace are available to its sessions. Linking does not read project instruction files. Unlinking does not revoke operating system permissions.")
-                .font(.system(size: 11))
+                .font(.system(size: 11.5))
                 .foregroundStyle(DashboardPalette.mutedForeground)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(paths, id: \.self) { path in
                         HStack(spacing: 8) {
-                            Text(path).font(.system(size: 11)).textSelection(.enabled)
+                            Text(path).font(.system(size: 11.5)).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Button { paths.removeAll { $0 == path } } label: {
                                 DashboardLucideIcon(glyph: .close, size: 12).frame(width: 24, height: 24)
@@ -1150,7 +1154,8 @@ struct DashboardFolderReferencesPopover: View {
             } else {
                 HStack {
                     TextField("Absolute path in this workspace", text: $newPath)
-                        .textFieldStyle(.roundedBorder)
+                        .dashboardQuietTextInput()
+                        .focused($pathFocused)
                         .onSubmit(addPath)
                     Button("Link", action: addPath)
                         .disabled(!newPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/"))
@@ -1165,6 +1170,7 @@ struct DashboardFolderReferencesPopover: View {
         }
         .padding(16)
         .frame(width: 380)
+        .dashboardFormFocusDismissal { pathFocused = false }
     }
 
     private func addPath() {

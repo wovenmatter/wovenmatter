@@ -398,8 +398,7 @@ private struct DashboardDatabaseLinkPopover: View {
                         ? DashboardPalette.warning : DashboardPalette.mutedForeground)
             }
             TextField("SQL query, for example SELECT * FROM sales", text: $sqliteQuery, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12, design: .monospaced))
+                .dashboardQuietTextInput(font: .system(size: 12, design: .monospaced))
                 .lineLimit(2...5)
             Text(document.kind == .html
                 ? "Results are available as window.wovenMatterData. Your HTML refreshes when committed data changes."

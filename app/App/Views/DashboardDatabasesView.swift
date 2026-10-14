@@ -493,13 +493,13 @@ private struct DashboardCreateDatabaseSheet: View {
                 .font(.system(size: 18, weight: .semibold))
             Text("Create in \(workspaceName).")
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
             TextField("Database name", text: $name)
-                .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
+                .dashboardQuietTextInput()
             Text("Agents create and update tables through Woven Matter’s database tools.")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
             if let error {
                 Text(error)
                     .font(.system(size: 11.5))
@@ -516,8 +516,11 @@ private struct DashboardCreateDatabaseSheet: View {
                     .disabled(isCreating || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .font(.system(size: 13))
+        .foregroundStyle(DashboardPalette.foreground)
         .padding(22)
         .frame(width: 420)
+        .dashboardFormFocusDismissal { nameFocused = false }
         .onAppear { nameFocused = true }
     }
 }
@@ -544,7 +547,7 @@ private struct DashboardCopyDatabaseSheet: View {
                 .font(.system(size: 18, weight: .semibold))
             Text("Create an independent copy of \(database.name). Existing artifact links keep using the original database.")
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
             if database.offline {
                 Text("The owner is offline. This copy uses the last complete synced snapshot.")
@@ -553,13 +556,13 @@ private struct DashboardCopyDatabaseSheet: View {
             }
             Text(DashboardDatabaseFreshness.description(database))
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
             Picker("Destination workspace", selection: $destinationSourceID) {
                 ForEach(destinations) { Text($0.name).tag($0.id) }
             }
             TextField("Database name", text: $name)
-                .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
+                .dashboardQuietTextInput()
             if let error {
                 Text(error)
                     .font(.system(size: 11.5))
@@ -578,8 +581,11 @@ private struct DashboardCopyDatabaseSheet: View {
                 .disabled(isCopying || !canCopy)
             }
         }
+        .font(.system(size: 13))
+        .foregroundStyle(DashboardPalette.foreground)
         .padding(22)
         .frame(width: 440)
+        .dashboardFormFocusDismissal { nameFocused = false }
         .onAppear {
             name = "\(database.name) copy"
             destinationSourceID = destinations.first { $0.id != database.sourceID }?.id
