@@ -53,6 +53,9 @@ extension WorkspaceDatabaseConnection {
         guard goal.status == .active else { return }
         try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_goal_runs(goal_id,run_id) SELECT ?,id FROM dashboard_runs WHERE conversation_id=? AND rowid>?", [goal.id, goal.sessionID, String(goal.enrolledRunSequence)])
         goal.enrolledRunSequence = try historyRowsUnlocked("SELECT coalesce(max(rowid),0) AS sequence FROM dashboard_runs WHERE conversation_id=?", values: [goal.sessionID]).first?.objectValue?["sequence"]?.goalInteger ?? goal.enrolledRunSequence
+        // Newly enrolled runs may already be complete. Budget checks in this
+        // transaction must include them before reserving another continuation.
+        goal.completedTurns = try historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goal.id]).first?.objectValue?["count"]?.intValue ?? goal.completedTurns
     }
 
     public func sessionGoals() throws -> [WorkspaceGoal] {
@@ -131,12 +134,21 @@ extension WorkspaceDatabaseConnection {
                         current.status = .paused
                     case .resume:
                         try requireToolUnlocked(.goals, sessionID: sessionID)
+                        // An already active goal keeps its pending delivery and
+                        // progress fences; Resume must not create a second turn.
+                        if current.status == .active { break }
                         guard current.status != .complete else { throw WorkspaceToolError.invalid("This goal is complete. Set a new goal.") }
                         guard current.tokenBudget.map({ (current.tokensUsed ?? 0) < $0 }) ?? true,
                               current.turnBudget.map({ current.completedTurns < $0 }) ?? true else {
                             throw WorkspaceToolError.invalid("Increase or remove the goal budget before resuming.")
                         }
-                        current.enrolledRunSequence = try historyRowsUnlocked("SELECT coalesce(max(rowid),0) AS sequence FROM dashboard_runs WHERE conversation_id=?", values: [sessionID]).first?.objectValue?["sequence"]?.goalInteger ?? current.enrolledRunSequence
+                        let latest = try historyRowsUnlocked("SELECT rowid AS sequence,status FROM dashboard_runs WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1", values: [sessionID]).first?.objectValue
+                        let sequence = latest?["sequence"]?.goalInteger ?? current.enrolledRunSequence
+                        let running = ["queued", "accepted", "running"].contains(latest?["status"]?.stringValue ?? "")
+                        // A conversational Resume enrolls its current turn, while
+                        // ordinary work completed during the pause stays excluded.
+                        let resumingTurn = running && sequence > current.enrolledRunSequence
+                        current.enrolledRunSequence = resumingTurn ? max(0, sequence - 1) : sequence
                         current.observedRunSequence = current.enrolledRunSequence
                         current.status = .active; current.evidence = nil
                         if let pending = current.pendingDeliveryID,
@@ -252,10 +264,11 @@ extension WorkspaceDatabaseConnection {
                     if receipt != "accepted" {
                         goal.status = receipt == "cancelled" ? .paused : .blocked
                         goal.evidence = "Goal delivery is \(receipt ?? "unavailable"). Inspect it before resuming."
-                    } else if goal.progressRevision == goal.pendingProgressRevision,
-                        try historyRowsUnlocked("SELECT 1 FROM dashboard_run_events e JOIN dashboard_runs r ON r.id=e.run_id WHERE r.conversation_id=? AND r.rowid>? AND e.event_type='tool' LIMIT 1", values: [goal.sessionID, String(goal.observedRunSequence)]).isEmpty {
+                    } else if goal.progressRevision == goal.pendingProgressRevision {
+                        // Merely reading goal status uses a tool too. Require a
+                        // new checkpoint so status-only turns cannot loop forever.
                         goal.status = .blocked
-                        goal.evidence = "The agent ended a goal turn without using tools or reporting progress or completion. Resume after checking its response."
+                        goal.evidence = "The agent ended a goal turn without reporting new progress or completion. Resume after checking its response."
                     }
                     goal.pendingDeliveryID = nil
                 }

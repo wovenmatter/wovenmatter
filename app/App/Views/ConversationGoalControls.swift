@@ -108,6 +108,8 @@ private struct ConversationGoalEditor: View {
         guard (tokens.isEmpty || tokenBudget != nil), (turns.isEmpty || turnBudget != nil) else {
             error = "Enter positive whole numbers for budgets."; return
         }
+        do { try WorkspaceGoal.validate(objective: objective, tokenBudget: tokenBudget, turnBudget: turnBudget) }
+        catch { self.error = error.localizedDescription; return }
         saving = true
         Task {
             defer { saving = false }

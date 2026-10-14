@@ -6,6 +6,11 @@ extension ApplicationModel {
     func mutateConversationGoal(id: String, mutation: WorkspaceGoalMutation,
                                 dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WorkspaceGoal? {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        switch mutation {
+        case let .set(objective, tokens, turns), let .edit(_, objective, tokens, turns):
+            try WorkspaceGoal.validate(objective: objective, tokenBudget: tokens, turnBudget: turns)
+        default: break
+        }
         let starts: Bool
         switch mutation { case .set, .resume: starts = true; default: starts = false }
         let fence = starts ? suppliedFence ?? beginAgentDispatch(conversationID: id) : nil
@@ -14,22 +19,26 @@ extension ApplicationModel {
         if case .set = mutation { try await applyPendingSessionSelections(conversationID: id) }
         let stops: Bool
         switch mutation { case .pause, .clear, .edit: stops = true; default: stops = false }
-        let goal: WorkspaceGoal?
+        let result: Result<WorkspaceGoal?, any Error>
         if stops {
             // Install the barrier before any await, and keep the mutation inside
             // it so a later Resume or user input observes the whole operation.
+            let outcome = GoalMutationOutcome()
             let barrier = beginAgentStop(conversationID: id, afterStop: {
-                _ = try await database.mutateGoal(sessionID: id, mutation: mutation)
+                // Native Stop failures remain retained. A rejected goal change
+                // reports its own error without blocking future conversation input.
+                do { outcome.value = .success(try await database.mutateGoal(sessionID: id, mutation: mutation)) }
+                catch { outcome.value = .failure(error) }
             })
             try await barrier.value
-            goal = try await database.sessionGoals().first { $0.sessionID == id }
+            result = outcome.value
         } else {
             try fence?.check()
-            goal = try await database.mutateGoal(sessionID: id, mutation: mutation, dispatchFence: fence)
+            result = .success(try await database.mutateGoal(sessionID: id, mutation: mutation, dispatchFence: fence))
         }
         try await agentTools?.reload()
         await backendApplicationService?.invalidations.publish(scopes: [.settings], conversationIDs: [id])
-        return goal
+        return try result.get()
     }
 
     func handleConversationGoalCommand(_ command: WorkspaceGoalCommand, conversationID: String,
@@ -59,8 +68,10 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database,
               let goal = try? await database.sessionGoals().first(where: { $0.sessionID == delivery.targetID }),
               goal.status == .active, goal.pendingDeliveryID == delivery.id else { return }
+        let clean = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let evidence = clean.isEmpty ? "Goal dispatch failed." : String(clean.prefix(1_024))
         _ = try? await database.mutateGoal(sessionID: goal.sessionID,
-            mutation: .block(id: goal.id, evidence: String(reason.prefix(4_000))))
+            mutation: .block(id: goal.id, evidence: evidence))
     }
 
     func runConversationGoals() async {
@@ -85,4 +96,9 @@ extension ApplicationModel {
             }
         } catch { agentTools?.error = error.localizedDescription }
     }
+}
+
+@MainActor
+private final class GoalMutationOutcome {
+    var value: Result<WorkspaceGoal?, any Error> = .failure(CancellationError())
 }

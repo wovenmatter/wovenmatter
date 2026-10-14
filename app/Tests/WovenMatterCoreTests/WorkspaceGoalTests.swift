@@ -167,6 +167,24 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.status == .blocked)
     }
 
+    @Test func statusOnlyToolCallsAndRepeatedCheckpointsCannotKeepAGoalSpinning() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session)
+        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Work remains"))
+        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
+        _ = try await db.claimToolDelivery(id: delivery.id)
+        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+        try await run(db, session: session, id: "status-only-turn")
+        try await db.write { connection in
+            try connection.toolsExecuteUnlocked("INSERT INTO dashboard_run_events(id,run_id,event_type,content,created_at) VALUES(?,?,?,?,?)",
+                ["goal-status-read", "status-only-turn", "tool", "wovenmatter goals get", WorkspaceDatabaseConnection.timestamp(Date())])
+        }
+        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Work remains"))
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .blocked)
+    }
+
     @Test func usageIsIdempotentAndBudgetExhaustionIsNotCompletion() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -184,6 +202,60 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.status == .budgetLimited)
         #expect(try await db.sessionGoals().first?.tokensUsed == 110)
         await #expect(throws: (any Error).self) { try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id)) }
+    }
+
+    @Test func turnBudgetIncludesRunsFirstObservedAfterCompletion() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await create(db, session, turns: 1)
+        try await run(db, session: session, id: "completed-before-enrollment")
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .budgetLimited)
+        #expect(try await db.sessionGoals().first?.completedTurns == 1)
+    }
+
+    @Test func repeatedResumeRetainsPendingDeliveryAndStallDetection() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session)
+        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
+        _ = try await db.claimToolDelivery(id: delivery.id)
+        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+        try await run(db, session: session, id: "resumed-active-turn", status: "running")
+        let resumed = try #require(await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id)))
+        #expect(resumed.pendingDeliveryID == delivery.id)
+        #expect(resumed.observedRunSequence == goal.observedRunSequence)
+        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id='resumed-active-turn'") }
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .blocked)
+    }
+
+    @Test func resumeDoesNotReobserveTheOldTurnStillSettlingAfterStop() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session)
+        try await run(db, session: session, id: "stopped-turn", status: "running")
+        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
+        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
+        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='cancelled' WHERE id='stopped-turn'") }
+        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
+        #expect(try await db.sessionGoals().first?.status == .active)
+    }
+
+    @Test func conversationalResumeCountsItsTurnButExcludesEarlierPausedWork() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session, tokens: 100, turns: 1)
+        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
+        try await run(db, session: session, id: "earlier-paused-work")
+        try await db.recordGoalUsage(runID: "earlier-paused-work", tokens: 500)
+        try await run(db, session: session, id: "conversational-resume", status: "running")
+        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
+        try await db.recordGoalUsage(runID: "conversational-resume", tokens: 40)
+        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id='conversational-resume'") }
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        let saved = try #require(await db.sessionGoals().first)
+        #expect(saved.tokensUsed == 40 && saved.completedTurns == 1 && saved.status == .budgetLimited)
     }
 
     @Test func aLaterTurnWithoutUsageCannotSilentlyBypassTheTokenBudget() async throws {

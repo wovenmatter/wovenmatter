@@ -63,10 +63,12 @@ also pause when the execution service restarts or Goals tools are disabled.
 They require an explicit resume after either event.
 
 The agent marks a goal achieved only after verifying it. A stalled goal retains
-its explanation so you can resolve the blocker and resume. Budgets are checked
-between turns; reaching a budget does not mark the goal achieved. If token usage
-is unavailable, a token budget prevents further continuation. A turn budget is
-available when you want to limit iterations instead.
+its explanation so you can resolve the blocker and resume. After each automatic
+turn, the agent must report new progress or completion; checking status alone
+does not keep the goal running. Budgets are checked between turns; reaching a
+budget does not mark the goal achieved. If token usage is unavailable, a token
+budget prevents further continuation. A turn budget is available when you want
+to limit iterations instead.
 
 Normal messages retain their priority. A goal waits for active work, questions,
 approvals and queued inputs before beginning another turn. Plan mode does not
