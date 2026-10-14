@@ -199,18 +199,21 @@ struct HomePane: View {
             HStack(spacing: 12) { quickActions }
             VStack(spacing: 12) { quickActions }
           }.padding(.vertical, 12)
-          let agents = model.launcherAgents
+          let groups = model.launcherGroups
           GroupLabel(text: "Agents")
-          ForEach(agents.filter { $0.workspaceID == "local" }) { agent in agentRow(agent) }
-          let macAgents = agents.filter(\.isLocalMac)
-          if !macAgents.isEmpty {
+          ForEach(groups.first(where: { $0.id == "local" })?.agents ?? []) { agent in agentRow(agent) }
+          if let mac = groups.first(where: { $0.id == "central" }) {
             GroupLabel(text: "Local agent workspace")
-            ForEach(macAgents) { agent in agentRow(agent) }
+            workspaceAgents(mac)
           }
-          let remoteAgents = agents.filter { $0.workspaceID != "local" && !$0.isLocalMac }
-          if !remoteAgents.isEmpty {
+          ForEach(groups.filter { $0.id != "central" && $0.workspace?.kind == .mac }) { mac in
+            GroupLabel(text: mac.name)
+            workspaceAgents(mac)
+          }
+          let remote = groups.filter { $0.id != "local" && $0.id != "central" && $0.workspace?.kind != .mac }
+          if !remote.isEmpty {
             GroupLabel(text: "Remote workspaces")
-            ForEach(remoteAgents) { agent in agentRow(agent) }
+            ForEach(remote) { workspaceAgents($0) }
           }
           Divider().padding(.horizontal, 14).padding(.vertical, 18)
           ForEach([CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
@@ -219,6 +222,15 @@ struct HomePane: View {
           }
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
+    }
+  }
+  @ViewBuilder private func workspaceAgents(_ group: CompanionAgentGroup) -> some View {
+    if group.agents.isEmpty, let workspace = group.workspace {
+      SettingsNavigationRow(title: workspace.name, icon: workspace.kind == .mac ? .monitor : .container) {
+        WorkspaceSettingsPane(model: model, workspace: workspace)
+      }
+    } else {
+      ForEach(group.agents) { agent in agentRow(agent) }
     }
   }
   @ViewBuilder private var quickActions: some View {

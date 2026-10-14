@@ -143,17 +143,12 @@ struct NewChatChooser: View {
   @Environment(\.dashboardTheme) private var theme
   @Environment(\.dismiss) private var dismiss
   @Bindable var model: CompanionModel
-  private var groups: [String] {
-    var names: [String] = []
-    for agent in model.launcherAgents where !names.contains(agent.workspaceName) { names.append(agent.workspaceName) }
-    return names
-  }
   var body: some View {
     VStack(spacing: 0) {
       header
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          ForEach(groups, id: \.self) { workspace in workspaceSection(workspace) }
+          ForEach(model.launcherGroups) { workspace in workspaceSection(workspace) }
           if let problem = model.chatSetupProblem { Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger).padding(.vertical, 12) }
         }.padding(.horizontal, 20).padding(.bottom, 24)
       }.scrollIndicators(.never)
@@ -170,10 +165,10 @@ struct NewChatChooser: View {
         .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Close agent chooser").disabled(model.startingChat)
     }.padding(.horizontal, 20).padding(.top, 10)
   }
-  private func workspaceSection(_ workspace: String) -> some View {
+  private func workspaceSection(_ workspace: CompanionAgentGroup) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      GroupLabel(text: workspace)
-      ForEach(model.launcherAgents.filter { $0.workspaceName == workspace }) { agent in agentRow(agent) }
+      GroupLabel(text: workspace.name)
+      ForEach(workspace.agents) { agent in agentRow(agent) }
     }
   }
   private func agentRow(_ agent: CompanionAgentLauncher) -> some View {

@@ -140,10 +140,13 @@ extension CompanionModel {
     return CompanionAgentLauncher.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
       workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known)
   }
+  var launcherGroups: [CompanionAgentGroup] {
+    CompanionAgentGroup.list(agents: launcherAgents, workspaces: executionWorkspaces)
+  }
   func launchAgent(_ launcher: CompanionAgentLauncher) async {
     guard let current = launcherAgents.first(where: { $0.id == launcher.id }), current.isAvailable else { return }
     if let latest = current.latestConversation(in: conversations, owner: { executionOwner(of: $0) }) {
-      await selectConversation(latest.id)
+      await selectConversation(latest.id, workspaceID: current.workspaceID)
     } else {
       await startNewChat(with: current)
     }
@@ -190,7 +193,10 @@ extension CompanionModel {
     if let workspaceID = conversationWorkspaceIDs[conversationID] { return workspaceID == deviceWorkspaceID ? "local" : workspaceID }
     return "central"
   }
-  var selectedExecutionWorkspaceID: String { selectedConversationID.map { executionOwner(of: $0) } ?? executionWorkspaceID }
+  var selectedExecutionWorkspaceID: String {
+    if let route = selectedConversationRoute, route.conversationID == selectedConversationID { return route.workspaceID }
+    return selectedConversationID.map { executionOwner(of: $0) } ?? executionWorkspaceID
+  }
   func executionAvailable(for conversationID: String) -> Bool {
     switch executionOwner(of: conversationID) {
     case "local": return !fixture

@@ -27,6 +27,7 @@ import CompanionInference
   var state = MobileStoreState()
   var providers: [CompanionProvider] = []
   var knownAgentIDs: Set<String> = []
+  var selectedConversationRoute: (conversationID: String, workspaceID: String)?
   var savedAgentCatalog: CompanionAgentCatalog?
   var pending: [CompanionPendingInteraction] = []
   var sessionCapabilities: [String: CompanionProvider] = [:]
@@ -352,7 +353,8 @@ import CompanionInference
       catch { errorMessage = error.localizedDescription }
     }
   }
-  func selectConversation(_ id: String) async {
+  func selectConversation(_ id: String, workspaceID: String? = nil) async {
+    selectedConversationRoute = workspaceID.map { (id, $0) }
     selectedConversationID = id; tab = .chat
     if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
     else if selectedExecutionWorkspaceID == "central" { await refresh() }
