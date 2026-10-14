@@ -47,6 +47,7 @@ final class WorkspaceDatabaseConnection {
       try migrate()
       try migrateWorkspaceHistory()
       try migrateAgentTools()
+      try migrateGoals()
       try migrateCalendar()
       try migrateLibrary()
       try createNativeRunArchive()

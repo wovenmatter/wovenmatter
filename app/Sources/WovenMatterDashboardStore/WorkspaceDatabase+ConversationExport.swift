@@ -44,6 +44,7 @@ extension WorkspaceDatabaseConnection {
       ("activities", "SELECT * FROM dashboard_run_events WHERE \(runPredicate) ORDER BY created_at,rowid", [id,id]),
       ("historyEvents", "SELECT * FROM workspace_history_events WHERE \(runPredicate) ORDER BY sequence", [id,id]),
       ("traceEvents", "SELECT * FROM dashboard_run_trace_events WHERE \(runPredicate) ORDER BY created_at,seq,id", [id,id]),
+      ("goal", "SELECT * FROM workspace_session_goals WHERE session_id=?", [id]),
       ("deliveries", "SELECT * FROM workspace_session_deliveries WHERE message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=?) ORDER BY created_at,rowid", [id]),
     ]
     for (name, sql, bindings) in sections {

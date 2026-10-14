@@ -589,7 +589,13 @@ final class ApplicationModel {
                 }, executorControl: { [weak self] control in
                     guard let self else { throw CancellationError() }
                     return try await self.executeExecutorControl(control)
-                }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+                }, goalControl: { [weak self] id, mutation in
+                    guard let self else { throw CancellationError() }
+                    _ = try await self.mutateConversationGoal(id: id, mutation: mutation)
+                }, onMutation: { [weak self] in
+                    await self?.refreshWorkspace()
+                    await self?.backendApplicationService?.invalidations.publish(scopes: [.settings])
+                })
             try await dashboardStore.setCLIConnectionProvider { [weak self] id in
                 try await self?.sessionCLIConnection(id)
             }
@@ -2148,6 +2154,8 @@ final class ApplicationModel {
         toolSessionAdmission.finish(conversationID)
     }
 
+    var preparingAgentDispatchIDs: Set<String> { Set(pendingAgentDispatches.keys) }
+
     func beginAgentDispatch(conversationID: String) -> AgentDispatchFence {
         let fence = AgentDispatchFence()
         pendingAgentDispatches[conversationID, default: [:]][ObjectIdentifier(fence)] = fence
@@ -2211,6 +2219,9 @@ final class ApplicationModel {
 
     private func stopBackendAgentDispatch(conversationID: String) async throws {
         guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
+        var goalPauseError: (any Error)?
+        do { try await dashboardStore?.database.pauseActiveGoals(sessionID: conversationID) }
+        catch { goalPauseError = error }
         // Do not sweep app fences here: a new input may already be waiting for
         // this Stop. Its fence must survive unless another Stop supersedes it.
         if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
@@ -2221,6 +2232,10 @@ final class ApplicationModel {
         } else {
             try await dashboardStore?.stopLocalACPPrompt(conversationID: conversationID)
         }
+        try? await agentTools?.reload()
+        // Native cancellation still runs if storage fails. The retained Stop
+        // failure prevents a new goal dispatch until an explicit retry succeeds.
+        if let goalPauseError { throw goalPauseError }
     }
 
     private func stopAgentLocally(conversationID: String) {
@@ -2264,6 +2279,17 @@ final class ApplicationModel {
             }
         }
 
+        var goalObjective: String?
+        if input.historyDeliveryID == nil, let command = WorkspaceGoalCommand(input.text), WorkspaceGoal.supports(conversation.localRuntimeKind) {
+            if case .set(let objective) = command {
+                _ = try await handleConversationGoalCommand(command, conversationID: conversation.id)
+                goalObjective = objective
+            } else {
+                guard input.attachments.isEmpty else { throw WorkspaceToolError.invalid("Send attachments with a goal objective or an ordinary message.") }
+                return try await handleConversationGoalCommand(command, conversationID: conversation.id)
+            }
+        }
+
         let activityID = activeWorkSleepPrevention.beginDispatch()
         defer { activeWorkSleepPrevention.endDispatch(activityID) }
         try await waitForAgentStop(conversationID: conversation.id)
@@ -2296,7 +2322,7 @@ final class ApplicationModel {
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
-        var normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
+        var normalized = AgentMessageInput(text: (goalObjective ?? input.text).trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
         for reference in normalized.references where reference.kind == .conversation {
@@ -2318,6 +2344,24 @@ final class ApplicationModel {
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
         normalized.cliContext = try await agentTools.cliContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
         let deliveryContent = normalized.text
+        if WorkspaceGoal.supports(conversation.localRuntimeKind),
+           try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.goals) {
+            let goal = try await dashboardStore.database.sessionGoals().first { $0.sessionID == conversation.id }
+            let goalContext = goal.map { "Current goal ID: \($0.id). Status: \($0.status.rawValue)." } ?? "No goal is currently set."
+            let guidance = """
+
+            <wovenmatter-goals>
+            \(goalContext)
+            When the user explicitly requests a goal, use `wovenmatter goals set --objective TEXT --request-id UUID`.
+            Read `wovenmatter goals help` for controls. Manage this chat's goal through this CLI,
+            not provider-native goal tools or /goal loops. Complete only with verified evidence.
+            Set, pause, resume and clear require explicit user intent. While active, report useful
+            progress with goals checkpoint or an explained blocker with goals block before ending.
+            </wovenmatter-goals>
+            """
+            normalized = AgentMessageInput(text: normalized.text + guidance, attachments: normalized.attachments,
+                historyDeliveryID: normalized.historyDeliveryID, visibleWorkspace: normalized.visibleWorkspace, cliContext: normalized.cliContext)
+        }
         try dispatchFence.check()
         if let deliveryID = normalized.historyDeliveryID {
             try await dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
@@ -2361,7 +2405,7 @@ final class ApplicationModel {
             // successful refresh without reporting a retryable send failure.
             localRunningConversationIDs.insert(conversation.id)
         }
-        scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
+        scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: deliveryContent)
         return true
     }
 
@@ -5530,7 +5574,13 @@ extension ApplicationModel {
                 return try await self.sendBackendCommand(.toolsMutation(.executor(control))).exportURL
             }) { [weak self] mutation in
                 guard let self else { throw CancellationError() }
-                let result = try await self.sendBackendCommand(.toolsMutation(mutation))
+                let result: BackendApplicationResult
+                if case let .goal(id, goalMutation) = mutation {
+                    let stops: Bool
+                    switch goalMutation { case .pause, .clear, .edit: stops = true; default: stops = false }
+                    let admission = try self.backendDispatchAdmission(conversationID: id, stopping: stops)
+                    result = try await self.sendBackendCommand(.goalMutationFenced(conversationID: id, mutation: goalMutation, admission: admission))
+                } else { result = try await self.sendBackendCommand(.toolsMutation(mutation)) }
                 if result.requiresTimerPauseConfirmation { throw WorkspaceToolError.timerPauseConfirmation }
             }
             await refreshWorkspace()

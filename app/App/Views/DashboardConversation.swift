@@ -384,6 +384,10 @@ struct DashboardCloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
+                if let conversation, WorkspaceGoal.supports(conversation.localRuntimeKind), let tools = model.agentTools,
+                   tools.sessionPolicies[conversation.id]?.enabled.contains(.goals) == true || tools.goals[conversation.id] != nil {
+                    ConversationGoalControls(tools: tools, sessionID: conversation.id).frame(maxWidth: 768)
+                }
                 if let conversation, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
                         .frame(maxWidth: 768)
@@ -1163,7 +1167,7 @@ struct DashboardMessageRow: View {
                     if isUser {
                         WorkspaceIncomingAgentHeader(message: message)
                         ConversationUserMessage(
-                            content: message.content,
+                            content: message.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt(message.content),
                             attachments: attachments,
                             references: references,
                             onOpenAttachment: onOpenAttachment

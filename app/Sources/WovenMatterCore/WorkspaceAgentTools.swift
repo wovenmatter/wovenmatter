@@ -1,13 +1,14 @@
 import Foundation
 
 public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sendable {
-  case notes, history, sessions, timers, usage, calendar, library, executor
+  case notes, history, sessions, goals, timers, usage, calendar, library, executor
   public var id: String { rawValue }
   public var title: String {
     switch self {
     case .notes: "Notes"
     case .history: "Conversation history"
     case .sessions: "Session management"
+    case .goals: "Goals"
     case .timers: "Timers"
     case .usage: "Usage data"
     case .calendar: "Calendar"
@@ -84,7 +85,7 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public init(identifiers: [String]) throws {
     let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == identifiers.count else {
-      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, timers, usage, calendar, library, or executor.")
+      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, goals, timers, usage, calendar, library, or executor.")
     }
     self.enabled = Set(groups)
   }
@@ -266,7 +267,7 @@ public enum WorkspaceToolError: Error, LocalizedError, Equatable, Sendable {
 }
 
 public enum WorkspaceSessionDeliveryKind: String, Codable, Sendable {
-  case message, created, timer, notification, calendar
+  case message, created, timer, notification, calendar, goal
 }
 
 public struct WorkspaceSessionDelivery: Codable, Identifiable, Equatable, Sendable {

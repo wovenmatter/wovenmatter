@@ -144,6 +144,21 @@ extension WorkspaceDatabaseConnection {
           try bind(created, at: 4, to: run); try bindNullable(status == "streaming" ? nil : completed, at: 5, to: run)
           try bind(created, at: 6, to: run); try bind(now, at: 7, to: run); try bind(conversationID, at: 8, to: run)
           try stepDone(run)
+          let reported = message["content"].array.filter { $0["type"].text == "step-finish" && !$0["tokens"].isNull }
+          if !reported.isEmpty {
+            var total: Int64 = 0
+            for step in reported {
+              let value = step["tokens"]
+              let counts = UsageTokenCounts(inputTokens: Self.goalTokenCount(value["input"].number),
+                cachedInputTokens: Self.goalTokenCount(value["cache"]["read"].number),
+                cacheCreationTokens: Self.goalTokenCount(value["cache"]["write"].number),
+                outputTokens: Self.goalTokenCount(value["output"].number),
+                reportedTotalTokens: value["total"].number.map { Self.goalTokenCount($0) })
+              let sum = total.addingReportingOverflow(counts.totalTokens)
+              total = sum.overflow ? Int64.max : sum.partialValue
+            }
+            try recordGoalUsageUnlocked(runID: runID, tokens: total)
+          }
           let activities = OpenCodeSessionSnapshot.activities(message, assistantMessageID: id)
           let activityIDs = activities.map { "\(runID):activity:\($0.id)" }
           let placeholders = Array(repeating: "?", count: activityIDs.count).joined(separator: ",")
@@ -306,5 +321,12 @@ extension WorkspaceDatabase {
 
   public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) async throws -> OpenCodeSessionSnapshot {
     try await read { try $0.openCodeDisplaySnapshot(snapshot, conversationID: conversationID) }
+  }
+}
+
+private extension WorkspaceDatabaseConnection {
+  static func goalTokenCount(_ value: Double?) -> Int64 {
+    guard let value, value.isFinite, value > 0 else { return 0 }
+    return value >= Double(Int64.max) ? Int64.max : Int64(value)
   }
 }

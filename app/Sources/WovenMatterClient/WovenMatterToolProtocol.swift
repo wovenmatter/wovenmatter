@@ -87,6 +87,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .history, .usage, .library: return false
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
+    case .goals: return action != "get"
     case .timers: return action != "list"
     case .calendar: return !["list", "read", "occurrences"].contains(action)
     case nil: return false
@@ -125,13 +126,14 @@ public struct WovenMatterToolCommand: Sendable {
       .notes: ["list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
+      .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
       .executor: ["execute", "search", "skills", "status", "cancel"],
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -232,6 +234,10 @@ public struct WovenMatterToolCommand: Sendable {
     case (.sessions, "receipts"): allowed = ["before", "limit"]; maximumPositionals = 0
     case (.sessions, "folders"): allowed = pagination; maximumPositionals = 0
     case (.sessions, "harnesses"): allowed = ["offset", "limit"]; maximumPositionals = 0
+    case (.goals, "get"): allowed = []; maximumPositionals = 0
+    case (.goals, "set"): allowed = ["objective", "token-budget", "turn-budget"] + request; maximumPositionals = 0
+    case (.goals, "pause"), (.goals, "resume"), (.goals, "clear"): allowed = ["id"] + request; maximumPositionals = 0
+    case (.goals, "complete"), (.goals, "block"), (.goals, "checkpoint"): allowed = ["id", "evidence"] + request; maximumPositionals = 0
     case (.timers, "list"): allowed = ["session"] + pagination; maximumPositionals = 0
     case (.timers, "create"): allowed = ["text", "at", "every", "session", "paused"] + request; maximumPositionals = 0
     case (.timers, "update"): allowed = ["id", "text", "at", "every", "paused"] + request; maximumPositionals = 1
@@ -323,6 +329,7 @@ public struct WovenMatterToolCommand: Sendable {
       notes       Discover, read and edit notes, spreadsheets and HTML; recover versions
       history     Search conversations and read observed transcripts and traces
       sessions    Create, message and coordinate ordinary Woven Matter sessions
+      goals       Set, inspect and manage this conversation’s persistent objective
       timers      Wake an agent at a set time or interval to carry out instructions
       usage       Read recorded usage analytics and available account usage limits
       calendar    Read, create and maintain calendar events
@@ -391,6 +398,19 @@ public struct WovenMatterToolCommand: Sendable {
       request ID to inspect its outcome without creating another prompt. Server shutdown
       or restart cancels pending approvals. Messages steer busy sessions or queue when
       steering is unsupported. Use release when the assignment is complete.
+      """
+    case .goals: """
+      get
+      set --objective TEXT [--token-budget N --turn-budget N] --request-id UUID
+      pause|resume|clear --id GOAL_ID --request-id UUID
+      complete|block|checkpoint --id GOAL_ID --evidence TEXT --request-id UUID
+
+      One goal belongs to this conversation. Set a goal only when explicitly requested.
+      Complete it only after checking concrete evidence; report useful progress with checkpoint.
+      Use block for an explained blocker. Pause, resume and clear require explicit user intent.
+      Never start a provider-native goal alongside a Woven Matter goal.
+      Token budgets are checked between turns using reported usage; missing usage blocks continuation.
+      A turn budget limits automatic iterations. Use the current goal ID for lifecycle changes.
       """
     case .timers: """
       list [--session ID]

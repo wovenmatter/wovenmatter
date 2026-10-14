@@ -212,6 +212,12 @@ extension WorkspaceDatabaseConnection {
   private func setSessionToolsUnlocked(_ tools: WorkspaceSessionTools, sessionID: String,
     confirmedPausingTimers: Bool) throws {
     try requireToolSessionUnlocked(sessionID)
+    if !tools.enabled.contains(.goals), var goal = try goalUnlocked(sessionID), goal.status == .active {
+      try captureGoalRunsUnlocked(&goal)
+      try cancelQueuedGoalDeliveryUnlocked(goal)
+      goal.status = .paused; goal.evidence = "Goal tools are disabled."
+      try saveGoalUnlocked(goal)
+    }
     if !tools.enabled.contains(.timers) {
       let active = try historyRowsUnlocked("SELECT id FROM workspace_session_timers WHERE session_id=? AND is_paused=0 LIMIT 1", values: [sessionID])
       guard active.isEmpty || confirmedPausingTimers else { throw WorkspaceToolError.timerPauseConfirmation }

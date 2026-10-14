@@ -81,6 +81,11 @@ You are working in a Woven Matter agent workspace.
 - Use the WovenMatter CLI to work with the app. Run `wovenmatter help` to see the
   available tools and how to use them. The CLI connection is supplied by this session, and
   commands use its enabled tools and permissions.
+- When explicitly asked to set a goal, use `wovenmatter goals set --objective TEXT`
+  with a UUID request ID. Read `wovenmatter goals help` for lifecycle controls.
+  Woven Matter owns continuation: do not start a provider-native goal loop alongside it.
+  Complete a goal only after checking concrete evidence. Pause, resume and clear
+  goals only when requested by the user.
 - When the user refers to the note or asset they had open, run `wovenmatter context` to
   get the ID captured when they sent that message. Read its contents through the CLI when
   needed.

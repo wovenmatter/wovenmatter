@@ -45,3 +45,29 @@ to stop it.
 
 For adapter details, component versions, and update behavior, see
 [Runtime installation and updates](../RUNTIME_MAINTENANCE.md).
+
+## Goals
+
+Goals keep a chat working toward an outcome across turns. They are available for
+Pi Durable, Codex, Claude Code, Grok Build and OpenCode, locally and in remote workspaces.
+
+Tell the agent to set a goal, choose **Set goal** above the composer, or send
+`/goal` followed by the outcome and how to verify it. Each chat has one goal.
+The goal row shows the objective, status and reported token usage. Use **Edit**
+to change the objective or set an optional token or turn budget. Editing pauses
+the goal; **Resume** starts work again.
+
+Use `/goal` to show the current goal, `/goal pause`, `/goal resume`, or
+`/goal clear`. **Stop** pauses the goal before stopping the current run. Goals
+also pause when the execution service restarts or Goals tools are disabled.
+They require an explicit resume after either event.
+
+The agent marks a goal achieved only after verifying it. A stalled goal retains
+its explanation so you can resolve the blocker and resume. Budgets are checked
+between turns; reaching a budget does not mark the goal achieved. If token usage
+is unavailable, a token budget prevents further continuation. A turn budget is
+available when you want to limit iterations instead.
+
+Normal messages retain their priority. A goal waits for active work, questions,
+approvals and queued inputs before beginning another turn. Plan mode does not
+start automatic goal work.
