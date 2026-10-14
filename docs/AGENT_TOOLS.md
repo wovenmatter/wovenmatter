@@ -89,6 +89,9 @@ Agent downloads remain temporary, never execute, and are capped at 16 files of
 the native save dialog. Dialogs can be accepted/dismissed with `accept` on the
 triggering action, or an explicit `dialog` action. Website content is untrusted.
 
+Use `--json -` to read large browser/computer payloads from stdin (at most 3 MiB),
+avoiding OS command-line limits. Native tools and the MCP adapter use this path.
+
 Computer Use grants broad access to the Mac desktop; there are no per-app
 allowlists. Enable it in the chat's Tools menu, or set a default for new chats.
 Grant Woven Matter Screen Recording and Accessibility in macOS System Settings.

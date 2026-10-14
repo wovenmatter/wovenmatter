@@ -30,7 +30,7 @@ export async function callAutomation(name, input, environment, signal, run = spa
   const id = randomUUID();
   return await new Promise((resolve, reject) => {
     signal?.throwIfAborted();
-    const child = run(executable, [name, 'call', '--json', JSON.stringify(input), '--request-id', id], { env: environment, stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = run(executable, [name, 'call', '--json', '-', '--request-id', id], { env: environment, stdio: ['pipe', 'pipe', 'ignore'] });
     let output = '', size = 0;
     const abort = () => {
       child.kill('SIGTERM');
@@ -50,6 +50,10 @@ export async function callAutomation(name, input, environment, signal, run = spa
         resolve({ content: response.result?.content ?? [{ type: 'text', text: JSON.stringify(response.result) }], details: response.result?.details });
       } catch (error) { reject(error); }
     });
+    // Keep uploads and typed text out of argv, including Linux's per-argument
+    // ceiling. The CLI reads a bounded payload before forwarding the request.
+    child.stdin.on('error', () => {});
+    child.stdin.end(JSON.stringify(input));
   });
 }
 export const automationTools = environment => Object.keys(automationSchemas).map(name => ({

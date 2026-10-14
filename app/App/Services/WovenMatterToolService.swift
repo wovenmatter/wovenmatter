@@ -39,6 +39,16 @@ enum WovenMatterCommandLine {
                 return EXIT_SUCCESS
             }
             var args = arguments
+            if (command.group == .browser || command.group == .computer), command.action == "call",
+               command.options["json"] == "-", let index = command.optionIndices["json"] {
+                var input = Data()
+                while let bytes = try FileHandle.standardInput.read(upToCount: 65_536), !bytes.isEmpty {
+                    input.append(bytes)
+                    guard input.count <= 3 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
+                }
+                guard let json = String(data: input, encoding: .utf8) else { throw WorkspaceToolError.invalid("Automation input must be UTF-8 JSON.") }
+                args[index + 1] = json
+            }
             if let index = command.optionIndices["image"] { args.removeSubrange(index...index + 1) }
             // File paths belong to the CLI host. Never ask the app to open an
             // arbitrary caller-supplied path on the Mac (remote callers included).

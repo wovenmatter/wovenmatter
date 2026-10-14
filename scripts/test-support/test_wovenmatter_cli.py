@@ -24,7 +24,7 @@ class BundledCLITests(unittest.TestCase):
             self.assertEqual(response["code"], "transport_error")
             self.assertEqual(len(response["requestID"]), 36)
 
-    def invoke(self, arguments, response, environment=None):
+    def invoke(self, arguments, response, environment=None, stdin=None):
         with tempfile.TemporaryDirectory(prefix="wmcli-", dir="/tmp") as directory:
             endpoint = str(Path(directory) / "rpc.sock")
             captured, errors = [], []
@@ -54,7 +54,7 @@ class BundledCLITests(unittest.TestCase):
                 try:
                     result = subprocess.run([str(CLI)] + arguments,
                         env={**os.environ, "WOVENMATTER_SOCKET": endpoint, **(environment or {})},
-                        capture_output=True, text=True, timeout=10)
+                        input=stdin, capture_output=True, text=True, timeout=10)
                 finally:
                     worker.join(timeout=6)
                 self.assertFalse(worker.is_alive())
@@ -63,12 +63,23 @@ class BundledCLITests(unittest.TestCase):
                 return result, captured[0]
 
     def test_help_for_all_groups_requires_no_endpoint(self):
-        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library", "executor"]:
+        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library", "executor", "browser", "computer"]:
             result = subprocess.run([str(CLI)] + ([group, "help"] if group else ["help"]),
                 env={**os.environ, "WOVENMATTER_SOCKET": "/nonexistent/wovenmatter-test.sock"},
                 capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("wovenmatter", result.stdout.lower())
+
+    def test_large_automation_payload_uses_bounded_stdin(self):
+        payload = json.dumps({"action": "upload", "data": "A" * 2800000})
+        result, request = self.invoke(["browser", "call", "--json", "-"], {"success": True}, stdin=payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(request["arguments"], ["browser", "call", "--json", payload])
+        too_large = subprocess.run([str(CLI), "computer", "call", "--json", "-"], input="x" * (3 * 1024 * 1024 + 1),
+            env={**os.environ, "WOVENMATTER_SOCKET": "/nonexistent/wovenmatter-test.sock"}, capture_output=True, text=True, timeout=10)
+        response = json.loads(too_large.stdout)
+        self.assertEqual(response["code"], "invalid_request")
+        self.assertNotIn("requestID", response)
 
     def test_literal_flag_value_and_request_id_reach_bound_endpoint(self):
         identity = "10000000-0000-4000-8000-000000000001"

@@ -16,7 +16,7 @@ test('bundled MCP server negotiates tools and delivers inline screenshots over s
   const root = await mkdtemp(join(tmpdir(), 'woven-mcp-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const cli = join(root, 'wovenmatter');
-  await writeFile(cli, `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({success:true,result:{content:[{type:'image',mimeType:'image/jpeg',data:'ZmFrZQ=='}]}})+'\\n');\n`, { mode: 0o700 });
+  await writeFile(cli, `#!${process.execPath}\nlet text=''; for await(const bytes of process.stdin) text+=bytes; const input=JSON.parse(text); const content=input.action==='upload' ? [{type:'text',text:JSON.stringify({argv:process.argv.slice(2),size:input.data.length})}] : [{type:'image',mimeType:'image/jpeg',data:'ZmFrZQ=='}]; process.stdout.write(JSON.stringify({success:true,result:{content}})+'\\n');\n`, { mode: 0o700 });
   const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/automation-mcp.mjs', import.meta.url))], env: { PATH: process.env.PATH, WOVENMATTER_CLI: cli, WOVENMATTER_SOCKET: '/fixture/caller.sock' } });
   const client = new Client({ name: 'fixture', version: '1' });
   t.after(() => client.close());
@@ -24,6 +24,12 @@ test('bundled MCP server negotiates tools and delivers inline screenshots over s
   assert.deepEqual((await client.listTools()).tools.map(x => x.name), ['browser', 'computer']);
   const result = await client.callTool({ name: 'computer', arguments: { action: 'screenshot' } });
   assert.deepEqual(result.content, [{ type: 'image', mimeType: 'image/jpeg', data: 'ZmFrZQ==' }]);
+  const data = Buffer.alloc(2 * 1024 * 1024).toString('base64');
+  const upload = await client.callTool({ name: 'browser', arguments: { action: 'upload', data } });
+  const received = JSON.parse(upload.content[0].text);
+  assert.equal(received.size, data.length);
+  assert.deepEqual(received.argv.slice(0, 4), ['browser', 'call', '--json', '-']);
+  assert.ok(received.argv.join(' ').length < 200);
 });
 
 test('private CDP bridge owns one page, rejects discovery outside it and maps native sessions', async t => {
@@ -61,7 +67,7 @@ test('private CDP bridge owns one page, rejects discovery outside it and maps na
 test('automation adapter uses the current scoped CLI, preserves images and cancels its own request', async () => {
   const calls = [];
   const run = (path, args, options) => {
-    const child = new EventEmitter(); child.stdout = new PassThrough(); child.kill = signal => { child.killed = signal; }; child.unref = () => {};
+    const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = signal => { child.killed = signal; }; child.unref = () => {};
     calls.push({ path, args, options, child }); return child;
   };
   const environment = { WOVENMATTER_CLI: '/fixture/scoped-cli', WOVENMATTER_SOCKET: '/fixture/owner.sock' };
@@ -71,6 +77,7 @@ test('automation adapter uses the current scoped CLI, preserves images and cance
   assert.deepEqual((await result).content, content);
   assert.equal(calls[0].path, environment.WOVENMATTER_CLI);
   assert.equal(calls[0].options.env, environment);
+  assert.deepEqual(JSON.parse(calls[0].child.stdin.read().toString()), { action: 'screenshot', tabId: 'owned' });
   const controller = new AbortController();
   const interrupted = callAutomation('computer', { action: 'type', text: 'fixture' }, environment, controller.signal, run);
   controller.abort(); calls[1].child.emit('close', 1);

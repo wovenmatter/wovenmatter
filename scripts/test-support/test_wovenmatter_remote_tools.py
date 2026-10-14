@@ -54,6 +54,14 @@ class RemoteToolTests(unittest.TestCase):
         self.assertNotIn("--session", args)
         self.assertEqual(str(tools.uuid.UUID(args[-1])), args[-1])
 
+    def test_large_automation_stdin_stays_on_the_caller_host_and_is_bounded(self):
+        payload = json.dumps({"action": "upload", "data": "A" * 2800000}).encode()
+        arguments = ["browser", "call", "--json", "-"]
+        request = json.loads(tools.build_request(arguments, {}, stdin=io.BytesIO(payload)))
+        self.assertEqual(request["arguments"], ["browser", "call", "--json", payload.decode()])
+        with self.assertRaises(ValueError):
+            tools.build_request(arguments, {}, stdin=io.BytesIO(b"x" * (3 * 1024 * 1024 + 1)))
+
     def test_executor_file_is_bounded_and_read_on_the_cli_host(self):
         with tempfile.TemporaryDirectory() as temporary:
             file = Path(temporary) / "program.js"

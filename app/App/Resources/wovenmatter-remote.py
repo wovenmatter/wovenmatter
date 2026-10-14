@@ -58,12 +58,19 @@ def option_indices(arguments, positional=None):
     return result
 
 
-def build_request(arguments, environment):
+def build_request(arguments, environment, stdin=None):
     if len(arguments) > 1024:
         raise ValueError("A tool command must contain at most 1,024 arguments.")
     args = list(arguments)
     positional = []
     options = option_indices(args, positional)
+    if args[:2] in (["browser", "call"], ["computer", "call"]) and "json" in options:
+        index = options["json"]
+        if index + 1 < len(args) and args[index + 1] == "-":
+            data = (stdin if stdin is not None else sys.stdin.buffer).read(3 * 1024 * 1024 + 1)
+            if len(data) > 3 * 1024 * 1024:
+                raise ValueError("Automation input exceeds 3 MiB.")
+            args[index + 1] = data.decode("utf-8")
     if "image" in options:
         index = options["image"]
         if args[:2] not in (["browser", "call"], ["computer", "call"]) or index + 1 >= len(args):
