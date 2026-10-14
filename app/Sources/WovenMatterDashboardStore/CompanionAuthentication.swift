@@ -26,10 +26,18 @@ public actor CompanionAuthentication {
     var encryptedCredential: Data?
     var workspaceID: String?
   }
+  private struct PendingQRPairing: Codable {
+    var device: CompanionPairedDevice
+    var workspaceID: String
+    var expiresAt: Date
+    var offerProof: Data
+    var encryptedCredential: Data
+  }
   private struct State: Codable {
     var version = 1
     var devices: [CompanionPairedDevice] = []
     var approvals: [Approval]?
+    var pendingQRPairings: [PendingQRPairing]?
   }
   private struct Offer { let digest: Data; let expiresAt: Date; let deviceID: String? }
   private let fileURL: URL
@@ -108,18 +116,51 @@ public actor CompanionAuthentication {
 
   public func cancelOffer() { offer = nil }
 
+  /// Verify the code and target without enrolling a device or consuming the code.
+  public func previewPairing(_ request: CompanionPairRequest, workspaceID: String) throws -> CompanionPairingPreview {
+    guard request.protocolVersion == CompanionProtocol.version else { throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.") }
+    guard request.expectedWorkspaceID == nil || request.expectedWorkspaceID == workspaceID else {
+      throw Self.error("workspace_mismatch", "The central database changed. Generate a new pairing code.")
+    }
+    let proof = Self.digest(request.token)
+    let available = offer.map { $0.expiresAt > now() && Self.constantTimeEqual($0.digest, proof) && ($0.deviceID == nil || $0.deviceID == request.deviceID) } == true
+    let retry = request.requiresConfirmation == true && (state.pendingQRPairings ?? []).contains {
+      $0.expiresAt > now() && $0.workspaceID == workspaceID && $0.device.id == request.deviceID &&
+        $0.device.name == request.deviceName && $0.device.metadata == request.metadata && Self.constantTimeEqual($0.offerProof, proof)
+    }
+    guard available || retry else { throw Self.error("invalid_pairing", "The pairing code is invalid or expired. Generate another code on the Mac.") }
+    return .init(workspaceID: workspaceID)
+  }
+
+  /// Pending credentials cannot read data or appear in the paired-device list.
+  /// Confirmation is idempotent when its response is lost after the commit.
+  public func confirmPairing(bearer: String, workspaceID: String) throws {
+    let hash = Self.digest(bearer)
+    if state.devices.contains(where: { $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, hash) }) { return }
+    guard let entry = state.pendingQRPairings?.first(where: { $0.expiresAt > now() && $0.workspaceID == workspaceID && Self.constantTimeEqual($0.device.credentialHash, hash) }),
+      !state.devices.contains(where: { $0.revokedAt == nil && $0.id.lowercased() == entry.device.id.lowercased() }) else { throw Self.unauthorized }
+    var next = state
+    next.devices = next.devices.filter { $0.revokedAt == nil } + [entry.device]
+    next.pendingQRPairings?.removeAll { $0.device.id == entry.device.id || $0.expiresAt <= now() }
+    try persist(next); state = next
+  }
+
   public func pair(_ request: CompanionPairRequest, workspaceID: String) throws -> CompanionPairResponse {
     guard request.protocolVersion == CompanionPairingPayload.currentProtocolVersion else {
       throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.")
     }
+    _ = try previewPairing(request, workspaceID: workspaceID)
     let instant = now()
     attempts.removeAll { instant.timeIntervalSince($0) >= 60 }
     guard attempts.count < 10 else { throw Self.error("rate_limited", "Too many pairing attempts. Wait a minute and try again.") }
     attempts.append(instant)
-    guard let offer, offer.expiresAt > instant,
-          Self.constantTimeEqual(offer.digest, Self.digest(request.token)),
-          offer.deviceID == nil || offer.deviceID == request.deviceID else {
-      throw Self.error("invalid_pairing", "The pairing code is invalid or expired. Generate another code on the Mac.")
+    if request.requiresConfirmation == true, let pending = state.pendingQRPairings?.first(where: {
+      $0.expiresAt > instant && $0.workspaceID == workspaceID && $0.device.id == request.deviceID &&
+        $0.device.name == request.deviceName && $0.device.metadata == request.metadata && Self.constantTimeEqual($0.offerProof, Self.digest(request.token))
+    }) {
+      let data = try AES.GCM.open(AES.GCM.SealedBox(combined: pending.encryptedCredential), using: Self.key(request.token))
+      guard let credential = String(data: data, encoding: .utf8) else { throw Self.unauthorized }
+      return .init(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, confirmationRequired: true)
     }
     guard UUID(uuidString: request.deviceID) != nil,
           !request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -134,12 +175,19 @@ public actor CompanionAuthentication {
       name: request.deviceName, pairedAt: instant, revokedAt: nil,
       metadata: request.metadata, lastSeenAt: instant, credentialHash: Self.digest(credential))
     var next = state
-    // Revoked secrets cannot authorize requests and need no unbounded retention.
-    next.devices = state.devices.filter { $0.revokedAt == nil } + [device]
+    if request.requiresConfirmation == true {
+      let encrypted = try AES.GCM.seal(Data(credential.utf8), using: Self.key(request.token)).combined!
+      next.pendingQRPairings = (next.pendingQRPairings ?? []).filter { $0.expiresAt > instant && $0.device.id != request.deviceID }
+      next.pendingQRPairings?.append(.init(device: device, workspaceID: workspaceID,
+        expiresAt: instant.addingTimeInterval(300), offerProof: Self.digest(request.token), encryptedCredential: encrypted))
+    } else {
+      // Legacy clients retain their v3 pairing contract.
+      next.devices = state.devices.filter { $0.revokedAt == nil } + [device]
+    }
     try persist(next)
     state = next
     self.offer = nil
-    return CompanionPairResponse(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential)
+    return CompanionPairResponse(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, confirmationRequired: request.requiresConfirmation == true ? true : nil)
   }
 
   public func authenticate(bearer: String, metadata: CompanionDeviceMetadata? = nil) throws -> CompanionPairedDevice {
@@ -165,11 +213,9 @@ public actor CompanionAuthentication {
   public func revoke(deviceID: String, expected: CompanionPairedDevice? = nil) throws {
     if let expected, !isCurrent(expected) { throw Self.unauthorized }
     var next = state
-    if let index = next.devices.firstIndex(where: { $0.id == deviceID }) {
-      next.devices[index].revokedAt = now()
-      try persist(next)
-      state = next
-    }
+    if let index = next.devices.firstIndex(where: { $0.id == deviceID }) { next.devices[index].revokedAt = now() }
+    next.pendingQRPairings?.removeAll { $0.device.id == deviceID }
+    try persist(next); state = next
     offer = nil
   }
 

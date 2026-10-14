@@ -23,6 +23,8 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var formatVersion = 1
   public var deviceID = UUID().uuidString.lowercased()
   public var workspaceID: String?
+  public var detachedWorkspaceID: String?
+  public var pairingTransitionWorkspaceID: String?
   public var cursor: Int64 = 0
   public var hasLibrarySnapshot: Bool?
   public var folders: [String: CompanionFolder] = [:]
@@ -124,11 +126,85 @@ public actor MobileStore {
     try cache(merged, preservingOlderPages: false)
   }
 
+  /// Unpairing removes authority, not writing. Retain the previous identity only
+  /// to distinguish a same-database reconnect from an explicit database change.
+  public func detachWorkspace() throws {
+    try transaction { next in
+      next.detachedWorkspaceID = next.workspaceID ?? next.detachedWorkspaceID
+      next.workspaceID = nil
+    }
+  }
+
+  public func recoverPairingTransition() async throws {
+    if let target = state.pairingTransitionWorkspaceID { try await finishPairingTransition(target) }
+  }
+
+  /// Called only by explicit pairing, never by ordinary synchronization. The
+  /// backup stays inside this device's app container and contains no Keychain data.
+  public func prepareForPairing(_ id: String) async throws {
+    guard !id.isEmpty else { throw Failure.wrongWorkspace }
+    try await recoverPairingTransition()
+    let previous = state.workspaceID ?? state.detachedWorkspaceID
+    if previous == nil || previous == id {
+      try transaction { next in next.workspaceID = id; next.detachedWorkspaceID = nil }
+      return
+    }
+    let backup = file.deletingLastPathComponent().appendingPathComponent("Pairing Recovery", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+    // Copy the committed index and immutable bodies before changing any store.
+    for source in [file, file.appendingPathExtension("bodies"), file.appendingPathExtension("execution"),
+                   file.appendingPathExtension("execution.bodies"), file.appendingPathExtension("calendar"),
+                   file.appendingPathExtension("artifacts")] where FileManager.default.fileExists(atPath: source.path) {
+      try FileManager.default.copyItem(at: source, to: backup.appendingPathComponent(source.lastPathComponent))
+    }
+    try transaction { $0.pairingTransitionWorkspaceID = id }
+    try await finishPairingTransition(id)
+  }
+
+  private func finishPairingTransition(_ id: String) async throws {
+    // Each participant records its target and is idempotent. The main index is
+    // the commit marker; startup resumes it before any sync or agent execution.
+    try await journal.moveDeviceWorkspace(to: id, deviceID: state.deviceID)
+    try await calendar.moveLocalWriting(to: id)
+    try await artifacts.moveDeviceArtifacts(to: id, deviceID: state.deviceID)
+    let history = await journal.snapshot()
+    try transaction { next in
+      next.outbox = []
+      for key in next.folders.keys.sorted() {
+        next.folders[key]?.revision = 0
+        next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .createFolder,
+          resourceID: key, title: next.folders[key]!.name)))
+      }
+      next.notes = next.notes.filter { $0.value.contentIncluded }
+      for key in next.notes.keys.sorted() {
+        next.notes[key]?.revision = 0
+        next.outbox.append(.init(mutation: Self.mutation(for: next.notes[key]!, kind: .createNote, deviceID: next.deviceID)))
+      }
+      next.bases = [:]; next.deletedNotes = []; next.uncachedNoteIDs = []
+      next.pendingNoteDeletions = nil; next.pendingFolderDeletions = nil
+      next.localRevisionParents = [:]
+      // Old workspace commands must never be replayed against the new database.
+      next.commands = []; next.launches = []
+      next.conversations = history.conversations; next.transcripts = history.transcripts
+      next.executionConversationIDs = Set(history.conversations.keys)
+      next.ownedConversationIDs = Set(history.conversations.keys)
+      next.centralConversationIDs = []; next.centralDeletedConversationIDs = []
+      next.transcriptRecency = next.transcriptRecency.filter { history.conversations[$0] != nil }
+      next.chatDrafts = next.chatDrafts.filter { $0.key == "new-chat" || history.conversations[$0.key] != nil }
+      next.pinnedTranscriptIDs = next.pinnedTranscriptIDs?.intersection(history.conversations.keys)
+      next.dirtyTranscriptIDs = []
+      next.cursor = 0; next.hasLibrarySnapshot = false
+      next.workspaceID = id; next.detachedWorkspaceID = nil; next.pairingTransitionWorkspaceID = nil
+    }
+  }
+
   public func bindWorkspace(_ id: String) throws {
     try transaction { next in try Self.checkWorkspace(id, state: &next) }
   }
   public func verifyWorkspace(_ id: String) throws {
-    guard state.workspaceID == nil || state.workspaceID == id else { throw Failure.wrongWorkspace }
+    guard state.pairingTransitionWorkspaceID == nil,
+      (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
   }
   public func cacheNote(_ note: CompanionNote) throws {
     try transaction { next in
@@ -544,8 +620,9 @@ public actor MobileStore {
           folderID: note.folderID, title: note.title, content: note.content)
   }
   private static func checkWorkspace(_ id: String, state: inout MobileStoreState) throws {
-    guard state.workspaceID == nil || state.workspaceID == id else { throw Failure.wrongWorkspace }
-    state.workspaceID = id
+    guard state.pairingTransitionWorkspaceID == nil,
+      (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
+    state.workspaceID = id; state.detachedWorkspaceID = nil
   }
   private static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
     if state.deletedNotes.contains(note.id), state.bases[note.id]?.revision ?? 0 >= note.revision { return }

@@ -58,10 +58,19 @@ public struct CompanionPairRequest: Codable, Equatable, Sendable {
   public let deviceName: String
   public let metadata: CompanionDeviceMetadata?
   public let protocolVersion: Int
-  public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version, metadata: CompanionDeviceMetadata? = nil) {
+  public let expectedWorkspaceID: String?
+  public let requiresConfirmation: Bool?
+  public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version,
+              metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil, requiresConfirmation: Bool? = nil) {
     self.token = token; self.deviceID = deviceID; self.deviceName = deviceName
     self.protocolVersion = protocolVersion; self.metadata = metadata
+    self.expectedWorkspaceID = expectedWorkspaceID; self.requiresConfirmation = requiresConfirmation
   }
+}
+
+public struct CompanionPairingPreview: Codable, Equatable, Sendable {
+  public let workspaceID: String
+  public init(workspaceID: String) { self.workspaceID = workspaceID }
 }
 
 public struct CompanionPairResponse: Codable, Equatable, Sendable {
@@ -69,9 +78,11 @@ public struct CompanionPairResponse: Codable, Equatable, Sendable {
   public let deviceID: String
   public let credential: String
   public let protocolVersion: Int
-  public init(workspaceID: String, deviceID: String, credential: String, protocolVersion: Int = CompanionProtocol.version) {
-    self.workspaceID = workspaceID; self.deviceID = deviceID
-    self.credential = credential; self.protocolVersion = protocolVersion
+  public let confirmationRequired: Bool?
+  public init(workspaceID: String, deviceID: String, credential: String, protocolVersion: Int = CompanionProtocol.version,
+              confirmationRequired: Bool? = nil) {
+    self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential; self.protocolVersion = protocolVersion
+    self.confirmationRequired = confirmationRequired
   }
 }
 

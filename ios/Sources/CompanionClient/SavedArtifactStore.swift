@@ -20,7 +20,7 @@ public actor SavedArtifactStore {
     var requestedDownload: Bool?
     var localOrigin: Bool?
   }
-  private struct State: Codable, Equatable { var records: [String: Record] = [:] }
+  private struct State: Codable, Equatable { var records: [String: Record] = [:]; var libraryID: String? }
   public enum Failure: Error, LocalizedError {
     case invalidTransfer, checksumMismatch, capacity
     public var errorDescription: String? {
@@ -41,6 +41,19 @@ public actor SavedArtifactStore {
     let file = directory.appendingPathComponent("index.json")
     state = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) : .init()
   }
+  public func moveDeviceArtifacts(to libraryID: String, deviceID: String) throws {
+    guard state.libraryID != libraryID else { return }
+    var next = state
+    next.records = next.records.filter { $0.value.localOrigin == true && $0.value.manifest.workspaceID == deviceID }
+    for id in next.records.keys {
+      next.records[id]?.manifest.revision = 0
+      next.records[id]?.upload = true
+    }
+    next.libraryID = libraryID
+    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"))
+    state = next
+  }
+
   public func manifests() -> [CompanionArtifactManifest] { state.records.values.map(\.manifest) }
   public func offlineStatus(id: String) -> SavedArtifactOfflineStatus? {
     guard let record = state.records[id] else { return nil }

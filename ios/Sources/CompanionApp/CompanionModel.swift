@@ -195,17 +195,30 @@ import CompanionInference
       await reload()
       if fixture { await seedFixture() }
       else {
-        do { credential = try MobileCredentialVault.load(); try configureTransport() }
-        catch { errorMessage = error.localizedDescription }
+        do { try await store?.recoverPairingTransition(); await reload(); credential = try MobileCredentialVault.load() }
+        catch { errorMessage = error.localizedDescription; return }
+        var unpairRequested = false
         #if DEBUG
         if CommandLine.arguments.contains("--unpair-devices") {
+          unpairRequested = true
           await disconnectMac()
-          let result = ["unpaired": pairingError == nil && credential == nil && workspaceClients.isEmpty]
-          if let data = try? JSONEncoder().encode(result) {
+          let result: [String: Any] = ["unpaired": pairingError == nil && credential == nil && workspaceClients.isEmpty,
+            "workspaceDetached": state.workspaceID == nil, "noteCount": state.notes.count,
+            "conversationCount": state.conversations.count]
+
+          if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
             try? data.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("wovenmatter-unpair-result.json"), options: .atomic)
           }
         }
         #endif
+        if !unpairRequested {
+          do {
+            if let pending = credential, pending.confirmationPending == true {
+              credential = nil
+              try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+            } else { try configureTransport() }
+          } catch { pairingError = error.localizedDescription; credential = nil }
+        }
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
       }
@@ -236,9 +249,39 @@ import CompanionInference
     do {
       let payload = try CompanionPairingPayload.parseURL(url)
       let current = await store.snapshot()
-      let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
+      // A lost confirmation reply must be recoverable by scanning again, not
+      // only by restarting the app. Never send a stored grant to a new endpoint.
+      if let pending = try MobileCredentialVault.load(), pending.confirmationPending == true,
+        pending.endpoint == payload.endpoint {
+        if (current.workspaceID ?? current.detachedWorkspaceID) != pending.workspaceID,
+          !localRunTasks.isEmpty || processingDeviceSchedule {
+          throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
+        }
+        await flushLocalWrites()
+        stopDeviceScheduler()
+        defer { if connectionForeground { startDeviceScheduler() } }
+        do {
+          try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+          pairingText = ""
+          await refresh(); await refreshExecutionWorkspaces(force: true)
+          return
+        } catch MobileConnectionError.revoked {
+          // Expired or explicitly revoked enrollment needs the fresh QR offer.
+          try MobileCredentialVault.clear()
+        }
+      }
+      let target = try await HTTPSCompanionTransport.previewPairing(payload, deviceID: current.deviceID,
         deviceName: UIDevice.current.name, metadata: deviceMetadata)
-      try await acceptPairing(paired) { try MobileCredentialVault.save($0) }
+      if (current.workspaceID ?? current.detachedWorkspaceID) != target,
+        !localRunTasks.isEmpty || processingDeviceSchedule {
+        throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
+      }
+      await flushLocalWrites()
+      stopDeviceScheduler()
+      defer { if connectionForeground { startDeviceScheduler() } }
+      let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
+        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true)
+      try await acceptPairing(paired, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
       pairingText = ""
       await refresh()
       await refreshExecutionWorkspaces(force: true)

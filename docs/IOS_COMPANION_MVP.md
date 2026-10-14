@@ -93,9 +93,22 @@ before reusing the port. Sharing prevents idle sleep, but the Mac must remain
 powered on, awake and running. Closing its window keeps access available; with background execution enabled, quitting the frontend also leaves the service and sharing running.
 
 The QR/deep link is `wovenmatter://pair?endpoint=...&token=...&version=3`. Its random
-256-bit token expires after five minutes and is consumed once. Up to 16 iPhones/iPads may be
-paired, with independent revocation. Only token hashes are persisted on the Mac;
-the phone credential is stored in Keychain. Requests require matching protocol and
+256-bit token expires after five minutes and authorizes one device. Devices have
+independent revocation. iOS previews the target database, saves its pending grant
+in Keychain, commits local setup, then confirms enrollment. Pending grants cannot
+read the database and do not appear as paired. The Mac persists credential hashes
+and a short-lived retry envelope encrypted with the QR secret, never plaintext
+credentials. Repeating a pending request or a completed confirmation is idempotent.
+The phone resumes a pending confirmation after restart or another scan.
+
+Unpairing detaches the active database identity and clears central-issued grants;
+it retains local writing and provider sign-ins. Reconnecting to the same database
+preserves exact outbox identities. Explicit pairing to a different database first
+creates a recovery copy inside the phone's app container, then rebases notes,
+calendar writing and the phone's own execution journal. Each store records the
+transition target so an interrupted migration resumes before sync. Remote history
+and commands stay in the recovery copy and are never republished by the phone.
+Ordinary synchronization still rejects mismatched database identities. Requests require matching protocol and
 workspace headers as well as the credential. The client rejects redirects and the
 server rejects browser origins, cookies, ambiguous framing and oversized requests.
 
@@ -107,7 +120,7 @@ header and pairing payload negotiate this wire-format version.
 
 Routes are relative to the paired HTTPS endpoint:
 
-- `POST /v1/pair`
+- `POST /v1/pair/preview`, `/v1/pair`, `/v1/pair/confirm`, `/v1/pair/unpair`
 - `GET /v1/hello`, `/v1/snapshot`, `/v1/changes?after=...&limit=...&wait=...`
 - `POST /v1/mutations`, `/v1/commands`, `/v1/workspace-read`, `/v1/tools`
 - `GET /v1/calendar`, `POST /v1/calendar/mutations`, `/v1/calendar/runs`

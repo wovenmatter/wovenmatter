@@ -207,6 +207,23 @@ public actor MobileCalendarStore {
       }
     }
   }
+  public func moveLocalWriting(to workspaceID: String) throws {
+    guard state.workspaceID != workspaceID else { return }
+    try update { next in
+      // Remote execution schedules belong to their owners. They remain in the
+      // recovery copy; moving this phone must never launch those tasks here.
+      next.records = next.records.filter { _, record in
+        !record.deleted && (record.event.draft.task == nil || record.ownerDeviceID == deviceID)
+      }
+      next.bases = [:]; next.outbox = []; next.conflicts = next.conflicts.filter { next.records[$0.key] != nil }
+      for record in next.records.values.sorted(by: { $0.id < $1.id }) { enqueue(record, into: &next) }
+      next.runs = next.runs.filter { $0.value.ownerDeviceID == deviceID && next.records[$0.value.eventID] != nil }
+      next.dirtyRuns = Set(next.runs.keys)
+      next.through = next.through.filter { next.records[$0.key] != nil }
+      next.workspaceID = workspaceID
+    }
+  }
+
   public func verifyWorkspace(_ id: String) throws {
     guard state.workspaceID == nil || state.workspaceID == id else { throw CompanionCalendarError.wrongWorkspace }
   }

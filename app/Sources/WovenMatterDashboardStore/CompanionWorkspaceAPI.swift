@@ -106,7 +106,22 @@ public final class CompanionWorkspaceAPI {
                 if request.method == "POST", response.status == 200 { onMutation() }
                 return response
             }
+            if request.method == "POST", path == "/v1/pair/preview" {
+                guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
+                let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
+                return try .json(try await authentication.previewPairing(command, workspaceID: workspaceID))
+            }
+            if request.method == "POST", path == "/v1/pair/confirm" {
+                guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version),
+                    request.headers["x-woven-workspace"] == workspaceID, let bearer = request.bearer else {
+                    return .error("unauthorized", "Complete pairing on this device.", status: 401)
+                }
+                try await authentication.confirmPairing(bearer: bearer, workspaceID: workspaceID)
+                await onPair()
+                return try .json(["confirmed": true])
+            }
             if request.method == "POST", path == "/v1/pair" {
+                guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
                 let result = try await authentication.pair(command, workspaceID: workspaceID)
                 await onPair()
@@ -128,6 +143,12 @@ public final class CompanionWorkspaceAPI {
                 return .error("workspace_mismatch", "This credential belongs to a different workspace. Your local writing is preserved.", status: 409)
             }
             onRequest()
+            if request.method == "POST", path == "/v1/pair/unpair" {
+                try await onCancelPairing(device)
+                if await authentication.isCurrent(device) { try await authentication.revoke(deviceID: device.id, expected: device) }
+                await onPair()
+                return try .json(["unpaired": true])
+            }
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
             if path.hasPrefix("/v1/federation/") {

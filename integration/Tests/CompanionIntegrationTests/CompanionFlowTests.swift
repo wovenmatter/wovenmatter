@@ -10,6 +10,74 @@ import WovenMatterDashboardStore
 @Suite("Companion complete flows", .serialized)
 @MainActor
 struct CompanionFlowTests {
+  @Test("QR re-pairing waits for durable phone setup and recovers a lost confirmation over HTTP")
+  func qrRepairAndLostConfirmation() async throws {
+    let fixture = try await FlowFixture(); defer { fixture.remove() }
+    let phoneURL = fixture.directory.appending(path: "repair-phone/store.json")
+    let phone = try MobileStore(file: phoneURL)
+    try await phone.bindWorkspace("previous-database")
+    let folder = try await phone.createFolder(name: "Phone ideas")
+    let note = try await phone.createNote(folderID: folder.id, title: "Keep writing", content: richDocument("Kept on the phone"))
+    try await phone.detachWorkspace()
+    let existing = try await fixture.database.createNote(folderID: nil, content: richDocument("Existing central writing"))
+    let device = await phone.snapshot().deviceID
+    let target = fixture.credential.workspaceID
+    let offer = try await fixture.authentication.createOffer(endpoint: fixture.credential.endpoint)
+    let pair = CompanionPairRequest(token: offer.payload.token, deviceID: device, deviceName: "Repair iPhone",
+      metadata: .init(kind: .iPhone), expectedWorkspaceID: target, requiresConfirmation: true)
+    func send(_ path: String, method: String = "POST", body: Data? = nil, token: String? = nil) async throws -> (Data, Int) {
+      var request = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + path)!)
+      request.httpMethod = method; request.httpBody = body
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+      request.setValue(target, forHTTPHeaderField: "X-Woven-Workspace")
+      if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+      let (data, response) = try await URLSession.shared.data(for: request)
+      return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+    let (previewData, previewStatus) = try await send("/v1/pair/preview", body: JSONEncoder().encode(pair))
+    #expect(previewStatus == 200)
+    #expect(try JSONDecoder().decode(CompanionPairingPreview.self, from: previewData).workspaceID == target)
+    let (pairData, pairStatus) = try await send("/v1/pair", body: JSONEncoder().encode(pair))
+    #expect(pairStatus == 200)
+    let response = try JSONDecoder().decode(CompanionPairResponse.self, from: pairData)
+    #expect(response.confirmationRequired == true)
+    var saved: MobileCredential?
+    let pending = MobileCredential(endpoint: fixture.credential.endpoint, workspaceID: target, deviceID: device,
+      token: response.credential, confirmationPending: response.confirmationRequired)
+    #expect(await fixture.authentication.devices().count == 1)
+    let (_, unauthorized) = try await send("/v1/snapshot", method: "GET", token: pending.token)
+    #expect(unauthorized == 401)
+    do {
+      _ = try await MobilePairingCommit.complete(pending, store: phone, allowingLibraryChange: true,
+        saveCredential: { saved = $0 }, confirm: {
+          let (_, status) = try await send("/v1/pair/confirm", token: pending.token)
+          #expect(status == 200)
+          throw MobileConnectionError.offline // Server committed; reply was lost.
+        })
+      Issue.record("Expected a lost reply")
+    } catch MobileConnectionError.offline {}
+    #expect(saved?.confirmationPending == true)
+    let restarted = try MobileStore(file: phoneURL)
+    let committed = try await MobilePairingCommit.complete(try #require(saved), store: restarted, allowingLibraryChange: true,
+      saveCredential: { saved = $0 }, confirm: {
+        let (_, status) = try await send("/v1/pair/confirm", token: pending.token)
+        #expect(status == 200)
+      })
+    #expect(saved?.confirmationPending == nil)
+    #expect(await fixture.authentication.devices().count == 2)
+    let transport = APITransport(serverURL: fixture.http.endpoint, credential: committed)
+    try await MobileSyncEngine(store: restarted, transport: transport).synchronize()
+    #expect(try await fixture.database.companionNote(id: note.id)?.content == note.content)
+    #expect(try await fixture.database.companionNote(id: existing) != nil)
+    #expect(await restarted.snapshot().outbox.isEmpty)
+    let (_, unpairStatus) = try await send("/v1/pair/unpair", token: committed.token)
+    #expect(unpairStatus == 200)
+    #expect(await fixture.authentication.devices().count == 1)
+    let (_, revoked) = try await send("/v1/pair/confirm", token: committed.token)
+    #expect(revoked == 401)
+  }
+
   @Test("online linked previews use only canonical registered links and preserve note content")
   func linkedArtifactPreview() async throws {
     var readLinks: [DatabaseArtifactLink] = []
@@ -320,7 +388,9 @@ private final class FlowFixture {
     authentication = try CompanionAuthentication(fileURL: directory.appending(path: "devices.json"))
     commands = FakeCommands(database: database)
     activity = FlowActivity()
-    api = CompanionWorkspaceAPI(database: database, authentication: authentication, commands: commands, isActive: { [activity] in activity.active }, linkedData: linkedData)
+    api = CompanionWorkspaceAPI(database: database, authentication: authentication, commands: commands, isActive: { [activity] in activity.active }, onCancelPairing: { [authentication] device in
+      try await authentication.revoke(deviceID: device.id, expected: device)
+    }, linkedData: linkedData)
     http = try await FlowHTTPServer(api: api)
     let endpoint = URL(string: "https://fixture.test-tailnet.ts.net/wovenmatter")!
     let offer = try await authentication.createOffer(endpoint: endpoint)

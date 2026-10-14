@@ -100,6 +100,30 @@ public actor WorkspaceJournal {
     return activity
   }
 
+  /// Transfer only history produced on this device. Cached observers never
+  /// become publishers when the user attaches to a different central database.
+  public func moveDeviceWorkspace(to libraryID: String, deviceID: String) throws {
+    guard state.libraryID != libraryID else { return }
+    try transaction { next in
+      let owned = Set(next.workspaces.values.filter { Self.isLocalExecutionOwner($0, deviceID: deviceID) }.map(\.id)).union([deviceID])
+      next.workspaces = next.workspaces.filter { owned.contains($0.key) }
+      for id in next.workspaces.keys {
+        next.workspaces[id]?.libraryID = libraryID; next.workspaces[id]?.revision = 0
+      }
+      next.entries = next.entries.filter { owned.contains($0.value.workspaceID) }
+      let conversations = Set(next.conversationWorkspaceIDs.filter { owned.contains($0.value) }.keys)
+      next.conversationOwners = next.conversationWorkspaceIDs.filter { conversations.contains($0.key) }
+      next.conversations = next.conversations.filter { conversations.contains($0.key) }
+      next.transcripts = next.transcripts.filter { conversations.contains($0.key) }
+      next.deletedConversationIDs.formIntersection(conversations)
+      next.commands = next.commands.filter { owned.contains($0.value.command.workspaceID ?? "") }
+      next.originSequences = next.originSequences.filter { owned.contains($0.key) }
+      next.pendingEventIDs = Set(next.entries.keys); next.pendingRegistrations = Set(next.workspaces.keys)
+      next.centralWorkspaceRevisions = [:]; next.centralCursor = 0; next.directCursors = [:]
+      next.libraryID = libraryID
+    }
+  }
+
   public func bind(libraryID: String) throws {
     try transaction { next in
       guard next.libraryID == nil || next.libraryID == libraryID else { throw Failure.wrongLibrary }

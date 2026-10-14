@@ -37,7 +37,7 @@ private actor DisabledPairingWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class PairingSettingsTests: XCTestCase {
-  @MainActor func testUnpairPreservesWritingAndBindingButClearsDirectWorkspaceAccess() async throws {
+  @MainActor func testUnpairPreservesWritingAndDetachesBindingWhileClearingDirectWorkspaceAccess() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try MobileStore(file: directory.appendingPathComponent("library.json"))
@@ -56,11 +56,12 @@ final class PairingSettingsTests: XCTestCase {
     XCTAssertNil(model.credential); XCTAssertNil(model.engine); XCTAssertFalse(model.online)
     XCTAssertNil(model.workspaceReachable["linux-workspace"])
     let after = await store.snapshot()
-    XCTAssertEqual(after, before)
+    var expected = before; expected.workspaceID = nil; expected.detachedWorkspaceID = "library-a"
+    XCTAssertEqual(after, expected)
     XCTAssertGreaterThan(model.pendingSyncCount, 0)
     let reopened = try MobileStore(file: directory.appendingPathComponent("library.json"))
     let persisted = await reopened.snapshot()
-    XCTAssertEqual(persisted.workspaceID, "library-a")
+    XCTAssertNil(persisted.workspaceID); XCTAssertEqual(persisted.detachedWorkspaceID, "library-a")
     XCTAssertEqual(persisted.outbox, before.outbox)
     var savedWrongCredential = false
     let wrong = MobileCredential(endpoint: URL(string: "https://other-mac.example.ts.net/wovenmatter")!,
@@ -68,7 +69,7 @@ final class PairingSettingsTests: XCTestCase {
     do { try await model.acceptPairing(wrong) { _ in savedWrongCredential = true }; XCTFail("Mixed two libraries") }
     catch MobileStore.Failure.wrongWorkspace { }
     XCTAssertFalse(savedWrongCredential)
-    let final = await store.snapshot(); XCTAssertEqual(final, before)
+    let final = await store.snapshot(); XCTAssertEqual(final, expected)
   }
 
   @MainActor func testDisabledWorkspaceDiscardsOnlyItsGrantAndRemainsDimmed() async throws {
@@ -109,7 +110,7 @@ final class PairingSettingsTests: XCTestCase {
     await model.disconnectMac(clearCredential: {}, clearWorkspaceCredential: { _ in })
     let reopened = try MobileStore(file: directory.appendingPathComponent("library.json"))
     let persisted = await reopened.snapshot()
-    XCTAssertEqual(persisted.workspaceID, "library-a")
+    XCTAssertNil(persisted.workspaceID); XCTAssertEqual(persisted.detachedWorkspaceID, "library-a")
     XCTAssertEqual(persisted.cursor, 0)
   }
 

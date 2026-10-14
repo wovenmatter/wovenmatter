@@ -12,8 +12,9 @@ public struct MobileCredential: Codable, Sendable, Equatable {
   public var workspaceID: String
   public var deviceID: String
   public var token: String
-  public init(endpoint: URL, workspaceID: String, deviceID: String, token: String) {
-    self.endpoint = endpoint; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token
+  public var confirmationPending: Bool?
+  public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil) {
+    self.endpoint = endpoint; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token; self.confirmationPending = confirmationPending
   }
 }
 
@@ -77,13 +78,33 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 45
     session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
   }
-  public static func pair(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String, metadata: CompanionDeviceMetadata? = nil) async throws -> MobileCredential {
+  public static func previewPairing(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String,
+                                    metadata: CompanionDeviceMetadata? = nil) async throws -> String {
+    let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
+    let transport = try HTTPSCompanionTransport(credential: provisional)
+    let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName,
+      metadata: metadata, requiresConfirmation: true)
+    let preview: CompanionPairingPreview = try await transport.request("v1/pair/preview", method: "POST", body: JSONEncoder().encode(request))
+    return preview.workspaceID
+  }
+  public func confirmPairing() async throws {
+    let _: [String: Bool] = try await request("v1/pair/confirm", method: "POST", body: Data("{}".utf8))
+  }
+  public func unpair() async throws {
+    let _: [String: Bool] = try await request("v1/pair/unpair", method: "POST", body: Data("{}".utf8))
+  }
+  public static func pair(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String,
+                          metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil,
+                          requiresConfirmation: Bool = false) async throws -> MobileCredential {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
     let transport = try HTTPSCompanionTransport(credential: provisional, metadata: metadata)
-    let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata)
+    let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: requiresConfirmation ? true : nil)
     let result: CompanionPairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
     guard result.protocolVersion == CompanionProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
-    return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID, token: result.credential)
+    guard expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
+      !requiresConfirmation || result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
+    return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
+      token: result.credential, confirmationPending: result.confirmationRequired)
   }
   public func executeTool(_ value: CompanionToolRequest) async throws -> WovenMatterToolResponse { try await request("v1/tools", method: "POST", body: JSONEncoder().encode(value)) }
   public func readWorkspace(_ value: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }

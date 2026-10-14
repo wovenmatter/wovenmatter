@@ -4,6 +4,47 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 @Suite struct CompanionPairingApprovalTests {
+    @Test func qrPairingWaitsForLocalCommitAndRecoversBothLostReplies() async throws {
+        let fixture = try PairingFixture(); defer { fixture.remove() }
+        let auth = try fixture.authentication()
+        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
+        let request = CompanionPairRequest(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "iPhone",
+            metadata: .init(kind: .iPhone), expectedWorkspaceID: fixture.libraryID, requiresConfirmation: true)
+        #expect(try await auth.previewPairing(request, workspaceID: fixture.libraryID).workspaceID == fixture.libraryID)
+        #expect(await auth.devices().isEmpty)
+        let first = try await auth.pair(request, workspaceID: fixture.libraryID)
+        #expect(first.confirmationRequired == true)
+        #expect(await auth.devices().isEmpty)
+        await #expect(throws: CompanionAPIError.self) { try await auth.authenticate(bearer: first.credential) }
+        let reopened = try fixture.authentication()
+        let replay = try await reopened.pair(request, workspaceID: fixture.libraryID)
+        #expect(replay == first)
+        let disk = try String(contentsOf: fixture.file, encoding: .utf8)
+        #expect(!disk.contains(first.credential) && !disk.contains(offer.payload.token))
+        try await reopened.confirmPairing(bearer: first.credential, workspaceID: fixture.libraryID)
+        let secondRestart = try fixture.authentication()
+        try await secondRestart.confirmPairing(bearer: first.credential, workspaceID: fixture.libraryID)
+        #expect(await secondRestart.devices().count == 1)
+        #expect(try await secondRestart.authenticate(bearer: first.credential).id == request.deviceID)
+        try await secondRestart.revoke(deviceID: request.deviceID)
+        await #expect(throws: CompanionAPIError.self) { try await secondRestart.confirmPairing(bearer: first.credential, workspaceID: fixture.libraryID) }
+    }
+
+    @Test func qrTargetMismatchAndExpiredUncommittedPairingNeverEnroll() async throws {
+        let fixture = try PairingFixture(); defer { fixture.remove() }
+        let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
+        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
+        var request = CompanionPairRequest(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "iPad",
+            expectedWorkspaceID: "wrong-database", requiresConfirmation: true)
+        await #expect(throws: CompanionAPIError.self) { try await auth.pair(request, workspaceID: fixture.libraryID) }
+        request = .init(token: request.token, deviceID: request.deviceID, deviceName: request.deviceName,
+            expectedWorkspaceID: fixture.libraryID, requiresConfirmation: true)
+        let pending = try await auth.pair(request, workspaceID: fixture.libraryID)
+        clock.advance(301)
+        await #expect(throws: CompanionAPIError.self) { try await auth.confirmPairing(bearer: pending.credential, workspaceID: fixture.libraryID) }
+        #expect(await auth.devices().isEmpty)
+    }
+
     @Test func approvalIsExplicitSecretBoundAndRecoverableAfterRestart() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let auth = try fixture.authentication()

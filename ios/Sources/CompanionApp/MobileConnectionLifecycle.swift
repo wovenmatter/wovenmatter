@@ -22,20 +22,21 @@ extension CompanionModel {
       appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
   }
 
-  /// Keep the library binding even if the user disconnects before the initial
-  /// snapshot completes. Pairing another central database must never merge it.
-  func acceptPairing(_ paired: MobileCredential,
+  func acceptPairing(_ paired: MobileCredential, allowingLibraryChange: Bool = false,
                      saveCredential: (MobileCredential) throws -> Void) async throws {
     guard let store else { throw MobileConnectionError.invalidResponse }
-    let current = await store.snapshot()
-    guard paired.deviceID == current.deviceID else { throw MobileConnectionError.invalidResponse }
-    try await store.verifyWorkspace(paired.workspaceID)
     let connection = try HTTPSCompanionTransport(credential: paired, metadata: deviceMetadata)
-    try await store.bindWorkspace(paired.workspaceID)
-    try saveCredential(paired)
     connectionGeneration = UUID()
-    await engine?.cancelSynchronization()
-    credential = paired; transport = connection
+    connectionRefreshTask?.cancel(); connectionRefreshTask = nil
+    for task in workspacePollTasks.values { task.cancel() }
+    workspacePollTasks = [:]
+    let previousEngine = engine
+    credential = nil; transport = nil; engine = nil; online = false
+    await previousEngine?.cancelSynchronization()
+    let committed = try await MobilePairingCommit.complete(paired, store: store,
+      allowingLibraryChange: allowingLibraryChange, saveCredential: saveCredential,
+      confirm: { try await connection.confirmPairing() })
+    credential = committed; transport = connection
     engine = MobileSyncEngine(store: store, transport: connection)
     synchronizationStatus = .init(); online = false; connectionLabel = "Connecting"
     centralRetryCount = 0; centralRefreshAfter = .distantPast
@@ -54,6 +55,7 @@ extension CompanionModel {
     for task in workspacePollTasks.values { task.cancel() }
     workspacePollTasks = [:]
     let previousEngine = engine
+    let previousTransport = transport
     credential = nil; transport = nil; engine = nil
     online = false; connecting = false; connectionLabel = "Disconnected"
     let workspaceIDs = Set(workspaceClients.keys).union(executionWorkspaces.map(\.id))
@@ -61,9 +63,11 @@ extension CompanionModel {
     remotePending = [:]; pending = []; providers = []
     await previousEngine?.cancelSynchronization()
     do {
-      // Do not touch inference credentials, content, outboxes, or the library
-      // binding. Only explicit unpairing drops the central-issued access grants.
+      // Best effort while reachable; local unpairing also works offline.
+      try? await previousTransport?.unpair()
       try clearCredential()
+      try await store?.recoverPairingTransition()
+      try await store?.detachWorkspace()
       let journalIDs = await store?.journal.snapshot().workspaces.keys.map { $0 } ?? []
       for id in workspaceIDs.union(journalIDs) where id != deviceWorkspaceID {
         try clearWorkspaceCredential(id)
