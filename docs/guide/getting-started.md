@@ -11,7 +11,7 @@ choose a harness supported by an account or API key you have.
 
 ## Set up your first agent
 
-1. Open **Settings → Local agent workspace** and check that the workspace is
+1. Open **Settings → Local Agent Workspace** and check that the workspace is
    ready; use **Retry setup** if it is unavailable.
 2. Choose **New folder** in the sidebar to create a blank project or link an
    existing directory on your Mac.

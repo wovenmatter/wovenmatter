@@ -26,6 +26,33 @@ the macOS sandbox before loading CEF. Websites have no Woven Matter tool bridge,
 remote debugging port, Node integration, or certificate-error bypass. Existing
 HTML artifact WebKit isolation remains independent.
 
+Browser Use is enabled by default and exposes Playwright operations through the
+session-bound CLI and MCP. The GUI owns an automation socket beside the backend
+socket, with the same private directory and kernel peer checks as backend RPC.
+The backend checks the caller's current capability and persists an input digest
+before dispatch. The GUI rechecks it on each native protocol command. An ephemeral
+Node helper translates one owned CEF page into a token-protected loopback CDP
+connection for Playwright; CEF itself has no debugging port. Native frame IDs,
+utility worlds and domain cleanup preserve repeated connections and iframes.
+The helper receives no CLI socket or provider credentials. Shared tabs remain
+owned by ApplicationModel's WorkspaceAssetSession across pane visibility changes.
+
+Secondary Macs inject the visible client's same asset session into their native
+execution workspace and dispatch automation in process, without replacing the
+central library's automation socket. Browser tabs remain accessible in the
+client's Browser pane. Device-owned iPhone tools route these two capabilities to
+the paired central Mac; they do not control iPhone UI. Central device execution
+access is checked before acceptance and between native input steps. Cancellation
+retains caller ownership and works after capability or execution-access revocation.
+Automation receipts retain completion metadata, without page or desktop captures;
+retries after completion inspect fresh state instead of replaying input.
+
+Computer Use is an independent, default-off capability. Peekaboo's pinned Swift
+libraries run inside the signed GUI process, so macOS grants apply to Woven Matter.
+MCP and CLI route local and remote harnesses to this host. Screen capture returns
+a bounded image and a single-use, chat-scoped frame for coordinate input; Stop or
+capability revocation cancels work. Cua and cross-platform desktop hosts are deferred.
+
 `WorkspaceVisibleContext` captures bounded note IDs/titles/revisions and browser
 HTTP(S) URLs/titles at Send, marking the selected tab. URLs lose user information
 and fragments. The immutable snapshot survives local/backend/remote transport;
@@ -90,3 +117,13 @@ all proprietary Chrome services, codecs, or DRM. Sources:
   Only the fixture target compiles the mock-Keychain switch. Never automate
   browser tests against the user's real Keychain/profile or provider accounts.
   Live websites, signed-in sessions, and UI acceptance remain human testing.
+
+- `scripts/test-browser-automation.py CEF_CMAKE_BUILD BUILT_APP NODE BROWSER_SCRIPT`
+  runs the opt-in `WovenBrowserAutomationTests` target against real CEF/Playwright
+  with the same disposable profile, hidden window and mock Keychain. It covers
+  snapshots, repeated connections, form input, upload/download, screenshot,
+  navigation and shutdown. Build that target before invoking the script.
+  Browser MCP/CLI, capability migration, revocation, admission digests and image
+  transport have provider-free tests in the normal validation suite. Human testing
+  still covers signed-app TCC grants, multi-display desktop input, Stop during
+  active control, and provider acceptance in each harness.

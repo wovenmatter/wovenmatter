@@ -94,8 +94,8 @@ struct DeviceAgentSettingsPane: View {
 
       Section {
         ForEach(toolDefinitions, id: \.id) { tool in
-          Toggle(tool.label, isOn: Binding(get: { defaults.enabledTools?.contains(tool.id) ?? true }, set: { enabled in
-            var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id))
+          Toggle(tool.label, isOn: Binding(get: { CompanionModel.deviceToolEnabled(tool.id, selection: defaults.enabledTools) }, set: { enabled in
+            var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id).filter { CompanionModel.deviceToolEnabled($0, selection: nil) })
             if enabled { selected.insert(tool.id) } else {
               selected.remove(tool.id)
               if tool.id == "wovenmatter_notes" { selected.subtract(["list_notes", "read_note", "save_note"]) }

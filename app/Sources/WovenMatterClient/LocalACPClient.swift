@@ -844,7 +844,7 @@ public actor LocalACPClient {
                     params: .object([
                         "sessionId": .string(existingSessionID),
                         "cwd": .string(workingDirectory.path),
-                        "mcpServers": .array([]),
+                        "mcpServers": automationMCPServers(),
                         "_meta": .object(try nativeConnectionMetadata()),
                     ])
                 )
@@ -935,6 +935,14 @@ public actor LocalACPClient {
         return ["wovenToolsConnection": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(cliConnection))]
     }
 
+    private func automationMCPServers() -> ACPJSONValue {
+        guard let cliConnection, runtimeKind != .defaultAgent, runtimeKind != .pi else { return .array([]) }
+        var env: [ACPJSONValue] = [.object(["name": .string("WOVENMATTER_CLI"), "value": .string(cliConnection.executablePath)])]
+        if let socket = cliConnection.socketPath { env.append(.object(["name": .string("WOVENMATTER_SOCKET"), "value": .string(socket)])) }
+        return .array([.object(["name": .string("woven-automation"), "command": .string(cliConnection.executablePath),
+            "args": .array([.string("mcp")]), "env": .array(env)])])
+    }
+
     private func createSession(
         workingDirectory: URL,
         title: String?,
@@ -942,7 +950,7 @@ public actor LocalACPClient {
     ) async throws -> LocalACPInitializedSession {
         var parameters: [String: ACPJSONValue] = [
             "cwd": .string(workingDirectory.path),
-            "mcpServers": .array([]),
+            "mcpServers": automationMCPServers(),
         ]
         var metadata = try nativeConnectionMetadata()
         if let systemPrompt, !systemPrompt.isEmpty {

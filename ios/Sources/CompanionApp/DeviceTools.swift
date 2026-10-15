@@ -49,6 +49,11 @@ extension CompanionModel {
       guard let argv = arguments["arguments"] as? [String] else { throw DeviceExecutionError.unavailable("Pass CLI arguments as an array of strings.") }
       let output = try await performDeviceCLI(arguments: [group.rawValue] + argv, conversationID: conversationID,
         requestID: toolCallID, target: arguments["target"] as? String ?? "local")
+      if group.isAutomation, let envelope = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
+         envelope["success"] as? Bool == true, let result = envelope["result"] as? [String: Any],
+         let content = result["content"] as? [[String: Any]] {
+        return try Self.toolJSON(["content": content])
+      }
       return try Self.toolJSON(["content": [["type": "text", "text": output]]])
     }
     if name == "execute_command" { return try await performEmbeddedDeviceCommand(arguments: arguments, conversationID: conversationID, toolCallID: toolCallID) }

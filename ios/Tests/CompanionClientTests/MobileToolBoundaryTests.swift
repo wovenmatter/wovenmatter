@@ -5,6 +5,14 @@ import WovenMatterCompanion
 
 @Suite("Mobile CLI durable boundaries")
 struct MobileToolBoundaryTests {
+  @Test func computerUseIsOptInButScopedCancellationSurvivesDisable() throws {
+    let context = MobileToolContext(sessionID: "caller", workspaceID: "phone")
+    #expect(context.enabled.contains(.browser) && !context.enabled.contains(.computer))
+    #expect(throws: (any Error).self) {
+      try context.authorize(WovenMatterToolCommand(["computer", "call", "--json", "{\"action\":\"screenshot\"}"]))
+    }
+    try context.authorize(WovenMatterToolCommand(["computer", "cancel", "--id", "all"]))
+  }
   private func fixture() throws -> (MobileStore, URL, MobileToolContext) {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("wm-tool-boundary-" + UUID().uuidString)
     return (try MobileStore(file: root.appendingPathComponent("library.json")), root,

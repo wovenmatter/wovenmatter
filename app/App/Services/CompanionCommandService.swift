@@ -268,7 +268,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 route = "remote:\(id.uuidString.lowercased()):"
             }
             command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
-        case (.executor, "execute"), (.executor, "cancel"):
+        case (.executor, "execute"), (.executor, "cancel"), (.browser, "call"), (.computer, "call"):
             command = .init(deviceID: deviceID, kind: .createSession, providerID: "local:")
         default: return
         }
@@ -312,7 +312,7 @@ final class CompanionCommandService: CompanionCommandServing {
             else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
         }
         if let target, denied.contains(target) {
-            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Device Connections on the central Mac.")
+            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Devices on the central Mac.")
         }
     }
 

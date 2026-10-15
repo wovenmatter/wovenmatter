@@ -52,6 +52,12 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS workspace_opencode_input_context(
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
         CREATE TABLE IF NOT EXISTS workspace_tool_schema(version INTEGER PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS workspace_automation_requests(
+          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
+          input_digest TEXT NOT NULL, PRIMARY KEY(source_id,request_id));
+        CREATE TABLE IF NOT EXISTS workspace_automation_cancellations(
+          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
+          PRIMARY KEY(source_id,request_id));
         CREATE TABLE IF NOT EXISTS workspace_session_tools(
           session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL,
           defaults_applied INTEGER NOT NULL DEFAULT 0);
@@ -139,6 +145,21 @@ extension WorkspaceDatabaseConnection {
               AND source.deleted_at IS NULL AND target.deleted_at IS NULL;
           INSERT INTO workspace_tool_schema(version) VALUES(1);
           """)
+      }
+      // Browser Use is default-on, including existing installs. Computer Use
+      // is never introduced by migration and always requires the user's choice.
+      if try historyRowsUnlocked("SELECT 1 FROM workspace_tool_schema WHERE version=2", values: []).isEmpty {
+        var settings = try toolSettingsUnlocked()
+        settings.enabledByDefault.insert(.browser)
+        try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
+        for row in try historyRowsUnlocked("SELECT session_id,enabled_json FROM workspace_session_tools", values: []) {
+          guard let id = row.objectValue?["session_id"]?.stringValue,
+                let json = row.objectValue?["enabled_json"]?.stringValue else { continue }
+          var groups = try JSONDecoder().decode(Set<WorkspaceToolGroup>.self, from: Data(json.utf8))
+          groups.insert(.browser)
+          try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=? WHERE session_id=?", [try toolsJSON(groups), id])
+        }
+        try executeUnlocked("INSERT INTO workspace_tool_schema(version) VALUES(2)")
       }
       // Existing and newly imported sessions take a snapshot of the defaults.
       try executeUnlocked("""
@@ -471,6 +492,38 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  public func reserveAutomationRequest(callerID: String, request: WovenMatterToolRequest) throws -> Bool {
+    try transaction {
+      let command = try WovenMatterToolCommand(request.arguments)
+      guard let group = command.group, [.browser, .computer].contains(group) else { throw WorkspaceToolError.invalid("Invalid automation group.") }
+      try requireToolUnlocked(group, sessionID: callerID, writesCalendar: false)
+      let id = try canonicalToolRequestID(request.requestID)
+      try requireAutomationNotCancelled(callerID: callerID, requestID: id)
+      let digest = SHA256.hash(data: try JSONEncoder().encode(request.operationArguments)).map { String(format: "%02x", $0) }.joined()
+      let rows = try historyRowsUnlocked("SELECT input_digest FROM workspace_automation_requests WHERE source_id=? AND request_id=?", values: [callerID, id])
+      if let prior = rows.first?.objectValue?["input_digest"]?.stringValue {
+        guard prior == digest else { throw WorkspaceToolError.invalid("This request ID was already used for another automation call.") }
+        return false
+      }
+      // Commit before crossing the UI boundary. A lost process or response can
+      // never cause automatic repetition of a click, upload or typed text.
+      try toolsExecuteUnlocked("INSERT INTO workspace_automation_requests(source_id,request_id,input_digest) VALUES(?,?,?)", [callerID, id, digest])
+      return true
+    }
+  }
+
+  func requireAutomationNotCancelled(callerID: String, requestID: String) throws {
+    let id = try canonicalToolRequestID(requestID)
+    guard try historyRowsUnlocked("SELECT request_id FROM workspace_automation_cancellations WHERE source_id=? AND request_id=?", values: [callerID, id]).isEmpty else {
+      throw WorkspaceToolError.invalid("This automation request was cancelled. Inspect fresh state before starting another action.")
+    }
+  }
+
+  func cancelAutomationRequest(callerID: String, requestID: String) throws {
+    let id = try canonicalToolRequestID(requestID)
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_automation_cancellations(source_id,request_id) VALUES(?,?)", [callerID, id])
+  }
+
   func toolsJSON<T: Encodable>(_ value: T) throws -> String {
     String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
   }
@@ -534,6 +587,25 @@ extension WorkspaceDatabaseConnection {
 // MARK: - Async worker boundary
 
 extension WorkspaceDatabase {
+  public func reserveAutomationRequest(callerID: String, request: WovenMatterToolRequest) async throws -> Bool {
+    try await write { try $0.reserveAutomationRequest(callerID: callerID, request: request) }
+  }
+  public func cancelAutomationRequest(callerID: String, requestID: String) async throws {
+    // Cancellation can beat the original request to the GUI. Persist it even
+    // when no action is running, and let cleanup survive its caller's Stop.
+    try await finishWrite { try $0.cancelAutomationRequest(callerID: callerID, requestID: requestID) }
+  }
+  public func cancelAutomationRequests(callerID: String) async throws {
+    try await finishWrite {
+      try $0.toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_automation_cancellations(source_id,request_id) SELECT source_id,request_id FROM workspace_automation_requests WHERE source_id=?", [callerID])
+    }
+  }
+  public func requireAutomationRequest(_ group: WorkspaceToolGroup, callerID: String, requestID: String) async throws {
+    try await read {
+      try $0.requireToolUnlocked(group, sessionID: callerID, writesCalendar: false)
+      try $0.requireAutomationNotCancelled(callerID: callerID, requestID: requestID)
+    }
+  }
   public func toolSettings() async throws -> WorkspaceToolSettings {
     try await read { try $0.toolSettings() }
   }

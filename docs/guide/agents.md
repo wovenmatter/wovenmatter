@@ -10,8 +10,8 @@ A **harness** is the software that runs the agent. Settings also calls it a
 
 ## Set up a harness
 
-1. Open **Settings → Local agent workspace**, or select a workspace under
-   **Remote agent workspaces**.
+1. Open **Settings → Local Agent Workspace**, or select a workspace under
+   **Remote Agent Workspaces**.
 2. Find the harness under **Runtimes**. If it is missing, select **Install**
    and review the installer before confirming.
 3. Enable the harness and complete its sign-in or connection setup.

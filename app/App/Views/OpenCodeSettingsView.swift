@@ -133,7 +133,7 @@ struct SettingsOpenCodeView: View {
     }
 
     var body: some View {
-        SettingsPage(title: "OpenCode",
+        SettingsPage(title: "Open Code",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             SettingsAgentDefaultsSection(model: model, runtime: .opencode,
                 fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)

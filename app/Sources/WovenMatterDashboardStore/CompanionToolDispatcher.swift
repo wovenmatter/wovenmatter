@@ -27,7 +27,14 @@ public final class CompanionToolDispatcher {
     request.requestID = id
     let work = Task { [database] in
       let response = await perform(request, value.conversationID).bounded()
-      try await database.finishCompanionTool(response, requestID: id, deviceID: deviceID)
+      // Desktop/page captures and text belong to the model's tool response, not
+      // the durable transport ledger. Record completion without those payloads.
+      let command = try? WovenMatterToolCommand(request.arguments)
+      let automation = command?.group?.isAutomation == true && command?.action == "call"
+      let receipt = automation ? WovenMatterToolResponse(success: false,
+        error: "This automation call finished. Its output is not retained in the transport receipt. Inspect fresh state before further input; this request will not run again.",
+        code: "automation_outcome_recorded", requestID: id) : response
+      try await database.finishCompanionTool(receipt, requestID: id, deviceID: deviceID)
       return response
     }
     pending[key] = work

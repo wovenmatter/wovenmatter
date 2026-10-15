@@ -39,4 +39,9 @@
 - (void)dismissPasswordOffer {}
 - (void)fillPasswordForUsername:(NSString *)username {}
 - (void)close {}
+- (NSString *)chromiumVersion { return @"0.0.0.0"; }
+- (NSArray<NSDictionary *> *)automationDownloads { return @[]; }
+- (NSDictionary *)readAutomationDownload:(NSString *)identifier offset:(NSUInteger)offset { return nil; }
+- (BOOL)sendAutomationMessage:(NSString *)message { return NO; }
+- (void)detachAutomation { self.automationMessageHandler = nil; }
 @end
