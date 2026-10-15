@@ -97,7 +97,7 @@ public actor MobileProductAnalytics {
       var status = "dropped"
       do {
         try Task.checkCancellation()
-        let ack = try await transport.sendAnalytics(.init(events: [event]))
+        let ack = try await transport.sendAnalytics(.init(events: [event], analyticsID: preference.analyticsID))
         try Task.checkCancellation()
         guard generation == choiceGeneration else { return }
         try apply(ack.preference)
@@ -114,6 +114,7 @@ public actor MobileProductAnalytics {
     }
   }
   public func connect(using transport: (any ProductAnalyticsTransport)?) {
+    cancelSends()
     self.transport = transport
   }
   public func synchronizePreference() async throws {
@@ -138,8 +139,8 @@ public actor MobileProductAnalytics {
     try record(name, platform: platform)
   }
   public func synchronize(using transport: any ProductAnalyticsTransport) async throws {
+    let generation = choiceGeneration
     if let enabled = state.pendingEnabled {
-      let generation = choiceGeneration
       let current = try await transport.analyticsPreference()
       try Task.checkCancellation()
       guard generation == choiceGeneration else { return }
@@ -171,6 +172,7 @@ public actor MobileProductAnalytics {
     } else {
       let current = try await transport.analyticsPreference()
       try Task.checkCancellation()
+      guard generation == choiceGeneration else { return }
       try apply(current)
     }
     self.transport = transport

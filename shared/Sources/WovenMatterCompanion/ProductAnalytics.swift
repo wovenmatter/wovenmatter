@@ -111,7 +111,11 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
 }
 public struct ProductAnalyticsBatch: Codable, Sendable {
   public var events: [ProductAnalyticsEvent]
-  public init(events: [ProductAnalyticsEvent]) { self.events = events }
+  public var analyticsID: String
+  public init(events: [ProductAnalyticsEvent], analyticsID: String) {
+    self.events = events
+    self.analyticsID = analyticsID
+  }
 }
 public struct ProductAnalyticsAcknowledgement: Codable, Sendable {
   public var acceptedEventIDs: [String]

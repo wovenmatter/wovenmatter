@@ -168,18 +168,19 @@ final class ProductAnalyticsModel {
   /// One attempt only. Failures never retain an event for later delivery.
   private func send(_ event: ProductAnalyticsEvent) async {
     let epoch = generation
+    guard let preference else { return }
     do {
-      if let client, let preference {
+      if let client {
         await client.sendUpdateReceipt(event, analyticsID: preference.analyticsID)
       } else if let rpc {
         let acknowledgement = try JSONDecoder().decode(
           ProductAnalyticsAcknowledgement.self,
           from: await rpc.call(
             method: "analytics.events",
-            payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event]))))
+            payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event], analyticsID: preference.analyticsID))))
         acceptAcknowledgement(acknowledgement, epoch: epoch)
       } else if database != nil {
-        acceptAcknowledgement(try await ingest(.init(events: [event])), epoch: epoch)
+        acceptAcknowledgement(try await ingest(.init(events: [event], analyticsID: preference.analyticsID)), epoch: epoch)
       }
     } catch { /* Drop failed sends without interrupting a user action. */ }
   }
@@ -244,6 +245,10 @@ final class ProductAnalyticsModel {
   }
   func ingest(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
     guard let database else { throw WorkspaceDatabaseError.corruptRow }
+    let current = try await database.productAnalyticsPreference()
+    guard batch.analyticsID == current.analyticsID else {
+      return .init(acceptedEventIDs: [], preference: current, discardedEventIDs: batch.events.map(\.id))
+    }
     // Concurrent immediate sends are bounded; overflow is dropped, never queued.
     guard publisher, uploads.count < 20 else {
       return .init(acceptedEventIDs: [], preference: try await database.productAnalyticsPreference(),
