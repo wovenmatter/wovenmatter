@@ -115,3 +115,26 @@ test('automation adapter uses the current scoped CLI, preserves images and cance
   assert.equal(automationSchemas.computer.additionalProperties, false);
   assert.ok(!('sessionId' in automationSchemas.computer.properties));
 });
+
+test('automation responses preserve UTF-8 split across pipe chunks', async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = () => {};
+  const pending = callAutomation('browser', { action: 'snapshot' }, { WOVENMATTER_CLI: '/fixture/cli' }, undefined, () => child);
+  const content = [{ type: 'text', text: 'Café 日本語 🧶' }];
+  const bytes = Buffer.from(JSON.stringify({ success: true, result: { content } }));
+  for (const byte of bytes) child.stdout.write(Buffer.from([byte]));
+  child.emit('close', 0);
+  assert.deepEqual((await pending).content, content);
+});
+
+
+test('automation rejects oversized output even after a complete JSON response', async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = signal => { child.killed = signal; };
+  const pending = callAutomation('browser', { action: 'snapshot' }, { WOVENMATTER_CLI: '/fixture/cli' }, undefined, () => child);
+  child.stdout.write(JSON.stringify({ success: true, result: { content: [] } }));
+  child.stdout.write(Buffer.alloc(1100000, 32));
+  child.emit('close', null);
+  await assert.rejects(pending, /exceeds its size limit/);
+  assert.equal(child.killed, 'SIGKILL');
+});

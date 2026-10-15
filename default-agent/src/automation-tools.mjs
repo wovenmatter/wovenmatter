@@ -31,7 +31,8 @@ export async function callAutomation(name, input, environment, signal, run = spa
   return await new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const child = run(executable, [name, 'call', '--json', '-', '--request-id', id], { env: environment, stdio: ['pipe', 'pipe', 'ignore'] });
-    let output = '', size = 0;
+    const output = [];
+    let size = 0;
     const abort = () => {
       child.kill('SIGTERM');
       // Cancellation grants no new surface authority and is scoped to this ID.
@@ -39,13 +40,15 @@ export async function callAutomation(name, input, environment, signal, run = spa
       cancel.on('error', () => {}); cancel.unref();
     };
     signal?.addEventListener('abort', abort, { once: true });
-    child.stdout.on('data', bytes => { size += bytes.length; if (size > 1100000) child.kill('SIGKILL'); else output += bytes; });
+    child.stdout.on('data', bytes => { size += bytes.length; if (size > 1100000) child.kill('SIGKILL'); else output.push(bytes); });
     child.on('error', reject);
     child.on('close', () => {
       signal?.removeEventListener('abort', abort);
       if (signal?.aborted) { reject(new Error('Automation interrupted. Do not replay input blindly.')); return; }
       try {
-        const response = JSON.parse(output);
+        if (size > 1100000) throw new Error('Automation response exceeds its size limit.');
+        // Pipe chunks can split a UTF-8 scalar. Decode only the complete response.
+        const response = JSON.parse(Buffer.concat(output).toString('utf8'));
         if (!response.success) throw new Error(response.error ?? 'Automation failed.');
         resolve({ content: response.result?.content ?? [{ type: 'text', text: JSON.stringify(response.result) }], details: response.result?.details });
       } catch (error) { reject(error); }
