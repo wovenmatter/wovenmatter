@@ -308,7 +308,7 @@ final class CompanionCommandService: CompanionCommandServing {
             else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
         }
         if let target, denied.contains(target) {
-            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Device Connections on the central Mac.")
+            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Devices on the central Mac.")
         }
     }
 

@@ -12,7 +12,7 @@ struct SettingsLocalWorkspaceView: View {
 
     var body: some View {
         SettingsPage(
-            title: "Local agent workspace",
+            title: "Local Agent Workspace",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
