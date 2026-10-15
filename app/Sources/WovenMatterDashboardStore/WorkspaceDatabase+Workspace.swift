@@ -340,12 +340,16 @@ extension WorkspaceDatabaseConnection {
           SELECT id, name, position
           FROM folders
           WHERE user_id = ? AND is_pinned = ?
+            AND (SELECT workspace_id FROM folder_execution_roots WHERE folder_id = folders.id)
+                IS (SELECT workspace_id FROM folder_execution_roots WHERE folder_id = ?)
           """)
         defer { sqlite3_finalize(sectionLookup) }
         try bind(operatorID, at: 1, to: sectionLookup)
         guard sqlite3_bind_int(sectionLookup, 2, isPinned ? 1 : 0) == SQLITE_OK else {
           throw bindError()
         }
+
+        try bind(id, at: 3, to: sectionLookup)
 
         var values: [(id: String, name: String, position: Int64)] = []
         while true {

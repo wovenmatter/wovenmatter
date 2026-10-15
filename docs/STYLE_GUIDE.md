@@ -64,6 +64,13 @@ when an intentional design change is accepted.
   Racing Green, lighter green, royal blue, purple, red, pink, orange, yellow, and
   black. Choices persist and may be reused across categories.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
+- **Workspace sidebar:** group Agents and Folders within each owning workspace.
+  Pinned agents and folders lead their respective lists without a separate Pinned
+  section. Each Folders section starts with New folder, scoped to that workspace.
+  Remote workspace names align with the local workspace heading; both use the same
+  child indentation. All Workspaces sits above the workspaces, Trash below them,
+  and Recents remains global. Folder hover cards match chat previews and show the
+  workspace, chat/note counts, root directory, and additional reference directories.
 - **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
   styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
