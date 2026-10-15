@@ -166,3 +166,26 @@ test('slash resume after a failed run uses the same reconciliation baseline as U
   assert.equal((await f.service.command(f.command('send',{conversationID:id,text:'/goal resume'}),f.principal)).status,'completed')
   await f.service.tickGoals();await turn();assert.equal(f.runs.length,1)
 })
+
+
+test('out-of-order cumulative usage reports cannot reduce the consumed token budget',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
+  await f.mutate(id,{set:{objective:'Verify',tokenBudget:100}});await f.service.tickGoals();await turn()
+  const goal=await f.read(id)
+  await f.cli('checkpoint','--id',goal.id,'--evidence','Verified change','--request-id',randomUUID())
+  f.runs[0].publish({sessionUpdate:'woven_usage',usage:{totalTokens:120}})
+  f.runs[0].publish({sessionUpdate:'usage_update',usage:{totalTokens:20}})
+  f.runs[0].end();await turn();await f.service.tickGoals()
+  assert.equal((await f.read(id)).tokensUsed,120);assert.equal((await f.read(id)).status,'budget_limited');assert.equal(f.runs.length,1)
+})
+
+test('simultaneous sessions sharing a directory keep independent native goal bindings',async t=>{
+  const f=fixture(t),first=await f.service.command(f.command('createSession'),f.principal),second=await f.service.command(f.command('createSession'),f.principal)
+  await f.mutate(first.conversationID,{set:{objective:'First'}})
+  await f.mutate(second.conversationID,{set:{objective:'Second'}})
+  await f.service.tickGoals();await turn()
+  for(const run of f.runs) {
+    const result=await f.cliWith(run.command.goalToolContext,f.directory,'get')
+    assert.equal(result.result.sessionID,run.command.conversationID)
+  }
+})

@@ -253,7 +253,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(runtimeKind==='opencode'){const control=nativeJobs.get(command.runID)?.control;if(!control?.steer)throw fail('This native run does not support steering.');return control.steer(command.text,command.commandID)}
     const channel=await attach(native,runtimeKind)
     if(!channel.run||channel.run.command.runID!==command.runID)throw fail('That run has finished. Send a new message.')
-    if(runtimeKind==='grok_build')return rpc(channel,'_x.ai/interject',{sessionId:native.sessionID,text:command.text},command.commandID)
+    if(runtimeKind==='grok_build')return rpc(channel,'_x.ai/interject',{sessionId:native.sessionID,text:command.text,...(command.goalToolContext?{_meta:{wovenTools:command.goalToolContext}}:{})},command.commandID)
     if(!native.steeringSupported)throw fail('This native agent does not support steering.')
     const result=await rpc(channel,'_session/steering',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,steering:{idleBehavior:'promptRequired'},...(command.goalToolContext?{wovenTools:command.goalToolContext}:{})}},command.commandID)
     if(!['injected','startedNewTurn'].includes(result.outcome))throw fail('That run has finished. Send a new message.')

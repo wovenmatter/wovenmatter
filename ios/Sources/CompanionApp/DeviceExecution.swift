@@ -471,7 +471,7 @@ extension CompanionModel {
           guard self.localRunTokens[id] == token, self.localExecutionAttempts[id] == attemptID else { return }
           let usage = try await self.deviceTokenUsage(runtime)
           let baseline = self.executionRecords[id]?.goalUsageBaseline
-          self.executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in baseline.map { max(0, total - $0) } }, succeeded: status == "completed")
+          self.executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in baseline.flatMap { total >= $0 ? total - $0 : nil } }, succeeded: status == "completed")
           self.executionRecords[id]?.status = status
           if let reason = receipt["reason"] as? String { self.inferenceProblem = reason; self.errorMessage = reason }
         }
@@ -575,7 +575,7 @@ extension CompanionModel {
     try await runtime.abort()
     if let runID = record.runID {
       let usage = try await deviceTokenUsage(runtime)
-      executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in record.goalUsageBaseline.map { max(0, total - $0) } }, succeeded: false)
+      executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in record.goalUsageBaseline.flatMap { total >= $0 ? total - $0 : nil } }, succeeded: false)
       try await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
       finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)
     }

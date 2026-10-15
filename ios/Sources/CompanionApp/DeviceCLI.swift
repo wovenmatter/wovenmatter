@@ -149,15 +149,9 @@ extension CompanionModel {
     }
   }
   func deviceTokenUsage(_ runtime: PiDurableRuntime) async throws -> Int64? {
-    let snapshot = try Self.executionObject(await runtime.snapshot())
-    let messages = (snapshot["entries"] as? [[String: Any]] ?? []).flatMap { $0["model"] as? [[String: Any]] ?? [] }
-    let assistant = messages.filter { $0["role"] as? String == "assistant" }
-    guard assistant.allSatisfy({ (($0["usage"] as? [String: Any])?["totalTokens"] as? NSNumber).map { $0.doubleValue.isFinite && $0.doubleValue >= 0 && $0.doubleValue <= Double(Int64.max) } == true }) else { return nil }
-    return assistant.reduce(Int64(0)) { total, message in
-      let value = ((message["usage"] as? [String: Any])?["totalTokens"] as? NSNumber)?.int64Value ?? 0
-      let sum = total.addingReportingOverflow(max(0, value)); return sum.overflow ? Int64.max : sum.partialValue
-    }
+    try await runtime.tokenUsage()
   }
+
   func processDeviceGoals() async throws {
     guard let store else { return }
     let inbox = await store.toolSubmissions()

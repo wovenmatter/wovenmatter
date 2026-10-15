@@ -453,7 +453,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     if(update.sessionUpdate==='usage_update'||update.sessionUpdate==='woven_usage') {
       const tokens=update.usage?.totalTokens??update.totalTokens
-      if(Number.isSafeInteger(tokens)&&tokens>=0){record.runUsage??={};record.runUsage[runID]=tokens;save(record)}
+      if(Number.isSafeInteger(tokens)&&tokens>=0){record.runUsage??={};record.runUsage[runID]=Math.max(record.runUsage[runID]??0,tokens);save(record)}
       return
     }
     const message = record.transcript.messages.find(item => item.id === runID)
