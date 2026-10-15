@@ -141,6 +141,6 @@ Steinberger. AXorcist and the Swift support-library licenses are reproduced in
 
 Browser automation bundles `playwright-core` 1.64.1 from
 [Microsoft Playwright](https://github.com/microsoft/playwright) under Apache-2.0
-and `ws` 8.21.3 from [websockets/ws](https://github.com/websockets/ws) under MIT.
+and `ws` 8.22.0 from [websockets/ws](https://github.com/websockets/ws) under MIT.
 Their upstream licenses remain in the bundled Node dependencies. Playwright
 connects to Woven Matter’s pinned CEF rather than installing another browser.
