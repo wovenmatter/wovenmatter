@@ -75,7 +75,8 @@ test('an app-source fingerprint change rejects stale copied helper code', async 
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
   const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.1.0' })) });
   const pi = status.sdks.find(sdk => sdk.id === 'pi');
-  assert.equal(pi.installedVersion, '1.1.0');
+  const bundled = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(pi.installedVersion, bundled.packages['node_modules/@earendil-works/pi-durable'].version);
   assert.equal(pi.latestVersion, '1.1.0');
   assert.equal(pi.consistent, true);
   assert.equal(pi.updateAvailable, false);

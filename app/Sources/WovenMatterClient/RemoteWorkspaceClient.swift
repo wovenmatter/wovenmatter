@@ -622,7 +622,7 @@ public actor RemoteWorkspaceSSHClient {
             hostName: hostName,
             userName: userName
         )
-        let command = #"if docker info >/dev/null 2>&1; then exec docker build --tag wovenmatter/workspace:0.1 --file remote/Dockerfile -; elif sudo -n docker info >/dev/null 2>&1; then exec sudo -n docker build --tag wovenmatter/workspace:0.1 --file remote/Dockerfile -; else printf '%s\n' 'Docker Engine is unavailable after host verification.' >&2; exit 69; fi"#
+        let command = #"if docker info >/dev/null 2>&1; then exec docker build --pull --no-cache --tag wovenmatter/workspace:0.1 --file remote/Dockerfile -; elif sudo -n docker info >/dev/null 2>&1; then exec sudo -n docker build --pull --no-cache --tag wovenmatter/workspace:0.1 --file remote/Dockerfile -; else printf '%s\n' 'Docker Engine is unavailable after host verification.' >&2; exit 69; fi"#
         _ = try runner(
             destination,
             command,

@@ -22,7 +22,7 @@ jobs:
       macos: ${{ steps.paths.outputs.macos }}
       remote: ${{ steps.paths.outputs.remote }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -71,8 +71,8 @@ jobs:
     # Cold desktop builds and companion integration have a separate budget from UI tests.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Ensure CEF build tools
@@ -98,7 +98,7 @@ jobs:
           - name: iPad
             type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
@@ -112,19 +112,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote
       - name: Build the remote workspace image
-        run: docker build --file remote/Dockerfile --tag wovenmatter-remote:ci .
+        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:0.1 .
+
+      - name: Verify workspace isolation and home preservation
+        run: scripts/test-container.sh --skip-build
 
       - name: Build the standalone Executor runtime
         run: |
           wm_executor_version="$(node --input-type=module -e 'import { latestExecutorVersion } from "./default-agent/src/executor/broker.mjs"; console.log(await latestExecutorVersion());')"
-          docker build --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
+          docker build --pull --no-cache --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
             --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
       - name: Verify Executor native helper prerequisites
         run: |

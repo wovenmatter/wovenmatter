@@ -260,7 +260,9 @@ export async function openDurableSession(engine, id, requested) {
       });
       await detailsQueue;
       if (detailsError) throw detailsError;
-      return { ...result, ...(result.structuredContent === undefined ? {} : { details: { ...result.details, structuredContent: result.structuredContent } }) };
+      // Preserve the classic coding-tool result for retained 1.1 generations;
+      // Durable 1.2 reads the same model-visible blocks from output.
+      return { ...result, output: result.content ?? [], ...(result.structuredContent === undefined ? {} : { details: { ...result.details, structuredContent: result.structuredContent } }) };
     } }));
     const codeTool = { ...codemode, description: 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: ' + tools.map(t => t.name + ': ' + t.description).join('\n'), replay: 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId), conversation = scope.conversation;
@@ -278,7 +280,7 @@ export async function openDurableSession(engine, id, requested) {
           const nestedTask = await api.commit(async tx => {
             signal?.throwIfAborted(); ctx.abortSignal.throwIfAborted();
             const assistant = await tx.appendEntry(conversation.id, { kind: 'pi.assistant', data: { wovenNestedCall: true }, model: [{ role: 'assistant', content: [{ type: 'toolCall', ...call }], timestamp: Date.now(), api: scope.session.model?.api, provider: scope.session.model?.provider, model: scope.session.model?.id, stopReason: 'toolUse', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }], edits: [] });
-            const taskID = await tx.createTask(ToolTask, { assistant: assistant.id, callId: call.id }, { conversationId: conversation.id, ownership: { kind: 'task', taskId: api.taskId } });
+            const taskID = await tx.createTask(ToolTask, { kind: 'model', assistant: assistant.id, callId: call.id }, { conversationId: conversation.id, ownership: { kind: 'task', taskId: api.taskId } });
             await tx.appendEntry(conversation.id, { kind: 'woven.codemode-context', edits: [{ target: assistant.id, action: 'omit' }] });
             return { taskID, assistantID: assistant.id };
           }, ctx);
@@ -318,7 +320,7 @@ export async function openDurableSession(engine, id, requested) {
       }
       if (detailsError) throw detailsError;
       for (const write of invocation.pendingStoreWrites) await api.commit(tx => tx.appendEntry(conversation.id, { kind: 'woven.codemode-store', data: write.data }), ctx);
-      return result;
+      return { ...result, output: result.content ?? [] };
     } };
     record.subagents = createSubagents({ record, engine, context, allTools: () => [...adapted, codeTool], send,
       getTrustedInstructions: () => [...(record.userInstructions ?? []), ...loader.getAgentsFiles().agentsFiles.map(file => file.content)],
