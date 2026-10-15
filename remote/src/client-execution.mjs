@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
-import { mutateGoal, settleGoal, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance, goalCLI } from './client-goals.mjs'
+import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance, goalCLI } from './client-goals.mjs'
 import { resolve } from 'node:path'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
 
@@ -146,7 +146,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for (const row of db.prepare('SELECT body FROM conversations').all()) {
       const record = JSON.parse(row.body)
       delete record.goalBinding
-      if(record.goal?.status==='active'){record.goal.status='paused';record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
+      if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
         for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
         delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
@@ -248,7 +248,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         transcript:{conversationID:body.conversation.id,messages:[],activities:[]}}
       if(body.goal) {
         if(body.goal.sessionID!==body.conversation.id)throw fail(400,'Goal identity does not match.')
-        record.goal=copy(body.goal);if(record.goal.status==='active')record.goal.status='paused';delete record.goal.pendingDeliveryID
+        record.goal=copy(body.goal);if(record.goal.status==='active')setGoalStatus(record.goal,'paused');delete record.goal.pendingDeliveryID
         record.goalBaseCompletedTurns=record.goal.completedTurns;record.goalBaseTokensUsed=record.goal.tokensUsed;record.goalRuns={}
       }
       transaction(()=>{
@@ -414,7 +414,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return transaction(() => { save(latest); return receipt(command, 'completed') })
     }
     if (command.kind === 'stop') {
-      if(record.goal?.status==='active'){record.goal.status='paused';delete record.goal.pendingDeliveryID;save(record)}
+      if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');delete record.goal.pendingDeliveryID;save(record)}
       const job=jobs.get(command.runID)
       if(job)job.stopped=true
       try { await runtime.stop({ native: record.native, runtimeKind: record.conversation.runtimeKind, command }) }
@@ -515,11 +515,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         await serialize(row.id,async()=> {
           const record=getRecord(row.id),goal=record.goal
           if(!goal||goal.status!=='active'||record.conversation.activeRunID||record.pending?.length||goal.pendingDeliveryID)return
-          if(goal.tokenBudget!=null&&goalUsageUnavailable(record)){goal.status='blocked';goal.evidence='Token usage is unavailable; remove the token budget before resuming.';save(record);return}
-          if(budgetReached(goal)){goal.status='budget_limited';save(record);return}
+          if(goal.tokenBudget!=null&&goalUsageUnavailable(record)){setGoalStatus(goal,'blocked');goal.evidence='Token usage is unavailable; remove the token budget before resuming.';save(record);return}
+          if(budgetReached(goal)){setGoalStatus(goal,'budget_limited');save(record);return}
           if(db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='accepted'").get(row.id))return
           const uncertain=db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='outcomeUnknown' AND rowid>?").get(row.id,record.goalCommandBaseline??0)
-          if(uncertain){goal.status='blocked';goal.evidence='An earlier command needs reconciliation before continuing.';save(record);return}
+          if(uncertain){setGoalStatus(goal,'blocked');goal.evidence='An earlier command needs reconciliation before continuing.';save(record);return}
           const settings=await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
           if(closed)return
           if(['plan','plan_mode'].includes(settings.permission))return
@@ -532,7 +532,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
           const initial={commandID,deviceID:command.deviceID,conversationID:row.id,status:'accepted'}
           db.prepare('INSERT INTO commands VALUES (?,?,?,?,?)').run(commandID,command.deviceID,digest(JSON.stringify(ordered(command))),JSON.stringify(command),JSON.stringify(initial))
           try { await perform(command) }
-          catch(error){const latest=getRecord(row.id);if(latest.goal?.id===goal.id&&latest.goal.status==='active'){latest.goal.status='blocked';latest.goal.evidence=String(error.message).slice(0,1024);delete latest.goal.pendingDeliveryID;save(latest)}receipt(command,'rejected',{message:error.message})}
+          catch(error){const latest=getRecord(row.id);if(latest.goal?.id===goal.id&&latest.goal.status==='active'){setGoalStatus(latest.goal,'blocked');latest.goal.evidence=String(error.message).slice(0,1024);delete latest.goal.pendingDeliveryID;save(latest)}receipt(command,'rejected',{message:error.message})}
         })
       }
     } finally {goalsTickRunning=false}

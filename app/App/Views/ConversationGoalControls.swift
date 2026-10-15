@@ -22,51 +22,55 @@ struct ConversationGoalControls: View {
 
     var body: some View {
         if let goal {
-            Button { showingDetails = true } label: {
-                HStack(spacing: 8) {
-                    DashboardLucideIcon(glyph: .compass, size: 14)
-                    Text(goal.status.title).font(.system(size: 11, weight: .medium)).lineLimit(1).layoutPriority(1)
-                    Text(goal.objective).font(.system(size: 12)).lineLimit(1)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.up").font(.system(size: 9, weight: .medium))
+            HStack(spacing: 8) {
+                Text(goal.status.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(goal.elapsedPursuitText(at: context.date))
+                }.font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                Spacer(minLength: 0)
+                Button("Delete", role: .destructive) { mutate(.clear(id: goal.id)) }
+                    .disabled(busy)
+                if goal.status != .complete {
+                    Button(goal.status == .active ? "Pause" : "Resume") {
+                        mutate(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
+                    }.disabled(busy)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .contentShape(Rectangle())
+                Button("Expand") { showingDetails = true }
             }
-            .buttonStyle(.plain)
+            .font(.system(size: 11))
+            .buttonStyle(.borderless)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12).padding(.vertical, 8)
             .background(theme.palette.themeWhisper, in: DashboardShapes.card)
-            .accessibilityLabel("Goal: \(goal.status.title). \(goal.objective)")
-            .popover(isPresented: $showingDetails, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 12) {
+            .sheet(isPresented: $showingDetails) {
+                VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Text("Goal").font(.headline)
                         Spacer()
                         Text(goal.status.title).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             Text(goal.objective).textSelection(.enabled)
                             if let evidence = goal.evidence, !evidence.isEmpty {
                                 Text(evidence).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                                     .textSelection(.enabled)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.scrollIndicators(.never).frame(maxHeight: 240)
+                    }.scrollIndicators(.never).frame(minHeight: 180, maxHeight: 360)
                     HStack {
-                        if goal.status != .complete {
-                            Button(goal.status == .active ? "Pause" : "Resume") {
-                                mutate(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
-                            }.buttonStyle(DashboardQuietButtonStyle())
-                        }
                         Spacer()
-                        Button("Delete", role: .destructive) { mutate(.clear(id: goal.id)) }
-                            .buttonStyle(DashboardQuietButtonStyle())
-                    }.disabled(busy)
-                    if let error { Text(error).font(.caption).foregroundStyle(.red) }
-                }.padding(16).frame(width: 360)
+                        Button("Done") { showingDetails = false }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                }.padding(20).frame(width: 480)
             }
+            .alert("Unable to update goal", isPresented: Binding(
+                get: { error != nil }, set: { if !$0 { error = nil } }
+            )) {
+                Button("OK", role: .cancel) { error = nil }
+            } message: { Text(error ?? "") }
         }
     }
 

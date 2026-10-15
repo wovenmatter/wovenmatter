@@ -274,50 +274,51 @@ private struct MobileGoalControls: View {
   var body: some View {
     Group {
       if let goal {
-        Button { showingDetails = true } label: {
-          HStack(spacing: 8) {
-            DashboardLucideIcon(glyph: .compass, size: 16)
-            Text(goal.status.title).font(.caption.weight(.medium)).lineLimit(1).layoutPriority(1)
-            Text(goal.objective).font(.caption).lineLimit(1)
-              .foregroundStyle(DashboardPalette.mutedForeground)
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.up").font(.caption2)
-          }.padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        HStack(spacing: 8) {
+          Text(goal.status.title).font(.caption.weight(.medium)).lineLimit(1)
+          TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(goal.elapsedPursuitText(at: context.date))
+                }.font(.caption2).monospacedDigit()
+            .foregroundStyle(DashboardPalette.mutedForeground)
+          Spacer(minLength: 0)
+          Button("Delete", role: .destructive) { change(.clear(id: goal.id)) }
+            .frame(minHeight: 44).disabled(saving || !model.executionOnline)
+          if goal.status != .complete {
+            Button(goal.status == .active ? "Pause" : "Resume") {
+              change(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
+            }.frame(minHeight: 44).disabled(saving || !model.executionOnline)
+          }
+          Button("Expand") { showingDetails = true }.frame(minHeight: 44)
+        }.font(.caption).buttonStyle(.borderless)
+          .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
           .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
-          .accessibilityLabel("Goal: \(goal.status.title). \(goal.objective)")
-          .popover(isPresented: $showingDetails) {
-            VStack(alignment: .leading, spacing: 16) {
-              HStack {
-                Text("Goal").font(.headline)
-                Spacer()
-                Text(goal.status.title).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-              }
+          .sheet(isPresented: $showingDetails) {
+            NavigationStack {
               ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
+                  Text(goal.status.title).font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
                   Text(goal.objective).textSelection(.enabled)
                   if let evidence = goal.evidence, !evidence.isEmpty {
                     Text(evidence).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
                   }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-              }.scrollIndicators(.never).frame(maxHeight: 260)
-              HStack {
-                if goal.status != .complete {
-                  Button(goal.status == .active ? "Pause" : "Resume") {
-                    change(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
-                  }.buttonStyle(DashboardQuietButtonStyle())
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+              }.scrollIndicators(.never)
+                .navigationTitle("Goal")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                  ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingDetails = false }
+                  }
                 }
-                Spacer()
-                Button("Delete", role: .destructive) { change(.clear(id: goal.id)) }
-                  .buttonStyle(DashboardQuietButtonStyle())
-              }.disabled(saving || !model.executionOnline)
-              if let problem { Text(problem).font(.caption).foregroundStyle(.red) }
-            }.padding(20).frame(idealWidth: 340)
-              .presentationCompactAdaptation(.popover)
+            }
           }
       }
     }
+    .alert("Unable to update goal", isPresented: Binding(
+      get: { problem != nil }, set: { if !$0 { problem = nil } }
+    )) {
+      Button("OK", role: .cancel) { problem = nil }
+    } message: { Text(problem ?? "") }
     .task(id: conversationID) {
       while !Task.isCancelled {
         await load()

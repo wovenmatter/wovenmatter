@@ -21,7 +21,24 @@ public struct WorkspaceGoal: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var sessionID: String
     public var objective: String
-    public var status: WorkspaceGoalStatus = .active
+    public var status: WorkspaceGoalStatus = .active {
+        didSet {
+            guard status != oldValue else { return }
+            let now = Date()
+            if oldValue == .active, let activeSince {
+                activeSeconds = (activeSeconds ?? 0) + max(0, now.timeIntervalSince(activeSince))
+            }
+            if status == .active {
+                activeSeconds = activeSeconds ?? 0
+                activeSince = now
+            } else {
+                activeSince = nil
+            }
+        }
+    }
+    /// Optional for saved goals created before elapsed pursuit tracking existed.
+    public var activeSeconds: TimeInterval?
+    public var activeSince: Date?
     public var tokenBudget: Int64?
     public var turnBudget: Int?
     public var tokensUsed: Int64?
@@ -45,6 +62,18 @@ public struct WorkspaceGoal: Codable, Equatable, Identifiable, Sendable {
         observedRunSequence = baselineRunSequence
         enrolledRunSequence = baselineRunSequence
         createdAt = now; updatedAt = now
+        activeSeconds = 0; activeSince = now
+    }
+
+    public func elapsedPursuitText(at now: Date) -> String {
+        guard let activeSeconds else { return "Elapsed unavailable" }
+        let elapsed = activeSeconds + (status == .active ? activeSince.map { max(0, now.timeIntervalSince($0)) } ?? 0 : 0)
+        guard elapsed.isFinite, elapsed >= 0, elapsed < Double(Int.max) else { return "Elapsed unavailable" }
+        let seconds = Int(elapsed)
+        let duration = seconds >= 3600
+            ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+            : String(format: "%d:%02d", seconds / 60, seconds % 60)
+        return "\(duration) elapsed"
     }
 
     public static func validate(objective: String, tokenBudget: Int64?, turnBudget: Int?) throws {
