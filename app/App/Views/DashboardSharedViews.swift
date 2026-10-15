@@ -1020,7 +1020,8 @@ struct DashboardFolderHoverCard: View {
                 ScrollView { paths }
                     .scrollIndicators(.never)
             }
-            .frame(maxHeight: 280)
+            .frame(maxHeight: 280, alignment: .top)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(DashboardPalette.foreground)
         .padding(14)
