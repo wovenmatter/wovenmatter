@@ -2,6 +2,8 @@ import Foundation
 
 public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sendable {
   case notes, history, sessions, goals, timers, usage, calendar, library, executor
+  /// Goals are always available; only optional tools appear in selection controls.
+  public static var configurableCases: [Self] { allCases.filter { $0 != .goals } }
   public var id: String { rawValue }
   public var title: String {
     switch self {

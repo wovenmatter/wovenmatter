@@ -223,7 +223,7 @@ extension CompanionCommandService {
             models: options(metadata?.selectableModels, metadata?.modelOptionMetadata, current: metadata?.model ?? saved?.model),
             thinkingLevels: options(metadata?.thinkingLevels, metadata?.thinkingOptionMetadata, current: metadata?.thinking ?? saved?.thinking),
             permissions: options(metadata?.permissionOptions, metadata?.permissionOptionMetadata, current: metadata?.permission ?? saved?.permission),
-            availableTools: WorkspaceToolGroup.allCases.map { .init(id: $0.rawValue, label: $0.title) },
+            availableTools: WorkspaceToolGroup.configurableCases.map { .init(id: $0.rawValue, label: $0.title) },
             enabledTools: tools.enabled.map(\.rawValue).sorted(), canConfigure: !model.runningToolSessionIDs.contains(id))
     }
 

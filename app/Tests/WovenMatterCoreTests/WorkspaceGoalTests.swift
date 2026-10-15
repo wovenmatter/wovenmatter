@@ -114,7 +114,7 @@ struct WorkspaceGoalTests {
         }
     }
 
-    @Test func pauseClearDisableAndRestartCancelUnsentContinuations() async throws {
+    @Test func pauseAndRestartCancelUnsentContinuationsButToolSelectionDoesNot() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         let goal = try await create(db, session)
@@ -130,8 +130,8 @@ struct WorkspaceGoalTests {
         #expect(try await db.claimToolDelivery(id: resumed.id) == nil)
         _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
         _ = try await db.setSessionToolEnabled(.goals, enabled: false, sessionID: session)
-        #expect(try await db.sessionGoals().first?.status == .paused)
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .active)
+        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
     }
 
     @Test func stoppedPreparationCannotSetOrResumeAGoal() async throws {
@@ -415,7 +415,7 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.tokensUsed == 60)
     }
 
-    @Test func planOnlyWorkPausesGoalsAndDisablingIsNotReenabledOnReopen() async throws {
+    @Test func planOnlyWorkPausesGoalsAndGoalsStayEnabledOnReopen() async throws {
         let (db, directory, session) = try await fixture(.claudeCode)
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await create(db, session)
@@ -424,7 +424,7 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.status == .paused)
         _ = try await db.setSessionToolEnabled(.goals, enabled: false, sessionID: session)
         let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        #expect(try await reopened.sessionTools(session).enabled.contains(.goals) == false)
+        #expect(try await reopened.sessionTools(session).enabled.contains(.goals))
     }
 
     @Test func trashRestoreCannotRestartAGoalAndClearCleansItsAccounting() async throws {

@@ -76,7 +76,7 @@ struct SettingsAgentDefaultsSection: View {
                         save(.tools, selections: SessionSelections(tools: enabled ? enabledTools.sorted() : nil))
                     }))
                     if stored.tools != nil {
-                        ForEach(WorkspaceToolGroup.allCases) { group in
+                        ForEach(WorkspaceToolGroup.configurableCases) { group in
                             Toggle(group.title, isOn: Binding(get: { enabledTools.contains(group.rawValue) }, set: { enabled in
                                 var tools = enabledTools
                                 if enabled { tools.insert(group.rawValue) } else { tools.remove(group.rawValue) }

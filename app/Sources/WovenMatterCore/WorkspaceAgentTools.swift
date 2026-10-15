@@ -50,20 +50,28 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
 
 public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public var executorProfiles: Set<String>?
-  public var enabled: Set<WorkspaceToolGroup>
+  private var selectedGroups: Set<WorkspaceToolGroup>
+  /// Goals stay available even when older saved selections omitted them.
+  public var enabled: Set<WorkspaceToolGroup> {
+    get { selectedGroups.union([.goals]) }
+    set { selectedGroups = newValue.union([.goals]) }
+  }
   public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }), executorProfiles: Set<String>? = nil) {
     self.executorProfiles = executorProfiles
-    self.enabled = enabled
+    self.selectedGroups = enabled.union([.goals])
   }
 
   public static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.enabled == rhs.enabled && (lhs.executorProfiles ?? []) == (rhs.executorProfiles ?? [])
   }
-  private enum CodingKeys: String, CodingKey { case enabled, executorProfiles }
+  private enum CodingKeys: String, CodingKey {
+    case selectedGroups = "enabled"
+    case executorProfiles
+  }
   public func encode(to encoder: any Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encodeIfPresent(executorProfiles?.sorted(), forKey: .executorProfiles)
-    try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .enabled)
+    try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .selectedGroups)
   }
 
   public init(identifiers: [String]) throws {
@@ -71,7 +79,7 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
     guard groups.count == identifiers.count else {
       throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, goals, timers, usage, calendar, library, or executor.")
     }
-    self.enabled = Set(groups)
+    self.selectedGroups = Set(groups).union([.goals])
   }
 }
 
