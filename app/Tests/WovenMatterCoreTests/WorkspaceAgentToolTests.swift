@@ -16,13 +16,13 @@ struct WorkspaceAgentToolTests {
     try await db.saveToolSettings(settings)
     try await db.write { try $0.executeUnlocked("DELETE FROM workspace_tool_schema WHERE version=2") }
     let migrated = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    #expect(try await migrated.sessionTools(caller).enabled == [.notes, .browser])
+    #expect(try await migrated.sessionTools(caller).enabled == [.notes, .browser, .goals])
     #expect(try await migrated.toolSettings().enabledByDefault == [.notes, .browser])
     try await migrated.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
     let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    #expect(try await reopened.sessionTools(caller).enabled == [.notes])
+    #expect(try await reopened.sessionTools(caller).enabled == [.notes, .goals])
     let fresh = try await reopened.createLocalACPSession(runtimeKind: .defaultAgent, title: "Fresh", ownerDeviceID: UUID())
-    #expect(try await reopened.sessionTools(fresh).enabled == [.notes, .browser])
+    #expect(try await reopened.sessionTools(fresh).enabled == [.notes, .browser, .goals])
   }
 
   @Test func automationIntentsPersistBeforeInputAndRejectChangedReplays() async throws {
