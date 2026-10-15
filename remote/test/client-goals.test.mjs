@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -21,9 +21,10 @@ function fixture(t, runtimeKind='default_agent') {
   const command=(kind,values={})=>({commandID:randomUUID(),deviceID:principal.id,kind,...values})
   const read=async id=>(await service.readWorkspace({session:{id}})).session._0.goal
   const mutate=(id,mutation)=>service.command(command('workspace',{conversationID:id,workspaceAction:{goal:{id,mutation}}}),principal)
-  const cli=async (...args)=>JSON.parse((await exec('python3',[resolve('remote/src/wovenmatter'),'goals',...args],{cwd:directory})).stdout)
+  const cliWith=async (context,cwd,...args)=>JSON.parse((await exec('python3',[resolve('remote/src/wovenmatter'),'goals',...args],{cwd,env:{...process.env,WOVENMATTER_SOCKET:context.socketPath,WOVENMATTER_CONTEXT_ID:context.captureID}})).stdout)
+  const cli=async (...args)=>cliWith(runs.at(-1).command.goalToolContext,directory,...args)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  return {directory,runs,runtime,command,principal,read,mutate,cli,get service(){return service},async restart(){await service.close();service=createClientExecution({directory,runtime,goalIntervalMilliseconds:3600000})}}
+  return {directory,runs,runtime,command,principal,read,mutate,cli,cliWith,get service(){return service},async restart(){await service.close();service=createClientExecution({directory,runtime,goalIntervalMilliseconds:3600000})}}
 }
 for(const kind of ['default_agent','codex','claude_code','grok_build','opencode'])test(`owner goal controls and ordinary continuation dispatch: ${kind}`,async t=>{
   const f=fixture(t,kind),opened=await f.service.command(f.command('createSession',{providerID:kind}),f.principal),id=opened.conversationID
@@ -129,4 +130,39 @@ test('explicit resume after a failed turn authorizes fresh work without replayin
   assert.equal((await f.mutate(id,{resume:{id:goal.id}})).status,'completed')
   await f.service.tickGoals();await turn()
   assert.equal(f.runs.length,1);assert.equal((await f.read(id)).status,'active')
+})
+
+
+test('missing token usage cannot be bypassed by resuming with the budget retained',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
+  await f.mutate(id,{set:{objective:'Verify',tokenBudget:100}});await f.service.tickGoals();await turn()
+  f.runs[0].end();await turn()
+  const goal=await f.read(id)
+  assert.equal((await f.mutate(id,{resume:{id:goal.id}})).status,'rejected')
+  await f.service.tickGoals();assert.equal(f.runs.length,1)
+  await f.mutate(id,{edit:{id:goal.id,objective:'Verify',tokenBudget:null}})
+  await f.mutate(id,{resume:{id:(await f.read(id)).id}})
+  await f.service.tickGoals();await turn();assert.equal(f.runs.length,2)
+})
+
+test('goal CLI follows its captured run from subdirectories and rejects an old binding',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
+  await f.mutate(id,{set:{objective:'Verify'}});await f.service.tickGoals();await turn()
+  const context=f.runs[0].command.goalToolContext,goal=await f.read(id),subdirectory=join(f.directory,'child')
+  mkdirSync(subdirectory)
+  assert.equal((await f.cliWith(context,subdirectory,'get')).result.id,goal.id)
+  await f.cliWith(context,f.directory,'checkpoint','--id',goal.id,'--evidence','First change','--request-id',randomUUID())
+  f.runs[0].end();await turn();await f.service.tickGoals();await turn()
+  await assert.rejects(f.cliWith(context,f.directory,'checkpoint','--id',goal.id,'--evidence','Stale work','--request-id',randomUUID()))
+  assert.equal((await f.cliWith(f.runs[1].command.goalToolContext,subdirectory,'get')).result.id,goal.id)
+})
+
+test('slash resume after a failed run uses the same reconciliation baseline as UI resume',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
+  await f.mutate(id,{set:{objective:'Verify'}})
+  const original=f.runtime.run;f.runtime.run=async()=>{throw new Error('Interrupted native attempt')}
+  await f.service.tickGoals();await turn();assert.equal((await f.read(id)).status,'blocked')
+  f.runtime.run=original
+  assert.equal((await f.service.command(f.command('send',{conversationID:id,text:'/goal resume'}),f.principal)).status,'completed')
+  await f.service.tickGoals();await turn();assert.equal(f.runs.length,1)
 })

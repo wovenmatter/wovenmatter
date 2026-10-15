@@ -47,6 +47,9 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
             case .resume:
                 guard value.status != .complete else { throw WorkspaceToolError.invalid("Set a new goal after completion.") }
                 if value.status != .active {
+                    guard value.tokenBudget == nil || !runIDs.contains(where: { $0 != currentRunID && runTokens[$0] == nil }) else {
+                        throw WorkspaceToolError.invalid("Token usage is unavailable; remove the token budget before resuming.")
+                    }
                     guard !budgetReached else { throw WorkspaceToolError.invalid("Increase or remove the budget before resuming.") }
                     value.status = .active; value.evidence = nil; value.pendingDeliveryID = nil
                     value.pendingProgressRevision = value.progressRevision - 1
@@ -95,6 +98,10 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
     }
     public mutating func claimContinuation(id: String) -> String? {
         guard var value = goal, value.status == .active, value.pendingDeliveryID == nil else { return nil }
+        guard value.tokenBudget == nil || runIDs.allSatisfy({ runTokens[$0] != nil }) else {
+            goal?.status = .blocked; goal?.evidence = "Token usage is unavailable; remove the token budget before resuming."
+            return nil
+        }
         guard !budgetReached else { goal?.status = .budgetLimited; return nil }
         // A fresh/resumed idle goal gets one initial attempt. Every settled run
         // after that must have produced a new checkpoint.

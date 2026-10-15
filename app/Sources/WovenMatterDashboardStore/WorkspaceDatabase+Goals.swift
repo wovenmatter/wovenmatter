@@ -305,9 +305,9 @@ extension WorkspaceDatabaseConnection {
                 } else if goal.tokenBudget != nil, try historyRowsUnlocked("""
                     SELECT 1 FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id
                     LEFT JOIN workspace_goal_usage u ON u.goal_id=g.goal_id AND u.run_id=g.run_id
-                    WHERE g.goal_id=? AND r.status='completed' AND u.run_id IS NULL LIMIT 1
+                    WHERE g.goal_id=? AND r.status NOT IN ('queued','accepted','running') AND u.run_id IS NULL LIMIT 1
                     """, values: [goal.id]).isEmpty == false {
-                    goal.status = .blocked; goal.evidence = "This runtime did not report token usage for a completed goal turn. Remove the token budget or resolve usage reporting before resuming."
+                    goal.status = .blocked; goal.evidence = "This runtime did not report token usage for a settled goal turn. Remove the token budget or resolve usage reporting before resuming."
                 }
                 if goal != original { goal.updatedAt = now; try saveGoalUnlocked(goal) }
                 guard goal.status == .active else { continue }

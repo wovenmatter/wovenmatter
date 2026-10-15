@@ -319,6 +319,36 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.tokensUsed == 40)
     }
 
+    @Test func interruptedUnreportedUsageStillBlocksAfterResume() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session, tokens: 100)
+        try await run(db, session: session, id: "interrupted", status: "running")
+        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
+        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='cancelled' WHERE id='interrupted'") }
+        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .blocked)
+        try await db.recordGoalUsage(runID: "interrupted", tokens: 30)
+        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
+        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
+    }
+
+    @Test func incompleteOpenCodeUsageDoesNotBecomeZeroTokens() async throws {
+        let (db, directory, session) = try await fixture(.opencode)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await create(db, session, tokens: 100)
+        try await db.attachOpenCodeSession(.init(conversationID: session, connectionID: "fixture", sessionID: "native"))
+        var snapshot = OpenCodeSessionSnapshot()
+        snapshot.messages = [.object(["id": .string("assistant"), "type": .string("assistant"),
+            "time": .object(["created": .number(1000), "completed": .number(2000)]),
+            "content": .array([.object(["type": .string("step-finish"), "tokens": .object([:])])])])]
+        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
+        #expect(try await db.sessionGoals().first?.tokensUsed == nil)
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .blocked)
+    }
+
     @Test func queuedInputAndActiveNativeRunsTakePrecedence() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }

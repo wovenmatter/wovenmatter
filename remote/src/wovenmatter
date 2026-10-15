@@ -16,8 +16,11 @@ if args[0] == 'goals':
         print('wovenmatter goals get|set|pause|resume|clear|complete|block|checkpoint\n  set --objective TEXT [--token-budget N] [--turn-budget N] --request-id UUID\n  Other mutations: --id ID [--evidence TEXT] --request-id UUID')
         sys.exit(0)
     try:
-        # Bound by the execution owner to this native working directory and run.
-        context = json.loads((Path.cwd() / '.wovenmatter-goal-context.json').read_text())
+        # Native tool hooks capture this binding for the executing input. A cwd
+        # change or later turn must never retarget an old process to a new run.
+        context = {'socket': os.environ.get('WOVENMATTER_SOCKET'), 'token': os.environ.get('WOVENMATTER_CONTEXT_ID')}
+        if not context['socket'] or not context['token']:
+            raise ValueError('This goal command requires an active native tool binding.')
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(30)
             connection.connect(context['socket'])

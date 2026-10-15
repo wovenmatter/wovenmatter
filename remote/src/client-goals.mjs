@@ -26,6 +26,7 @@ export function mutateGoal(record,mutation,currentRunID) {
   else if(action==='resume') {
     if(old.status==='complete')throw fail('Set a new goal after completion.')
     if(old.status!=='active') {
+      if(old.tokenBudget!=null&&goalUsageUnavailable(record,currentRunID))throw fail('Token usage is unavailable; remove the token budget before resuming.')
       if(budgetReached(old))throw fail('Increase or remove the budget before resuming.')
       old.status='active';delete old.evidence;delete old.pendingDeliveryID;old.pendingProgressRevision=old.progressRevision-1
       if(currentRunID)(record.goalRuns??={})[currentRunID]??={settled:false}
@@ -56,6 +57,9 @@ export function settleGoal(record,runID,succeeded,tokens) {
   else if(goal.progressRevision<=goal.pendingProgressRevision){goal.status='blocked';goal.evidence='The turn ended without a goal checkpoint. Review progress before resuming.'}
   goal.updatedAt=now()
 }
+export const goalUsageUnavailable = (record,currentRunID) =>
+  ((record.goalBaseCompletedTurns??0)>0&&record.goalBaseTokensUsed==null)
+  || Object.entries(record.goalRuns??{}).some(([id,run])=>id!==currentRunID&&run.tokens==null)
 export const budgetReached = goal => (goal.turnBudget!=null&&goal.completedTurns>=goal.turnBudget)||(goal.tokenBudget!=null&&(goal.tokensUsed??0)>=goal.tokenBudget)
 export function goalCLI(arguments_) {
   if(!Array.isArray(arguments_)||arguments_[0]!=='goals')throw fail('Expected a goals command.')

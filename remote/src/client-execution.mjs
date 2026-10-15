@@ -1,9 +1,9 @@
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync, chmodSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
-import { mutateGoal, settleGoal, budgetReached, goalPrompt, goalGuidance, goalCLI } from './client-goals.mjs'
+import { mutateGoal, settleGoal, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance, goalCLI } from './client-goals.mjs'
 import { resolve } from 'node:path'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
 
@@ -60,7 +60,12 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       socket.pause()
       void (async()=> {
         if(closed)throw fail(503,'The workspace is stopping.')
-        const request=JSON.parse(input.trim()),record=getRecord(request.conversationID)
+        const request=JSON.parse(input.trim())
+        if(typeof request.token!=='string'||!request.token)throw fail(403,'This goal tool binding is no longer active.')
+        const row=db.prepare("SELECT body FROM conversations WHERE json_extract(body,'$.goalBinding.token')=?").get(request.token)
+        if(!row)throw fail(403,'This goal tool binding is no longer active.')
+        const record=JSON.parse(row.body)
+        request.conversationID=record.conversation.id
         if(record.goalsEnabled===false)throw fail(403,'Goal tools are disabled for this session.')
         if(!record.goalBinding||record.goalBinding.token!==request.token||record.goalBinding.runID!==record.conversation.activeRunID)throw fail(403,'This goal tool binding is no longer active.')
         const cli=goalCLI(request.arguments)
@@ -359,10 +364,13 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         const value=slash[1]?.trim()??''
         if(['','pause','resume','clear'].includes(value.toLowerCase())) {
           if(!record.goal)throw fail(409,'No goal is set. Use /goal followed by an objective.')
+          const wasActive=record.goal.status==='active'
           if(value)mutateGoal(record,{[value.toLowerCase()]:{id:record.goal.id}})
+          if(value.toLowerCase()==='resume'&&!wasActive)record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
           save(record);return transaction(()=>receipt(command,'completed'))
         }
         mutateGoal(record,{set:{objective:value}});command.text=value
+        record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
       }
       if(command.goalID&&(record.goal?.id!==command.goalID||record.goal?.status!=='active'||record.goal?.pendingDeliveryID!==command.commandID))throw fail(409,'The goal continuation was cancelled.')
       const runID = command.runID ?? randomUUID()
@@ -391,7 +399,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if(job.stopped)throw fail(409,'The run stopped before native dispatch.')
         latest.goalBinding=binding;save(latest)
         command.goalToolContext={executablePath:fileURLToPath(new URL('./wovenmatter',import.meta.url)),socketPath:goalSocketPath,captureID:binding.token}
-        if(record.native.nativeWorkingDirectory)writeFileSync(resolve(record.native.nativeWorkingDirectory,'.wovenmatter-goal-context.json'),JSON.stringify({socket:goalSocketPath,conversationID:command.conversationID,token:binding.token}),{mode:0o600})
         return runtime.run({ native: record.native, runtimeKind: record.conversation.runtimeKind,
         command, publish: update => applyUpdate(command.conversationID, runID, update),
         interaction: value => setInteraction(command.conversationID, runID, value) }) })
@@ -417,6 +424,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return transaction(() => receipt(command, 'completed'))
     }
     if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
+    if(record.goalBinding)command.goalToolContext={executablePath:fileURLToPath(new URL('./wovenmatter',import.meta.url)),socketPath:goalSocketPath,captureID:record.goalBinding.token}
     await runtime.steer({ native: record.native, runtimeKind: record.conversation.runtimeKind, command })
     // Read again: streaming updates may have arrived while the steer was sent.
     const latest = getRecord(command.conversationID)
@@ -509,6 +517,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         await serialize(row.id,async()=> {
           const record=getRecord(row.id),goal=record.goal
           if(!goal||goal.status!=='active'||record.conversation.activeRunID||record.pending?.length||goal.pendingDeliveryID)return
+          if(goal.tokenBudget!=null&&goalUsageUnavailable(record)){goal.status='blocked';goal.evidence='Token usage is unavailable; remove the token budget before resuming.';save(record);return}
           if(budgetReached(goal)){goal.status='budget_limited';save(record);return}
           if(db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='accepted'").get(row.id))return
           const uncertain=db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='outcomeUnknown' AND rowid>?").get(row.id,record.goalCommandBaseline??0)

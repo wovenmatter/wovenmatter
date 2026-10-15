@@ -179,15 +179,11 @@ extension WorkspaceDatabaseConnection {
             var total: Int64 = 0
             for step in reported {
               let value = step["tokens"]
-              let counts = UsageTokenCounts(inputTokens: Self.goalTokenCount(value["input"].number),
-                cachedInputTokens: Self.goalTokenCount(value["cache"]["read"].number),
-                cacheCreationTokens: Self.goalTokenCount(value["cache"]["write"].number),
-                outputTokens: Self.goalTokenCount(value["output"].number),
-                reportedTotalTokens: value["total"].number.map { Self.goalTokenCount($0) })
-              let sum = total.addingReportingOverflow(counts.totalTokens)
+              guard let tokens = Self.goalStepTokens(value) else { total = -1; break }
+              let sum = total.addingReportingOverflow(tokens)
               total = sum.overflow ? Int64.max : sum.partialValue
             }
-            try recordGoalUsageUnlocked(runID: runID, tokens: total)
+            if total >= 0 { try recordGoalUsageUnlocked(runID: runID, tokens: total) }
           }
           let activities = OpenCodeSessionSnapshot.activities(message, assistantMessageID: id)
           let activityIDs = activities.map { "\(runID):activity:\($0.id)" }
@@ -367,8 +363,20 @@ extension WorkspaceDatabase {
 }
 
 private extension WorkspaceDatabaseConnection {
-  static func goalTokenCount(_ value: Double?) -> Int64 {
-    guard let value, value.isFinite, value > 0 else { return 0 }
+  static func goalTokenCount(_ value: Double?) -> Int64? {
+    guard let value, value.isFinite, value >= 0, value.rounded(.towardZero) == value else { return nil }
     return value >= Double(Int64.max) ? Int64.max : Int64(value)
+  }
+
+  static func goalStepTokens(_ value: OpenCodeValue) -> Int64? {
+    if !value["total"].isNull { return goalTokenCount(value["total"].number) }
+    guard let input = goalTokenCount(value["input"].number),
+          let output = goalTokenCount(value["output"].number),
+          let read = goalTokenCount(value["cache"]["read"].isNull ? 0 : value["cache"]["read"].number),
+          let write = goalTokenCount(value["cache"]["write"].isNull ? 0 : value["cache"]["write"].number) else { return nil }
+    return [input, output, read, write].reduce(Int64(0)) { total, count in
+      let sum = total.addingReportingOverflow(count)
+      return sum.overflow ? Int64.max : sum.partialValue
+    }
   }
 }
