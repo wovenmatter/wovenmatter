@@ -55,7 +55,7 @@ final class ProductAnalyticsModel {
       } else if let rpc {
         let current = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
-          from: await rpc.call(method: "analytics.preference", payload: Data()))
+          from: await rpc.call(method: "analytics.preference", payload: Data(), timeout: 5))
         guard acceptPreference(current, epoch: epoch) else { return }
         if !pendingLocalChoice { locallyDisabled = !current.enabled }
       } else if let database {
@@ -91,7 +91,7 @@ final class ProductAnalyticsModel {
         updated = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
           from: await rpc.call(
-            method: "analytics.setPreference", payload: JSONEncoder().encode(change)))
+            method: "analytics.setPreference", payload: JSONEncoder().encode(change), timeout: 5))
       } else if let database {
         updated = try await database.setProductAnalyticsPreference(change)
       } else {
@@ -146,7 +146,8 @@ final class ProductAnalyticsModel {
           ProductAnalyticsAcknowledgement.self,
           from: await rpc.call(
             method: "analytics.events",
-            payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event], analyticsID: preference.analyticsID))))
+            payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event], analyticsID: preference.analyticsID)),
+            timeout: 5))
         acceptAcknowledgement(acknowledgement, epoch: epoch)
       } else if database != nil {
         acceptAcknowledgement(try await ingest(.init(events: [event], analyticsID: preference.analyticsID)), epoch: epoch)
