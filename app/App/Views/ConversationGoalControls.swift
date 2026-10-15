@@ -29,19 +29,28 @@ struct ConversationGoalControls: View {
                 }.font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(DashboardPalette.mutedForeground)
                 Spacer(minLength: 0)
-                Button("Delete", role: .destructive) { mutate(.clear(id: goal.id)) }
-                    .disabled(busy)
+                Button(role: .destructive) { mutate(.clear(id: goal.id)) } label: {
+                    Text("Delete").padding(.horizontal, 6).frame(height: 24)
+                }.disabled(busy)
                 if goal.status != .complete {
-                    Button(goal.status == .active ? "Pause" : "Resume") {
+                    Button {
                         mutate(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
+                    } label: {
+                        Text(goal.status == .active ? "Pause" : "Resume")
+                            .padding(.horizontal, 6).frame(height: 24)
                     }.disabled(busy)
                 }
-                Button("Expand") { showingDetails = true }
+                Button { showingDetails = true } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 12)).frame(width: 24, height: 24)
+                }
+                .help("Expand goal")
+                .accessibilityLabel("Expand goal")
             }
             .font(.system(size: 11))
-            .buttonStyle(.borderless)
+            .buttonStyle(DashboardIconButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, 12).padding(.vertical, 4)
             .background(theme.palette.themeWhisper, in: DashboardShapes.card)
             .sheet(isPresented: $showingDetails) {
                 VStack(alignment: .leading, spacing: 14) {
