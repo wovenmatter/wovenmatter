@@ -132,14 +132,15 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> CompanionNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
-  func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil) async throws -> Result {
-    let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024)
+  func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Result {
+    let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024, timeout: timeout)
     return try JSONDecoder().decode(Result.self, from: data)
   }
-  private func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, maximumBytes: Int) async throws -> (Data, HTTPURLResponse) {
+  private func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, maximumBytes: Int, timeout: TimeInterval? = nil) async throws -> (Data, HTTPURLResponse) {
     var components = URLComponents(url: credential.endpoint.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
     components.queryItems = query.isEmpty ? nil : query
     var request = URLRequest(url: components.url!)
+    if let timeout { request.timeoutInterval = timeout }
     request.httpMethod = method; request.httpBody = body
     request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     request.setValue("application/json", forHTTPHeaderField: "Accept")

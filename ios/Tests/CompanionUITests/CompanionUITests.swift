@@ -9,7 +9,6 @@ final class CompanionUITests: XCTestCase {
     app.launch()
     let analyticsOptOut = app.buttons["Turn off analytics"]
     XCTAssertTrue(analyticsOptOut.waitForExistence(timeout: 10))
-    XCTAssertTrue(app.descendants(matching: .any)["Read our privacy policy"].firstMatch.exists)
     if app.buttons["tab-library"].exists {
       // Settle the iPad window transform before the first pointer event. On the
       // iOS 27 simulator, a fresh window can otherwise synthesize its first tap

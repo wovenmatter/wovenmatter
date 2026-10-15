@@ -6,15 +6,16 @@ public struct MobileProductAnalyticsState: Codable, Sendable {
   public var disclosed = false
   public var pendingEnabled: Bool?
   public var pendingRevision: Int64?
-  public var events: [ProductAnalyticsEvent] = []
+  public var lastAttempts: [String: Date]?
   public var log: [ProductAnalyticsLogEntry] = []
   public init() {}
 }
-/// Separate bounded file: user content and operational identities never enter telemetry.
+/// Persists privacy choices, two signal timestamps, and an inspection log; never an event queue.
 public actor MobileProductAnalytics {
   private let file: URL
   private var state: MobileProductAnalyticsState
-  private var lastEdit: Date?
+  private var transport: (any ProductAnalyticsTransport)?
+  private var sends: [UUID: Task<Void, Never>] = [:]
   private var choiceGeneration = 0
   public init(file: URL) throws {
     self.file = file
@@ -25,7 +26,7 @@ public actor MobileProductAnalytics {
       ?? .init()
   }
   public func snapshot() -> MobileProductAnalyticsState {
-    if state.events.contains(where: { $0.timestamp < Date().addingTimeInterval(-7 * 86400) }) {
+    if state.log.contains(where: { $0.event.timestamp < Date().addingTimeInterval(-7 * 86400) }) {
       try? persist()
     }
     return state
@@ -35,10 +36,9 @@ public actor MobileProductAnalytics {
     try setEnabled(enabled && (state.preference?.enabled ?? true))
   }
   public func setEnabled(_ enabled: Bool) throws {
-    choiceGeneration += 1
     state.pendingEnabled = enabled
     state.pendingRevision = state.preference?.revision
-    discardPending()
+    cancelSends()
     try persist()
   }
   public func apply(_ preference: ProductAnalyticsPreference) throws {
@@ -50,12 +50,12 @@ public actor MobileProductAnalytics {
       state.disclosed = false
       state.pendingEnabled = nil
       state.pendingRevision = nil
-      discardPending()
+      cancelSends()
       state.log.removeAll()
-      lastEdit = nil
+      state.lastAttempts = nil
     }
     if state.preference?.revision != preference.revision || !preference.collects {
-      discardPending()
+      cancelSends()
     }
     state.preference = preference
     try persist()
@@ -66,44 +66,68 @@ public actor MobileProductAnalytics {
     guard state.disclosed, state.pendingEnabled == nil, let preference = state.preference,
       preference.collects
     else { return }
-    let now = Date()
-    if name == .contentChanged, properties["action"] == "edit" {
-      if let lastEdit, now.timeIntervalSince(lastEdit) < 30 { return }
-      lastEdit = now
-    }
     var values = properties
     values["platform"] = platform
     values["app_version"] =
       Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     values["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
-    let event = ProductAnalyticsEvent(
-      preferenceRevision: preference.revision, name: name, properties: values)
-    state.events.append(event)
-    state.events = Array(state.events.suffix(1000))
-    state.log.append(.init(event: event, status: "pending"))
-    state.log = Array(state.log.suffix(500))
-    try persist()
+    send(ProductAnalyticsEvent(preferenceRevision: preference.revision, name: name, properties: values))
   }
-  /// Durable updater acknowledgements keep the original UUID on retry. A privacy
-  /// rejection consumes the receipt without retaining it for later backfill.
-  public func enqueueUpdateReceipt(_ event: ProductAnalyticsEvent, analyticsID: String) throws -> Bool {
-    guard state.disclosed, state.pendingEnabled == nil, let preference = state.preference,
-      preference.analyticsID == analyticsID,
-      event.name == .updateInstallCompleted,
-      let value = event.validated(preference: preference) else { return true }
-    if state.log.contains(where: { $0.id == value.id }) { return true }
-    state.events.append(value)
-    state.events = Array(state.events.suffix(1000))
-    state.log.append(.init(event: value, status: "pending"))
-    state.log = Array(state.log.suffix(500))
-    try persist()
-    return true
+  public func sendUpdateReceipt(_ event: ProductAnalyticsEvent, analyticsID: String) {
+    guard state.preference?.analyticsID == analyticsID, event.name == .updateInstallCompleted else { return }
+    send(event)
+  }
+  private func send(_ event: ProductAnalyticsEvent) {
+    guard let transport, state.disclosed, state.pendingEnabled == nil,
+      let preference = state.preference, let event = event.validated(preference: preference),
+      sends.count < 20 else { return }
+    let now = Date()
+    if event.rateLimited {
+      if let previous = state.lastAttempts?[event.name.rawValue],
+        now.timeIntervalSince(previous) < ProductAnalyticsEvent.signalInterval { return }
+      if state.lastAttempts == nil { state.lastAttempts = [:] }
+      state.lastAttempts?[event.name.rawValue] = now
+    }
+    let generation = choiceGeneration
+    state.log.append(.init(event: event, status: "attempted"))
+    try? persist()
+    let id = UUID()
+    sends[id] = Task {
+      defer { sends.removeValue(forKey: id) }
+      var status = "dropped"
+      do {
+        try Task.checkCancellation()
+        let ack = try await transport.sendAnalytics(.init(events: [event]))
+        try Task.checkCancellation()
+        guard generation == choiceGeneration else { return }
+        try apply(ack.preference)
+        if state.lastAttempts == nil { state.lastAttempts = [:] }
+        for (name, next) in ack.nextSignalAt {
+          state.lastAttempts?[name] = next.addingTimeInterval(-ProductAnalyticsEvent.signalInterval)
+        }
+        status = ack.acceptedEventIDs.contains(event.id) ? "central library accepted" : "suppressed by central library"
+      } catch { /* No retention, retry, or replay. */ }
+      if let index = state.log.firstIndex(where: { $0.id == event.id }) {
+        state.log[index].status = status
+        try? persist()
+      }
+    }
+  }
+  public func connect(using transport: (any ProductAnalyticsTransport)?) {
+    self.transport = transport
+  }
+  public func synchronizePreference() async throws {
+    guard let transport else { return }
+    try await synchronize(using: transport)
+  }
+  public func disconnect() {
+    transport = nil
+    cancelSends()
   }
   public func recordCommand(_ command: CompanionCommand) throws {
     let name: ProductAnalyticsEvent.Name
     switch command.kind {
-    case .createSession: name = .sessionCreated
-    case .send, .steer: name = .messageSubmitted
+    case .createSession, .send, .steer: name = .active
     default: return
     }
     #if os(iOS)
@@ -112,16 +136,6 @@ public actor MobileProductAnalytics {
       let platform = "macos"
     #endif
     try record(name, platform: platform)
-  }
-  public func acknowledge(_ ack: ProductAnalyticsAcknowledgement) throws {
-    let ids = Set(ack.acceptedEventIDs + ack.discardedEventIDs)
-    state.events.removeAll { ids.contains($0.id) }
-    for index in state.log.indices where ids.contains(state.log[index].id) {
-      state.log[index].status =
-        ack.discardedEventIDs.contains(state.log[index].id)
-        ? "discarded by central library" : "central library accepted"
-    }
-    try apply(ack.preference)
   }
   public func synchronize(using transport: any ProductAnalyticsTransport) async throws {
     if let enabled = state.pendingEnabled {
@@ -159,26 +173,16 @@ public actor MobileProductAnalytics {
       try Task.checkCancellation()
       try apply(current)
     }
-    guard state.pendingEnabled == nil, state.disclosed, state.preference?.collects == true else {
-      return
-    }
-    let events = Array(state.events.prefix(100))
-    if !events.isEmpty {
-      let generation = choiceGeneration
-      let acknowledgement = try await transport.sendAnalytics(.init(events: events))
-      try Task.checkCancellation()
-      guard generation == choiceGeneration else { return }
-      try acknowledge(acknowledgement)
-    }
+    self.transport = transport
   }
-  private func discardPending() {
-    state.events.removeAll()
-    for index in state.log.indices where state.log[index].status == "pending" {
-      state.log[index].status = "discarded after preference change"
-    }
+  private func cancelSends() {
+    choiceGeneration += 1
+    sends.values.forEach { $0.cancel() }
+    sends.removeAll()
   }
   private func persist() throws {
-    state.events.removeAll { $0.timestamp < Date().addingTimeInterval(-7 * 86400) }
+    state.log.removeAll { $0.event.timestamp < Date().addingTimeInterval(-7 * 86400) }
+    state.log = Array(state.log.suffix(500))
     try MobileStorePersistence.writeDurably(JSONEncoder().encode(state), at: file)
   }
 }
@@ -190,14 +194,14 @@ public protocol ProductAnalyticsTransport: Sendable {
 }
 extension HTTPSCompanionTransport: ProductAnalyticsTransport {
   public func analyticsPreference() async throws -> ProductAnalyticsPreference {
-    try await request("v1/analytics/preference")
+    try await request("v1/analytics/preference", timeout: 5)
   }
   public func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws
     -> ProductAnalyticsPreference
   {
-    try await request("v1/analytics/preference", method: "POST", body: JSONEncoder().encode(change))
+    try await request("v1/analytics/preference", method: "POST", body: JSONEncoder().encode(change), timeout: 5)
   }
   public func sendAnalytics(_ batch: ProductAnalyticsBatch) async throws
     -> ProductAnalyticsAcknowledgement
-  { try await request("v1/analytics/events", method: "POST", body: JSONEncoder().encode(batch)) }
+  { try await request("v1/analytics/events", method: "POST", body: JSONEncoder().encode(batch), timeout: 5) }
 }

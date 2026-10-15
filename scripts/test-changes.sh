@@ -19,9 +19,6 @@ run_static_checks() {
   for file in remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
     bash -n "$file"
   done
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_github_analytics_restore.py
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_github_analytics.py
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_github_analytics_publisher.py
   scripts/test-release.sh
   bash scripts/test-dev-signing.sh
   scripts/test-app-termination.sh

@@ -29,10 +29,7 @@ public struct ProductAnalyticsPreferenceChange: Codable, Sendable {
 public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable {
   public enum Name: String, Codable, Sendable {
     case appOpened = "app_opened"
-    case contentChanged = "content_changed"
-    case sessionCreated = "session_created"
-    case messageSubmitted = "message_submitted"
-    case agentRunCompleted = "agent_run_completed"
+    case active = "app_active"
     case updateCheckClicked = "update_check_clicked"
     case updateDownloadClicked = "update_download_clicked"
     case updateDownloadCompleted = "update_download_completed"
@@ -56,24 +53,15 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
     self.name = name
     self.properties = Self.sanitize(properties)
   }
+  public static let signalInterval: TimeInterval = 6 * 60 * 60
+  public var rateLimited: Bool { name == .appOpened || name == .active }
   public var qualifying: Bool {
-    name == .contentChanged || name == .sessionCreated || name == .messageSubmitted
+    name == .active
   }
   /// Re-applied at the central ingestion boundary, including decoded remote input.
   public static func sanitize(_ values: [String: String]) -> [String: String] {
     let enums: [String: Set<String>] = [
       "platform": ["macos", "ios", "ipados"],
-      "action": ["create", "edit", "move", "delete", "restore"],
-      "item_category": [
-        "folder", "note", "document", "spreadsheet", "database", "presentation", "asset",
-        "calendar", "session", "other",
-      ],
-      "outcome": ["success", "failure", "cancelled"],
-      "harness": ["pi", "claude", "codex", "opencode", "openclaw", "hermes", "cursor", "other"],
-      "provider": ["openai", "anthropic", "google", "xai", "openrouter", "other"],
-      "duration_range": ["under_10s", "10s_1m", "1m_5m", "5m_30m", "over_30m"],
-      "token_range": ["under_1k", "1k_10k", "10k_100k", "over_100k"],
-      "error_class": ["network", "authentication", "rate_limit", "runtime", "other"],
     ]
     var result: [String: String] = [:]
     for (key, value) in values {
@@ -86,8 +74,6 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
       if key == "os_major", let major = Int(value), (1...99).contains(major) {
         result[key] = String(major)
       }
-      // Do not send user-configured model labels or endpoint names. Model metadata
-      // can be added later through a reviewed public-catalog allowlist.
     }
     return result
   }
@@ -110,22 +96,13 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
     else { return "" }
     return String(decoding: data, as: UTF8.self)
   }
-  public static func durationRange(_ seconds: TimeInterval) -> String {
-    switch seconds {
-    case ..<10: "under_10s"
-    case ..<60: "10s_1m"
-    case ..<300: "1m_5m"
-    case ..<1800: "5m_30m"
-    default: "over_30m"
-    }
-  }
   public func validated(preference: ProductAnalyticsPreference, now: Date = Date())
     -> ProductAnalyticsEvent?
   {
     guard UUID(uuidString: id) != nil, preference.collects,
       preferenceRevision == preference.revision,
       let start = preference.disclosedAt, timestamp >= start,
-      timestamp > now.addingTimeInterval(-7 * 86400), timestamp <= now.addingTimeInterval(300)
+      timestamp > now.addingTimeInterval(-60), timestamp <= now.addingTimeInterval(60)
     else { return nil }
     var value = self
     value.properties = Self.sanitize(properties)
@@ -140,13 +117,15 @@ public struct ProductAnalyticsAcknowledgement: Codable, Sendable {
   public var acceptedEventIDs: [String]
   public var discardedEventIDs: [String]
   public var preference: ProductAnalyticsPreference
+  public var nextSignalAt: [String: Date]
   public init(
     acceptedEventIDs: [String], preference: ProductAnalyticsPreference,
-    discardedEventIDs: [String] = []
+    discardedEventIDs: [String] = [], nextSignalAt: [String: Date] = [:]
   ) {
     self.acceptedEventIDs = acceptedEventIDs
     self.preference = preference
     self.discardedEventIDs = discardedEventIDs
+    self.nextSignalAt = nextSignalAt
   }
 }
 public struct ProductAnalyticsLogEntry: Codable, Equatable, Identifiable, Sendable {
@@ -161,34 +140,17 @@ public struct ProductAnalyticsLogEntry: Codable, Equatable, Identifiable, Sendab
 public enum ProductAnalyticsPolicy {
   public static let url = URL(string: "https://wovenmatter.com/privacy")!
   public static let disclosure =
-    "Woven Matter shares limited product analytics by default to help improve the app. We record app opens, actions such as creating or editing content and sending messages, app update clicks and outcomes, coarse technical metadata, and approximate country. A random ID belongs to your central library and is shared across its connected devices. We do not collect your notes, messages, files, account identities, or precise location. You can turn analytics off for the whole library in General Settings and inspect the analytics log."
+    "Woven Matter shares limited product analytics by default to help improve the app. We send an app-open signal and a generic active-use signal, each at most once every six hours per library, plus app update clicks and outcomes, basic technical metadata, and approximate country. We do not report which content you change or which qualifying action you perform. Offline activity and failed sends are dropped without replay. A random ID belongs to your central library and is shared across its connected devices. We do not collect your notes, messages, files, account identities, or precise location. You can turn analytics off for the whole library in General Settings and inspect the analytics log."
 }
 
 extension CompanionWorkspaceAction {
-  /// Explicit editor/controller actions only. No request payload is retained.
-  public var analyticsProperties: [String: String]? {
-    let category: String
-    let action: String
+  /// Recognize deliberate actions locally; never serialize their kind or content.
+  public var qualifiesForAnalytics: Bool {
     switch self {
-    case .note(_, let operation, _, _, _):
-      category = "note"
-      action = operation
-    case .conversation(_, let operation, _, _):
-      category = "session"
-      action = operation
-    case .saveCalendar(_, let revision, _):
-      return ["item_category": "calendar", "action": revision == nil ? "create" : "edit"]
-    case .deleteCalendar: return ["item_category": "calendar", "action": "delete"]
-    default: return nil
+    case .note(_, let operation, _, _, _), .conversation(_, let operation, _, _):
+      return ["trash", "delete", "restore", "move", "rename", "pin", "unpin"].contains(operation)
+    case .saveCalendar, .deleteCalendar: return true
+    default: return false
     }
-    let coarse: String
-    switch action {
-    case "trash", "delete": coarse = "delete"
-    case "restore": coarse = "restore"
-    case "move": coarse = "move"
-    case "rename", "pin", "unpin": coarse = "edit"
-    default: return nil
-    }
-    return ["item_category": category, "action": coarse]
   }
 }

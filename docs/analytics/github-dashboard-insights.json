@@ -26,44 +26,6 @@
     }
   },
   {
-    "name": "GitHub unique viewers and cloners \u2014 daily",
-    "description": "GitHub daily unique counts, using the latest observation for each day. Do not add these to derive weekly or monthly unique people.",
-    "query": {
-      "kind": "DataVisualizationNode",
-      "source": {
-        "kind": "HogQLQuery",
-        "query": "SELECT day,\n    sumIf(daily_unique_count, metric = 'views') AS daily_unique_viewers,\n    sumIf(daily_unique_count, metric = 'clones') AS daily_unique_cloners\nFROM (\n    SELECT toDate(properties.report_day) AS day,\n        properties.traffic_metric AS metric,\n        argMax(toInt(properties.daily_unique_count), timestamp) AS daily_unique_count\n    FROM events\n    WHERE event = 'github_traffic_snapshot'\n        AND properties.source = 'github'\n        AND properties.repository = 'wovenmatter/wovenmatter'\n        AND timestamp >= now() - INTERVAL 45 DAY\n        AND toDate(properties.report_day) >= toDate(now() - INTERVAL 30 DAY)\n    GROUP BY day, metric\n)\nGROUP BY day\nORDER BY day"
-      },
-      "display": "ActionsLineGraph",
-      "chartSettings": {
-        "xAxis": {
-          "column": "day"
-        },
-        "yAxis": [
-          {
-            "column": "daily_unique_viewers"
-          },
-          {
-            "column": "daily_unique_cloners"
-          }
-        ],
-        "showLegend": true
-      }
-    }
-  },
-  {
-    "name": "Installer downloads \u2014 DMG",
-    "description": "GitHub installer download totals across website, direct GitHub, in-app updates, repeats and internal downloads. Supporting files are excluded. These are downloads, not installations or unique people.",
-    "query": {
-      "kind": "DataVisualizationNode",
-      "source": {
-        "kind": "HogQLQuery",
-        "query": "SELECT argMax(toInt(properties.cumulative_dmg_downloads), timestamp) AS cumulative_dmg_downloads\nFROM events\nWHERE event = 'github_download_snapshot'\n    AND properties.source = 'github'\n    AND properties.repository = 'wovenmatter/wovenmatter'\n    AND timestamp >= now() - INTERVAL 90 DAY"
-      },
-      "display": "BoldNumber"
-    }
-  },
-  {
     "name": "Installer downloads \u2014 cumulative observations",
     "description": "Last known installer-only DMG counters by observation day, including replaced installers and repeats. Supporting files are excluded. Historical daily download deltas are not inferred.",
     "query": {
@@ -88,15 +50,29 @@
     }
   },
   {
-    "name": "GitHub collection time \u2014 UTC",
-    "description": "Latest stored observation for traffic and download snapshots. The nightly collector starts after the analytics workflow reaches main.",
+    "name": "GitHub stars and forks \u2014 daily",
+    "description": "Latest repository totals per UTC observation day; no account identities or inferred historical counts.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT event AS snapshot_type, max(timestamp) AS last_collected_utc\nFROM events\nWHERE event IN ('github_traffic_snapshot', 'github_download_snapshot')\n    AND properties.source = 'github'\n    AND properties.repository = 'wovenmatter/wovenmatter'\n    AND timestamp >= now() - INTERVAL 90 DAY\nGROUP BY event\nORDER BY event"
+        "query": "SELECT toDate(properties.report_day) AS day, argMax(toInt(properties.stars), timestamp) AS stars, argMax(toInt(properties.forks), timestamp) AS forks FROM events WHERE event = 'github_repository_snapshot' AND properties.source = 'github' AND properties.repository = 'wovenmatter/wovenmatter' AND timestamp >= now() - INTERVAL 30 DAY GROUP BY day ORDER BY day"
       },
-      "display": "ActionsTable"
+      "display": "ActionsLineGraph",
+      "chartSettings": {
+        "xAxis": {
+          "column": "day"
+        },
+        "yAxis": [
+          {
+            "column": "stars"
+          },
+          {
+            "column": "forks"
+          }
+        ],
+        "showLegend": true
+      }
     }
   }
 ]

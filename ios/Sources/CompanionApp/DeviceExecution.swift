@@ -369,7 +369,7 @@ extension CompanionModel {
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
           enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
-        if userInitiated { await analytics.record(.sessionCreated,properties:["harness":"pi"]) }
+        if userInitiated { await analytics.record(.active) }
       }
       if executionRecords[id]?.title == "New chat", state.transcripts[id]?.messages.isEmpty != false {
         executionRecords[id]?.title = String(text.prefix(80))
@@ -390,7 +390,7 @@ extension CompanionModel {
       executionRecords[id]?.updatedAt = Self.executionTimestamp()
       try persistExecutionConfiguration()
       if selectedConversationID == selection { selectedConversationID = id }
-      if userInitiated { await analytics.record(.messageSubmitted,properties:["harness":"pi"]) }
+      if userInitiated { await analytics.record(.active) }
       attemptID = beginDeviceExecutionAttempt(id, runID: requestID, runtime: runtime, userInitiated: userInitiated)
       let receipt = try await runtime.submit(text: prompt, requestID: requestID)
       guard executionRecords[id]?.runID == requestID, executionRecords[id]?.status == "running" else { return }

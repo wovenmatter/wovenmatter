@@ -62,7 +62,7 @@ struct DeviceWorkspaceFiles: View {
         let data = try Data(contentsOf: file)
         _ = try await store.artifacts.save(data: data, workspaceID: model.deviceWorkspaceID, title: file.lastPathComponent,
           mediaType: UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream")
-        await model.analytics.record(.contentChanged,properties:["action":"create","item_category":"asset"])
+        await model.analytics.record(.active)
         status = "Saved to Library."
       } catch { status = error.localizedDescription }
       busy = false

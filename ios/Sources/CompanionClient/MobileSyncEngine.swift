@@ -67,6 +67,7 @@ public actor MobileSyncEngine {
     let running = syncTask
     scheduledTask?.cancel(); scheduledTask = nil
     running?.cancel()
+    await store.analytics.disconnect()
     let analytics = analyticsTask
     analytics?.cancel()
     await store.artifacts.cancelSynchronization()
@@ -140,6 +141,7 @@ public actor MobileSyncEngine {
       try await store.bindWorkspace(identity)
       verifiedThisPass = true
     } catch {
+      await store.analytics.disconnect()
       if case MobileConnectionError.http = error { status.centralReachable = true; status.lastContactAt = Date() }
       else if !(error is MobileStore.Failure) { status.centralReachable = false }
       throw error
@@ -149,7 +151,8 @@ public actor MobileSyncEngine {
       // A single optional telemetry task must not delay any content lane.
       analyticsTask = Task {
         defer { analyticsTask = nil }
-        try? await store.analytics.synchronize(using: analyticsTransport)
+        do { try await store.analytics.synchronize(using: analyticsTransport) }
+        catch { await store.analytics.disconnect() }
       }
     }
     var errors: [any Error] = []

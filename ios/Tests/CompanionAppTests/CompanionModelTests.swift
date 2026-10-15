@@ -48,19 +48,6 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
   func receipt(_ id: String) async throws -> CompanionCommandReceipt? { nil }
 }
 
-private actor ModelAnalyticsTransport: ProductAnalyticsTransport {
-  var preference: ProductAnalyticsPreference
-  init(preference: ProductAnalyticsPreference) { self.preference = preference }
-  func analyticsPreference() async throws -> ProductAnalyticsPreference { preference }
-  func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference {
-    preference.enabled = change.enabled; preference.revision += 1
-    return preference
-  }
-  func sendAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
-    .init(acceptedEventIDs: batch.events.map(\.id), preference: preference)
-  }
-}
-
 final class CompanionModelTests: XCTestCase {
   @MainActor func testAppHostedUnitTestsOpenOnlyAnIsolatedLibraryWithoutNetworking() async throws {
     let model = CompanionModel()
@@ -104,37 +91,6 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertEqual(drafts["A"]?.text, "")
     XCTAssertEqual(drafts["B"]?.text, "Draft for B")
   }
-  @MainActor func testOfflineCalendarActionsQualifyWithoutContentOrRefreshActivity() async throws {
-    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
-    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-    let store = try MobileStore(file: file)
-    let preference = ProductAnalyticsPreference(analyticsID: UUID().uuidString, disclosedAt: Date().addingTimeInterval(-60))
-    try await store.analytics.apply(preference)
-    try await store.analytics.disclose(enabled: true)
-    try await store.analytics.synchronize(using: ModelAnalyticsTransport(preference: preference))
-    let model = CompanionModel(store: store, transport: ModelMac())
-    model.online = false
-    await model.analytics.configure(store.analytics)
-    let id = UUID().uuidString.lowercased()
-    let saved = await model.perform(.saveCalendar(id: id, revision: nil, draft: .init(title: "Private calendar title", startsAt: Date())))
-    XCTAssertTrue(saved)
-    await model.reload(); await model.reload()
-    let created = await store.calendar.record(id: id)
-    let deleted = await model.perform(.deleteCalendar(id: id, revision: try XCTUnwrap(created).event.revision, occurrence: nil))
-    XCTAssertTrue(deleted)
-    let events = await store.analytics.snapshot().events
-    XCTAssertEqual(events.count, 2)
-    XCTAssertTrue(events.allSatisfy { $0.name == .contentChanged && $0.qualifying })
-    XCTAssertEqual(events.map { $0.properties["action"] }, ["create", "delete"])
-    XCTAssertTrue(events.allSatisfy { $0.properties["item_category"] == "calendar" })
-    XCTAssertFalse(String(decoding: try JSONEncoder().encode(events), as: UTF8.self).contains("Private calendar title"))
-    try await store.analytics.setEnabled(false)
-    let optedOut = await model.perform(.saveCalendar(id: UUID().uuidString.lowercased(), revision: nil, draft: .init(title: "Opted out", startsAt: Date())))
-    XCTAssertTrue(optedOut)
-    let disabledEvents = await store.analytics.snapshot().events
-    XCTAssertTrue(disabledEvents.isEmpty)
-  }
-
   @MainActor func testCalendarSavesOfflineAndSynchronizesOnceAfterLostReceipt() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }

@@ -130,21 +130,12 @@ struct ReleaseUpdateTests {
       }
     )
 
-    let analytics = DownloadAnalyticsProbe()
-    let release = try await installer.download(verifiedManifest, onDownloaded: {
-      await analytics.completed()
-    })
+    let release = try await installer.download(verifiedManifest)
 
     #expect(release.manifest == verifiedManifest)
     #expect(release.fileURL.deletingLastPathComponent() == root)
     #expect(try Data(contentsOf: release.fileURL) == payload)
     #expect(try await installer.cachedRelease(for: verifiedManifest) == release)
-    #expect(await analytics.count == 1)
-    let cached = try await installer.download(verifiedManifest, onDownloaded: {
-      await analytics.completed()
-    })
-    #expect(cached == release)
-    #expect(await analytics.count == 1)
   }
 
   @Test("rejects a downloaded release with the wrong checksum")
@@ -167,13 +158,11 @@ struct ReleaseUpdateTests {
       }
     )
 
-    let analytics = DownloadAnalyticsProbe()
     await #expect(
       throws: WovenMatterReleaseInstallationError.checksumMismatch
     ) {
-      try await installer.download(manifest, onDownloaded: { await analytics.completed() })
+      try await installer.download(manifest)
     }
-    #expect(await analytics.count == 0)
     #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
   }
 
@@ -200,9 +189,4 @@ struct ReleaseUpdateTests {
     "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   }
   """
-}
-
-private actor DownloadAnalyticsProbe {
-  private(set) var count = 0
-  func completed() { count += 1 }
 }

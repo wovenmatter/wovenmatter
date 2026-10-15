@@ -30,7 +30,7 @@ struct ProductAnalyticsLogView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Analytics log").font(.title2.weight(.semibold))
                 Text(
-                    "Only these event fields are queued for analytics. PostHog adds approximate country from the central Mac’s network. IP addresses and more precise location are discarded."
+                    "These are recent analytics send attempts. Failed sends are dropped without replay. PostHog adds approximate country from the central Mac’s network. IP addresses and more precise location are discarded."
                 ).font(.caption).foregroundStyle(.secondary)
                 if entries.isEmpty {
                     Text("No analytics events recorded.").foregroundStyle(.secondary)
@@ -65,7 +65,7 @@ struct ProductAnalyticsSettingsCard: View {
                     set: { value in Task { await analytics.setEnabled(value) } })
             ).toggleStyle(DashboardSwitchToggleStyle()).disabled(analytics.preference == nil)
             Text(
-                "This setting applies to your whole central library. Turning it off clears unsent analytics and stops collection; disconnected devices receive the choice when they reconnect."
+                "This setting applies to your whole central library. Turning it off stops collection; disconnected devices receive the choice when they reconnect."
             ).font(.caption).foregroundStyle(.secondary)
             if let id = analytics.preference?.analyticsID {
                 Text("Library analytics ID: " + id).font(.caption.monospaced()).textSelection(

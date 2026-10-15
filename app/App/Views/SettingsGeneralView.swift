@@ -333,7 +333,7 @@ struct SettingsGeneralView: View {
             do {
                 guard await WorkspaceAssetSession.prepareForRestart() else {
                     await model.analytics.record(.updateInstallFailed,
-                        properties: properties.merging(["outcome": "cancelled"]) { _, new in new })
+                        properties: properties)
                     releaseUpdateState = .ready(release)
                     return
                 }
@@ -348,7 +348,7 @@ struct SettingsGeneralView: View {
                 do { try await model.recoverBackendAfterFailedUpdate() }
                 catch { message += " " + error.localizedDescription }
                 await model.analytics.record(.updateInstallFailed,
-                    properties: properties.merging(["outcome": "failure"]) { _, new in new })
+                    properties: properties)
                 releaseUpdateState = .installFailed(release, message)
             }
         }

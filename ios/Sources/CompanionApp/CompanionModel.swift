@@ -193,7 +193,6 @@ import CompanionInference
     guard !isolatedTestHost else { return }
     if !booted {
       booted = true
-      if let store { await analytics.configure(store.analytics) }
       defer { initialized = true }
       await reload()
       if fixture { await seedFixture() }
@@ -226,6 +225,7 @@ import CompanionInference
         catch { errorMessage = error.localizedDescription }
       }
     }
+    if let store { await analytics.configure(store.analytics, transport: transport) }
     if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
     await maintainConnections()
   }
@@ -338,14 +338,14 @@ import CompanionInference
   func closeFolder() { selectedFolderID = nil; folderContentsPresented = false }
   func newFolder(name: String) async {
     guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    do { let folder = try await store.createFolder(name: name); await analytics.record(.contentChanged,properties:["action":"create","item_category":"folder"]); await reload(); openFolder(folder.id) }
+    do { let folder = try await store.createFolder(name: name); await analytics.record(.active); await reload(); openFolder(folder.id) }
     catch { errorMessage = error.localizedDescription }
   }
   func newNote() async {
     guard let store else { return }
     do {
       let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled note", content: NoteDocument().encoded())
-      await analytics.record(.contentChanged,properties:["action":"create","item_category":"note"])
+      await analytics.record(.active)
       selectedNoteID = note.id; tab = .note; await reload()
     } catch { errorMessage = error.localizedDescription }
   }
@@ -399,7 +399,7 @@ import CompanionInference
       await previous?.value
       do {
         try await store.editNote(id: id, title: title, content: content, folderID: folder, base: base)
-        await analytics.record(.contentChanged,properties:["action":"edit","item_category":"note"])
+        await analytics.record(.active)
         await reload()
         if saveGenerations[id] == generation {
           saveStates[id] = "Saved on this device"
@@ -567,7 +567,7 @@ import CompanionInference
   @discardableResult
   func perform(_ action: CompanionWorkspaceAction) async -> Bool {
     if let result = await performLocalCalendar(action) {
-      if result, let properties=action.analyticsProperties { await analytics.record(.contentChanged,properties:properties) }
+      if result, action.qualifiesForAnalytics { await analytics.record(.active) }
       return result
     }
     let conversationID: String?
@@ -579,7 +579,7 @@ import CompanionInference
       let owner = executionRoute(for: id)
       if owner == "local" {
         let accepted=await performDeviceAction(action)
-        if accepted, let properties=action.analyticsProperties { await analytics.record(.contentChanged,properties:properties) }
+        if accepted, action.qualifiesForAnalytics { await analytics.record(.active) }
         return accepted
       }
       if owner != "central" {
@@ -588,7 +588,7 @@ import CompanionInference
           let command = CompanionCommand(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: action)
           let result = try await client.submit(command)
           guard result.status == .completed else { errorMessage = result.message ?? "The workspace has not confirmed this change."; return false }
-          if let properties=action.analyticsProperties { await analytics.record(.contentChanged,properties:properties) }
+          if action.qualifiesForAnalytics { await analytics.record(.active) }
           await refreshExecutionWorkspaces(); return true
         } catch { errorMessage = error.localizedDescription; return false }
       }
@@ -611,7 +611,7 @@ import CompanionInference
         errorMessage = result.message ?? "The Mac has not confirmed this change. Check its acknowledgement before retrying."
         return false
       }
-      if pending == nil, let properties=action.analyticsProperties { await analytics.record(.contentChanged,properties:properties) }
+      if pending == nil, action.qualifiesForAnalytics { await analytics.record(.active) }
       await refresh()
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }

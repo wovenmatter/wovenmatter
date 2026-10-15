@@ -67,6 +67,11 @@ def pending_snapshots(history):
             })
             add("traffic:" + day + ":" + metric, event)
 
+    for day, row in sorted(history.get("repository_observations", {}).items()):
+        add("repository:" + day, snapshot(repository, "github_repository_snapshot", day, row["observed_at"], {
+            "stars": counter(row["stars"]), "forks": counter(row["forks"]),
+        }))
+
     # Retain the last known counter for replaced/deleted assets. Filenames and
     # release tags stay in the archive; only the aggregate counters leave it.
     known_assets = {}

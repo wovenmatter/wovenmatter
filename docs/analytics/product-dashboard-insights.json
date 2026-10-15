@@ -7,7 +7,7 @@
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 24 HOUR AND timestamp < now()"
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 24 HOUR AND timestamp < now()"
       },
       "display": "BoldNumber"
     }
@@ -20,7 +20,7 @@
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 7 DAY AND timestamp < now()"
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 7 DAY AND timestamp < now()"
       },
       "display": "BoldNumber"
     }
@@ -33,7 +33,7 @@
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now()"
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now()"
       },
       "display": "BoldNumber"
     }
@@ -41,12 +41,12 @@
   {
     "short_id": "z2fDY4L3",
     "name": "Qualified libraries by UTC date \u2014 30 day trend",
-    "description": "Supplemental historical chart grouped by UTC calendar date. Headline DAU, WAU and MAU use whole rolling 24-hour, 7-day and 30-day windows; daily unique counts are never summed.",
+    "description": "Distinct libraries with generic qualifying activity signals; at most one signal per six hours. Rolling 24-hour/7-day/30-day windows are approximate, exclude offline/failed sends, and never sum daily uniques.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT toDate(timestamp) AS day, count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now() GROUP BY day ORDER BY day"
+        "query": "SELECT toDate(timestamp) AS day, count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now() GROUP BY day ORDER BY day"
       },
       "display": "ActionsLineGraph",
       "chartSettings": {
@@ -63,8 +63,8 @@
   },
   {
     "short_id": "1rpLMpaC",
-    "name": "App opens \u2014 rolling 24 hours, 7 days, 30 days",
-    "description": "First interface opening per app process after disclosure. Each whole rolling window reports total opens and distinct opening libraries. Opens are separate from qualifying active users; background refresh and navigation do not add opens.",
+    "name": "App-open signals \u2014 rolling 24 hours, 7 days, 30 days",
+    "description": "At most one app-open signal per library per six hours, triggered by opening the interface. Counts are sampled signals, not total launches. Opens do not qualify for DAU/WAU/MAU; offline and failed sends are excluded.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -75,27 +75,14 @@
     }
   },
   {
-    "short_id": "M2PnDLkA",
-    "name": "Qualified activity by feature \u2014 30 days",
-    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
-    "query": {
-      "kind": "DataVisualizationNode",
-      "source": {
-        "kind": "HogQLQuery",
-        "query": "SELECT event, properties.item_category AS category, count() AS actions FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 30 DAY GROUP BY event,category ORDER BY actions DESC"
-      },
-      "display": "ActionsTable"
-    }
-  },
-  {
     "short_id": "4GBAnZ6I",
     "name": "Active libraries by country \u2014 30 days",
-    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
+    "description": "Distinct libraries with generic qualifying activity signals; at most one signal per six hours. Rolling 24-hour/7-day/30-day windows are approximate, exclude offline/failed sends, and never sum daily uniques.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
         "kind": "HogQLQuery",
-        "query": "SELECT properties.$geoip_country_code AS country, count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event IN ('content_changed','session_created','message_submitted') AND timestamp >= now() - INTERVAL 30 DAY GROUP BY country ORDER BY active_libraries DESC"
+        "query": "SELECT properties.$geoip_country_code AS country, count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 30 DAY GROUP BY country ORDER BY active_libraries DESC"
       },
       "display": "ActionsTable"
     }

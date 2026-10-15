@@ -7,8 +7,8 @@ extension WorkspaceDatabaseConnection {
     try executeUnlocked(
       """
       CREATE TABLE IF NOT EXISTS product_analytics_preference(singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload BLOB NOT NULL);
-      CREATE TABLE IF NOT EXISTS product_analytics_events(id TEXT PRIMARY KEY, payload BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created REAL NOT NULL);
-      CREATE INDEX IF NOT EXISTS product_analytics_pending ON product_analytics_events(status,created);
+      CREATE TABLE IF NOT EXISTS product_analytics_events(id TEXT PRIMARY KEY, payload BLOB NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS product_analytics_limits(name TEXT PRIMARY KEY, last_attempt REAL NOT NULL);
       """)
     let insert = try prepareUnlocked(
       "INSERT OR IGNORE INTO product_analytics_preference VALUES(1,?)")
@@ -50,13 +50,11 @@ extension WorkspaceDatabaseConnection {
         defer { sqlite3_finalize(stmt) }
         try bind(JSONEncoder().encode(value), at: 1, to: stmt)
         try stepDone(stmt)
-        // Clear unsent events on both transitions. No disabled-period backfill.
-        try executeUnlocked("DELETE FROM product_analytics_events WHERE status='pending'")
       }
       return value
     }
   }
-  func enqueueProductAnalytics(_ events: [ProductAnalyticsEvent]) throws
+  func acceptProductAnalytics(_ events: [ProductAnalyticsEvent]) throws
     -> ProductAnalyticsAcknowledgement
   {
     try transaction {
@@ -66,29 +64,56 @@ extension WorkspaceDatabaseConnection {
       }
       var accepted: [String] = []
       var discarded: [String] = []
+      let now = Date()
       for event in events {
         guard let value = event.validated(preference: preference) else {
           discarded.append(event.id)
           continue
         }
-        accepted.append(event.id)
+        if value.rateLimited {
+          let limit = try prepareUnlocked("SELECT last_attempt FROM product_analytics_limits WHERE name=?")
+          defer { sqlite3_finalize(limit) }
+          try bind(value.name.rawValue, at: 1, to: limit)
+          if sqlite3_step(limit) == SQLITE_ROW,
+            now.timeIntervalSince1970 - sqlite3_column_double(limit, 0) < ProductAnalyticsEvent.signalInterval {
+            discarded.append(value.id)
+            continue
+          }
+        }
         let stmt = try prepareUnlocked(
-          "INSERT OR IGNORE INTO product_analytics_events(id,payload,status,created) VALUES(?,?,'pending',?)"
+          "INSERT OR IGNORE INTO product_analytics_events(id,payload,status,created) VALUES(?,?,'attempted',?)"
         )
         defer { sqlite3_finalize(stmt) }
         try bind(value.id, at: 1, to: stmt)
         try bind(JSONEncoder().encode(value), at: 2, to: stmt)
         sqlite3_bind_double(stmt, 3, value.timestamp.timeIntervalSince1970)
         try stepDone(stmt)
+        guard changedRowCountUnlocked > 0 else { discarded.append(value.id); continue }
+        accepted.append(value.id)
+        if value.rateLimited {
+          let limit = try prepareUnlocked("INSERT OR REPLACE INTO product_analytics_limits VALUES(?,?)")
+          defer { sqlite3_finalize(limit) }
+          try bind(value.name.rawValue, at: 1, to: limit)
+          sqlite3_bind_double(limit, 2, now.timeIntervalSince1970)
+          try stepDone(limit)
+        }
       }
       try executeUnlocked(
         "DELETE FROM product_analytics_events WHERE created < \(Date().addingTimeInterval(-7*86400).timeIntervalSince1970)"
       )
       try executeUnlocked(
-        "DELETE FROM product_analytics_events WHERE id NOT IN (SELECT id FROM product_analytics_events ORDER BY created DESC LIMIT 1000)"
+        "DELETE FROM product_analytics_events WHERE id NOT IN (SELECT id FROM product_analytics_events ORDER BY created DESC LIMIT 500)"
       )
-      // Consume rejected epochs too, without reporting them as accepted.
-      return .init(acceptedEventIDs: accepted, preference: preference, discardedEventIDs: discarded)
+      // The log is inspection-only. It is never read for delivery or replay.
+      let limits = try prepareUnlocked("SELECT name,last_attempt FROM product_analytics_limits")
+      defer { sqlite3_finalize(limits) }
+      var next: [String: Date] = [:]
+      while sqlite3_step(limits) == SQLITE_ROW {
+        next[try text(limits, column: 0)] = Date(timeIntervalSince1970:
+          sqlite3_column_double(limits, 1) + ProductAnalyticsEvent.signalInterval)
+      }
+      return .init(acceptedEventIDs: accepted, preference: preference,
+        discardedEventIDs: discarded, nextSignalAt: next)
     }
   }
   func pruneProductAnalytics() throws {
@@ -102,7 +127,7 @@ extension WorkspaceDatabaseConnection {
       let stmt = try prepareUnlocked(
         "SELECT payload,status FROM product_analytics_events ORDER BY created DESC LIMIT ?")
       defer { sqlite3_finalize(stmt) }
-      sqlite3_bind_int(stmt, 1, Int32(max(1, min(1000, limit))))
+      sqlite3_bind_int(stmt, 1, Int32(max(1, min(500, limit))))
       var rows: [ProductAnalyticsLogEntry] = []
       while sqlite3_step(stmt) == SQLITE_ROW {
         rows.append(
@@ -114,13 +139,14 @@ extension WorkspaceDatabaseConnection {
       return rows
     }
   }
-  func markProductAnalyticsDelivered(_ ids: [String]) throws {
+  func markProductAnalytics(_ ids: [String], status: String) throws {
     try transaction {
       for id in ids {
         let stmt = try prepareUnlocked(
-          "UPDATE product_analytics_events SET status='delivered' WHERE id=?")
+          "UPDATE product_analytics_events SET status=? WHERE id=?")
         defer { sqlite3_finalize(stmt) }
-        try bind(id, at: 1, to: stmt)
+        try bind(status, at: 1, to: stmt)
+        try bind(id, at: 2, to: stmt)
         try stepDone(stmt)
       }
     }
@@ -133,16 +159,15 @@ extension WorkspaceDatabase {
   public func setProductAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws
     -> ProductAnalyticsPreference
   { try await write { try $0.setProductAnalyticsPreference(change) } }
-  public func enqueueProductAnalytics(_ events: [ProductAnalyticsEvent]) async throws
+  public func acceptProductAnalytics(_ events: [ProductAnalyticsEvent]) async throws
     -> ProductAnalyticsAcknowledgement
-  { try await write { try $0.enqueueProductAnalytics(events) } }
+  { try await write { try $0.acceptProductAnalytics(events) } }
   public func productAnalyticsLog(limit: Int = 500) async throws -> [ProductAnalyticsLogEntry] {
-    // Expiry must advance even when no new user event arrives. Refresh/upload
-    // reads are the maintenance boundary; a closed library is pruned on reopen.
+    // Inspection history expires independently of delivery. It is never a queue.
     if !isReadOnlyProjection { try await write { try $0.pruneProductAnalytics() } }
     return try await read { try $0.productAnalyticsLog(limit: limit) }
   }
-  public func markProductAnalyticsDelivered(_ ids: [String]) async throws {
-    try await write { try $0.markProductAnalyticsDelivered(ids) }
+  public func markProductAnalytics(_ ids: [String], status: String) async throws {
+    try await write { try $0.markProductAnalytics(ids, status: status) }
   }
 }

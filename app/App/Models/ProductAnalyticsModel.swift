@@ -21,12 +21,9 @@ final class ProductAnalyticsModel {
   private var clientDisclosed = false
   private var database: WorkspaceDatabase?
   private var rpc: BackendRPCClient?
-  private var task: Task<Void, Never>?
+  private var uploads: [UUID: Task<Void, Never>] = [:]
+  private var publisher = false
   private var generation = 0
-  private let startedAt = Date()
-  private var lastEdit: Date?
-  private var completedRunIDs: Set<String> = []
-  private var opened = false
   private var interface = false
   private var locallyDisabled = false
   private var pendingLocalChoice = false
@@ -44,16 +41,7 @@ final class ProductAnalyticsModel {
   static let projectToken = "phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh"
   func configure(database: WorkspaceDatabase, publisher: Bool) {
     self.database = database
-    if publisher, task == nil { session = URLSession(configuration: .ephemeral) }
-    if publisher, task == nil {
-      task = Task { [weak self] in
-        while !Task.isCancelled {
-          guard self != nil else { return }
-          await self?.upload()
-          do { try await Task.sleep(for: .seconds(30)) } catch { return }
-        }
-      }
-    }
+    self.publisher = publisher
   }
   func configure(rpc: BackendRPCClient) { self.rpc = rpc }
   /// The secondary Mac relays updater events through its central library too.
@@ -62,9 +50,7 @@ final class ProductAnalyticsModel {
     self.client = client
     database = nil
     rpc = nil
-    task?.cancel()
-    task = nil
-    session.invalidateAndCancel()
+    cancelUploads()
     interface = true
     await refresh()
   }
@@ -73,8 +59,7 @@ final class ProductAnalyticsModel {
     await refresh()
     guard preference != nil else { return }
     disclosurePresented = !localDisclosureAcknowledged
-    if !disclosurePresented, !opened {
-      opened = true
+    if !disclosurePresented {
       await record(.appOpened)
     }
   }
@@ -120,9 +105,7 @@ final class ProductAnalyticsModel {
     locallyDisabled = !effectiveEnabled
     if !effectiveEnabled {
       defaults.removeObject(forKey: Self.updateReceiptKey)
-      task?.cancel()
-      task = nil
-      session.invalidateAndCancel()
+      cancelUploads()
     }
     guard let preference else { return }
     do {
@@ -150,7 +133,6 @@ final class ProductAnalyticsModel {
         configure(database: database, publisher: !database.isReadOnlyProjection)
       }
       if disclose, effectiveEnabled, interface {
-        opened = true
         await record(.appOpened)
       }
       await refresh()
@@ -165,9 +147,14 @@ final class ProductAnalyticsModel {
       let preference, preference.collects else {
       return
     }
-    if name == .contentChanged, properties["action"] == "edit" {
-      if let lastEdit, Date().timeIntervalSince(lastEdit) < 30 { return }
-      lastEdit = Date()
+    // This frontend also avoids making an RPC for every qualifying action.
+    // Central admission enforces the same limit across all connected devices.
+    if name == .appOpened || name == .active {
+      let key = "wovenmatter.analytics.last-attempt." + preference.analyticsID + "." + name.rawValue
+      let now = Date()
+      if let previous = defaults.object(forKey: key) as? Date,
+        now.timeIntervalSince(previous) < ProductAnalyticsEvent.signalInterval { return }
+      defaults.set(now, forKey: key)
     }
     var values = properties
     values["platform"] = "macos"
@@ -176,31 +163,32 @@ final class ProductAnalyticsModel {
     values["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
     let event = ProductAnalyticsEvent(
       preferenceRevision: preference.revision, name: name, properties: values)
-    _ = await enqueue(event)
+    await send(event)
   }
-  /// Acknowledged UUIDs (including privacy rejections) consume a local receipt;
-  /// a transport failure retains it for retry without inventing another install.
-  private func enqueue(_ event: ProductAnalyticsEvent) async -> Bool {
+  /// One attempt only. Failures never retain an event for later delivery.
+  private func send(_ event: ProductAnalyticsEvent) async {
     let epoch = generation
     do {
       if let client, let preference {
-        return try await client.enqueueUpdateReceipt(event, analyticsID: preference.analyticsID)
+        await client.sendUpdateReceipt(event, analyticsID: preference.analyticsID)
       } else if let rpc {
         let acknowledgement = try JSONDecoder().decode(
           ProductAnalyticsAcknowledgement.self,
           from: await rpc.call(
             method: "analytics.events",
             payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event]))))
-        _ = acceptPreference(acknowledgement.preference, epoch: epoch)
-        return acknowledgement.acceptedEventIDs.contains(event.id)
-          || acknowledgement.discardedEventIDs.contains(event.id)
-      } else if let database {
-        let acknowledgement = try await database.enqueueProductAnalytics([event])
-        return acknowledgement.acceptedEventIDs.contains(event.id)
-          || acknowledgement.discardedEventIDs.contains(event.id)
+        acceptAcknowledgement(acknowledgement, epoch: epoch)
+      } else if database != nil {
+        acceptAcknowledgement(try await ingest(.init(events: [event])), epoch: epoch)
       }
-    } catch { /* Analytics must never interrupt a user action. */ }
-    return false
+    } catch { /* Drop failed sends without interrupting a user action. */ }
+  }
+  private func acceptAcknowledgement(_ acknowledgement: ProductAnalyticsAcknowledgement, epoch: Int) {
+    guard acceptPreference(acknowledgement.preference, epoch: epoch) else { return }
+    for (name, next) in acknowledgement.nextSignalAt {
+      let key = "wovenmatter.analytics.last-attempt." + acknowledgement.preference.analyticsID + "." + name
+      defaults.set(next.addingTimeInterval(-ProductAnalyticsEvent.signalInterval), forKey: key)
+    }
   }
   func prepareUpdateInstallation(_ manifest: WovenMatterReleaseManifest) async -> UUID {
     await refresh()
@@ -251,37 +239,46 @@ final class ProductAnalyticsModel {
       cancelUpdateInstallation()
       return
     }
-    if await enqueue(receipt.event), defaults.data(forKey: Self.updateReceiptKey) == data {
-      cancelUpdateInstallation()
-    }
-  }
-  private static func analyticsDate(_ value: String) -> Date? {
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
-  }
-  func completedRun(_ run: WorkspaceRunRecord, harness: String?) async {
-    guard let completed = run.completedAt.flatMap(Self.analyticsDate), completed >= startedAt
-    else { return }
-    guard completedRunIDs.insert(run.id).inserted else { return }
-    if completedRunIDs.count > 1000 { completedRunIDs = [run.id] }
-    let outcome: String
-    switch run.status {
-    case "completed", "succeeded", "success": outcome = "success"
-    case "cancelled", "canceled", "stopped": outcome = "cancelled"
-    default: outcome = "failure"
-    }
-    var values = ["outcome": outcome]
-    values["harness"] = harness
-    if let start = run.startedAt.flatMap(Self.analyticsDate) {
-      values["duration_range"] = ProductAnalyticsEvent.durationRange(
-        max(0, completed.timeIntervalSince(start)))
-    }
-    await record(.agentRunCompleted, properties: values)
+    cancelUpdateInstallation()
+    await send(receipt.event)
   }
   func ingest(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
     guard let database else { throw WorkspaceDatabaseError.corruptRow }
-    return try await database.enqueueProductAnalytics(batch.events)
+    // Concurrent immediate sends are bounded; overflow is dropped, never queued.
+    guard publisher, uploads.count < 20 else {
+      return .init(acceptedEventIDs: [], preference: try await database.productAnalyticsPreference(),
+        discardedEventIDs: batch.events.map(\.id))
+    }
+    let id = UUID()
+    let epoch = generation
+    // Reserve a slot before the database await so reentrant calls cannot create a backlog.
+    uploads[id] = Task {}
+    do {
+      let ack = try await database.acceptProductAnalytics(batch.events)
+      guard epoch == generation, !locallyDisabled, !Task.isCancelled else {
+        uploads.removeValue(forKey: id)
+        return .init(acceptedEventIDs: [], preference: ack.preference,
+          discardedEventIDs: batch.events.map(\.id))
+      }
+      var accepted = Set(ack.acceptedEventIDs)
+      let events = batch.events.filter { accepted.remove($0.id) != nil }
+      guard !events.isEmpty else { uploads.removeValue(forKey: id); return ack }
+      uploads[id] = Task { [weak self] in
+        guard let self else { return }
+        defer { self.uploads.removeValue(forKey: id) }
+        await self.upload(events, preference: ack.preference, epoch: epoch)
+      }
+      return ack
+    } catch {
+      uploads.removeValue(forKey: id)
+      throw error
+    }
+  }
+  private func cancelUploads() {
+    uploads.values.forEach { $0.cancel() }
+    uploads.removeAll()
+    session.invalidateAndCancel()
+    session = URLSession(configuration: .ephemeral)
   }
   func change(_ change: ProductAnalyticsPreferenceChange) async throws
     -> ProductAnalyticsPreference
@@ -290,9 +287,7 @@ final class ProductAnalyticsModel {
     let epoch = generation
     if !change.enabled {
       defaults.removeObject(forKey: Self.updateReceiptKey)
-      task?.cancel()
-      task = nil
-      session.invalidateAndCancel()
+      cancelUploads()
     }
     guard let database else { throw WorkspaceDatabaseError.corruptRow }
     let value = try await database.setProductAnalyticsPreference(change)
@@ -303,37 +298,34 @@ final class ProductAnalyticsModel {
     }
     return value
   }
-  private func upload() async {
+  private func upload(_ events: [ProductAnalyticsEvent], preference: ProductAnalyticsPreference, epoch: Int) async {
+    guard let database, !database.isReadOnlyProjection else { return }
+    var status = "dropped"
     #if DEBUG
-      return  // Test and developer builds never transmit to production PostHog.
+      status = "not sent (Debug build)"
     #else
-      guard let database, !database.isReadOnlyProjection else { return }
-      let epoch = generation
       do {
         let current = try await database.productAnalyticsPreference()
-        guard acceptPreference(current, epoch: epoch), current.collects else { return }
-        let rows = try await database.productAnalyticsLog(limit: 1000)
-        let events = rows.filter { $0.status == "pending" }.reversed().compactMap {
-          $0.event.validated(preference: current)
-        }.prefix(20)
-        guard !locallyDisabled, !events.isEmpty, epoch == generation, !Task.isCancelled
-        else { return }
-        let batch = events.map { $0.postHogObject(analyticsID: current.analyticsID) }
+        guard epoch == generation, current.collects, current.revision == preference.revision,
+          !locallyDisabled, !Task.isCancelled else { return }
+        let batch = events.compactMap { $0.validated(preference: current) }
+          .map { $0.postHogObject(analyticsID: current.analyticsID) }
+        guard !batch.isEmpty else { return }
         var request = URLRequest(url: URL(string: "https://us.i.posthog.com/batch/")!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = 5
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
           "api_key": Self.projectToken, "batch": batch,
         ])
         let (_, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse,
-          (200..<300).contains(response.statusCode), epoch == generation
-        else { return }
-        try await database.markProductAnalyticsDelivered(events.map(\.id))
-      } catch { /* Retain bounded events for retry with their original UUID/timestamp. */  }
+        if let response = response as? HTTPURLResponse,
+          (200..<300).contains(response.statusCode) { status = "delivered" }
+      } catch { /* Offline and failed sends are dropped permanently. */ }
     #endif
+    try? await database.markProductAnalytics(events.map(\.id), status: status)
   }
+
 }
 
 

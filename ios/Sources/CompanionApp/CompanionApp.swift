@@ -569,7 +569,7 @@ private struct MobileAnalyticsLog: View {
   @Bindable var model: CompanionModel
   var body: some View {
     List {
-      Text("Only the listed event fields are queued. The central Mac adds the shared random analytics ID; PostHog adds approximate country and discards IP and precise location.").font(.caption)
+      Text("These are recent send attempts; failed sends are dropped without replay. The central Mac adds the shared random analytics ID; PostHog adds approximate country and discards IP and precise location.").font(.caption)
       if model.analytics.state.log.isEmpty { Text("No analytics events recorded.") }
       ForEach(Array(model.analytics.state.log.reversed())) { entry in
         VStack(alignment:.leading,spacing:6) {

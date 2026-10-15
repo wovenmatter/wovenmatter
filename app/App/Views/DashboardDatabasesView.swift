@@ -114,7 +114,7 @@ struct DashboardDatabasesView: View {
                         name: name,
                         preference: .sqlite
                     ) {
-                        await model.analytics.record(.contentChanged, properties: ["action": "create", "item_category": "database"])
+                        await model.analytics.record(.active)
                         selectedSourceID = sourceID
                         selectedDatabaseID = id
                         showsCreateDatabase = false

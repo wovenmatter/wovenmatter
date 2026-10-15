@@ -1115,10 +1115,6 @@ final class ApplicationModel {
     ) async {
         await refreshConversation(id: change.conversationID)
         guard change.phase == .terminal else { return }
-        if !isBackendFrontend, let run = conversationStatesByID[change.conversationID]?.presentation?.window.runs.first(where: { $0.id == change.runID }) {
-            let harness = workspaceOverview?.conversations.first { $0.id == change.conversationID }?.localRuntimeKind?.rawValue
-            await analytics.completedRun(run, harness: harness)
-        }
         if let dashboardStore {
             await recoverPendingRemoteNoteEdit(
                 runID: change.runID,
@@ -1552,7 +1548,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot)))
                 await refreshWorkspace()
                 if result.entityID != nil, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "create", "item_category": "folder"])
+                    await analytics.record(.active)
                 }
                 return result.entityID
             }
@@ -1585,7 +1581,7 @@ final class ApplicationModel {
             let folderID = try await dashboardStore.createFolder(name: name,
                 location: .init(workspaceID: owner, rootPath: path, managed: managed))
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "create", "item_category": "folder"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return folderID
         } catch {
             folderMutationError = error.localizedDescription
@@ -1600,7 +1596,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.renameFolder(id: id, name: name)))
                 await refreshWorkspace()
                 if result.accepted, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "edit", "item_category": "folder"])
+                    await analytics.record(.active)
                 }
                 return result.accepted
             }
@@ -1609,7 +1605,7 @@ final class ApplicationModel {
             }
             try await dashboardStore.renameFolder(id: id, name: name)
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "edit", "item_category": "folder"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1624,7 +1620,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.pinFolder(id: id, isPinned: isPinned)))
                 await refreshWorkspace()
                 if result.accepted, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "edit", "item_category": "folder"])
+                    await analytics.record(.active)
                 }
                 return result.accepted
             }
@@ -1633,7 +1629,7 @@ final class ApplicationModel {
             }
             try await dashboardStore.setFolderPinned(id: id, isPinned: isPinned)
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "edit", "item_category": "folder"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1648,7 +1644,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.moveFolder(id: id, up: { if case .up = direction { return true }; return false }())))
                 await refreshWorkspace()
                 if result.accepted, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "move", "item_category": "folder"])
+                    await analytics.record(.active)
                 }
                 return result.accepted
             }
@@ -1663,7 +1659,7 @@ final class ApplicationModel {
                 return false
             }
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "move", "item_category": "folder"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1678,7 +1674,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.deleteFolder(id: id, deleteRoot: deleteRoot)))
                 await refreshWorkspace()
                 if result.accepted, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "delete", "item_category": "folder"])
+                    await analytics.record(.active)
                 }
                 return result.accepted
             }
@@ -1705,7 +1701,7 @@ final class ApplicationModel {
             }
             try await dashboardStore.deleteFolder(id: id)
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "delete", "item_category": "folder"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1724,7 +1720,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.moveConversation(id: id, folderID: folderID)))
                 await refreshWorkspace()
                 if result.accepted, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "move", "item_category": "session"])
+                    await analytics.record(.active)
                 }
                 return result.accepted
             }
@@ -1755,7 +1751,7 @@ final class ApplicationModel {
             // already confirmed controls visible in the meantime.
             localACPSessionMetadata[id] = localACPSessionMetadata[id]?.withWorkingDirectory(root.path)
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "move", "item_category": "session"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1773,7 +1769,7 @@ final class ApplicationModel {
                 let result = try await sendBackendCommand(.workspaceMutation(.createNote(folderID: folderID, kind: kind)))
                 await refreshWorkspace()
                 if result.entityID != nil, LocalExecutionRole.current != .backend {
-                    await analytics.record(.contentChanged,properties: ["action": "create", "item_category": kind == .spreadsheet ? "spreadsheet" : "note"])
+                    await analytics.record(.active)
                 }
                 return result.entityID
             }
@@ -1785,7 +1781,7 @@ final class ApplicationModel {
                 kind: kind
             )
             await refreshWorkspace()
-            if LocalExecutionRole.current != .backend { await analytics.record(.contentChanged,properties: ["action": "create", "item_category": kind == .spreadsheet ? "spreadsheet" : "note"]) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return noteID
         } catch {
             noteMutationError = error.localizedDescription
@@ -1888,7 +1884,7 @@ final class ApplicationModel {
         draft.edit(title: title, content: content)
         persistNoteDraft(note: note, draft: draft)
         if draft.title != before.title || draft.content != before.content {
-            Task { await analytics.record(.contentChanged,properties: ["action": "edit", "item_category": "note"]) }
+            Task { await analytics.record(.active) }
         }
     }
 
@@ -2360,7 +2356,7 @@ final class ApplicationModel {
                 return false
             }
             state.setError(nil)
-            if LocalExecutionRole.current != .backend { await analytics.record(.messageSubmitted) }
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch LocalACPSessionDatabaseError.steeringUnsupported {
             state.setError(ApplicationModelError.steeringUnavailable.localizedDescription)

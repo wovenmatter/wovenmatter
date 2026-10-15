@@ -1144,7 +1144,7 @@ struct WorkspaceView: View {
                 )
                 return
             }
-            await model.analytics.record(.sessionCreated)
+            await model.analytics.record(.active)
             finishChatCreation(selection, conversationID: conversationID)
         }
     }
@@ -1169,7 +1169,7 @@ struct WorkspaceView: View {
                 )
                 return
             }
-            await model.analytics.record(.sessionCreated)
+            await model.analytics.record(.active)
             finishChatCreation(selection, conversationID: conversationID)
         }
     }

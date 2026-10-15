@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preserve aggregate GitHub traffic and installer download counters. Never derives app users."""
+"""Preserve daily repository totals: downloads, stars, forks, views, and clones."""
 import argparse
 from datetime import datetime, timezone
 import json
@@ -18,16 +18,15 @@ def collect(history, repository, fetch=api, now=None):
         raise ValueError("History belongs to another repository or schema")
     history.setdefault("schema_version", 1)
     history.setdefault("repository", repository)
+    repo = fetch(f"repos/{repository}")
+    history.setdefault("repository_observations", {})[now[:10]] = {
+        "observed_at": now, "stars": repo["stargazers_count"], "forks": repo["forks_count"]}
     traffic = history.setdefault("traffic_days", {})
     for metric in ("views", "clones"):
         response = fetch(f"repos/{repository}/traffic/{metric}?per=day")
         for row in response[metric]:
             day = row["timestamp"][:10]
             traffic.setdefault(day, {})[metric] = {"count": row["count"], "uniques": row["uniques"], "observed_at": now}
-    # Older archives may contain supporting release files. Keep installer history only.
-    for observation in history.get("download_observations", {}).values():
-        observation["assets"] = [asset for asset in observation.get("assets", [])
-                                 if str(asset.get("name", "")).lower().endswith(".dmg")]
     assets = []
     page = 1
     while True:
