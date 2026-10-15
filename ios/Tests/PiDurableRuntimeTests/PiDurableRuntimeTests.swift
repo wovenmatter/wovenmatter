@@ -269,6 +269,11 @@ final class PiDurableRuntimeTests: XCTestCase {
     XCTAssertEqual((conversations["items"] as? [Any])?.count, 2)
     let counts = await host.counts()
     XCTAssertEqual(counts.0, 4); XCTAssertEqual(counts.1, 1)
+    let usageBeforeCompaction = try await engine.tokenUsage()
+    XCTAssertEqual(usageBeforeCompaction, 72, "Include all four root and child model requests")
+    try await engine.compact(instructions: "Keep a concise summary")
+    let usageAfterCompaction = try await engine.tokenUsage()
+    XCTAssertGreaterThanOrEqual(try XCTUnwrap(usageAfterCompaction), 72, "Compaction cannot discard consumed tokens")
     let requests = await host.requests
     let scopes = try requests.map { try object($0)["scope"] as? [String:Any] }
     XCTAssertEqual(Set(scopes.compactMap { $0?["conversationID"] as? String }).count, 2)
@@ -286,6 +291,11 @@ final class PiDurableRuntimeTests: XCTestCase {
       XCTAssertEqual(inventory.contains("subagent"), scope?["conversationID"] as? String == rootScope, "Only the root can delegate")
     }
     try await engine.close()
+    let reopened = try runtime(path, host: host)
+    _ = try await reopened.open()
+    let reopenedUsage = try await reopened.tokenUsage()
+    XCTAssertEqual(reopenedUsage, usageAfterCompaction)
+    try await reopened.close()
   }
 
   func testCodeModeUsesDurableNestedToolAndStoresConversationValues() async throws {

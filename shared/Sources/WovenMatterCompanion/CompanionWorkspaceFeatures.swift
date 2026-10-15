@@ -18,6 +18,7 @@ public enum CompanionWorkspaceRead: Codable, Equatable, Sendable {
 public enum CompanionWorkspaceAction: Codable, Equatable, Sendable {
   case conversation(id: String, action: String, title: String?, folderID: String?)
   case note(id: String, action: String, revision: String, title: String?, folderID: String?)
+  case goal(id: String, mutation: WorkspaceGoalMutation)
   case configureSession(id: String, model: String?, thinking: String?, permission: String?)
   case sessionTools(id: String, enabled: [String], confirmPausingTimers: Bool)
   case saveCalendar(id: String, revision: Int?, draft: CompanionCalendarDraft)
@@ -72,13 +73,14 @@ public struct CompanionSessionSettings: Codable, Equatable, Sendable {
   public var permissions: [CompanionSelection]
   public var availableTools: [CompanionSelection]
   public var enabledTools: [String]
+  public var goal: WorkspaceGoal?
   public var canConfigure: Bool
   public init(conversationID: String, model: String?, thinking: String?, permission: String?,
               models: [CompanionSelection], thinkingLevels: [CompanionSelection], permissions: [CompanionSelection],
-              availableTools: [CompanionSelection], enabledTools: [String], canConfigure: Bool) {
+              availableTools: [CompanionSelection], enabledTools: [String], canConfigure: Bool, goal: WorkspaceGoal? = nil) {
     self.conversationID = conversationID; self.model = model; self.thinking = thinking; self.permission = permission
     self.models = models; self.thinkingLevels = thinkingLevels; self.permissions = permissions
-    self.availableTools = availableTools; self.enabledTools = enabledTools; self.canConfigure = canConfigure
+    self.availableTools = availableTools; self.enabledTools = enabledTools; self.canConfigure = canConfigure; self.goal = goal
   }
 }
 

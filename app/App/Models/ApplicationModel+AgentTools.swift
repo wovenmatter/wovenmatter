@@ -120,7 +120,7 @@ extension ApplicationModel {
                     catch { agentTools?.error = error.localizedDescription }
                 }
             }
-            for delivery in try await database.sessionDeliveries(queuedOnly: true, includeCalendar: false) {
+            for delivery in try await database.sessionDeliveries(queuedOnly: true, includeCalendar: false) where delivery.kind != .goal {
                 guard !Task.isCancelled else { return }
                 // Initial sends try steering. A deferred send waits for an idle
                 // target instead of repeatedly trying an unsupported operation.
@@ -134,6 +134,7 @@ extension ApplicationModel {
                       ["accepted", "cancelled"].contains(receipt.status) else { continue }
                 try await database.finishTimerOccurrence(id: timer.id, deliveryID: id)
             }
+            await runConversationGoals()
             try await database.settleCalendarRuns()
             try await agentTools?.reloadInBackground()
         } catch { agentTools?.error = error.localizedDescription }
@@ -449,10 +450,10 @@ extension ApplicationModel {
             }
             let sent = try await dispatchAgentMessage(conversation: target,
                 input: .init(text: claimed.text, historyDeliveryID: claimed.id),
-                allowSteering: claimed.kind != .calendar, admissionDecision: admissionDecision,
+                allowSteering: claimed.kind != .calendar && claimed.kind != .goal, admissionDecision: admissionDecision,
                 dispatchFence: dispatchFence)
             guard sent else {
-                if claimed.kind == .calendar {
+                if claimed.kind == .calendar || claimed.kind == .goal {
                     try await database.setToolDeliveryStatus(id: claimed.id, status: "queued")
                     return try await .value(database.toolDelivery(id: claimed.id) ?? claimed)
                 }

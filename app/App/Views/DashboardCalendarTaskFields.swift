@@ -69,7 +69,7 @@ struct DashboardCalendarTaskFields: View {
             if let error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.danger).fixedSize(horizontal: false, vertical: true) }
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 9) {
-                    ForEach(WorkspaceToolGroup.allCases) { group in
+                    ForEach(WorkspaceToolGroup.configurableCases) { group in
                         Toggle(group.title, isOn: Binding(get: { task.configuration.tools.enabled.contains(group) }, set: {
                             if $0 { task.configuration.tools.enabled.insert(group) } else { task.configuration.tools.enabled.remove(group) }
                         })).toggleStyle(DashboardSwitchToggleStyle())

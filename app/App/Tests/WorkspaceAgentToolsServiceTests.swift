@@ -72,7 +72,7 @@ extension WorkspaceAgentToolsServiceTests {
         defer { fixture.stop() }
         let model = fixture.model
         #expect(model.sessionPolicies[fixture.caller] == nil)
-        #expect(model.policy(for: fixture.caller).enabled.isEmpty)
+        #expect(model.policy(for: fixture.caller).enabled == [.goals])
         let token = UUID()
         await model.observeSession(fixture.caller, token: token)
         #expect(model.policy(for: fixture.caller) == (try await fixture.database.sessionTools(fixture.caller)))
@@ -710,7 +710,7 @@ extension WorkspaceAgentToolsServiceTests {
         let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
-        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes])
+        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals])
         #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1",
             "--revision", String(independent.calendar.revision)]).success)
         #expect(try await request(["calendar", "read", detachedID]).success)
@@ -983,5 +983,39 @@ extension WorkspaceAgentToolsServiceTests {
         await model.saveSettings(disabled)
         #expect(!(try await fixture.database.toolSettings()).enabledByDefault.contains(.executor))
         #expect(!model.settings.enabledByDefault.contains(.executor))
+    }
+}
+
+
+extension WorkspaceAgentToolsServiceTests {
+    @Test func goalCommandsRunThroughTheBoundCLIAndPublishState() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Goals", ownerDeviceID: UUID())
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        let endpoint = try await service.endpoint(for: caller)
+        func request(_ arguments: [String], id: String = UUID().uuidString) async throws -> WovenMatterToolResponse {
+            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments, requestID: id))
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
+            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
+        }
+        let first = try await request(["goals", "set", "--objective", "Produce the verified artifact", "--turn-budget", "3"])
+        #expect(first.success)
+        let id = try #require(first.result?.objectValue?["id"]?.stringValue)
+        #expect(service.goals[caller]?.id == id)
+        let read = try await request(["goals", "get"])
+        #expect(read.result?.objectValue?["objective"]?.stringValue == "Produce the verified artifact")
+        let failed = try await request(["goals", "complete", "--id", id, "--evidence", " "])
+        #expect(!failed.success)
+        let done = try await request(["goals", "complete", "--id", id, "--evidence", "Artifact checked against the requirements"])
+        #expect(done.success && service.goals[caller]?.status == .complete)
+        _ = try await database.setSessionToolEnabled(.goals, enabled: false, sessionID: caller)
+        let stillEnabled = try await request(["goals", "get"])
+        #expect(stillEnabled.success)
     }
 }

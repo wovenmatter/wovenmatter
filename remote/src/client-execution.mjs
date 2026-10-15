@@ -1,6 +1,9 @@
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync, chmodSync } from 'node:fs'
+import { mkdirSync, chmodSync, mkdtempSync, rmSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { fileURLToPath } from 'node:url'
+import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance, goalCLI } from './client-goals.mjs'
 import { resolve } from 'node:path'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
 
@@ -28,7 +31,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000 }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -44,6 +47,47 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const jobs = new Map(), queues = new Map(), dirty = new Map()
   let flushTimer
   let closed = false, unlockMaterial
+  let goalsTickRunning = false
+  // Keep Unix socket names below platform limits even for long workspace roots.
+  const goalSocketDirectory=mkdtempSync('/tmp/wm-goals-');chmodSync(goalSocketDirectory,0o700)
+  const goalSocketPath = resolve(goalSocketDirectory,'goals.sock')
+  const goalServer = createServer(socket => {
+    let input='';socket.setEncoding('utf8')
+    socket.on('data',chunk=> {
+      input+=chunk
+      if(Buffer.byteLength(input)>32768){socket.destroy();return}
+      if(!input.includes('\n'))return
+      socket.pause()
+      void (async()=> {
+        if(closed)throw fail(503,'The workspace is stopping.')
+        const request=JSON.parse(input.trim())
+        if(typeof request.token!=='string'||!request.token)throw fail(403,'This goal tool binding is no longer active.')
+        const row=db.prepare("SELECT body FROM conversations WHERE json_extract(body,'$.goalBinding.token')=?").get(request.token)
+        if(!row)throw fail(403,'This goal tool binding is no longer active.')
+        const record=JSON.parse(row.body)
+        request.conversationID=record.conversation.id
+        if(!record.goalBinding||record.goalBinding.token!==request.token||record.goalBinding.runID!==record.conversation.activeRunID)throw fail(403,'This goal tool binding is no longer active.')
+        const cli=goalCLI(request.arguments)
+        if(cli.action==='get')return record.goal??null
+        return serialize(request.conversationID,()=> {
+          if(closed)throw fail(503,'The workspace is stopping.')
+          const latest=getRecord(request.conversationID)
+          if(latest.goalBinding?.token!==request.token||latest.goalBinding.runID!==latest.conversation.activeRunID)throw fail(403,'This goal tool binding is no longer active.')
+          const previous=latest.goalReceipts?.[cli.requestID],fingerprint=JSON.stringify(ordered(cli.mutation))
+          if(previous){if(previous.fingerprint!==fingerprint)throw fail(409,'This request ID belongs to another goal change.');return previous.result}
+          const wasActive=latest.goal?.status==='active'
+          mutateGoal(latest,cli.mutation,latest.conversation.activeRunID)
+          if(cli.action==='set'||(cli.action==='resume'&&!wasActive))latest.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
+          const result=latest.goal??null;(latest.goalReceipts??={})[cli.requestID]={fingerprint,result:copy(result)}
+          save(latest);return result
+        })
+      })().then(result=>socket.end(JSON.stringify({success:true,result})+'\n'),error=>socket.end(JSON.stringify({success:false,error:error.message})+'\n'))
+    })
+    socket.on('error',()=>{})
+  })
+  const goalSocketReady = new Promise((resolve_,reject)=> { goalServer.once('error',reject);goalServer.listen(goalSocketPath,()=> {chmodSync(goalSocketPath,0o600);resolve_()}) })
+  goalSocketReady.catch(()=>{})
+  goalServer.unref()
   const transaction = action => {
     db.exec('BEGIN IMMEDIATE')
     try { const value = action(); db.exec('COMMIT'); return value }
@@ -101,6 +145,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     for (const row of db.prepare('SELECT body FROM conversations').all()) {
       const record = JSON.parse(row.body)
+      delete record.goalBinding
+      if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
         for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
         delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
@@ -200,6 +246,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const native=await runtime.adopt({native:{sessionID:body.nativeSessionID,channelID:body.conversation.id,workspaceID:identity.id,nativeWorkingDirectory:body.nativeWorkingDirectory},runtimeKind:body.runtimeKind})
       const record={native,pending:[],conversation:{...copy(body.conversation),runtimeKind:body.runtimeKind,workspaceID:identity.id,routeID:identity.id},
         transcript:{conversationID:body.conversation.id,messages:[],activities:[]}}
+      if(body.goal) {
+        if(body.goal.sessionID!==body.conversation.id)throw fail(400,'Goal identity does not match.')
+        record.goal=copy(body.goal);if(record.goal.status==='active')setGoalStatus(record.goal,'paused');delete record.goal.pendingDeliveryID
+        record.goalBaseCompletedTurns=record.goal.completedTurns;record.goalBaseTokensUsed=record.goal.tokensUsed;record.goalRuns={}
+      }
       transaction(()=>{
         for(const runID of new Set(body.knownRunIDs??[]))db.prepare('INSERT INTO runs VALUES (?,?)').run(runID,'adopted')
         publish(record)
@@ -231,7 +282,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return JSON.parse(previous.receipt)
     }
     const command = copy(body)
-    command.conversationID ??= command.kind === 'createSession' ? randomUUID() : command.workspaceAction?.configureSession?.id ?? command.workspaceAction?.conversation?.id
+    command.conversationID ??= command.kind === 'createSession' ? randomUUID() : command.workspaceAction?.goal?.id ?? command.workspaceAction?.sessionTools?.id ?? command.workspaceAction?.configureSession?.id ?? command.workspaceAction?.conversation?.id
     if (!identifier(command.conversationID)) throw fail(400, 'A conversation is required.')
     const initial = { commandID: command.commandID, deviceID: device.id, conversationID: command.conversationID,
       libraryID: identity.libraryID, workspaceID: identity.id, status: 'accepted' }
@@ -242,6 +293,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     })
   }
   async function perform(command) {
+    if(closed)throw fail(503,'The workspace is stopping.')
     if (command.kind === 'createSession') {
       if (db.prepare('SELECT id FROM conversations WHERE id=?').get(command.conversationID)) throw fail(409, 'Conversation already exists.')
       const providers = await runtime.providers()
@@ -260,9 +312,46 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const native=await runtime.adopt({native:record.native,runtimeKind:record.conversation.runtimeKind})
       record.native={...native};delete record.native.needsAdopt;save(record)
     }
+    // Translate app-owned goal requests before send or steer reaches a native parser.
+    if (['send','steer'].includes(command.kind) && typeof command.text === 'string') {
+      const slash=command.text.trim().match(/^\/goal(?:\s+(.*))?$/is)
+      if(slash) {
+        const objective=slash[1]?.trim()??''
+        const controls={
+          '':'Establish a Woven Matter goal from our current conversation using the goal tools, then work toward it. If the intended objective is unclear, ask me to clarify before setting the goal.',
+          show:'Read the current Woven Matter goal using the goal tools and report its status.',
+          pause:'Pause the current Woven Matter goal using the goal tools.',
+          resume:'Resume the current Woven Matter goal using the goal tools and continue working toward it.',
+          clear:'Delete the current Woven Matter goal using the goal tools.'
+        }
+        command.text=Object.hasOwn(controls,objective.toLowerCase())?controls[objective.toLowerCase()]:`Set a Woven Matter goal using the goal tools, then work toward this objective:\n${objective}`
+      }
+    }
     if (command.kind === 'workspace') {
+      if(command.workspaceAction?.goal) {
+        const action=command.workspaceAction.goal
+        if(action.id!==command.conversationID)throw fail(400,'Session identity does not match.')
+        if(!['default_agent','codex','claude_code','grok_build','opencode'].includes(record.conversation.runtimeKind))throw fail(400,'Goals are unavailable for this runtime.')
+        // Validate a concrete edit before cancelling any current work.
+        const draft=copy(record);mutateGoal(draft,action.mutation,record.conversation.activeRunID)
+        if(action.mutation.set||(action.mutation.resume&&record.goal?.status!=='active'))record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
+        const stops=['pause','clear','edit'].some(key=>action.mutation[key])
+        if(stops&&record.conversation.activeRunID) {
+          // Persist the goal fence before native cancellation.
+          record.goal=draft.goal;record.goalRuns=draft.goalRuns;record.goalBaseCompletedTurns=draft.goalBaseCompletedTurns;record.goalBaseTokensUsed=draft.goalBaseTokensUsed;save(record)
+          const runID=record.conversation.activeRunID,job=jobs.get(runID)
+          if(job)job.stopped=true
+          await runtime.stop({native:record.native,runtimeKind:record.conversation.runtimeKind,command:{...command,runID}})
+          await job?.completion
+        } else { record.goal=draft.goal;record.goalRuns=draft.goalRuns;record.goalBaseCompletedTurns=draft.goalBaseCompletedTurns;record.goalBaseTokensUsed=draft.goalBaseTokensUsed;save(record) }
+        return transaction(()=>receipt(command,'completed'))
+      }
       if (record.conversation.activeRunID) throw fail(409,'Wait for this run to finish before changing its settings.')
-      if (command.workspaceAction?.configureSession) {
+      if(command.workspaceAction?.sessionTools) {
+        const options=command.workspaceAction.sessionTools
+        if(options.id!==command.conversationID||!Array.isArray(options.enabled)||options.enabled.some(value=>value!=='goals'))throw fail(400,'Invalid execution tool selection.')
+        record.goalsEnabled=true
+      } else if (command.workspaceAction?.configureSession) {
         const options = command.workspaceAction.configureSession
         if (options.id !== command.conversationID) throw fail(400,'Session identity does not match.')
         await runtime.configure({native:record.native,runtimeKind:record.conversation.runtimeKind,options})
@@ -281,6 +370,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (command.kind === 'send') {
       if (record.conversation.activeRunID) throw fail(409, 'This conversation is already running.')
       if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
+      if(command.goalID&&(record.goal?.id!==command.goalID||record.goal?.status!=='active'||record.goal?.pendingDeliveryID!==command.commandID))throw fail(409,'The goal continuation was cancelled.')
       const runID = command.runID ?? randomUUID()
       if (!identifier(runID)) throw fail(400, 'Invalid run identifier.')
       if (db.prepare('SELECT id FROM runs WHERE id=?').get(runID)) throw fail(409, 'This run identifier has already been used.')
@@ -288,7 +378,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       record.conversation.activeRunID = runID; record.transcript.activeRunID = runID
       record.conversation.title = record.transcript.messages.length ? record.conversation.title : command.text.slice(0,100)
       record.conversation.preview = command.text.slice(0,256); record.conversation.updatedAt = date()
-      record.transcript.messages.push(...inputMessages(command,runID))
+      const visible=command.goalID?'Continuing toward the goal.':command.text
+      record.transcript.messages.push(...inputMessages({...command,text:visible},runID))
+      if(record.goal?.status==='active') { (record.goalRuns??={})[runID]={settled:false};delete record.goal.pendingDeliveryID }
+      command.text+=goalGuidance
       record.transcript.messages.push({id: runID, conversationID: command.conversationID, runID, role: 'assistant', content: '', status: 'running', createdAt: date()})
       const result = transaction(() => {
         db.prepare('INSERT INTO runs VALUES (?,?)').run(runID, command.commandID)
@@ -297,9 +390,16 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       })
       const job = { command, runtimeKind:record.conversation.runtimeKind, stopped: false }
       jobs.set(runID, job)
-      job.completion = Promise.resolve().then(() => runtime.run({ native: record.native, runtimeKind: record.conversation.runtimeKind,
+      job.completion = Promise.resolve().then(async () => {
+        await goalSocketReady
+        const binding={token:randomBytes(32).toString('base64url'),runID}
+        const latest=getRecord(command.conversationID)
+        if(job.stopped)throw fail(409,'The run stopped before native dispatch.')
+        latest.goalBinding=binding;save(latest)
+        command.goalToolContext={executablePath:fileURLToPath(new URL('./wovenmatter',import.meta.url)),socketPath:goalSocketPath,captureID:binding.token}
+        return runtime.run({ native: record.native, runtimeKind: record.conversation.runtimeKind,
         command, publish: update => applyUpdate(command.conversationID, runID, update),
-        interaction: value => setInteraction(command.conversationID, runID, value) }))
+        interaction: value => setInteraction(command.conversationID, runID, value) }) })
         .then(() => finish(command, undefined), error => finish(command, error))
         .finally(() => jobs.delete(runID))
       return result
@@ -314,6 +414,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return transaction(() => { save(latest); return receipt(command, 'completed') })
     }
     if (command.kind === 'stop') {
+      if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');delete record.goal.pendingDeliveryID;save(record)}
       const job=jobs.get(command.runID)
       if(job)job.stopped=true
       try { await runtime.stop({ native: record.native, runtimeKind: record.conversation.runtimeKind, command }) }
@@ -321,6 +422,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return transaction(() => receipt(command, 'completed'))
     }
     if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
+    if(record.goalBinding)command.goalToolContext={executablePath:fileURLToPath(new URL('./wovenmatter',import.meta.url)),socketPath:goalSocketPath,captureID:record.goalBinding.token}
     await runtime.steer({ native: record.native, runtimeKind: record.conversation.runtimeKind, command })
     // Read again: streaming updates may have arrived while the steer was sent.
     const latest = getRecord(command.conversationID)
@@ -346,6 +448,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
           {nativeRecord:{recordID,format:'woven-native-update-v1',partIndex,partCount,byteCount:bytes.length,sha256,
             data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}},runID)
       })
+    }
+    if(update.sessionUpdate==='usage_update'||update.sessionUpdate==='woven_usage') {
+      const tokens=update.usage?.totalTokens??update.totalTokens
+      if(Number.isSafeInteger(tokens)&&tokens>=0){record.runUsage??={};record.runUsage[runID]=Math.max(record.runUsage[runID]??0,tokens);save(record)}
+      return
     }
     const message = record.transcript.messages.find(item => item.id === runID)
     const changedMessages = [], changedActivities = []
@@ -395,8 +502,42 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for(const activity of record.transcript.activities)if(activity.runID===command.runID&&activity.status==='running')activity.status=stopped?'cancelled':error?'failed':'completed'
     delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
     dirty.delete(command.conversationID)
+    delete record.goalBinding
+    settleGoal(record,command.runID,!error&&!stopped,record.runUsage?.[command.runID])
     transaction(() => { publish(record); receipt(command, error ? 'outcomeUnknown' : 'completed', error ? {message: message.content} : {}) })
   }
+  async function tickGoals() {
+    if(closed||!identity||goalsTickRunning)return
+    goalsTickRunning=true
+    try {
+      for(const row of db.prepare('SELECT id FROM conversations').all()) {
+        if(closed)return
+        await serialize(row.id,async()=> {
+          const record=getRecord(row.id),goal=record.goal
+          if(!goal||goal.status!=='active'||record.conversation.activeRunID||record.pending?.length||goal.pendingDeliveryID)return
+          if(goal.tokenBudget!=null&&goalUsageUnavailable(record)){setGoalStatus(goal,'blocked');goal.evidence='Token usage is unavailable; remove the token budget before resuming.';save(record);return}
+          if(budgetReached(goal)){setGoalStatus(goal,'budget_limited');save(record);return}
+          if(db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='accepted'").get(row.id))return
+          const uncertain=db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='outcomeUnknown' AND rowid>?").get(row.id,record.goalCommandBaseline??0)
+          if(uncertain){setGoalStatus(goal,'blocked');goal.evidence='An earlier command needs reconciliation before continuing.';save(record);return}
+          const settings=await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
+          if(closed)return
+          if(['plan','plan_mode'].includes(settings.permission))return
+          // Runtime settings may await while a human command enters the durable queue.
+          if(db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='accepted'").get(row.id))return
+          if(Object.keys(record.goalRuns??{}).length&&goal.progressRevision<=goal.pendingProgressRevision)return
+          const commandID=randomUUID()
+          goal.pendingDeliveryID=commandID;goal.pendingProgressRevision=goal.progressRevision;save(record)
+          const command={commandID,deviceID:identity.executionDeviceID,conversationID:row.id,kind:'send',text:goalPrompt(goal),goalID:goal.id}
+          const initial={commandID,deviceID:command.deviceID,conversationID:row.id,status:'accepted'}
+          db.prepare('INSERT INTO commands VALUES (?,?,?,?,?)').run(commandID,command.deviceID,digest(JSON.stringify(ordered(command))),JSON.stringify(command),JSON.stringify(initial))
+          try { await perform(command) }
+          catch(error){const latest=getRecord(row.id);if(latest.goal?.id===goal.id&&latest.goal.status==='active'){setGoalStatus(latest.goal,'blocked');latest.goal.evidence=String(error.message).slice(0,1024);delete latest.goal.pendingDeliveryID;save(latest)}receipt(command,'rejected',{message:error.message})}
+        })
+      }
+    } finally {goalsTickRunning=false}
+  }
+  const goalTimer=setInterval(()=>{void tickGoals().catch(()=>{})},goalIntervalMilliseconds);goalTimer.unref()
   function events(after = 0) {
     assertIdentity(); const cursor = Number(after)
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw fail(400, 'Invalid history cursor.')
@@ -476,7 +617,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (request?.session) {
         const record = getRecord(request.session.id)
         const settings = await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
-        return {session:{_0:{...settings,conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID}}}
+        return {session:{_0:{...settings,availableTools:[],enabledTools:['goals'],conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
       }
       if (request?.exportConversation) {
         const {id,format}=request.exportConversation, record=getRecord(id)
@@ -486,6 +627,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
-    async close() { await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); closed = true; unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); db.close() },
+    tickGoals,
+    async close() { closed=true;clearInterval(goalTimer);goalServer.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close();rmSync(goalSocketDirectory,{recursive:true,force:true}) },
   }
 }

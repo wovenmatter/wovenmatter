@@ -26,7 +26,7 @@ extension CompanionModel {
       let tools = Self.deviceToolAccessOptions
       return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: nil,
         models: inferenceConnections.map { .init(id: $0.id, label: $0.name + " · " + $0.modelID) }, thinkingLevels: ((try? JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8)))?.supportedThinkingLevels ?? []).map { .init(id: $0, label: $0.capitalized) }, permissions: [],
-        availableTools: tools, enabledTools: tools.filter { Self.deviceToolEnabled($0.id, selection: record.enabledTools) }.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted"))
+        availableTools: tools, enabledTools: tools.filter { Self.deviceToolEnabled($0.id, selection: record.enabledTools) }.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted", goal: record.goalLedger?.goal))
     case .exportConversation(let id, let format):
       guard executionRecords[id] != nil else { throw DeviceExecutionError.unavailable("This device conversation is unavailable.") }
       if format == "fullRun" {
@@ -66,6 +66,8 @@ extension CompanionModel {
         }
         record.updatedAt = Self.executionTimestamp(); executionRecords[id] = record
         try persistExecutionConfiguration(); try await adoptDeviceConversation(record, transcript: nil); await reload()
+      case .goal(let id, let mutation):
+        _ = try await mutateDeviceGoal(id, mutation: mutation)
       case .configureSession(let id, let connectionID, let thinking, _):
         guard let record = executionRecords[id] else { throw InferenceError.invalidConfiguration }
         let connection: InferenceConnection?

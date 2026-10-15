@@ -176,6 +176,7 @@ public actor DashboardStore {
       processLease: localProcessLease,
       onChange: publishChange,
       onUsage: { observation in
+        try? await database.recordGoalUsage(runID: observation.runID, tokens: observation.tokens.totalTokens)
         try? await usageRecorder.record(observation)
       }
     )
@@ -199,6 +200,8 @@ public actor DashboardStore {
     }
     guard acquisition == .acquired else { return }
     defer { processLease.release() }
+    // Only the execution owner may change active goals during recovery.
+    try await database.pauseActiveGoals(reason: "The execution service restarted. Resume to continue.")
     try await database.recoverInterruptedLocalACPRuns()
   }
 

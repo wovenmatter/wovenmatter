@@ -751,7 +751,7 @@ final class CentralLibraryClientModel {
         }
         let conversationID: String?
         switch action {
-        case .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
+        case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
         default: conversationID = nil
         }
         let owner = conversationID.flatMap { executionOwner(for: $0) } ?? "central"

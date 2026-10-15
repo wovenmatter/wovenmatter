@@ -55,6 +55,12 @@ extension WorkspaceDatabaseConnection {
           UPDATE dashboard_conversations SET deleted_at = ?, updated_at = ?,
             original_folder_id = folder_id WHERE id = ?
           """, [timestamp, timestamp, id])
+        if var goal = try goalUnlocked(id), goal.status == .active {
+          try captureGoalRunsUnlocked(&goal)
+          try cancelQueuedGoalDeliveryUnlocked(goal)
+          goal.status = .paused; goal.evidence = "This conversation was moved to Trash. Resume to continue."
+          try saveGoalUnlocked(goal)
+        }
         try toolsExecuteUnlocked("""
           UPDATE workspace_session_timers SET is_paused = 1, pending_delivery_id = NULL WHERE session_id = ?
           """, [id])

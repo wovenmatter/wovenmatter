@@ -122,6 +122,9 @@
 		4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */; };
 		46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */; };
 		00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */; };
+		A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848A38FA567146749E61538D /* ApplicationModel+Goals.swift */; };
+		A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */; };
+		A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */; };
 		BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */; };
 		A2D41477A1E81E4EC0EE3D4F /* CentralLibraryClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */; };
 		C4263304AD979555E1FFD2A7 /* CentralLibraryClientSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */; };
@@ -258,6 +261,9 @@
 		4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/WorkspaceAssetSession.swift"; sourceTree = SOURCE_ROOT; };
 		1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardAssetPane.swift"; sourceTree = SOURCE_ROOT; };
 		D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardBrowserPane.swift"; sourceTree = SOURCE_ROOT; };
+		848A38FA567146749E61538D /* ApplicationModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Goals.swift"; sourceTree = "<group>"; };
+		26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Goals.swift"; sourceTree = "<group>"; };
+		988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConversationGoalControls.swift"; sourceTree = "<group>"; };
 		619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientModel.swift; sourceTree = "<group>"; };
 		BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientView.swift; sourceTree = "<group>"; };
 		4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientSettings.swift; sourceTree = "<group>"; };
@@ -346,6 +352,7 @@
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
+				848A38FA567146749E61538D /* ApplicationModel+Goals.swift */,
 				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
 				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
 				E7E000000000000000000006 /* ExecutorRuntime.swift */,
@@ -363,6 +370,7 @@
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
+				26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */,
 				A71B00000000000000000102 /* LibraryModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
@@ -405,6 +413,7 @@
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
 				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
+				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
 				890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */,
 				DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */,
 				F10100000000000000000002 /* ArtifactEditor.swift */,
@@ -658,6 +667,7 @@
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
+				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,
 				97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */,
 				8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */,
 				F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */,
@@ -671,6 +681,7 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
+				A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */,
 				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
 				B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */,
 				E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */,
@@ -688,6 +699,7 @@
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
+				A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */,
 				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,

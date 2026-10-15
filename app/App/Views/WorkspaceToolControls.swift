@@ -15,7 +15,7 @@ struct WorkspaceToolDefaultsCard: View {
     var body: some View {
         SettingsCard(title: "Agent tools", detail: "Defaults for new sessions. You can change enabled tools in each session.") {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(WorkspaceToolGroup.allCases) { group in
+                ForEach(WorkspaceToolGroup.configurableCases) { group in
                     HStack(spacing: 12) {
                         Toggle(group.title, isOn: Binding(get: { tools.settings.enabledByDefault.contains(group) }, set: { enabled in
                             var settings = tools.settings
@@ -81,7 +81,7 @@ struct WorkspaceSessionToolsMenu: View {
                     ExecutorConversationApps(tools: tools, sessionID: sessionID) { showsExecutorApps = false }
                 } else {
                 Text("Tools").font(.system(size: 13, weight: .semibold))
-                ForEach(WorkspaceToolGroup.allCases) { group in
+                ForEach(WorkspaceToolGroup.configurableCases) { group in
                     HStack(spacing: 12) {
                         Toggle(group.title, isOn: Binding(get: { tools.policy(for: sessionID).enabled.contains(group) }, set: { set(group, enabled: $0) }))
                         Spacer(minLength: 0)
