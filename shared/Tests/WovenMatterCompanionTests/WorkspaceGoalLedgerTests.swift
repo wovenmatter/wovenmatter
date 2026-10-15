@@ -3,6 +3,37 @@ import Testing
 @testable import WovenMatterCompanion
 
 @Suite struct WorkspaceGoalLedgerTests {
+    @Test func elapsedPursuitExcludesPausedIntervalsAndSurvivesPersistence() throws {
+        var goal = WorkspaceGoal(sessionID: "session", objective: "Verify")
+        goal.activeSince = Date().addingTimeInterval(-60)
+        goal.status = .paused
+        let pausedSeconds = try #require(goal.activeSeconds)
+        #expect(pausedSeconds >= 60)
+        #expect(goal.activeSince == nil)
+        #expect(goal.elapsedPursuitText(at: Date().addingTimeInterval(3600)) == goal.elapsedPursuitText(at: Date()))
+        goal = try JSONDecoder().decode(WorkspaceGoal.self, from: JSONEncoder().encode(goal))
+        #expect(goal.activeSeconds == pausedSeconds && goal.activeSince == nil)
+        goal.activeSeconds = 60
+        goal.status = .active
+        let resumedAt = try #require(goal.activeSince)
+        #expect(goal.elapsedPursuitText(at: resumedAt.addingTimeInterval(30)) == "1:30 elapsed")
+        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(goal)) as? [String: Any])
+        legacy.removeValue(forKey: "activeSeconds"); legacy.removeValue(forKey: "activeSince")
+        var restored = try JSONDecoder().decode(WorkspaceGoal.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(restored.elapsedPursuitText(at: Date()) == "Elapsed unavailable")
+        restored.status = .paused; restored.status = .active
+        #expect(restored.activeSeconds == 0 && restored.activeSince != nil)
+    }
+
+    @Test func slashCommandsRequestAgentActionWithoutNativeCommandSyntax() throws {
+        #expect(WorkspaceGoalCommand("/goal") == .request)
+        #expect(WorkspaceGoalCommand("/goal show") == .show)
+        let command = try #require(WorkspaceGoalCommand("/goal Verify the fix"))
+        #expect(command.agentPrompt.contains("Set a Woven Matter goal"))
+        #expect(command.agentPrompt.hasSuffix("Verify the fix"))
+        #expect(!command.agentPrompt.hasPrefix("/"))
+    }
+
     @Test func durableReceiptAndCheckpointGate() throws {
         var ledger = WorkspaceGoalLedger()
         let requestID = UUID().uuidString, sessionID = UUID().uuidString

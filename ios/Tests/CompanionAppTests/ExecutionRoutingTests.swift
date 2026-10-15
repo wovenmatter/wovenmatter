@@ -327,10 +327,10 @@ final class ExecutionRoutingTests: XCTestCase {
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
     XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command"]))
-    XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
+    XCTAssertEqual(names.filter { $0.hasPrefix("wovenmatter_") }, ["wovenmatter_goals"])
     XCTAssertFalse(names.contains("read_note"))
     let context = try model.deviceToolContext(conversationID: record.id)
-    XCTAssertTrue(context.enabled.isEmpty)
+    XCTAssertEqual(context.enabled, [.goals])
     for name in ["wovenmatter_calendar", "read_note"] {
       do {
         _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
@@ -340,7 +340,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["wovenmatter_notes"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_notes", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.map { "wovenmatter_" + $0.rawValue }))
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.filter { $0 != .goals }.map { "wovenmatter_" + $0.rawValue }))
     XCTAssertTrue(CompanionModel.deviceCLITools.contains { $0["name"] as? String == "wovenmatter_goals" })
   }
 

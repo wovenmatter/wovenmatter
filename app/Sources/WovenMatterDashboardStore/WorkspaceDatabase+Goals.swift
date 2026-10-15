@@ -19,8 +19,8 @@ extension WorkspaceDatabaseConnection {
                 END;
                 """)
             if try historyRowsUnlocked("SELECT 1 FROM workspace_tool_schema WHERE version=2", values: []).isEmpty {
-                // Goals are a new, independently controllable capability. Install
-                // it once without changing any previously selected tool groups.
+                // Add the goal tool to older stored selections once without
+                // changing any previously selected optional tool groups.
                 var settings = try toolSettingsUnlocked()
                 settings.enabledByDefault.insert(.goals)
                 try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])

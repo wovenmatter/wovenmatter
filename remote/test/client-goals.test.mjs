@@ -83,14 +83,15 @@ test('token budget without provider accounting blocks before a second run',async
   f.runs[0].end();await turn();await f.service.tickGoals()
   assert.equal((await f.read(id)).status,'blocked');assert.match((await f.read(id)).evidence,/usage is unavailable/);assert.equal(f.runs.length,1)
 })
-test('plan mode, disabled tools and a queued human input gate automatic work',async t=>{
+test('plan mode and a queued human input gate automatic work while goals stay enabled',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
   await f.mutate(id,{set:{objective:'Verify'}})
   f.runtime.settings=async()=>({permission:'plan'});await f.service.tickGoals();assert.equal(f.runs.length,0)
   await f.service.command(f.command('workspace',{conversationID:id,workspaceAction:{sessionTools:{id,enabled:[]}}}),f.principal)
-  assert.equal((await f.read(id)).status,'paused');assert.equal((await f.mutate(id,{resume:{id:(await f.read(id)).id}})).status,'rejected')
-  await f.service.command(f.command('workspace',{conversationID:id,workspaceAction:{sessionTools:{id,enabled:['goals']}}}),f.principal)
-  await f.mutate(id,{resume:{id:(await f.read(id)).id}})
+  assert.equal((await f.read(id)).status,'active')
+  f.runtime.settings=async()=>({permission:'default'})
+  assert.equal((await f.mutate(id,{resume:{id:(await f.read(id)).id}})).status,'completed')
+  assert.deepEqual((await f.service.readWorkspace({session:{id}})).session._0.enabledTools,['goals'])
   let release;const waiting=new Promise(resolve_=>{release=resolve_});f.runtime.settings=async()=>{await waiting;return {permission:'default'}}
   const tick=f.service.tickGoals();await turn()
   const human=f.service.command(f.command('send',{conversationID:id,text:'New instruction'}),f.principal)
@@ -158,14 +159,18 @@ test('goal CLI follows its captured run from subdirectories and rejects an old b
   assert.equal((await f.cliWith(f.runs[1].command.goalToolContext,subdirectory,'get')).result.id,goal.id)
 })
 
-test('slash resume after a failed run uses the same reconciliation baseline as UI resume',async t=>{
+test('slash resume after a failed run asks the agent to resume through its goal CLI',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
   await f.mutate(id,{set:{objective:'Verify'}})
   const original=f.runtime.run;f.runtime.run=async()=>{throw new Error('Interrupted native attempt')}
   await f.service.tickGoals();await turn();assert.equal((await f.read(id)).status,'blocked')
   f.runtime.run=original
-  assert.equal((await f.service.command(f.command('send',{conversationID:id,text:'/goal resume'}),f.principal)).status,'completed')
-  await f.service.tickGoals();await turn();assert.equal(f.runs.length,1)
+  assert.equal((await f.service.command(f.command('send',{conversationID:id,text:'/goal resume'}),f.principal)).status,'accepted')
+  await turn();assert.equal(f.runs.length,1)
+  assert.match(f.runs[0].command.text,/^Resume the current Woven Matter goal using the goal tools/);assert.doesNotMatch(f.runs[0].command.text,/^\/goal/)
+  const goal=await f.read(id);assert.equal(goal.status,'blocked')
+  await f.cli('resume','--id',goal.id,'--request-id',randomUUID())
+  assert.equal((await f.read(id)).status,'active')
 })
 
 

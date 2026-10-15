@@ -72,7 +72,7 @@ extension WorkspaceAgentToolsServiceTests {
         defer { fixture.stop() }
         let model = fixture.model
         #expect(model.sessionPolicies[fixture.caller] == nil)
-        #expect(model.policy(for: fixture.caller).enabled.isEmpty)
+        #expect(model.policy(for: fixture.caller).enabled == [.goals])
         let token = UUID()
         await model.observeSession(fixture.caller, token: token)
         #expect(model.policy(for: fixture.caller) == (try await fixture.database.sessionTools(fixture.caller)))
@@ -710,7 +710,7 @@ extension WorkspaceAgentToolsServiceTests {
         let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
-        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes])
+        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals])
         #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1",
             "--revision", String(independent.calendar.revision)]).success)
         #expect(try await request(["calendar", "read", detachedID]).success)

@@ -590,14 +590,14 @@ struct WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: a)
     try await db.recordSessionOrigin(sourceID: a, targetID: b, purpose: "Write report")
-    #expect(try await db.sessionTools(b).enabled == [.sessions])
+    #expect(try await db.sessionTools(b).enabled == [.sessions, .goals])
     try await db.requireTranscriptAccess(sourceID: a, targetID: b)
     try await db.endCoordination(targetID: b)
     try await db.setSessionTools(.init(enabled: []), sessionID: b)
     try await db.recordSessionOrigin(sourceID: a, targetID: b, purpose: "Retry")
     let relationship = try await db.sessionRelationship(b)
     #expect(relationship.createdBy == a && relationship.coordinatorID == nil)
-    #expect(try await db.sessionTools(b).enabled.isEmpty)
+    #expect(try await db.sessionTools(b).enabled == [.goals])
     await #expect(throws: WorkspaceToolError.accessRequired(b)) { try await db.requireTranscriptAccess(sourceID: a, targetID: b) }
   }
 
@@ -813,7 +813,7 @@ struct WorkspaceAgentToolTests {
     let created = try await reopened.createLocalACPSession(runtimeKind: .claudeCode, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     #expect(created == target)
     #expect(try await reopened.sessionRelationship(target).createdBy == source)
-    #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes])
+    #expect(try await reopened.sessionTools(target).enabled == [.sessions, .notes, .goals])
     try await reopened.completeToolSessionCreation(requestID: firstID, sourceID: source)
     try await reopened.failToolSessionCreation(requestID: firstID)
     try await reopened.recoverToolSessionCreations()
@@ -1082,7 +1082,7 @@ extension WorkspaceAgentToolTests {
     try await reopened.completeToolSessionCreation(requestID: requestID, sourceID: source)
     let final = try await #require(reopened.workspaceOverview().conversations.first { $0.id == target })
     #expect(final.title == "User renamed" && final.folderID == laterFolder)
-    #expect(try await reopened.sessionTools(target).enabled == [.history])
+    #expect(try await reopened.sessionTools(target).enabled == [.history, .goals])
   }
 
   @Test func revocationDuringCreationRollsBackSessionAndInitialConfiguration() async throws {
@@ -1190,13 +1190,13 @@ extension WorkspaceAgentToolTests {
       try await database.setSessionTools(.init(enabled: [.notes]), sessionID: id)
     }
     try await database.applyInitialSessionTools(.init(enabled: []), sessionID: id)
-    #expect(try await database.sessionTools(id).enabled == (userChangesFirst ? [.notes] : []))
+    #expect(try await database.sessionTools(id).enabled == (userChangesFirst ? [.notes, .goals] : [.goals]))
     let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     try await reopened.applyInitialSessionTools(.init(enabled: [.library]), sessionID: id)
-    #expect(try await reopened.sessionTools(id).enabled == (userChangesFirst ? [.notes] : []))
+    #expect(try await reopened.sessionTools(id).enabled == (userChangesFirst ? [.notes, .goals] : [.goals]))
     try await reopened.setSessionTools(.init(enabled: [.history]), sessionID: id)
     try await reopened.applyInitialSessionTools(.init(enabled: []), sessionID: id)
-    #expect(try await reopened.sessionTools(id).enabled == [.history])
+    #expect(try await reopened.sessionTools(id).enabled == [.history, .goals])
   }
 
   @Test func migratingToolDefaultsPreservesExistingSessionsAndEnablesNewSnapshots() async throws {
@@ -1210,16 +1210,16 @@ extension WorkspaceAgentToolTests {
     }
     let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     try await reopened.applyInitialSessionTools(.init(enabled: []), sessionID: source)
-    #expect(try await reopened.sessionTools(source).enabled == [.history])
+    #expect(try await reopened.sessionTools(source).enabled == [.history, .goals])
     let new = try await reopened.createLocalACPSession(runtimeKind: .codex, title: "After migration", ownerDeviceID: UUID())
     try await reopened.applyInitialSessionTools(.init(enabled: []), sessionID: new)
-    #expect(try await reopened.sessionTools(new).enabled.isEmpty)
+    #expect(try await reopened.sessionTools(new).enabled == [.goals])
   }
 
   @Test func oldCreationConfigurationDecodesWithoutNewSelectionFields() throws {
     let oldJSON = #"{"runtimeKind":"codex","title":"Existing","tools":{"enabled":[]}}"#
     let configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(oldJSON.utf8))
     #expect(configuration.permission == nil && configuration.selectionWorkspace == nil)
-    #expect(configuration.tools.enabled.isEmpty)
+    #expect(configuration.tools.enabled == [.goals])
   }
 }
