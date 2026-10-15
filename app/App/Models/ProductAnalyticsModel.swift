@@ -57,6 +57,7 @@ final class ProductAnalyticsModel {
   func openInterface() async {
     interface = true
     await refresh()
+    await confirmUpdateInstallation()
     guard preference != nil else { return }
     disclosurePresented = !localDisclosureAcknowledged
     if !disclosurePresented {
@@ -222,10 +223,14 @@ final class ProductAnalyticsModel {
     version: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
     build: Int? = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")
   ) async {
-    guard interface, let preference,
+    guard interface,
       let data = defaults.data(forKey: Self.updateReceiptKey),
-      let receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data)
+      let receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data),
+      receipt.confirmed
     else { return }
+    // Confirmation gets one opportunity, even if settings or the connection are unavailable.
+    cancelUpdateInstallation()
+    guard let preference else { return }
     // Opt-out, a new preference epoch, or a different library fences the receipt.
     guard !locallyDisabled, preference.collects,
       receipt.analyticsID == preference.analyticsID,
@@ -233,14 +238,13 @@ final class ProductAnalyticsModel {
       cancelUpdateInstallation()
       return
     }
-    guard localDisclosureAcknowledged, receipt.confirmed,
+    guard localDisclosureAcknowledged,
       receipt.version == version, receipt.build == build
     else { return }
     guard receipt.event.validated(preference: preference) != nil else {
       cancelUpdateInstallation()
       return
     }
-    cancelUpdateInstallation()
     await send(receipt.event)
   }
   func ingest(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement {
