@@ -105,6 +105,18 @@ public enum WorkspaceGoalMutation: Codable, Equatable, Sendable {
 /// App-owned slash commands never reach a provider's native goal loop.
 public enum WorkspaceGoalCommand: Equatable, Sendable {
     case show, pause, resume, clear, set(String)
+    /// Translate app-owned intent before any provider parses native slash commands.
+    public var agentPrompt: String {
+        switch self {
+        case .set(let objective):
+            "Set a Woven Matter goal using the goal tools, then work toward this objective:\n\(objective)"
+        case .show: "Read the current Woven Matter goal using the goal tools and report its status."
+        case .pause: "Pause the current Woven Matter goal using the goal tools."
+        case .resume: "Resume the current Woven Matter goal using the goal tools and continue working toward it."
+        case .clear: "Delete the current Woven Matter goal using the goal tools."
+        }
+    }
+
     public init?(_ text: String) {
         let parts = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(maxSplits: 1, whereSeparator: \.isWhitespace)

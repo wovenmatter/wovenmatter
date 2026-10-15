@@ -66,7 +66,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if(!row)throw fail(403,'This goal tool binding is no longer active.')
         const record=JSON.parse(row.body)
         request.conversationID=record.conversation.id
-        if(record.goalsEnabled===false)throw fail(403,'Goal tools are disabled for this session.')
         if(!record.goalBinding||record.goalBinding.token!==request.token||record.goalBinding.runID!==record.conversation.activeRunID)throw fail(403,'This goal tool binding is no longer active.')
         const cli=goalCLI(request.arguments)
         if(cli.action==='get')return record.goal??null
@@ -313,13 +312,26 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const native=await runtime.adopt({native:record.native,runtimeKind:record.conversation.runtimeKind})
       record.native={...native};delete record.native.needsAdopt;save(record)
     }
+    // Translate app-owned goal requests before send or steer reaches a native parser.
+    if (['send','steer'].includes(command.kind) && typeof command.text === 'string') {
+      const slash=command.text.trim().match(/^\/goal(?:\s+(.*))?$/is)
+      if(slash) {
+        const objective=slash[1]?.trim()??''
+        const controls={
+          '':'Read the current Woven Matter goal using the goal tools and report its status.',
+          pause:'Pause the current Woven Matter goal using the goal tools.',
+          resume:'Resume the current Woven Matter goal using the goal tools and continue working toward it.',
+          clear:'Delete the current Woven Matter goal using the goal tools.'
+        }
+        command.text=Object.hasOwn(controls,objective.toLowerCase())?controls[objective.toLowerCase()]:`Set a Woven Matter goal using the goal tools, then work toward this objective:\n${objective}`
+      }
+    }
     if (command.kind === 'workspace') {
       if(command.workspaceAction?.goal) {
         const action=command.workspaceAction.goal
         if(action.id!==command.conversationID)throw fail(400,'Session identity does not match.')
         if(!['default_agent','codex','claude_code','grok_build','opencode'].includes(record.conversation.runtimeKind))throw fail(400,'Goals are unavailable for this runtime.')
         // Validate a concrete edit before cancelling any current work.
-        if(record.goalsEnabled===false&&(action.mutation?.set||action.mutation?.resume))throw fail(403,'Goal tools are disabled for this session.')
         const draft=copy(record);mutateGoal(draft,action.mutation,record.conversation.activeRunID)
         if(action.mutation.set||(action.mutation.resume&&record.goal?.status!=='active'))record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
         const stops=['pause','clear','edit'].some(key=>action.mutation[key])
@@ -337,8 +349,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(command.workspaceAction?.sessionTools) {
         const options=command.workspaceAction.sessionTools
         if(options.id!==command.conversationID||!Array.isArray(options.enabled)||options.enabled.some(value=>value!=='goals'))throw fail(400,'Invalid execution tool selection.')
-        record.goalsEnabled=options.enabled.includes('goals')
-        if(!record.goalsEnabled&&record.goal?.status==='active'){record.goal.status='paused';delete record.goal.pendingDeliveryID}
+        record.goalsEnabled=true
       } else if (command.workspaceAction?.configureSession) {
         const options = command.workspaceAction.configureSession
         if (options.id !== command.conversationID) throw fail(400,'Session identity does not match.')
@@ -358,20 +369,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (command.kind === 'send') {
       if (record.conversation.activeRunID) throw fail(409, 'This conversation is already running.')
       if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
-      const slash=command.text.trim().match(/^\/goal(?:\s+(.*))?$/s)
-      if(slash) {
-        if(record.goalsEnabled===false)throw fail(403,'Goal tools are disabled for this session.')
-        const value=slash[1]?.trim()??''
-        if(['','pause','resume','clear'].includes(value.toLowerCase())) {
-          if(!record.goal)throw fail(409,'No goal is set. Use /goal followed by an objective.')
-          const wasActive=record.goal.status==='active'
-          if(value)mutateGoal(record,{[value.toLowerCase()]:{id:record.goal.id}})
-          if(value.toLowerCase()==='resume'&&!wasActive)record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
-          save(record);return transaction(()=>receipt(command,'completed'))
-        }
-        mutateGoal(record,{set:{objective:value}});command.text=value
-        record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
-      }
       if(command.goalID&&(record.goal?.id!==command.goalID||record.goal?.status!=='active'||record.goal?.pendingDeliveryID!==command.commandID))throw fail(409,'The goal continuation was cancelled.')
       const runID = command.runID ?? randomUUID()
       if (!identifier(runID)) throw fail(400, 'Invalid run identifier.')
@@ -383,7 +380,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const visible=command.goalID?'Continuing toward the goal.':command.text
       record.transcript.messages.push(...inputMessages({...command,text:visible},runID))
       if(record.goal?.status==='active') { (record.goalRuns??={})[runID]={settled:false};delete record.goal.pendingDeliveryID }
-      if(record.goalsEnabled!==false)command.text+=goalGuidance
+      command.text+=goalGuidance
       record.transcript.messages.push({id: runID, conversationID: command.conversationID, runID, role: 'assistant', content: '', status: 'running', createdAt: date()})
       const result = transaction(() => {
         db.prepare('INSERT INTO runs VALUES (?,?)').run(runID, command.commandID)
@@ -524,7 +521,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
           if(uncertain){goal.status='blocked';goal.evidence='An earlier command needs reconciliation before continuing.';save(record);return}
           const settings=await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
           if(closed)return
-          if(['plan','plan_mode'].includes(settings.permission)||record.goalsEnabled===false)return
+          if(['plan','plan_mode'].includes(settings.permission))return
           // Runtime settings may await while a human command enters the durable queue.
           if(db.prepare("SELECT id FROM commands WHERE json_extract(body,'$.conversationID')=? AND json_extract(receipt,'$.status')='accepted'").get(row.id))return
           if(Object.keys(record.goalRuns??{}).length&&goal.progressRevision<=goal.pendingProgressRevision)return
@@ -619,7 +616,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (request?.session) {
         const record = getRecord(request.session.id)
         const settings = await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
-        return {session:{_0:{...settings,availableTools:[{id:'goals',label:'Goals'}],enabledTools:record.goalsEnabled===false?[]:['goals'],conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
+        return {session:{_0:{...settings,availableTools:[],enabledTools:['goals'],conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
       }
       if (request?.exportConversation) {
         const {id,format}=request.exportConversation, record=getRecord(id)

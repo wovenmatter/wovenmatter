@@ -34,6 +34,7 @@ struct DashboardComposer: View {
     let attachments: [AgentMessageAttachmentDraft]
     let agentTools: WorkspaceAgentToolsModel?
     let sessionID: String?
+    let supportsGoals: Bool
     let showsSessionControls: Bool
     let showsPermissionControl: Bool
     let sessionMetadataLoading: Bool
@@ -301,10 +302,11 @@ struct DashboardComposer: View {
     }
 
     private var matchingSlashCommands: [LocalACPSlashCommand] {
-        guard let query = slashQuery,
-              let commands = sessionMetadata?.slashCommands,
-              !commands.isEmpty else {
-            return []
+        guard let query = slashQuery else { return [] }
+        let goalCommands = supportsGoals
+            ? [LocalACPSlashCommand(name: "goal", detail: "Ask the agent to pursue a goal", argumentHint: "objective")] : []
+        let commands = goalCommands + (sessionMetadata?.slashCommands ?? []).filter {
+            !supportsGoals || $0.name.lowercased() != "goal"
         }
         let needle = query.lowercased()
         return commands.filter { command in

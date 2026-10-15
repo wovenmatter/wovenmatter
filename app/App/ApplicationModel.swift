@@ -2494,15 +2494,8 @@ final class ApplicationModel {
 
         if try await dispatchFederatedMessage(conversationID: conversation.id, input: input, note: note,
             expectedRunID: expectedRunID, requiresIdle: requiresIdle, dispatchFence: dispatchFence) { return (true, nil) }
-        var goalObjective: String?
-        if input.historyDeliveryID == nil, let command = WorkspaceGoalCommand(input.text), WorkspaceGoal.supports(conversation.localRuntimeKind) {
-            if case .set(let objective) = command {
-                goalObjective = objective
-            } else {
-                guard input.attachments.isEmpty else { throw WorkspaceToolError.invalid("Send attachments with a goal objective or an ordinary message.") }
-                return (try await handleConversationGoalCommand(command, conversationID: conversation.id, dispatchFence: dispatchFence), nil)
-            }
-        }
+        let goalPrompt = input.historyDeliveryID == nil && WorkspaceGoal.supports(conversation.localRuntimeKind)
+            ? WorkspaceGoalCommand(input.text)?.agentPrompt : nil
 
         let activityID = activeWorkSleepPrevention.beginDispatch()
         defer { activeWorkSleepPrevention.endDispatch(activityID) }
@@ -2550,7 +2543,7 @@ final class ApplicationModel {
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
-        var normalized = AgentMessageInput(text: (goalObjective ?? input.text).trimmingCharacters(in: .whitespacesAndNewlines),
+        var normalized = AgentMessageInput(text: (goalPrompt ?? input.text).trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
         if !steering {
@@ -2577,11 +2570,6 @@ final class ApplicationModel {
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
         normalized.cliContext = try await agentTools.cliContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
         let deliveryContent = normalized.text
-        if let goalObjective {
-            // Persist only after capacity, settings and input preparation succeed.
-            // The existing dispatch fence keeps the loop idle during this send.
-            _ = try await handleConversationGoalCommand(.set(goalObjective), conversationID: conversation.id, dispatchFence: dispatchFence)
-        }
         if WorkspaceGoal.supports(conversation.localRuntimeKind),
            try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.goals) {
             let goal = try await dashboardStore.database.sessionGoals().first { $0.sessionID == conversation.id }

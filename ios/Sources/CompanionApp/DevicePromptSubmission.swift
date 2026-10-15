@@ -86,7 +86,7 @@ extension CompanionModel {
       executionRecords[id]?.goalLedger?.enroll(job.id)
       try persistExecutionConfiguration()
       attemptID = beginDeviceExecutionAttempt(id, runID: job.id, runtime: runtime, userInitiated: false)
-      let receipt = try Self.executionObject(await runtime.submit(text: job.text + ((try? deviceToolContext(conversationID: id).enabled.contains(.goals)) == true ? WorkspaceGoal.guidance : ""), requestID: job.id))
+      let receipt = try Self.executionObject(await runtime.submit(text: (WorkspaceGoalCommand(job.text)?.agentPrompt ?? job.text) + ((try? deviceToolContext(conversationID: id).enabled.contains(.goals)) == true ? WorkspaceGoal.guidance : ""), requestID: job.id))
       guard executionRecords[id]?.runID == job.id, executionRecords[id]?.status == "running" else { throw CancellationError() }
       guard let submissionID = (receipt["submissionId"] ?? receipt["submissionID"] ?? receipt["id"]) as? Int else { throw DeviceExecutionError.unavailable("Pi Durable did not return a saved submission receipt.") }
       executionRecords[id]?.submissionID = submissionID; executionRecords[id]?.pendingInput = nil

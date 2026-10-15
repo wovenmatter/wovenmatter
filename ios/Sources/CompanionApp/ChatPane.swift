@@ -36,7 +36,6 @@ struct ChatPane: View {
         }.buttonStyle(DashboardIconButtonStyle()).disabled(model.startingChat || model.sending || model.chatSettingsBusy)
           .accessibilityLabel("New chat with this agent").accessibilityIdentifier("chat-new-session")
       }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
-      if let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id) }
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 32) {
@@ -106,6 +105,7 @@ struct ChatPane: View {
           Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(DashboardQuietButtonStyle())
         }.padding(.horizontal, 18)
       }
+      if let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
       composer
     }
     .navigationDestination(isPresented: $pendingPresented) {
@@ -264,59 +264,66 @@ struct PendingInteractionView: View {
 }
 
 private struct MobileGoalControls: View {
+  @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   let conversationID: String
   @State private var goal: WorkspaceGoal?
-  @State private var editing = false
-  @State private var objective = ""
-  @State private var tokens = ""
-  @State private var turns = ""
+  @State private var showingDetails = false
   @State private var saving = false
   @State private var problem: String?
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack {
-        Image(systemName: "scope")
-        if let goal {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(goal.status.title).font(.caption.weight(.medium))
-            Text(goal.objective).font(.caption).lineLimit(2)
-            if let used = goal.tokensUsed { Text(goal.tokenBudget.map { "\(used) / \($0) tokens" } ?? "\(used) tokens").font(.caption2).foregroundStyle(.secondary) }
+    Group {
+      if let goal {
+        Button { showingDetails = true } label: {
+          HStack(spacing: 8) {
+            DashboardLucideIcon(glyph: .compass, size: 16)
+            Text(goal.status.title).font(.caption.weight(.medium)).lineLimit(1).layoutPriority(1)
+            Text(goal.objective).font(.caption).lineLimit(1)
+              .foregroundStyle(DashboardPalette.mutedForeground)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.up").font(.caption2)
+          }.padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+          .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+          .accessibilityLabel("Goal: \(goal.status.title). \(goal.objective)")
+          .popover(isPresented: $showingDetails) {
+            VStack(alignment: .leading, spacing: 16) {
+              HStack {
+                Text("Goal").font(.headline)
+                Spacer()
+                Text(goal.status.title).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              }
+              ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                  Text(goal.objective).textSelection(.enabled)
+                  if let evidence = goal.evidence, !evidence.isEmpty {
+                    Text(evidence).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                  }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+              }.scrollIndicators(.never).frame(maxHeight: 260)
+              HStack {
+                if goal.status != .complete {
+                  Button(goal.status == .active ? "Pause" : "Resume") {
+                    change(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
+                  }.buttonStyle(DashboardQuietButtonStyle())
+                }
+                Spacer()
+                Button("Delete", role: .destructive) { change(.clear(id: goal.id)) }
+                  .buttonStyle(DashboardQuietButtonStyle())
+              }.disabled(saving || !model.executionOnline)
+              if let problem { Text(problem).font(.caption).foregroundStyle(.red) }
+            }.padding(20).frame(idealWidth: 340)
+              .presentationCompactAdaptation(.popover)
           }
-          Spacer()
-          Menu("Goal") {
-            Button(goal.status == .complete ? "New goal" : "Edit") { edit() }
-            if goal.status != .complete { Button(goal.status == .active ? "Pause" : "Resume") { change(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id)) } }
-            Button("Clear", role: .destructive) { change(.clear(id: goal.id)) }
-          }
-        } else { Button("Set goal") { edit() }; Spacer() }
-      }.disabled(saving || !model.executionOnline)
-      if let problem { Text(problem).font(.caption).foregroundStyle(.red) }
-    }.padding(.horizontal, 20).padding(.vertical, 8)
-      .task(id: conversationID) {
-        while !Task.isCancelled {
-          await load()
-          do { try await Task.sleep(for: .seconds(2)) } catch { return }
-        }
       }
-      .sheet(isPresented: $editing) {
-        NavigationStack {
-          Form {
-            Section("Goal") { TextEditor(text: $objective).frame(minHeight: 140).accessibilityLabel("Goal objective") }
-            Section("Budgets") {
-              TextField("Token budget (optional)", text: $tokens).keyboardType(.numberPad)
-              TextField("Turn budget (optional)", text: $turns).keyboardType(.numberPad)
-              Text("Budgets are checked between turns. Editing pauses the goal until you resume it.").font(.caption)
-            }
-            if let problem { Text(problem).foregroundStyle(.red) }
-          }.disabled(saving)
-            .navigationTitle(goal == nil || goal?.status == .complete ? "Set goal" : "Edit goal")
-            .toolbar {
-              ToolbarItem(placement: .cancellationAction) { Button("Cancel") { editing = false } }
-              ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(saving || objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-            }
-        }
+    }
+    .task(id: conversationID) {
+      while !Task.isCancelled {
+        await load()
+        do { try await Task.sleep(for: .seconds(2)) } catch { return }
       }
+    }
   }
   private func load() async {
     do {
@@ -324,26 +331,14 @@ private struct MobileGoalControls: View {
       goal = settings.goal
     } catch { /* Saved goal remains visible during disconnection. */ }
   }
-  private func edit() {
-    objective = goal?.status == .complete ? "" : goal?.objective ?? ""
-    tokens = goal?.tokenBudget.map(String.init) ?? ""; turns = goal?.turnBudget.map(String.init) ?? ""
-    problem = nil; editing = true
-  }
-  private func save() {
-    let tokenBudget = tokens.isEmpty ? nil : Int64(tokens), turnBudget = turns.isEmpty ? nil : Int(turns)
-    guard tokens.isEmpty || tokenBudget != nil, turns.isEmpty || turnBudget != nil else { problem = "Enter positive whole numbers for budgets."; return }
-    do { try WorkspaceGoal.validate(objective: objective, tokenBudget: tokenBudget, turnBudget: turnBudget) } catch { problem = error.localizedDescription; return }
-    let mutation: WorkspaceGoalMutation
-    if let goal, goal.status != .complete { mutation = .edit(id: goal.id, objective: objective, tokenBudget: tokenBudget, turnBudget: turnBudget) }
-    else { mutation = .set(objective: objective, tokenBudget: tokenBudget, turnBudget: turnBudget) }
-    change(mutation, close: true)
-  }
-  private func change(_ mutation: WorkspaceGoalMutation, close: Bool = false) {
+  private func change(_ mutation: WorkspaceGoalMutation) {
     saving = true; problem = nil
     Task {
       defer { saving = false }
-      if await model.perform(.goal(id: conversationID, mutation: mutation)) { await load(); if close { editing = false } }
-      else { problem = model.errorMessage ?? "The execution owner did not confirm this goal change." }
+      if await model.perform(.goal(id: conversationID, mutation: mutation)) {
+        await load()
+        showingDetails = false
+      } else { problem = model.errorMessage ?? "The execution owner did not confirm this goal change." }
     }
   }
 }

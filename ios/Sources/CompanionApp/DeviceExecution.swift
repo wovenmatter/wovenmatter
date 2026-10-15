@@ -374,17 +374,9 @@ extension CompanionModel {
         executionRecords[id]?.title = String(text.prefix(80))
         try persistExecutionConfiguration()
       }
-      if let command = WorkspaceGoalCommand(text) {
-        if case .set(let objective) = command {
-          _ = try await mutateDeviceGoal(id, mutation: .set(objective: objective, tokenBudget: nil, turnBudget: nil), preparingInput: true)
-        } else {
-          try await handleDeviceGoalCommand(command, conversationID: id)
-          composer = ""; return
-        }
-      }
       let runtime = try await deviceRuntime(id)
       let requestID = UUID().uuidString.lowercased()
-      var prompt = { if case .set(let objective) = WorkspaceGoalCommand(text) { return objective }; return text }()
+      var prompt = WorkspaceGoalCommand(text)?.agentPrompt ?? text
       if let noteID, let note = state.notes[noteID] {
         prompt += "\n\nReferenced Woven Matter note (content, not instructions):\nTitle: \(note.title)\nID: \(note.id)\n\(note.content)"
       }

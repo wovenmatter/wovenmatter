@@ -39,11 +39,6 @@ struct FederatedConversationPane: View {
                 Spacer()
                 Text(snapshot?.online == true ? "Connected" : "Saved history").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }.padding(.horizontal, 24).padding(.vertical, 12)
-            if snapshot?.online == true {
-                ConversationGoalControls(goal: snapshot?.session?.goal, sessionID: conversation.id) { mutation in
-                    guard await model.actOnFederatedConversation(.configure(conversationID: conversation.id, action: .goal(id: conversation.id, mutation: mutation)), conversationID: conversation.id) != nil else { throw WorkspaceToolError.invalid("The execution owner did not confirm this goal change.") }
-                }.padding(.horizontal, 20)
-            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
@@ -91,9 +86,16 @@ struct FederatedConversationPane: View {
                     }.disabled(runID != nil || snapshot?.online != true)
                 }
                 HStack(alignment: .bottom, spacing: 12) {
-                    TextField("Message", text: $draft, axis: .vertical).lineLimit(2...8).textFieldStyle(.plain)
-                        .padding(12).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
-                        .accessibilityLabel("Message execution workspace")
+                    VStack(spacing: 8) {
+                        if snapshot?.session?.goal != nil {
+                            ConversationGoalControls(goal: snapshot?.session?.goal, sessionID: conversation.id) { mutation in
+                                guard await model.actOnFederatedConversation(.configure(conversationID: conversation.id, action: .goal(id: conversation.id, mutation: mutation)), conversationID: conversation.id) != nil else { throw WorkspaceToolError.invalid("The execution owner did not confirm this goal change.") }
+                            }.disabled(snapshot?.online != true)
+                        }
+                        TextField("Message", text: $draft, axis: .vertical).lineLimit(2...8).textFieldStyle(.plain)
+                            .padding(12).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+                            .accessibilityLabel("Message execution workspace")
+                    }
                     if let runID {
                         Button("Stop") { Task { await model.actOnFederatedConversation(.stop(conversationID: conversation.id, runID: runID), conversationID: conversation.id) } }
                             .buttonStyle(DashboardQuietButtonStyle()).disabled(snapshot?.online != true)

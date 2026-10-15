@@ -139,16 +139,6 @@ extension CompanionModel {
     }
     return executionRecords[id]?.goalLedger?.goal
   }
-  func handleDeviceGoalCommand(_ command: WorkspaceGoalCommand, conversationID id: String) async throws {
-    guard let goal = executionRecords[id]?.goalLedger?.goal else { throw WorkspaceToolError.notFound("No goal is set. Use /goal followed by an objective.") }
-    switch command {
-    case .show: break
-    case .pause: _ = try await mutateDeviceGoal(id, mutation: .pause(id: goal.id))
-    case .resume: _ = try await mutateDeviceGoal(id, mutation: .resume(id: goal.id), preparingInput: true)
-    case .clear: _ = try await mutateDeviceGoal(id, mutation: .clear(id: goal.id))
-    case .set(let objective): _ = try await mutateDeviceGoal(id, mutation: .set(objective: objective, tokenBudget: nil, turnBudget: nil))
-    }
-  }
   func deviceTokenUsage(_ runtime: PiDurableRuntime) async throws -> Int64? {
     try await runtime.tokenUsage()
   }

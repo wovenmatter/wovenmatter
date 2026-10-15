@@ -51,29 +51,6 @@ extension ApplicationModel {
         return try result.get()
     }
 
-    func handleConversationGoalCommand(_ command: WorkspaceGoalCommand, conversationID: String,
-                                       dispatchFence: AgentDispatchFence) async throws -> Bool {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let goal = try await database.sessionGoals().first { $0.sessionID == conversationID }
-        let mutation: WorkspaceGoalMutation
-        switch command {
-        case .show:
-            guard goal != nil else { throw WorkspaceToolError.notFound("No goal is set. Use /goal followed by an objective.") }
-            try await agentTools?.reload()
-            return true
-        case .set(let objective): mutation = .set(objective: objective, tokenBudget: nil, turnBudget: nil)
-        case .pause, .resume, .clear:
-            guard let goal else { throw WorkspaceToolError.notFound("No goal is set.") }
-            switch command {
-            case .pause: mutation = .pause(id: goal.id)
-            case .resume: mutation = .resume(id: goal.id)
-            default: mutation = .clear(id: goal.id)
-            }
-        }
-        _ = try await mutateConversationGoal(id: conversationID, mutation: mutation, dispatchFence: dispatchFence)
-        return true
-    }
-
     private func blockGoalDelivery(_ delivery: WorkspaceSessionDelivery, reason: String) async {
         guard let database = dashboardStore?.database,
               let goal = try? await database.sessionGoals().first(where: { $0.sessionID == delivery.targetID }),

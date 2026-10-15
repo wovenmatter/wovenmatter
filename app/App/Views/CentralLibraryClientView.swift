@@ -276,7 +276,6 @@ private struct LibraryClientChatPane: View {
                     Button { details = true } label: { Image(systemName: "ellipsis") }.help("Conversation details")
                 }
             }
-            if let id = model.selectedConversationID { LibraryClientGoalControls(model: model, id: id).id(id) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     if model.transcript?.olderCursor != nil { Button("Load older messages") { Task { await model.olderMessages() } }.disabled(!model.canControl) }
@@ -310,6 +309,7 @@ private struct LibraryClientChatPane: View {
                         ForEach(model.notes) { note in Text(note.title).tag(note.id).disabled(!note.contentIncluded || model.state.conflicts[note.id] != nil) }
                     }.disabled(model.activeRunID != nil)
                 }
+                if let id = model.selectedConversationID { LibraryClientGoalControls(model: model, id: id).id(id) }
                 TextEditor(text: $model.composer).font(.system(size: 14)).frame(minHeight: 64, maxHeight: 130).scrollContentBackground(.hidden)
                 HStack {
                     if !model.canControl { Text("Draft saved on this Mac").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
@@ -394,7 +394,7 @@ private struct LibraryClientGoalControls: View {
         ConversationGoalControls(goal: goal, sessionID: id) { mutation in
             guard await model.perform(.goal(id: id, mutation: mutation)) else { throw WorkspaceToolError.invalid(model.errorMessage ?? "The execution owner did not confirm this goal change.") }
             await load()
-        }.disabled(!model.canControl).padding(.horizontal, 20)
+        }.disabled(!model.canControl)
         .task(id: id) {
             while !Task.isCancelled {
                 await load()
