@@ -7,9 +7,10 @@ import PiDurableRuntime
 extension CompanionModel {
   static var deviceToolGroups: [WorkspaceToolGroup] { WorkspaceToolGroup.allCases }
   static var deviceToolAccessOptions: [CompanionSelection] {
-    deviceToolGroups.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
+    deviceToolGroups.filter { $0 != .goals }.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
   }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool {
+    if name == "wovenmatter_goals" { return true }
     let group: String
     if ["list_notes", "read_note", "save_note"].contains(name) { group = "wovenmatter_notes" }
     else if name.hasPrefix("wovenmatter_") { group = name }
@@ -29,7 +30,7 @@ extension CompanionModel {
   func deviceToolContext(conversationID: String) throws -> MobileToolContext {
     guard let record = executionRecords[conversationID] else { throw DeviceExecutionError.unavailable("This tool request has no device execution owner.") }
     let selected = record.enabledTools.map(Set.init)
-    let enabled = Set(Self.deviceToolGroups.filter { selected == nil || selected!.contains("wovenmatter_" + $0.rawValue) })
+    let enabled = Set(Self.deviceToolGroups.filter { $0 == .goals || selected == nil || selected!.contains("wovenmatter_" + $0.rawValue) })
     return .init(sessionID: conversationID, workspaceID: deviceWorkspaceID,
       folderID: state.conversations[conversationID]?.folderID, enabled: enabled, nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) })
   }
