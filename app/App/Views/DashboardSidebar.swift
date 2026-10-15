@@ -287,7 +287,7 @@ struct DashboardSidebarNavigationPage: View {
     @State private var presentedFolderID: String?
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
-    @State private var showsNewFolderPopover = false
+    @State private var creatingFolderWorkspaceKey: String?
     @State private var renamingFolderID: String?
     @State private var renamedFolderName = ""
     @State private var deletingFolder: WorkspaceFolderRecord?
@@ -314,8 +314,9 @@ struct DashboardSidebarNavigationPage: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     topActions
+                    allWorkspacesRow
                     workspacesSection
-                    globalFolderActions
+                    trashRow
                     recentsSection
                 }
                 .padding(.horizontal, 8)
@@ -466,7 +467,8 @@ struct DashboardSidebarNavigationPage: View {
                     workspaceContents(
                         key: key,
                         title: title, workspaceAgents: [],
-                        workspaceFolders: folders.filter { ($0.executionWorkspaceID ?? "") == ownerID }
+                        workspaceFolders: folders.filter { ($0.executionWorkspaceID ?? "") == ownerID },
+                        canCreateFolders: false
                     )
                 }
             }
@@ -485,7 +487,8 @@ struct DashboardSidebarNavigationPage: View {
         title: String,
         workspaceAgents: [WorkspaceAgent],
         workspaceFolders: [WorkspaceFolderRecord],
-        remoteWorkspace: DashboardRemoteWorkspaceSidebarLink? = nil
+        remoteWorkspace: DashboardRemoteWorkspaceSidebarLink? = nil,
+        canCreateFolders: Bool = true
     ) -> some View {
         let sections = DashboardFolderSections(folders: workspaceFolders)
         let counts = folderContentCounts
@@ -502,21 +505,11 @@ struct DashboardSidebarNavigationPage: View {
             )
         )
         VStack(alignment: .leading, spacing: 0) {
-            agentDisclosureHeading(title: "Pinned", key: key + ":pinned")
-            if agentSectionExpanded(key + ":pinned") {
-                if pinned.isEmpty && sections.pinned.isEmpty {
-                    agentEmptyLabel("No pinned items")
-                }
+            agentDisclosureHeading(title: "Agents", key: key + ":agents")
+            if agentSectionExpanded(key + ":agents") {
                 ForEach(pinned) { agent in
                     agentRow(agent, moveScope: .pinned, groupAgents: pinned, isPinned: true)
                 }
-                ForEach(sections.pinned) { folder in
-                    folderRow(folder, sectionFolders: sections.pinned,
-                              counts: counts[folder.id, default: .init()], workspaceTitle: title)
-                }
-            }
-            agentDisclosureHeading(title: "Agents", key: key + ":agents")
-            if agentSectionExpanded(key + ":agents") {
                 ForEach(regular) { agent in
                     agentRow(agent, moveScope: .stored(remoteWorkspace == nil
                         ? DashboardAgentSidebarGroup.localWorkspace.orderKey : key),
@@ -527,19 +520,21 @@ struct DashboardSidebarNavigationPage: View {
                     ForEach(pendingTargets) { target in
                         remoteTargetRow(target)
                     }
-                    if regular.isEmpty && pendingTargets.isEmpty {
-                        agentEmptyLabel(pinned.isEmpty
-                            ? remoteWorkspaceEmptyLabel(remoteWorkspace, hasPinnedReadyAgent: false)
-                            : "Agents are pinned above")
+                    if pinned.isEmpty && regular.isEmpty && pendingTargets.isEmpty {
+                        agentEmptyLabel(remoteWorkspaceEmptyLabel(remoteWorkspace))
                     }
-                } else if regular.isEmpty {
-                    agentEmptyLabel(pinned.isEmpty ? "No agents" : "Agents are pinned above")
+                } else if pinned.isEmpty && regular.isEmpty {
+                    agentEmptyLabel("No agents")
                 }
             }
             agentDisclosureHeading(title: "Folders", key: key + ":folders")
             if agentSectionExpanded(key + ":folders") {
-                if sections.unpinned.isEmpty {
-                    agentEmptyLabel(sections.pinned.isEmpty ? "No folders" : "Folders are pinned above")
+                if canCreateFolders {
+                    newFolderRow(key: key, workspaceID: remoteWorkspace?.id, workspaceTitle: title)
+                }
+                ForEach(sections.pinned) { folder in
+                    folderRow(folder, sectionFolders: sections.pinned,
+                              counts: counts[folder.id, default: .init()], workspaceTitle: title)
                 }
                 ForEach(sections.unpinned) { folder in
                     folderRow(folder, sectionFolders: sections.unpinned,
@@ -617,10 +612,8 @@ struct DashboardSidebarNavigationPage: View {
     }
 
     private func remoteWorkspaceEmptyLabel(
-        _ workspace: DashboardRemoteWorkspaceSidebarLink,
-        hasPinnedReadyAgent: Bool
+        _ workspace: DashboardRemoteWorkspaceSidebarLink
     ) -> String {
-        if hasPinnedReadyAgent { return "Ready agents are pinned above" }
         let id = workspace.id
         if remoteWorkspaces.busyWorkspaceIDs.contains(id) {
             return "Refreshing workspace…"
@@ -749,32 +742,42 @@ struct DashboardSidebarNavigationPage: View {
         }
     }
 
-    private var globalFolderActions: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            DashboardRailRow(icon: .plus, title: "New folder", hoverID: "folder:create") {
-                showsNewFolderPopover = true
-            }
-            .popover(isPresented: $showsNewFolderPopover, arrowEdge: .trailing) {
-                DashboardNewFolderPopover(
-                    remoteWorkspaces: remoteWorkspaces,
-                    localWorkspaceReady: localWorkspaceReady,
-                    onCancel: { showsNewFolderPopover = false },
-                    onCreate: { name, workspaceID, externalRoot in
-                        showsNewFolderPopover = false
-                        onCreateFolder(name, workspaceID, externalRoot)
-                    }
-                )
-            }
-            HStack(spacing: 0) {
-                DashboardRailRow(
-                    icon: .folderOpen, title: "All Workspaces", hoverID: "folder:all",
-                    selected: selectedFolderID == nil
-                ) { onSelectFolder(nil) }
-                newChatButton(label: "New chat in All Workspaces") { onCreateChatInFolder(nil) }
-            }
-            DashboardRailRow(icon: .trash, title: "Trash", hoverID: "folder:trash") {
-                onShowTrash()
-            }
+    private func newFolderRow(key: String, workspaceID: UUID?, workspaceTitle: String) -> some View {
+        DashboardRailRow(icon: .plus, title: "New folder", hoverID: "folder:create:" + key) {
+            creatingFolderWorkspaceKey = key
+        }
+        .popover(isPresented: Binding(
+            get: { creatingFolderWorkspaceKey == key },
+            set: { if !$0 { creatingFolderWorkspaceKey = nil } }
+        ), arrowEdge: .trailing) {
+            DashboardNewFolderPopover(
+                remoteWorkspaces: remoteWorkspaces,
+                localWorkspaceReady: localWorkspaceReady,
+                workspaceID: workspaceID,
+                workspaceTitle: workspaceTitle,
+                onCancel: { creatingFolderWorkspaceKey = nil },
+                onCreate: { name, workspaceID, externalRoot in
+                    creatingFolderWorkspaceKey = nil
+                    onCreateFolder(name, workspaceID, externalRoot)
+                }
+            )
+        }
+    }
+
+    private var allWorkspacesRow: some View {
+        HStack(spacing: 0) {
+            DashboardRailRow(
+                icon: .folderOpen, title: "All Workspaces", hoverID: "folder:all",
+                selected: selectedFolderID == nil
+            ) { onSelectFolder(nil) }
+            newChatButton(label: "New chat in All Workspaces") { onCreateChatInFolder(nil) }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var trashRow: some View {
+        DashboardRailRow(icon: .trash, title: "Trash", hoverID: "folder:trash") {
+            onShowTrash()
         }
         .padding(.top, 8)
     }
@@ -1009,10 +1012,11 @@ enum DashboardRecentItem: Identifiable {
 struct DashboardNewFolderPopover: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
+    let workspaceID: UUID?
+    let workspaceTitle: String
     let onCancel: () -> Void
     let onCreate: (String, UUID?, URL?) -> Void
     @State private var name = ""
-    @State private var workspaceID: UUID?
     @State private var linksExistingDirectory = false
     @State private var externalRoot: URL?
     @FocusState private var nameFocused: Bool
@@ -1033,15 +1037,9 @@ struct DashboardNewFolderPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New Folder").font(.system(size: 14, weight: .semibold))
-            Picker("Workspace", selection: $workspaceID) {
-                Text("This Mac").tag(nil as UUID?)
-                ForEach(remoteWorkspaces.workspaces) { workspace in
-                    Text(workspace.name).tag(Optional(workspace.id))
-                }
-            }
-            .onChange(of: workspaceID) { _, id in
-                if id != nil { linksExistingDirectory = false; externalRoot = nil }
-            }
+            Text(workspaceTitle)
+                .font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
             if workspaceID == nil {
                 Picker("Directory", selection: $linksExistingDirectory) {
                     Text("Create New").tag(false)
