@@ -106,7 +106,7 @@ Crash dumps are disabled for managed helpers/containers; host swap and memory
 snapshots remain host responsibilities. Removing stored credentials does not
 revoke copies already obtained elsewhere; revoke those through the provider.
 
-Open **Local agent workspace** or a specific **Remote agent workspace** in
+Open **Local Agent Workspace** or a specific **Remote agent workspace** in
 Settings and select **Refresh sign-in status**. It checks Pi Durable and
 independent harnesses without starting login. Results distinguish stored
 credentials, a harness reporting sign-in, missing sign-in, unsupported checks,

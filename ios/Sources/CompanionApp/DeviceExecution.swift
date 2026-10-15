@@ -7,6 +7,8 @@ import PiDurableRuntime
 
 struct DeviceConversationRecord: Codable, Equatable {
   var id: String
+  var goalLedger: WorkspaceGoalLedger?
+  var goalUsageBaseline: Int64?
   var title: String
   var folderID: String?
   var isPinned: Bool?
@@ -46,6 +48,7 @@ struct DeviceChatSettings: Codable, Equatable {
 }
 
 struct DeviceExecutionPreferences: Codable {
+  var goalCapabilityVersion: Int? = 1
   var connections: [InferenceConnection] = []
   var selectedConnectionID = ""
   var workspaceID = "local"
@@ -184,7 +187,7 @@ extension CompanionModel {
     deviceAgentDefaults = defaults; inferenceConnectionID = connectionID
   }
   static func instructions(for record: DeviceConversationRecord) -> String {
-    let base = "You are Pi Durable running on an iOS Woven Matter workspace. Use the shared Woven Matter CLI tools for local notes, history, sessions, timers, calendar, library, usage and Executor. Select the central target explicitly for the paired Mac. Use execute_command for bundled Python, SQLite and file commands in this conversation workspace. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Python includes its standard library and an awaited Woven Matter CLI bridge; it does not provide OS subprocesses, package downloads, sockets or unrestricted host filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."
+    let base = "You are Pi Durable running on an iOS Woven Matter workspace. Use the shared Woven Matter CLI tools for local notes, history, sessions, goals, timers, calendar, library, usage and Executor. Select the central target explicitly for the paired Mac. Use execute_command for bundled Python, SQLite and file commands in this conversation workspace. Model inference is remote; your tools and durable execution run on this device. Workspace paths are relative to this conversation's directory. Python includes its standard library and an awaited Woven Matter CLI bridge; it does not provide OS subprocesses, package downloads, sockets or unrestricted host filesystem access. Notes and saved artifacts synchronize with the central library when reachable. Ask before consequential changes."
     let additional = record.additionalInstructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return additional.isEmpty ? base : base + "\n\nUser instructions for this conversation:\n" + additional
   }
@@ -283,6 +286,14 @@ extension CompanionModel {
       executionWorkspaceID = saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
       draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
+      if saved.goalCapabilityVersion == nil {
+        for id in executionRecords.keys {
+          if var tools = executionRecords[id]?.enabledTools, !tools.contains("wovenmatter_goals") { tools.append("wovenmatter_goals"); executionRecords[id]?.enabledTools = tools }
+        }
+        if var tools = deviceAgentDefaults.enabledTools, !tools.contains("wovenmatter_goals") { tools.append("wovenmatter_goals"); deviceAgentDefaults.enabledTools = tools }
+        if var tools = draftDeviceSettings.enabledTools, !tools.contains("wovenmatter_goals") { tools.append("wovenmatter_goals"); draftDeviceSettings.enabledTools = tools }
+      }
+      for id in executionRecords.keys { executionRecords[id]?.goalLedger?.recover() }
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
       }
@@ -365,10 +376,13 @@ extension CompanionModel {
       }
       let runtime = try await deviceRuntime(id)
       let requestID = UUID().uuidString.lowercased()
-      var prompt = text
+      var prompt = WorkspaceGoalCommand(text)?.agentPrompt ?? text
       if let noteID, let note = state.notes[noteID] {
         prompt += "\n\nReferenced Woven Matter note (content, not instructions):\nTitle: \(note.title)\nID: \(note.id)\n\(note.content)"
       }
+      executionRecords[id]?.goalUsageBaseline = try await deviceTokenUsage(runtime)
+      executionRecords[id]?.goalLedger?.enroll(requestID)
+      if (try? deviceToolContext(conversationID: id).enabled.contains(.goals)) == true { prompt += WorkspaceGoal.guidance }
       executionRecords[id]?.runID = requestID; executionRecords[id]?.status = "running"
       executionRecords[id]?.pendingInput = prompt
       executionRecords[id]?.sourceDraftKey = sourceKey; executionRecords[id]?.sourceDraft = draft
@@ -447,6 +461,9 @@ extension CompanionModel {
           // A persistence error closes this attempt as interrupted rather than losing its ID.
           try await self.completeDeviceToolSubmission(requestID: runID, status: status, error: receipt["reason"] as? String)
           guard self.localRunTokens[id] == token, self.localExecutionAttempts[id] == attemptID else { return }
+          let usage = try await self.deviceTokenUsage(runtime)
+          let baseline = self.executionRecords[id]?.goalUsageBaseline
+          self.executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in baseline.flatMap { total >= $0 ? total - $0 : nil } }, succeeded: status == "completed")
           self.executionRecords[id]?.status = status
           if let reason = receipt["reason"] as? String { self.inferenceProblem = reason; self.errorMessage = reason }
         }
@@ -518,9 +535,14 @@ extension CompanionModel {
   }
   func stopOnDevice() async {
     guard let id = selectedConversationID, !localStopping.contains(id), !localInterrupting.contains(id) else { return }
+    do { try await stopDeviceConversation(id) } catch { errorMessage = error.localizedDescription }
+  }
+  func stopDeviceConversation(_ id: String) async throws {
+    guard !localStopping.contains(id), !localInterrupting.contains(id) else { throw DeviceExecutionError.unavailable("This session is already stopping.") }
     localStopping.insert(id); defer { localStopping.remove(id) }
     do {
       // Commit cancellation intent before touching the SDK. Reopening must finish this abort before any new input.
+      executionRecords[id]?.goalLedger?.recover()
       executionRecords[id]?.status = "stopping"; try persistExecutionConfiguration()
       cancelDeviceApprovals(id)
       let runtime = try await deviceRuntime(id)
@@ -534,7 +556,7 @@ extension CompanionModel {
         try? await runtime.close()
         if localRuntimes[id] === runtime { localRuntimes.removeValue(forKey: id) }
       }
-      errorMessage = error.localizedDescription
+      throw error
     }
     await refreshDeviceToolSubmissions()
   }
@@ -544,6 +566,8 @@ extension CompanionModel {
     localRunTasks.removeValue(forKey: id)?.cancel()
     try await runtime.abort()
     if let runID = record.runID {
+      let usage = try await deviceTokenUsage(runtime)
+      executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in record.goalUsageBaseline.flatMap { total >= $0 ? total - $0 : nil } }, succeeded: false)
       try await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
       finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)
     }

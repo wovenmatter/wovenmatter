@@ -69,7 +69,7 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     let isLibraryClient: Bool
-    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel()
+    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel(assets: workspaceAssets)
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
@@ -180,6 +180,9 @@ final class ApplicationModel {
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
+    let workspaceAssets: WorkspaceAssetSession
+    @ObservationIgnored var clientExecutionDirectory: URL?
+    @ObservationIgnored var automationHost: WovenAutomationHost?
     var activeSessionLimitPresented = false
     var pendingSessionAccess: [WorkspaceCoordinationAccessRequest] = []
     var sessionAccessError: String?
@@ -374,8 +377,10 @@ final class ApplicationModel {
         dashboardStore: DashboardStore? = nil,
         startsAutomatically: Bool? = nil,
         ownsExecutionOverride: Bool? = nil,
-        localUsageService: LocalUsageService? = nil
+        localUsageService: LocalUsageService? = nil,
+        workspaceAssets: WorkspaceAssetSession? = nil
     ) {
+        self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
         self.isLibraryClient = LocalExecutionRole.current != .backend
             && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
@@ -515,6 +520,7 @@ final class ApplicationModel {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
+        clientExecutionDirectory = directory
         try await dashboardStore.prepareLocalWorkspace()
         await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
             await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
@@ -584,10 +590,18 @@ final class ApplicationModel {
             }, executorControl: { [weak self] control in
                 guard let self else { throw CancellationError() }
                 return try await self.executeExecutorControl(control)
+            }, goalControl: { [weak self] id, mutation in
+                guard let self else { throw CancellationError() }
+                _ = try await self.mutateConversationGoal(id: id, mutation: mutation)
             }, onMutation: { [weak self] in await self?.refreshWorkspace() })
         try await dashboardStore.setCLIConnectionProvider { [weak self] id in
             try await self?.sessionCLIConnection(id)
         }
+        agentTools?.automationHandler = { [weak self] caller, command, request in
+            guard let self else { throw CancellationError() }
+            return try await self.handleAutomationTool(callerID: caller, command: command, request: request)
+        }
+        agentTools?.automationDidDisable = { [weak self] caller in await self?.cancelAutomation(callerID: caller) }
         try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
     }
@@ -2327,6 +2341,8 @@ final class ApplicationModel {
         toolSessionAdmission.finish(conversationID)
     }
 
+    var preparingAgentDispatchIDs: Set<String> { Set(pendingAgentDispatches.keys) }
+
     func beginAgentDispatch(conversationID: String) -> AgentDispatchFence {
         let fence = AgentDispatchFence()
         pendingAgentDispatches[conversationID, default: [:]][ObjectIdentifier(fence)] = fence
@@ -2372,7 +2388,8 @@ final class ApplicationModel {
     /// Invalidate old preparation synchronously, then order native cancellation
     /// before every new user, tool, and scheduled input for this conversation.
     @discardableResult
-    func beginAgentStop(conversationID: String, retainFailure: Bool = true) -> Task<Void, any Error> {
+    func beginAgentStop(conversationID: String, retainFailure: Bool = true,
+                        afterStop: (@MainActor @Sendable () async throws -> Void)? = nil) -> Task<Void, any Error> {
         executorRuntime.cancel(conversationID)
         cancelPendingAgentDispatch(conversationID: conversationID)
         for permissionID in pendingLocalACPPermissions.filter({ $0.conversationID == conversationID }).map(\.id) {
@@ -2381,6 +2398,7 @@ final class ApplicationModel {
         cancelLocalACPInteractions(conversationID: conversationID)
         return agentStops.begin(conversationID: conversationID, retainFailure: retainFailure) { [self] in
             try await stopBackendAgentDispatch(conversationID: conversationID)
+            try await afterStop?()
         }
     }
 
@@ -2389,6 +2407,7 @@ final class ApplicationModel {
     }
 
     private func stopBackendAgentDispatch(conversationID: String) async throws {
+        await cancelAutomation(callerID: conversationID)
         guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
         if (try await dashboardStore?.database.companionExecutionOwner(conversationID: conversationID)) != nil {
             let client = try centralExecutionClient()
@@ -2397,6 +2416,9 @@ final class ApplicationModel {
             _ = try await client.stop(conversationID: conversationID, runID: runID)
             return
         }
+        var goalPauseError: (any Error)?
+        do { try await dashboardStore?.database.pauseActiveGoals(sessionID: conversationID) }
+        catch { goalPauseError = error }
         // Do not sweep app fences here: a new input may already be waiting for
         // this Stop. Its fence must survive unless another Stop supersedes it.
         if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
@@ -2406,6 +2428,10 @@ final class ApplicationModel {
         } else {
             try await dashboardStore?.stopLocalACPPrompt(conversationID: conversationID)
         }
+        try? await agentTools?.reload()
+        // Native cancellation still runs if storage fails. The retained Stop
+        // failure prevents a new goal dispatch until an explicit retry succeeds.
+        if let goalPauseError { throw goalPauseError }
     }
 
     private func stopAgentLocally(conversationID: String) {
@@ -2480,6 +2506,8 @@ final class ApplicationModel {
 
         if try await dispatchFederatedMessage(conversationID: conversation.id, input: input, note: note,
             expectedRunID: expectedRunID, requiresIdle: requiresIdle, dispatchFence: dispatchFence) { return (true, nil) }
+        let goalPrompt = input.historyDeliveryID == nil && WorkspaceGoal.supports(conversation.localRuntimeKind)
+            ? WorkspaceGoalCommand(input.text)?.agentPrompt : nil
 
         let activityID = activeWorkSleepPrevention.beginDispatch()
         defer { activeWorkSleepPrevention.endDispatch(activityID) }
@@ -2527,7 +2555,7 @@ final class ApplicationModel {
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
-        var normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
+        var normalized = AgentMessageInput(text: (goalPrompt ?? input.text).trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
         if !steering {
@@ -2554,6 +2582,24 @@ final class ApplicationModel {
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
         normalized.cliContext = try await agentTools.cliContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
         let deliveryContent = normalized.text
+        if WorkspaceGoal.supports(conversation.localRuntimeKind),
+           try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.goals) {
+            let goal = try await dashboardStore.database.sessionGoals().first { $0.sessionID == conversation.id }
+            let goalContext = goal.map { "Current goal ID: \($0.id). Status: \($0.status.rawValue)." } ?? "No goal is currently set."
+            let guidance = """
+
+            <wovenmatter-goals>
+            \(goalContext)
+            When the user explicitly requests a goal, use `wovenmatter goals set --objective TEXT --request-id UUID`.
+            Read `wovenmatter goals help` for controls. Manage this chat's goal through this CLI,
+            not provider-native goal tools or /goal loops. Complete only with verified evidence.
+            Set, pause, resume and clear require explicit user intent. While active, report useful
+            progress with goals checkpoint or an explained blocker with goals block before ending.
+            </wovenmatter-goals>
+            """
+            normalized = AgentMessageInput(text: normalized.text + guidance, attachments: normalized.attachments,
+                historyDeliveryID: normalized.historyDeliveryID, visibleWorkspace: normalized.visibleWorkspace, cliContext: normalized.cliContext)
+        }
         try dispatchFence.check()
         if let deliveryID = normalized.historyDeliveryID {
             try await dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
@@ -2607,7 +2653,7 @@ final class ApplicationModel {
             // successful refresh without reporting a retryable send failure.
             localRunningConversationIDs.insert(conversation.id)
         }
-        scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
+        scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: deliveryContent)
         return (true, accepted)
     }
 
@@ -2763,7 +2809,22 @@ final class ApplicationModel {
             return
         }
 
-        do { try await applyPendingSessionSelections(conversationID: conversation.id) }
+        var defersPendingSelectionsForRecovery = false
+        do {
+            if conversation.localRuntimeKind == .defaultAgent,
+               conversation.remoteWorkspaceID == nil,
+               sessionSelectionPreferences.conversation(id: conversation.id)?.requiresApplication == true,
+               let dashboardStore {
+                let persisted = try await dashboardStore.database.workspaceOverview().conversations
+                    .first { $0.id == conversation.id }
+                defersPendingSelectionsForRecovery = persisted?.programStatus?.executionStatus == "uncertain"
+            }
+            // An uncertain Pi run must reconnect before pending preferences can
+            // pass the active-run guard. Attachment reconciles its native outcome.
+            if !defersPendingSelectionsForRecovery {
+                try await applyPendingSessionSelections(conversationID: conversation.id)
+            }
+        }
         catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         if conversation.localRuntimeKind == .opencode {
             if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
@@ -2814,6 +2875,15 @@ final class ApplicationModel {
             )
             if let metadata = localACPSessionMetadata[conversation.id] {
                 await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
+            }
+            if defersPendingSelectionsForRecovery {
+                let active = try await dashboardStore.activeAgentConversationIDs()
+                guard !Task.isCancelled,
+                      localACPSessionRefreshLifecycle.isCurrent(request) else { return }
+                if !active.contains(conversation.id) {
+                    localRunningConversationIDs.remove(conversation.id)
+                    try await applyPendingSessionSelections(conversationID: conversation.id)
+                }
             }
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {
@@ -3473,6 +3543,7 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        automationHost?.stop(); automationHost = nil
         executorRuntime.setupTask?.cancel()
         for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
         Task { await executorRuntime.client?.shutdown() }
@@ -4424,7 +4495,13 @@ extension ApplicationModel {
                 return try await self.sendBackendCommand(.toolsMutation(.executor(control))).exportURL
             }) { [weak self] mutation in
                 guard let self else { throw CancellationError() }
-                let result = try await self.sendBackendCommand(.toolsMutation(mutation))
+                let result: BackendApplicationResult
+                if case let .goal(id, goalMutation) = mutation {
+                    let stops: Bool
+                    switch goalMutation { case .pause, .clear, .edit: stops = true; default: stops = false }
+                    let admission = try self.backendDispatchAdmission(conversationID: id, stopping: stops)
+                    result = try await self.sendBackendCommand(.goalMutationFenced(conversationID: id, mutation: goalMutation, admission: admission))
+                } else { result = try await self.sendBackendCommand(.toolsMutation(mutation)) }
                 if result.requiresTimerPauseConfirmation { throw WorkspaceToolError.timerPauseConfirmation }
             }
             await refreshWorkspace()

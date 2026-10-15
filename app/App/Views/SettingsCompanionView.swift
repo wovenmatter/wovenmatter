@@ -15,7 +15,7 @@ struct SettingsCompanionView: View {
     private var client: CentralLibraryClientModel { model.libraryClient }
 
     var body: some View {
-        SettingsPage(title: "Device Connections", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if model.isLibraryClient {
                 CentralLibraryPairingCard(client: client, application: model)
                 SettingsCard(title: "This Mac") {

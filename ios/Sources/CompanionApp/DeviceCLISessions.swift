@@ -16,8 +16,8 @@ extension CompanionModel {
       if let receipt = await store.toolSubmission(requestID: request.requestID), receipt.sessionID != id || receipt.text != text { throw WorkspaceToolError.invalid("The request ID is already used for different session content.") }
       // Destination defaults remain user controlled. An agent cannot expand its
       // authority by creating a child with broader tools than its own selection.
-      let defaults = deviceAgentDefaults.enabledTools ?? Self.deviceToolDefinitions.compactMap { $0["name"] as? String }
-      let permitted = source.enabledTools.map { Set($0).intersection(defaults).sorted() } ?? defaults
+      let defaults = deviceAgentDefaults.enabledTools ?? Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: nil) }
+      let permitted = defaults.filter { Self.deviceToolEnabled($0, selection: source.enabledTools) }.sorted()
       try await createDeviceToolSession(id: id, title: title, folderID: c.options["folder"] ?? source.folderID,
         model: c.options["model"], thinking: c.options["thinking"], enabledTools: permitted)
       if c.options["independent"] == nil {

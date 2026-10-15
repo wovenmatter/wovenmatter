@@ -13,7 +13,14 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     var tabs = WorkspaceAssetTabs()
     private(set) var pages: [UUID: WMBrowserPage] = [:]
     private(set) var pageRevision = 0
+    private(set) var browserPresentationRevision = 0
     var notice: String?
+    var automationTabs: [GatewayJSONValue] {
+        tabs.browserIDs.compactMap { id in
+            pages[id].map { .object(["tabId": .string(id.uuidString.lowercased()), "url": .string($0.url),
+                                    "title": .string($0.title), "loading": .bool($0.loading)]) }
+        }
+    }
     private static var preparedProfile = false
     static let clearDataKey = "wovenmatter.browser.clear-on-launch"
 
@@ -50,6 +57,11 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         case .note: tabs.close(tab)
         case .browser(let id): pages[id]?.close()
         }
+    }
+
+    func focusAutomationBrowser(_ id: UUID) {
+        tabs.select(.browser(id))
+        browserPresentationRevision &+= 1
     }
 
     func title(for tab: WorkspaceAssetTabs.Tab, notes: [WorkspaceNoteRecord]) -> String {

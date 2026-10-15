@@ -24,7 +24,7 @@ export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest
   }
 }
 
-async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive}) {
+async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,cliContext}) {
   const permission=config.permission
   if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
@@ -45,7 +45,7 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     // writable when the Mac's connected-session bridge is unavailable.
     const query = new URLSearchParams({'location[directory]': cwd})
     await call('POST', '/api/rpc/wovenmatter-cli/connect?' + query, {input: {
-      sessionID, context: {executablePath: fileURLToPath(new URL('./wovenmatter', import.meta.url)), captureID: ''},
+      sessionID, context: cliContext ?? {executablePath: fileURLToPath(new URL('./wovenmatter', import.meta.url)), captureID: ''},
     }})
     if(config.model||config.thinking){const model=config.model??[session.model?.providerID,session.model?.id].filter(Boolean).join('/'),split=model.indexOf('/');if(split<1)throw before('The saved OpenCode model is invalid.');const selection={providerID:model.slice(0,split),id:model.slice(split+1),...(config.thinking&&config.thinking!=='default'?{variant:config.thinking}:{})};await call('POST',path+'/model',{model:selection});session=(await call('GET',path)).data;if(session.model?.id!==selection.id||session.model?.providerID!==selection.providerID||(session.model?.variant??'default')!==(selection.variant??'default'))throw before('OpenCode did not confirm the saved model and thinking level.')}
     if (permission) {
@@ -88,7 +88,7 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     if(active[sessionID])throw before('The recurring OpenCode task is already running.')
     if(signal.aborted)throw before('Background execution was turned off.')
     accepted=true
-    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[]})
+    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[],...(cliContext?{metadata:{wovenTools:cliContext}}:{})})
     if(receipt.data?.id!==messageID)throw new Error('OpenCode did not acknowledge the task prompt. Check its session before retrying.')
     let observed=false, presentedText
     const presentedActivities=new Map()
@@ -152,7 +152,14 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
         }
       }
       const running=(await call('GET','/api/session/active')).data??{}
-      if(!running[sessionID]&&observed){if(signal.aborted)throw new Error('Background execution was turned off.');if(!interactive)for(const message of incoming.reverse())for(const part of message.content??message.parts??[]){if(part.type==='text'&&part.text)publishNativePresentation(textUpdate(part.text), publish);if(part.type==='reasoning'&&part.text)publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text}}, publish);}if(incoming.some(message=>message.error || message.info?.error))throw new Error('OpenCode could not complete this task.');return {stopReason:'end_turn'}}
+      if(!running[sessionID]&&observed){if(signal.aborted)throw new Error('Background execution was turned off.');if(!interactive)for(const message of incoming.reverse())for(const part of message.content??message.parts??[]){if(part.type==='text'&&part.text)publishNativePresentation(textUpdate(part.text), publish);if(part.type==='reasoning'&&part.text)publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text}}, publish);}if(incoming.some(message=>message.error || message.info?.error))throw new Error('OpenCode could not complete this task.');
+        const reported=incoming.flatMap(message=>(message.content??message.parts??[]).filter(part=>part.type==='step-finish'&&part.tokens).map(part=>part.tokens))
+        if(reported.length) {
+          const values=reported.map(tokens=>tokens.total??[tokens.input,tokens.output,tokens.cache?.read??0,tokens.cache?.write??0].reduce((sum,value)=>Number.isSafeInteger(value)&&value>=0?sum+value:NaN,0))
+          const totalTokens=values.reduce((sum,value)=>sum+value,0)
+          if(Number.isSafeInteger(totalTokens)&&totalTokens>=0)publish({sessionUpdate:'woven_usage',usage:{totalTokens}})
+        }
+        return {stopReason:'end_turn'}}
       await pause(250)
     }
     throw new Error('OpenCode task exceeded its runtime limit.')

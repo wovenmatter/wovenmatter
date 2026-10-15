@@ -14,7 +14,7 @@ enum CentralLibraryClientConfiguration {
 @MainActor @Observable
 final class CentralLibraryClientModel {
     enum Section: String, CaseIterable, Identifiable {
-        case home = "Home", folders = "Folders", chats = "Chats", notes = "Notes", library = "Library", calendar = "Calendar", trash = "Trash", settings = "Settings"
+        case home = "Home", folders = "Folders", chats = "Chats", notes = "Notes", library = "Library", calendar = "Calendar", browser = "Browser", trash = "Trash", settings = "Settings"
         var id: String { rawValue }
         var icon: DashboardLucideGlyph {
             switch self {
@@ -24,6 +24,7 @@ final class CentralLibraryClientModel {
             case .notes: .fileText
             case .library: .libraryBig
             case .calendar: .calendarDays
+            case .browser: .compass
             case .trash: .trash
             case .settings: .settings
             }
@@ -95,13 +96,15 @@ final class CentralLibraryClientModel {
     private var transport: HTTPSCompanionTransport?
 
     init(store: MobileStore? = nil, transport: (any CompanionTransport)? = nil,
+         assets: WorkspaceAssetSession? = nil,
          executionDirectory: URL? = nil, preferences: UserDefaults = .standard,
-         makeLocalExecution: @escaping @MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace = {
-             try await SecondaryMacExecutionWorkspace.create(directory: $0, replica: $1)
-         }, saveCentralCredential: @escaping @MainActor (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) },
+         makeLocalExecution: (@MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace)? = nil,
+         saveCentralCredential: @escaping @MainActor (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) },
          clearCentralCredential: @escaping @MainActor () throws -> Void = { try MobileCredentialVault.clear() },
          clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) }) {
-        self.makeLocalExecution = makeLocalExecution
+        self.makeLocalExecution = makeLocalExecution ?? { directory, replica in
+            try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica, assets: assets)
+        }
         self.clearCentralCredential = clearCentralCredential
         self.clearWorkspaceCredential = clearWorkspaceCredential
         self.saveCentralCredential = saveCentralCredential
@@ -751,7 +754,7 @@ final class CentralLibraryClientModel {
         }
         let conversationID: String?
         switch action {
-        case .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
+        case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
         default: conversationID = nil
         }
         let owner = conversationID.flatMap { executionOwner(for: $0) } ?? "central"

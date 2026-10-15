@@ -19,6 +19,7 @@ enum BackendToolsMutation: Codable, Sendable {
     case notifications(sessionID: String, enabled: Bool)
     case pauseTimer(id: String, paused: Bool)
     case removeTimer(id: String)
+    case goal(sessionID: String, mutation: WorkspaceGoalMutation)
 }
 
 @MainActor @Observable
@@ -30,6 +31,8 @@ final class WorkspaceAgentToolsModel {
     typealias CalendarTaskHandler = @MainActor (String, WovenMatterToolCommand, WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask
     var executorControl: (@MainActor (ExecutorControl) async throws -> URL?)?
     private let executorHandler: SessionHandler?
+    var automationHandler: SessionHandler?
+    var automationDidDisable: (@MainActor (String) async -> Void)?
     var executorDashboardURL: URL?
     var executorBusy = false
     func controlExecutor(_ control: ExecutorControl) async throws {
@@ -39,6 +42,7 @@ final class WorkspaceAgentToolsModel {
         executorDashboardURL = try await executorControl(control)
         try await reload()
     }
+    var goalControl: (@MainActor (String, WorkspaceGoalMutation) async throws -> Void)?
     var backendMutation: (@MainActor (BackendToolsMutation) async throws -> Void)?
     private let passiveProjection: Bool
     private var pendingSettingsWrites = 0
@@ -53,6 +57,7 @@ final class WorkspaceAgentToolsModel {
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
     private(set) var relationships: [String: WorkspaceSessionRelationship] = [:]
     private(set) var timers: [WorkspaceSessionTimer] = []
+    private(set) var goals: [String: WorkspaceGoal] = [:]
     private(set) var receipts: [String: [WorkspaceSessionDelivery]] = [:]
     private var reloadGeneration = UUID()
     private var observedSessions: [UUID: String] = [:]
@@ -78,9 +83,10 @@ final class WorkspaceAgentToolsModel {
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
-         calendarTaskHandler: CalendarTaskHandler? = nil, executorHandler: SessionHandler? = nil, executorControl: (@MainActor (ExecutorControl) async throws -> URL?)? = nil, passiveProjection: Bool = false, onMutation: @escaping @MainActor () async -> Void) async throws {
+         calendarTaskHandler: CalendarTaskHandler? = nil, executorHandler: SessionHandler? = nil, executorControl: (@MainActor (ExecutorControl) async throws -> URL?)? = nil, goalControl: (@MainActor (String, WorkspaceGoalMutation) async throws -> Void)? = nil, passiveProjection: Bool = false, onMutation: @escaping @MainActor () async -> Void) async throws {
         self.executorHandler = executorHandler
         self.executorControl = executorControl
+        self.goalControl = goalControl
         self.passiveProjection = passiveProjection
         self.calendarTaskHandler = calendarTaskHandler
         self.database = database
@@ -146,7 +152,9 @@ final class WorkspaceAgentToolsModel {
         })
         let snapshot = try await database.toolStateSnapshot(sessionIDs: observed.union(sessionPolicies.keys).union(policyIDs),
             oldestReceipts: oldest, receiptSessionIDs: observed)
+        let goals = Dictionary(uniqueKeysWithValues: try await database.sessionGoals().map { ($0.sessionID, $0) })
         guard generation == reloadGeneration, !stopped, !Task.isCancelled else { return }
+        if self.goals != goals { self.goals = goals }
         if mayPublishSettings, pendingSettingsWrites == 0 {
             committedSettings = snapshot.settings
             if settings != snapshot.settings { settings = snapshot.settings }
@@ -317,6 +325,7 @@ final class WorkspaceAgentToolsModel {
         let policy = try await database.setSessionToolEnabled(group, enabled: enabled, sessionID: sessionID,
             confirmedPausingTimers: confirmedPausingTimers)
         sessionPolicies[sessionID] = policy
+        if [.browser, .computer].contains(group), !enabled { await automationDidDisable?(sessionID) }
         try await reload()
     }
 
@@ -419,7 +428,9 @@ final class WorkspaceAgentToolsModel {
             guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool.") }
             // Scoped history reads have their own independent attachment/management
             // checks. All other commands require the group's current capability.
-            if group != .history { try await database.requireTool(group, sessionID: callerID) }
+            if group != .history && !([.browser, .computer].contains(group) && command.action == "cancel") {
+                try await database.requireTool(group, sessionID: callerID)
+            }
             let result: WovenMatterToolResponse
             if let replica = try await replicaReadHandler?(request, command, callerID) { result = replica }
             else { switch group {
@@ -448,6 +459,7 @@ final class WorkspaceAgentToolsModel {
                         after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                         limit: command.integer("limit", default: 100, range: 1...200)))
                 } else { result = try await sessionHandler(callerID, command, request) }
+            case .goals: result = try await goal(command, callerID: callerID, requestID: request.requestID)
             case .timers: result = try await timer(command, callerID: callerID, requestID: request.requestID)
             case .calendar:
                 try await calendarProjection?()
@@ -458,6 +470,9 @@ final class WorkspaceAgentToolsModel {
             case .executor:
                 guard let executorHandler else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
                 result = try await executorHandler(callerID, command, request)
+            case .browser, .computer:
+                guard let automationHandler else { throw WorkspaceToolError.invalid("Open Woven Matter to use browser and computer tools.") }
+                result = try await automationHandler(callerID, command, request)
             }
             }
             if command.isMutation {

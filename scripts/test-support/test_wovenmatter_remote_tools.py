@@ -20,6 +20,48 @@ spec.loader.exec_module(tools)
 
 
 class RemoteToolTests(unittest.TestCase):
+    def test_automation_images_are_exported_only_on_the_remote_caller(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = str(Path(temporary) / "screen.jpg")
+            arguments = ["browser", "call", "--json", '{"action":"screenshot"}', "--image", image]
+            request = json.loads(tools.build_request(arguments, {}))
+            self.assertEqual(request["arguments"], arguments[:4])
+            response = {"success": True, "result": {"content": [{"type": "image", "data": base64.b64encode(b"fake image").decode(), "mimeType": "image/jpeg"}]}}
+            with patch.object(tools, "forward_cli", return_value=response), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(tools.run_cli(arguments), 0)
+            self.assertEqual(Path(image).read_bytes(), b"fake image")
+            self.assertNotIn("data", response["result"]["content"][0])
+
+    def test_mcp_lists_tools_and_preserves_inline_images_with_no_selected_identity(self):
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_): self.target, self.args = target, args
+            def start(self): self.target(*self.args)
+        lines = [
+            {"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
+            {"id": 2, "method": "tools/list"},
+            {"id": 3, "method": "tools/call", "params": {"name": "computer", "arguments": {"action": "screenshot"}}}
+        ]
+        output = io.StringIO()
+        image = {"type": "image", "mimeType": "image/jpeg", "data": "ZmFrZQ=="}
+        with patch.object(sys, "stdin", io.StringIO("\n".join(map(json.dumps, lines)) + "\n")), contextlib.redirect_stdout(output), \
+                patch.object(tools.threading, "Lock", tools.threading.RLock), patch.object(tools.threading, "Thread", ImmediateThread), patch.object(tools, "forward_cli", return_value={"success": True, "result": {"content": [image]}}) as forward:
+            tools.run_mcp()
+        packets = list(map(json.loads, output.getvalue().splitlines()))
+        self.assertEqual([tool["name"] for tool in packets[1]["result"]["tools"]], ["browser", "computer"])
+        self.assertEqual(packets[2]["result"]["content"], [image])
+        args = forward.call_args.args[0]
+        self.assertEqual(args[:3], ["computer", "call", "--json"])
+        self.assertNotIn("--session", args)
+        self.assertEqual(str(tools.uuid.UUID(args[-1])), args[-1])
+
+    def test_large_automation_stdin_stays_on_the_caller_host_and_is_bounded(self):
+        payload = json.dumps({"action": "upload", "data": "A" * 2800000}).encode()
+        arguments = ["browser", "call", "--json", "-"]
+        request = json.loads(tools.build_request(arguments, {}, stdin=io.BytesIO(payload)))
+        self.assertEqual(request["arguments"], ["browser", "call", "--json", payload.decode()])
+        with self.assertRaises(ValueError):
+            tools.build_request(arguments, {}, stdin=io.BytesIO(b"x" * (3 * 1024 * 1024 + 1)))
+
     def test_executor_file_is_bounded_and_read_on_the_cli_host(self):
         with tempfile.TemporaryDirectory() as temporary:
             file = Path(temporary) / "program.js"

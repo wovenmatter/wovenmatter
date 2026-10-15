@@ -95,6 +95,7 @@ extension CompanionModel {
         } catch is CancellationError { throw CancellationError() }
         catch { /* Retain this fire ID, while allowing unrelated timers to proceed. */ }
       }
+      try await processDeviceGoals()
     } catch is CancellationError { }
     catch { /* Persistent claims remain available for the next execution window. */ }
     if await store.calendar.runs() != previousRuns { calendarRevision &+= 1 }

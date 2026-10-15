@@ -4,7 +4,7 @@ Technical reference. For everyday setup, start with [Agent setup](guide/agents.m
 
 ## Runtime controls
 
-**Settings → Local agent workspace** shows the executable and components used
+**Settings → Local Agent Workspace** shows the executable and components used
 by each harness. Missing components show **Install**; verified installations
 can be enabled. Opening settings refreshes the inventory. Enabled runtimes also
 check versions at startup or reopen, without a repeating timer.

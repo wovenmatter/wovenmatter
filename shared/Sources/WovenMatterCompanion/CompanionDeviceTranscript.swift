@@ -72,7 +72,7 @@ public enum CompanionDeviceTranscript {
         runID = stableRunID(conversationID + "-turn-" + id)
         ensureRun(at: date)
         messages.append(.init(id: id, conversationID: conversationID, runID: runID,
-          role: role, content: text(message["content"]), createdAt: date ?? "", sequence: sequence))
+          role: role, content: WorkspaceGoal.displayPrompt(text(message["content"])), createdAt: date ?? "", sequence: sequence))
         sequence += 1
         return
       }

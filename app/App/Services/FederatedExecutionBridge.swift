@@ -120,6 +120,15 @@ extension ApplicationModel {
     func dispatchFederatedMessage(conversationID: String, input: AgentMessageInput, note: WorkspaceNoteRecord?,
                                   expectedRunID: String?, requiresIdle: Bool, dispatchFence: AgentDispatchFence) async throws -> Bool {
         guard let database = dashboardStore?.database else { return false }
+        if let id = input.historyDeliveryID, try await database.toolDelivery(id: id)?.kind == .goal {
+            // A primary-owner reservation can never become a foreign-owner send.
+            // Adoption cancels this reservation; the new owner resumes its own goal.
+            try await database.validateClaimedToolDelivery(id: id)
+            guard try await database.companionExecutionOwner(conversationID: conversationID) == nil else {
+                throw WorkspaceToolError.invalid("This goal continuation belongs to the previous execution owner.")
+            }
+            return false
+        }
         if let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == conversationID }) {
             try await adoptRegisteredRemoteConversationIfNeeded(conversation)
         }

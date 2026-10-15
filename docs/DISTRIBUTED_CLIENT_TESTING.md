@@ -41,7 +41,7 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 
 ## Pairing and workspace control
 
-1. On the central database, open Settings → Device Connections. Tailscale sharing
+1. On the central database, open Settings → Devices. Tailscale sharing
    starts automatically; QR/link controls remain visible when unavailable.
    Pair a phone/tablet with a fresh QR/link. Repeat lost confirmation, restart
    during setup, expired code, duplicate scan and pairing to a different database.

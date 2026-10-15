@@ -53,6 +53,7 @@ extension CompanionModel {
     try? await runtime.close()
     guard localExecutionAttempts[id] == attemptID, executionRecords[id]?.runID == runID else { return }
     if localRuntimes[id] === runtime { localRuntimes.removeValue(forKey: id) }
+    executionRecords[id]?.goalLedger?.recover()
     if executionRecords[id]?.status == "running" { executionRecords[id]?.status = "interrupted" }
     try? persistExecutionConfiguration()
     if let record = executionRecords[id], let snapshot {

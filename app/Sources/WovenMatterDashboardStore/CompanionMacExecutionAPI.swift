@@ -94,7 +94,7 @@ public final class CompanionMacExecutionAPI {
           } else if command.kind == .workspace {
             guard let action = command.workspaceAction else { throw notLocal }
             switch action {
-            case .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
+            case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
             default: throw CompanionAPIError(code: "unsupported", message: "Use central library synchronization for this app-data operation.")
             }
           } else {

@@ -28,3 +28,10 @@ target_include_directories(WovenBrowserPasswordTests PRIVATE "${CEF_ROOT}")
 target_compile_options(WovenBrowserPasswordTests PRIVATE -fobjc-arc)
 target_compile_definitions(WovenBrowserPasswordTests PRIVATE WOVEN_BROWSER_TESTING)
 target_link_libraries(WovenBrowserPasswordTests PRIVATE libcef_dll_wrapper "-framework Cocoa" "-framework Security")
+
+add_executable(WovenBrowserAutomationTests EXCLUDE_FROM_ALL
+  ../../scripts/test-support/BrowserAutomationTests.mm)
+target_include_directories(WovenBrowserAutomationTests PRIVATE "${CEF_ROOT}")
+target_compile_options(WovenBrowserAutomationTests PRIVATE -fobjc-arc)
+target_compile_definitions(WovenBrowserAutomationTests PRIVATE WOVEN_BROWSER_TESTING)
+target_link_libraries(WovenBrowserAutomationTests PRIVATE libcef_dll_wrapper "-framework Cocoa" "-framework Security")

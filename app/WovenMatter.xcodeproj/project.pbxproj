@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = B40A00000000000000000002 /* WovenMatterAutomation */; };
 		DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */; };
 		DA4C00000000000000000001 /* DashboardColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000002 /* DashboardColors.swift */; };
 		E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */; };
@@ -96,7 +97,6 @@
 		301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */; };
 		88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */; };
 		3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */; };
-		7B7EB5C6F87BEB57A87978A2 /* SettingsDeviceWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2733F2AC346189BE8356C281 /* SettingsDeviceWorkspacesView.swift */; };
 		F2B1E2E7B8F7CB91795BE7E8 /* DeviceConnectionsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */; };
 		D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */; };
 		77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */; };
@@ -122,6 +122,9 @@
 		4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */; };
 		46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */; };
 		00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */; };
+		A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848A38FA567146749E61538D /* ApplicationModel+Goals.swift */; };
+		A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */; };
+		A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */; };
 		BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */; };
 		A2D41477A1E81E4EC0EE3D4F /* CentralLibraryClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */; };
 		C4263304AD979555E1FFD2A7 /* CentralLibraryClientSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */; };
@@ -139,6 +142,8 @@
 		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
 		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
 		04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969050270F91397F88F6A49D /* FederatedConversationPane.swift */; };
+		6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */; };
+		E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -232,7 +237,6 @@
 		0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CompanionHostController+Publishing.swift"; sourceTree = "<group>"; };
 		92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionMacPairingController.swift; sourceTree = "<group>"; };
 		8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCompanionView.swift; sourceTree = "<group>"; };
-		2733F2AC346189BE8356C281 /* SettingsDeviceWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDeviceWorkspacesView.swift; sourceTree = "<group>"; };
 		ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceConnectionsComponents.swift; sourceTree = "<group>"; };
 		A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNativeInteractions.swift; sourceTree = "<group>"; };
 		853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionWorkspaceFeatures.swift; sourceTree = "<group>"; };
@@ -258,6 +262,9 @@
 		4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/WorkspaceAssetSession.swift"; sourceTree = SOURCE_ROOT; };
 		1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardAssetPane.swift"; sourceTree = SOURCE_ROOT; };
 		D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardBrowserPane.swift"; sourceTree = SOURCE_ROOT; };
+		848A38FA567146749E61538D /* ApplicationModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Goals.swift"; sourceTree = "<group>"; };
+		26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Goals.swift"; sourceTree = "<group>"; };
+		988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConversationGoalControls.swift"; sourceTree = "<group>"; };
 		619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientModel.swift; sourceTree = "<group>"; };
 		BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientView.swift; sourceTree = "<group>"; };
 		4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralLibraryClientSettings.swift; sourceTree = "<group>"; };
@@ -274,6 +281,8 @@
 		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
 		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
 		969050270F91397F88F6A49D /* FederatedConversationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedConversationPane.swift; sourceTree = "<group>"; };
+		CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+Automation.swift"; sourceTree = SOURCE_ROOT; };
+		259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/WovenAutomationHost.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -283,6 +292,7 @@
 			files = (
 				1865697E240F2F2763E855ED /* CompanionClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
+				B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */,
 				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -340,12 +350,14 @@
 			children = (
 				8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */,
 				619A29D63D3B1A30B45C18E4 /* CentralLibraryClientModel.swift */,
+				CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */,
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
 				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
+				848A38FA567146749E61538D /* ApplicationModel+Goals.swift */,
 				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
 				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
 				E7E000000000000000000006 /* ExecutorRuntime.swift */,
@@ -363,6 +375,7 @@
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
+				26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */,
 				A71B00000000000000000102 /* LibraryModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
@@ -396,7 +409,6 @@
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */,
-				2733F2AC346189BE8356C281 /* SettingsDeviceWorkspacesView.swift */,
 				ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */,
 				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
 				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
@@ -405,6 +417,7 @@
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
 				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
+				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
 				890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */,
 				DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */,
 				F10100000000000000000002 /* ArtifactEditor.swift */,
@@ -472,6 +485,7 @@
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
+				259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */,
 				851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */,
 				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
@@ -504,6 +518,7 @@
 			packageProductDependencies = (
 				C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
+				B40A00000000000000000002 /* WovenMatterAutomation */,
 				D46000000000000000000001 /* WovenMatterDashboardStore */,
 			);
 			productName = WovenMatter;
@@ -623,6 +638,8 @@
 				C4263304AD979555E1FFD2A7 /* CentralLibraryClientSettings.swift in Sources */,
 				A2D41477A1E81E4EC0EE3D4F /* CentralLibraryClientView.swift in Sources */,
 				BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */,
+				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
+				6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
@@ -643,7 +660,6 @@
 				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */,
-				7B7EB5C6F87BEB57A87978A2 /* SettingsDeviceWorkspacesView.swift in Sources */,
 				F2B1E2E7B8F7CB91795BE7E8 /* DeviceConnectionsComponents.swift in Sources */,
 				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
 				301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */,
@@ -658,6 +674,7 @@
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
+				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,
 				97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */,
 				8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */,
 				F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */,
@@ -671,6 +688,7 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
+				A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */,
 				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
 				B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */,
 				E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */,
@@ -688,6 +706,7 @@
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
+				A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */,
 				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
@@ -954,6 +973,7 @@
 
 
 /* Begin XCSwiftPackageProductDependency section */
+		B40A00000000000000000002 /* WovenMatterAutomation */ = {isa = XCSwiftPackageProductDependency; productName = WovenMatterAutomation; };
 		0C11E0000000000000000004 /* WovenMatterClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterClient;

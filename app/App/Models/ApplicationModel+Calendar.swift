@@ -266,7 +266,11 @@ extension ApplicationModel {
             throw WorkspaceToolError.invalid("The scheduled session's folder is fixed. Edit the task to use a new session.")
         }
         try dispatchFence.check()
+        let previousTools = try await store.database.sessionTools(run.sessionID)
         try await store.database.setSessionTools(config.tools, sessionID: run.sessionID, confirmedPausingTimers: true)
+        if !previousTools.enabled.subtracting(config.tools.enabled).isDisjoint(with: [.browser, .computer]) {
+            await cancelAutomation(callerID: run.sessionID)
+        }
         try dispatchFence.check()
         try await applyPendingSessionSelections(conversationID: run.sessionID)
         try dispatchFence.check()

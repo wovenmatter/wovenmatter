@@ -111,7 +111,7 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
         return
       }
-      let scheduled = delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar
+      let scheduled = delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar || delivery.kind == .goal
       let status = submitted ? "uncertain" : scheduled ? "queued" : "failed"
       try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,retry_after=? WHERE id=?",
         [status, status == "queued" ? String(now.addingTimeInterval(30).timeIntervalSince1970) : nil, id])
@@ -135,6 +135,7 @@ extension WorkspaceDatabaseConnection {
     let source = try sessionToolsUnlocked(delivery.sourceID)
     let target = try sessionToolsUnlocked(delivery.targetID)
     switch delivery.kind {
+    case .goal: return try goalDeliveryAuthorizedUnlocked(sessionID: delivery.targetID, deliveryID: delivery.id)
     case .calendar: return try calendarRunAuthorizedUnlocked(delivery.id)
     case .message, .created: return source.enabled.contains(.sessions)
     case .timer:
@@ -175,7 +176,7 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked("""
         UPDATE workspace_session_deliveries SET status=CASE
           WHEN transport_started=1 THEN 'uncertain'
-          WHEN kind IN ('timer','notification','calendar') THEN 'queued' ELSE 'failed' END
+          WHEN kind IN ('timer','notification','calendar','goal') THEN 'queued' ELSE 'failed' END
           WHERE status='sending' AND message_id IS NULL
         """)
     }

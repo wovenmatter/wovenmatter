@@ -105,6 +105,7 @@ struct ChatPane: View {
           Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(DashboardQuietButtonStyle())
         }.padding(.horizontal, 18)
       }
+      if let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
       composer
     }
     .navigationDestination(isPresented: $pendingPresented) {
@@ -259,5 +260,86 @@ struct PendingInteractionView: View {
   private func respond(_ response: CompanionInteractionResponse) {
     responding = true
     Task { await model.respond(interaction, response: response); responding = false }
+  }
+}
+
+private struct MobileGoalControls: View {
+  @Environment(\.dashboardTheme) private var theme
+  @Bindable var model: CompanionModel
+  let conversationID: String
+  @State private var goal: WorkspaceGoal?
+  @State private var showingDetails = false
+  @State private var saving = false
+  @State private var problem: String?
+  var body: some View {
+    Group {
+      if let goal {
+        HStack(spacing: 8) {
+          Text(goal.status.title).font(.caption.weight(.medium)).lineLimit(1)
+          TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(goal.elapsedPursuitText(at: context.date))
+                }.font(.caption2).monospacedDigit()
+            .foregroundStyle(DashboardPalette.mutedForeground)
+          Spacer(minLength: 0)
+          Button("Delete", role: .destructive) { change(.clear(id: goal.id)) }
+            .frame(minHeight: 44).disabled(saving || !model.executionOnline)
+          if goal.status != .complete {
+            Button(goal.status == .active ? "Pause" : "Resume") {
+              change(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
+            }.frame(minHeight: 44).disabled(saving || !model.executionOnline)
+          }
+          Button("Expand") { showingDetails = true }.frame(minHeight: 44)
+        }.font(.caption).buttonStyle(.borderless)
+          .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+          .sheet(isPresented: $showingDetails) {
+            NavigationStack {
+              ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                  Text(goal.status.title).font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+                  Text(goal.objective).textSelection(.enabled)
+                  if let evidence = goal.evidence, !evidence.isEmpty {
+                    Text(evidence).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                  }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+              }.scrollIndicators(.never)
+                .navigationTitle("Goal")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                  ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingDetails = false }
+                  }
+                }
+            }
+          }
+      }
+    }
+    .alert("Unable to update goal", isPresented: Binding(
+      get: { problem != nil }, set: { if !$0 { problem = nil } }
+    )) {
+      Button("OK", role: .cancel) { problem = nil }
+    } message: { Text(problem ?? "") }
+    .task(id: conversationID) {
+      while !Task.isCancelled {
+        await load()
+        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+      }
+    }
+  }
+  private func load() async {
+    do {
+      guard case .session(let settings) = try await model.workspace(.session(id: conversationID)), !Task.isCancelled else { return }
+      goal = settings.goal
+    } catch { /* Saved goal remains visible during disconnection. */ }
+  }
+  private func change(_ mutation: WorkspaceGoalMutation) {
+    saving = true; problem = nil
+    Task {
+      defer { saving = false }
+      if await model.perform(.goal(id: conversationID, mutation: mutation)) {
+        await load()
+        showingDetails = false
+      } else { problem = model.errorMessage ?? "The execution owner did not confirm this goal change." }
+    }
   }
 }

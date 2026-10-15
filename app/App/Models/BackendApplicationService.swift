@@ -44,6 +44,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case sendMessage(conversationID: String, input: AgentMessageInput, noteID: String?)
     case sendMessageFenced(conversationID: String, input: AgentMessageInput, noteID: String?, admission: AgentDispatchAdmission)
     case cancelSessionFenced(conversationID: String, admission: AgentDispatchAdmission)
+    case goalMutationFenced(conversationID: String, mutation: WorkspaceGoalMutation, admission: AgentDispatchAdmission)
     case configureSession(conversationID: String, model: String?, thinking: String?, permission: String?)
     case subagentHistory(BuiltInSubagentArchiveRequest)
     case setSessionTools(conversationID: String, tools: WorkspaceSessionTools, confirmedPausingTimers: Bool)
@@ -263,6 +264,19 @@ final class BackendApplicationService {
             }
             guard let id else { throw BackendRPCError.remote(model.localRunError ?? "The session could not be created.") }
             return .init(conversationID: id)
+        case let .goalMutationFenced(id, mutation, admission):
+            let stops: Bool
+            switch mutation { case .pause, .clear, .edit: stops = true; default: stops = false }
+            if stops {
+                guard try dispatchAdmissions.prepareStop(admission, conversationID: id) else { return .init() }
+            } else {
+                if try dispatchAdmissions.prepareSend(admission, conversationID: id) { model.beginAgentStop(conversationID: id) }
+                try await model.waitForAgentStop(conversationID: id)
+                try dispatchAdmissions.validateSend(admission, conversationID: id)
+            }
+            _ = try await model.mutateConversationGoal(id: id, mutation: mutation)
+            await invalidations.publish(scopes: [.settings, .runtime], conversationIDs: [id])
+            return .init()
         case .sendMessage:
             // An unversioned request cannot prove that it predates or follows Stop.
             throw AgentDispatchAdmissionError.invalid
@@ -290,7 +304,9 @@ final class BackendApplicationService {
         case let .setSessionTools(id, tools, confirmed):
             _ = try await conversation(id)
             guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            let previous = try await database.sessionTools(id)
             try await database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
+            if !previous.enabled.subtracting(tools.enabled).isDisjoint(with: [.browser, .computer]) { await model.cancelAutomation(callerID: id) }
             try await model.agentTools?.reload()
         case let .cancelSession(id):
             // Keep legacy Stop useful for an older client and scheduled work.

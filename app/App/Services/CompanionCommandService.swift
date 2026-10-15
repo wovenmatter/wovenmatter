@@ -240,6 +240,10 @@ final class CompanionCommandService: CompanionCommandServing {
                 route = "remote:\(id.uuidString.lowercased()):"
             }
             command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
+        case (.goals, "set"), (.goals, "resume"):
+            // A goal starts native work through the continuation loop. It needs
+            // the same workspace execution permission as an ordinary send.
+            command = .init(deviceID: deviceID, kind: .send, conversationID: callerID)
         case (.sessions, "send"), (.sessions, "manage"), (.sessions, "release"), (.sessions, "notifications"):
             command = .init(deviceID: deviceID, kind: .send,
                 conversationID: try tool.required("id", allowPositional: true))
@@ -264,7 +268,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 route = "remote:\(id.uuidString.lowercased()):"
             }
             command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
-        case (.executor, "execute"), (.executor, "cancel"):
+        case (.executor, "execute"), (.executor, "cancel"), (.browser, "call"), (.computer, "call"):
             command = .init(deviceID: deviceID, kind: .createSession, providerID: "local:")
         default: return
         }
@@ -282,7 +286,7 @@ final class CompanionCommandService: CompanionCommandServing {
         var conversationID = command.conversationID
         if command.kind == .workspace {
             switch command.workspaceAction {
-            case .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
+            case .goal(let id, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
             case .saveCalendar(_, _, let draft):
                 guard let task = draft.task else { return }
                 let route: String
@@ -308,7 +312,7 @@ final class CompanionCommandService: CompanionCommandServing {
             else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
         }
         if let target, denied.contains(target) {
-            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Device Connections on the central Mac.")
+            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Devices on the central Mac.")
         }
     }
 
@@ -497,7 +501,7 @@ final class CompanionCommandService: CompanionCommandServing {
         return CompanionTranscript(
             conversationID: conversationID,
             messages: page.messages.map { .init(id: $0.id, conversationID: $0.conversationID, runID: $0.runID,
-                role: $0.role, content: $0.content, status: $0.status, createdAt: $0.createdAt) },
+                role: $0.role, content: $0.role == "user" ? ($0.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt($0.content)) : $0.content, status: $0.status, createdAt: $0.createdAt) },
             activities: page.activities.map { .init(id: $0.id, runID: $0.runID,
                 title: $0.activity.title ?? $0.activity.kind.rawValue,
                 detail: $0.activity.detail ?? $0.activity.content, status: $0.activity.status ?? "") },

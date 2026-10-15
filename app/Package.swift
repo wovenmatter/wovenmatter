@@ -10,9 +10,13 @@ let package = Package(
   products: [
     .library(name: "WovenMatterCore", targets: ["WovenMatterCore"]),
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
+    .library(name: "WovenMatterAutomation", targets: ["WovenMatterAutomation"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"])
   ],
-  dependencies: [.package(path: "../shared"), .package(path: "../ios")],
+  dependencies: [
+    .package(path: "../shared"), .package(path: "../ios"),
+    .package(url: "https://github.com/openclaw/Peekaboo.git", revision: "1e42f1d9053109d6d19e604504ea80bc229a88e8")
+  ],
   targets: [
     .target(
       name: "WovenMatterCore",
@@ -33,6 +37,12 @@ let package = Package(
         .linkedLibrary("sqlite3")
       ]
     ),
+    .target(
+      name: "WovenMatterAutomation",
+      dependencies: ["WovenMatterCore", "WovenMatterClient", .product(name: "PeekabooAutomationKit", package: "Peekaboo"), .product(name: "PeekabooFoundation", package: "Peekaboo")],
+      swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+    ),
+    .testTarget(name: "WovenMatterAutomationTests", dependencies: ["WovenMatterAutomation", "WovenMatterCore", "WovenMatterClient"]),
     .target(
       name: "WovenMatterDashboardStore",
       dependencies: ["WovenMatterCore", "WovenMatterClient"],
@@ -69,7 +79,7 @@ let package = Package(
     // Both test suites exercise those same services without starting providers.
     .target(
       name: "WovenMatterAppFacade",
-      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", .product(name: "CompanionClient", package: "ios")],
+      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "CompanionClient", package: "ios")],
       path: "App",
       exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Resources", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],

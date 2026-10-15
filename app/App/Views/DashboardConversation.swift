@@ -428,153 +428,161 @@ struct DashboardCloudConversation: View {
                         }
                     }
                     .padding(.bottom, DashboardComposer.verticalPadding)
-                    DashboardComposer(
-                        placeholder: dashboardComposerPlaceholder(
-                            agent: agent,
-                            runtimeKind: conversation?.localRuntimeKind
-                        ),
-                        draft: $draft,
-                        attachedNoteTitle: attachedNoteTitle,
-                        attachments: attachments,
-                        agentTools: model.agentTools,
-                        sessionID: conversation?.id,
-                        showsSessionControls: conversation.map {
-                            !$0.isArchived && $0.localRuntimeKind != nil
-                        } ?? false,
-                        showsPermissionControl: conversation.map {
-                            !$0.isArchived && $0.localRuntimeKind != nil
-                        } ?? false,
-                        sessionMetadataLoading: conversation.map {
-                            guard !$0.isArchived else { return false }
-                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
-                            return model.loadingLocalACPSessionIDs.contains($0.id)
-                                || model.localACPSessionMetadata[$0.id] == nil
-                        } ?? false,
-                        sessionMetadata: conversation.flatMap {
-                            guard !$0.isArchived else { return nil }
-                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
-                            return model.localACPSessionMetadata[$0.id]
-                        },
-                        sessionControlsDisabled: conversation.map {
-                            guard !$0.isArchived else { return true }
-                            if $0.localRuntimeKind == .opencode {
-                                return workspaceOpenCode?.isLocalSession($0.id) != true
-                                    || workspaceOpenCode?.statuses[$0.id] != "Connected"
-                                    || workspaceOpenCode?.updatingSessions.contains($0.id) == true
-                                    || model.localRunningConversationIDs.contains($0.id)
-                            }
-                            if $0.localRuntimeKind != nil {
+                    VStack(spacing: 8) {
+                        if let conversation, !conversation.isArchived,
+                           WorkspaceGoal.supports(conversation.localRuntimeKind),
+                           let tools = model.agentTools, tools.goals[conversation.id] != nil {
+                            ConversationGoalControls(tools: tools, sessionID: conversation.id)
+                        }
+                        DashboardComposer(
+                            placeholder: dashboardComposerPlaceholder(
+                                agent: agent,
+                                runtimeKind: conversation?.localRuntimeKind
+                            ),
+                            draft: $draft,
+                            attachedNoteTitle: attachedNoteTitle,
+                            attachments: attachments,
+                            agentTools: model.agentTools,
+                            sessionID: conversation?.id,
+                            supportsGoals: WorkspaceGoal.supports(conversation?.localRuntimeKind),
+                            showsSessionControls: conversation.map {
+                                !$0.isArchived && $0.localRuntimeKind != nil
+                            } ?? false,
+                            showsPermissionControl: conversation.map {
+                                !$0.isArchived && $0.localRuntimeKind != nil
+                            } ?? false,
+                            sessionMetadataLoading: conversation.map {
+                                guard !$0.isArchived else { return false }
+                                if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
+                                return model.loadingLocalACPSessionIDs.contains($0.id)
+                                    || model.localACPSessionMetadata[$0.id] == nil
+                            } ?? false,
+                            sessionMetadata: conversation.flatMap {
+                                guard !$0.isArchived else { return nil }
+                                if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
+                                return model.localACPSessionMetadata[$0.id]
+                            },
+                            sessionControlsDisabled: conversation.map {
+                                guard !$0.isArchived else { return true }
+                                if $0.localRuntimeKind == .opencode {
+                                    return workspaceOpenCode?.isLocalSession($0.id) != true
+                                        || workspaceOpenCode?.statuses[$0.id] != "Connected"
+                                        || workspaceOpenCode?.updatingSessions.contains($0.id) == true
+                                        || model.localRunningConversationIDs.contains($0.id)
+                                }
+                                if $0.localRuntimeKind != nil {
+                                    return model.loadingLocalACPSessionIDs.contains($0.id)
+                                        || model.updatingLocalACPSessionIDs.contains($0.id)
+                                        || model.localRunningConversationIDs.contains($0.id)
+                                }
+                                return true
+                            } ?? true,
+                            sendDisabled: sendInProgress || (conversation.map {
+                                guard !$0.isArchived else { return true }
+                                if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.isLocalSession($0.id) != true || workspaceOpenCode?.statuses[$0.id] != "Connected" }
+                                guard $0.localRuntimeKind != nil else { return true }
                                 return model.loadingLocalACPSessionIDs.contains($0.id)
                                     || model.updatingLocalACPSessionIDs.contains($0.id)
-                                    || model.localRunningConversationIDs.contains($0.id)
-                            }
-                            return true
-                        } ?? true,
-                        sendDisabled: sendInProgress || (conversation.map {
-                            guard !$0.isArchived else { return true }
-                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.isLocalSession($0.id) != true || workspaceOpenCode?.statuses[$0.id] != "Connected" }
-                            guard $0.localRuntimeKind != nil else { return true }
-                            return model.loadingLocalACPSessionIDs.contains($0.id)
-                                || model.updatingLocalACPSessionIDs.contains($0.id)
-                        } ?? false),
-                        startsCollapsed: startsComposerCollapsed,
-                        collapseOverride: $composerCollapseOverride,
-                        focusRequestGeneration: focusRequestGeneration,
-                        onActivate: onActivatePanel,
-                        onSelectModel: { selection in
-                            guard let conversation, !conversation.isArchived else { return }
-                            if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, model: selection); return }
-                            if conversation.localRuntimeKind != nil {
-                                Task { await model.updateLocalACPSession(
-                                    conversation: conversation, model: selection
-                                ) }
-                                return
-                            }
-                        },
-                        onSelectThinking: { selection in
-                            guard let conversation, !conversation.isArchived else { return }
-                            if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, thinking: selection); return }
-                            if conversation.localRuntimeKind != nil {
-                                Task { await model.updateLocalACPSession(
-                                    conversation: conversation, thinking: selection
-                                ) }
-                                return
-                            }
-                        },
-                        onSelectPermission: { selection in
-                            guard let conversation, !conversation.isArchived else { return }
-                            if conversation.localRuntimeKind == .opencode {
-                                workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
-                                return
-                            }
-                            if conversation.localRuntimeKind != nil {
-                                Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
-                            }
-                        },
-                        onAttachmentAction: onAttachmentAction,
-                        onRemoveAttachment: onRemoveAttachment,
-                        onOpenAttachment: { file in
-                            openAttachment(contentHash: file.contentHash,
-                                fileName: file.fileName, mimeType: file.mimeType)
-                        },
-                        onDropFiles: { urls in
-                            guard conversation?.isArchived != true else { return false }
-                            return onDropFiles(urls)
-                        },
-                        onUnavailableAction: onUnavailableComposerAction,
-                        onCommandNavigation: onCommandNavigation,
-                        onSend: {
-                            guard conversation?.isArchived != true else { return }
-                            transcriptOwnsScroll = false
-                            isUserScrolling = false
-                            scrollInteractionRevision += 1
-                            scrollState.setNearBottom(true)
-                            scrollPositionID = chatEndID
-                            onSend()
-                        },
-                        onStop: conversation.flatMap { current in
-                            guard !current.isArchived, model.localRunningConversationIDs.contains(current.id) else { return nil }
-                            return { model.cancelLocalACPPrompt(conversationID: current.id) }
-                        },
-                        folderLabel: conversation.map { current in
-                            model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "All Workspaces"
-                        },
-                        availableFolders: model.workspaceOverview?.folders ?? [],
-                        selectedFolderID: conversation?.folderID,
-                        folderWorkspaceID: executionWorkspaceID,
-                        folderSelectionDisabled: !canChooseFolder || choosingFolder || sendInProgress
-                            || messages.contains(where: { $0.role == "user" }),
-                        onSelectFolder: { folderID in
-                            guard let conversation, !conversation.isArchived, canChooseFolder, !choosingFolder else { return }
-                            choosingFolder = true
-                            folderSelectionError = nil
-                            Task {
-                                let accepted = await model.moveConversation(id: conversation.id, toFolderID: folderID)
-                                if !accepted {
-                                    folderSelectionError = model.folderMutationError ?? "The draft folder could not be changed."
+                            } ?? false),
+                            startsCollapsed: startsComposerCollapsed,
+                            collapseOverride: $composerCollapseOverride,
+                            focusRequestGeneration: focusRequestGeneration,
+                            onActivate: onActivatePanel,
+                            onSelectModel: { selection in
+                                guard let conversation, !conversation.isArchived else { return }
+                                if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, model: selection); return }
+                                if conversation.localRuntimeKind != nil {
+                                    Task { await model.updateLocalACPSession(
+                                        conversation: conversation, model: selection
+                                    ) }
+                                    return
                                 }
-                                choosingFolder = false
+                            },
+                            onSelectThinking: { selection in
+                                guard let conversation, !conversation.isArchived else { return }
+                                if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, thinking: selection); return }
+                                if conversation.localRuntimeKind != nil {
+                                    Task { await model.updateLocalACPSession(
+                                        conversation: conversation, thinking: selection
+                                    ) }
+                                    return
+                                }
+                            },
+                            onSelectPermission: { selection in
+                                guard let conversation, !conversation.isArchived else { return }
+                                if conversation.localRuntimeKind == .opencode {
+                                    workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
+                                    return
+                                }
+                                if conversation.localRuntimeKind != nil {
+                                    Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
+                                }
+                            },
+                            onAttachmentAction: onAttachmentAction,
+                            onRemoveAttachment: onRemoveAttachment,
+                            onOpenAttachment: { file in
+                                openAttachment(contentHash: file.contentHash,
+                                    fileName: file.fileName, mimeType: file.mimeType)
+                            },
+                            onDropFiles: { urls in
+                                guard conversation?.isArchived != true else { return false }
+                                return onDropFiles(urls)
+                            },
+                            onUnavailableAction: onUnavailableComposerAction,
+                            onCommandNavigation: onCommandNavigation,
+                            onSend: {
+                                guard conversation?.isArchived != true else { return }
+                                transcriptOwnsScroll = false
+                                isUserScrolling = false
+                                scrollInteractionRevision += 1
+                                scrollState.setNearBottom(true)
+                                scrollPositionID = chatEndID
+                                onSend()
+                            },
+                            onStop: conversation.flatMap { current in
+                                guard !current.isArchived, model.localRunningConversationIDs.contains(current.id) else { return nil }
+                                return { model.cancelLocalACPPrompt(conversationID: current.id) }
+                            },
+                            folderLabel: conversation.map { current in
+                                model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "All Workspaces"
+                            },
+                            availableFolders: model.workspaceOverview?.folders ?? [],
+                            selectedFolderID: conversation?.folderID,
+                            folderWorkspaceID: executionWorkspaceID,
+                            folderSelectionDisabled: !canChooseFolder || choosingFolder || sendInProgress
+                                || messages.contains(where: { $0.role == "user" }),
+                            onSelectFolder: { folderID in
+                                guard let conversation, !conversation.isArchived, canChooseFolder, !choosingFolder else { return }
+                                choosingFolder = true
+                                folderSelectionError = nil
+                                Task {
+                                    let accepted = await model.moveConversation(id: conversation.id, toFolderID: folderID)
+                                    if !accepted {
+                                        folderSelectionError = model.folderMutationError ?? "The draft folder could not be changed."
+                                    }
+                                    choosingFolder = false
+                                }
                             }
+                        )
+                        .disabled(conversation?.isArchived == true)
+                        .task(id: "\(conversation?.id ?? ""):\(conversation?.folderID ?? ""):\(conversation?.isArchived == true):\(messages.contains(where: { $0.role == "user" })):\(sendInProgress)") {
+                            canChooseFolder = false
+                            executionWorkspaceID = nil
+                            guard let conversation, !conversation.isArchived else { return }
+                            let id = conversation.id
+                            async let owner = model.conversationExecutionWorkspaceID(id: id)
+                            async let draftIsMutable = model.canChooseConversationFolder(id: id)
+                            let values = await (owner, draftIsMutable)
+                            guard !Task.isCancelled else { return }
+                            executionWorkspaceID = values.0
+                            canChooseFolder = values.1
                         }
-                    )
-                    .disabled(conversation?.isArchived == true)
-                    .task(id: "\(conversation?.id ?? ""):\(conversation?.folderID ?? ""):\(conversation?.isArchived == true):\(messages.contains(where: { $0.role == "user" })):\(sendInProgress)") {
-                        canChooseFolder = false
-                        executionWorkspaceID = nil
-                        guard let conversation, !conversation.isArchived else { return }
-                        let id = conversation.id
-                        async let owner = model.conversationExecutionWorkspaceID(id: id)
-                        async let draftIsMutable = model.canChooseConversationFolder(id: id)
-                        let values = await (owner, draftIsMutable)
-                        guard !Task.isCancelled else { return }
-                        executionWorkspaceID = values.0
-                        canChooseFolder = values.1
-                    }
-                    .alert("Folder could not be changed", isPresented: Binding(
-                        get: { folderSelectionError != nil },
-                        set: { if !$0 { folderSelectionError = nil } }
-                    )) { Button("OK") { folderSelectionError = nil } } message: {
-                        Text(folderSelectionError ?? "")
+                        .alert("Folder could not be changed", isPresented: Binding(
+                            get: { folderSelectionError != nil },
+                            set: { if !$0 { folderSelectionError = nil } }
+                        )) { Button("OK") { folderSelectionError = nil } } message: {
+                            Text(folderSelectionError ?? "")
+                        }
                     }
                     Group {
                         if showsAddPanel {
@@ -1148,7 +1156,7 @@ struct DashboardMessageRow: View {
                     if isUser {
                         WorkspaceIncomingAgentHeader(message: message)
                         ConversationUserMessage(
-                            content: message.content,
+                            content: message.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt(message.content),
                             attachments: attachments,
                             references: references,
                             onOpenAttachment: onOpenAttachment

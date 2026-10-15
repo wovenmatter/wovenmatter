@@ -38,6 +38,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)dismissPasswordOffer;
 - (void)fillPasswordForUsername:(NSString *)username;
 - (void)close;
+// App-owned Playwright bridge. This never exposes a debugging listener.
+@property(nonatomic, copy, nullable) void (^automationMessageHandler)(NSString *message);
+@property(nonatomic, readonly) NSArray<NSDictionary *> *automationDownloads;
+@property(nonatomic, readonly) NSString *chromiumVersion;
+- (nullable NSDictionary *)readAutomationDownload:(NSString *)identifier offset:(NSUInteger)offset;
+- (BOOL)sendAutomationMessage:(NSString *)message;
+- (void)detachAutomation;
 @end
 
 @interface WMBrowserRuntime : NSObject
