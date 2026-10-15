@@ -27,7 +27,7 @@ async function fixture(t) {
       const manifest = JSON.parse(content);
       Object.assign(manifest.dependencies, { '@anthropic-ai/claude-agent-sdk': '~0.3.300',
         '@earendil-works/pi-ai': '^1.2.0', '@earendil-works/pi-coding-agent': '^1.2.0', '@earendil-works/pi-durable': '^1.2.0',
-        '@modelcontextprotocol/sdk': '^1.32.1', 'proper-lockfile': '^4.1.2', typebox: '^1.3.37' });
+        '@modelcontextprotocol/sdk': '^1.32.1', 'playwright-core': '1.64.1', ws: '8.22.0', 'proper-lockfile': '^4.1.2', typebox: '^1.3.37' });
       manifest.devDependencies.esbuild = '~0.28.2';
       content = JSON.stringify(manifest, null, 2) + '\n';
     }
@@ -45,6 +45,7 @@ function metadata({ missingChecksum = false } = {}) {
     '@earendil-works/pi-durable': ['2.0.0', '1.3.0'],
     '@earendil-works/chord': ['2.0.0', '1.3.0'],
     '@modelcontextprotocol/sdk': ['1.32.1'], 'proper-lockfile': ['4.1.2'], 'typebox': ['1.3.38'],
+    'playwright-core': ['2.0.0', '1.65.0'], 'ws': ['9.0.0', '8.23.0'],
     'esbuild': ['0.29.0', '0.28.3'], 'npm': ['13.0.0', '12.3.0'], 'playwright': ['2.0.0', '1.65.0'],
   };
   return async url => {
@@ -71,6 +72,8 @@ test('check plans synchronized runtime pins, stays on supported channels, and ne
   assert.equal(packages.dependencies['@anthropic-ai/claude-agent-sdk'], '~0.3.301');
   assert.equal(packages.dependencies['@earendil-works/pi-durable'], '^1.3.0');
   assert.equal(packages.devDependencies.esbuild, '~0.28.3');
+  assert.equal(packages.dependencies['playwright-core'], '1.65.0');
+  assert.equal(packages.dependencies.ws, '8.23.0');
   assert.equal(plan.files.get('remote/Dockerfile').split('\n')[0], 'FROM node:24.23.0-trixie-slim@sha256:' + 'c'.repeat(64));
   assert.ok(plan.files.get('remote/Executor.Dockerfile').includes('npm@12.3.0'));
   for (const file of ['scripts/prepare-default-agent.sh', 'app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift']) {
