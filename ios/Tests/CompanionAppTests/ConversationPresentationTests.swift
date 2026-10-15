@@ -1,10 +1,47 @@
 import XCTest
 import UIKit
+import SwiftUI
 import WovenMatterCompanion
 @testable import WovenMatterMobileApp
 
 @MainActor
 final class ConversationPresentationTests: XCTestCase {
+  func testDarkThemeUsesSharedColorsWithoutChangingSavedNoteColors() {
+    XCTAssertEqual(DashboardTheme.allCases.map(\.rawValue), ["green", "cognac", "dark"])
+    XCTAssertEqual(DashboardTheme.dark.colorScheme, .dark)
+    XCTAssertEqual(DashboardTheme.green.colorScheme, .light)
+    XCTAssertEqual(DashboardTheme.cognac.colorScheme, .light)
+    let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
+    XCTAssertEqual(DashboardColors.documentColorHex(DashboardColors.foreground), "#0A1F16")
+    let ink = DashboardColors.noteForeground(DashboardColors.color(0x111827))
+    let highlight = DashboardColors.noteBackground(DashboardColors.color(0xFFEB94))
+    XCTAssertEqual(DashboardColors.documentColorHex(ink), "#111827")
+    XCTAssertEqual(DashboardColors.documentColorHex(highlight), "#FFEB94")
+    var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+    XCTAssertTrue(ink.resolvedColor(with: darkTraits).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+    XCTAssertGreaterThan(red, 0.5)
+    XCTAssertTrue(highlight.resolvedColor(with: darkTraits).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+    XCTAssertLessThan(red, 0.4)
+  }
+
+  func testDarkResponsePreservesSelectionAndReturnsToLight() {
+    let view = ConversationResponseNativeTextView()
+    let content = "An unchanged response with **formatting**."
+    view.apply(content: content, document: nil, isStreaming: false, typeSize: .large)
+    view.selectedRange = NSRange(location: 0, length: 7)
+    for scheme in [ColorScheme.dark, .light] {
+      view.apply(content: content, document: nil, isStreaming: false, typeSize: .large, colorScheme: scheme)
+      XCTAssertEqual(view.selectedRange, NSRange(location: 0, length: 7))
+      XCTAssertEqual(view.overrideUserInterfaceStyle, scheme == .dark ? .dark : .light)
+      let color = view.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! UIColor
+      let traits = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
+      var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+      XCTAssertTrue(color.resolvedColor(with: traits).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+      if scheme == .dark { XCTAssertGreaterThan(red, 0.7) }
+      else { XCTAssertLessThan(red, 0.1) }
+    }
+  }
+
   func testStructuredToolsUseDesktopGroupingAndFailuresRemainVisible() throws {
     let projection = #"{"id":"tool","kind":"tool","title":"read_file","toolName":"read_file","status":"failed","position":2,"locations":[],"changes":[],"planEntries":[],"rawInputJSON":"{}","content":"Not found"}"#
     let transcript = CompanionTranscript(conversationID: "c", messages: [

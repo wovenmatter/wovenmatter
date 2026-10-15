@@ -177,6 +177,7 @@ private struct ConflictPane: View {
 }
 
 private struct RichBlockTextView: UIViewRepresentable {
+  @Environment(\.colorScheme) private var colorScheme
   var block: NoteRichTextBlock
   var generation: Int
   var editable: Bool
@@ -188,13 +189,15 @@ private struct RichBlockTextView: UIViewRepresentable {
     view.isScrollEnabled = false; view.backgroundColor = .clear
     view.textContainerInset = .init(top: 6, left: 0, bottom: 6, right: 0); view.textContainer.lineFragmentPadding = 0
     view.adjustsFontForContentSizeCategory = true
-    view.tintColor = UIColor(DashboardPalette.primary)
-    view.linkTextAttributes = [.foregroundColor: UIColor(DashboardPalette.success)]
+    view.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+    view.tintColor = DashboardColors.primary
+    view.linkTextAttributes = [.foregroundColor: DashboardColors.success]
     view.delegate = context.coordinator; view.attributedText = Self.attributed(block)
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return view
   }
   func updateUIView(_ view: UITextView, context: Context) {
+    view.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
     guard generation >= context.coordinator.latestGeneration else { return }
     context.coordinator.parent = self; view.isEditable = editable
     context.coordinator.latestGeneration = generation
@@ -258,8 +261,8 @@ private struct RichBlockTextView: UIViewRepresentable {
       if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) { font = UIFont(descriptor: descriptor, size: font.pointSize) }
       var attributes: [NSAttributedString.Key: Any] = [.font: UIFontMetrics(forTextStyle: .body).scaledFont(for: font), .foregroundColor: UIColor(DashboardPalette.foreground), .paragraphStyle: paragraph]
       if run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-      if let foreground = run.foregroundHex.flatMap(UIColor.init(hex:)) { attributes[.foregroundColor] = foreground }
-      if let background = run.highlightHex.flatMap(UIColor.init(hex:)) { attributes[.backgroundColor] = background }
+      if let foreground = run.foregroundHex.flatMap(UIColor.init(hex:)) { attributes[.foregroundColor] = DashboardColors.noteForeground(foreground) }
+      if let background = run.highlightHex.flatMap(UIColor.init(hex:)) { attributes[.backgroundColor] = DashboardColors.noteBackground(background) }
       if let value = run.link, let url = URL(string: value), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") { attributes[.link] = url }
       result.append(NSAttributedString(string: run.text, attributes: attributes))
     }
@@ -278,7 +281,8 @@ private struct NativeTablePreview: View {
             ForEach(row.cells) { cell in
               Text(AttributedString(RichBlockTextView.attributed(.init(runs: cell.runs))))
                 .frame(minWidth: 100, minHeight: 34, alignment: .leading).padding(8)
-                .background(index < table.headerRowCount ? theme.palette.themeWhisper : .clear)
+                .background(cell.backgroundHex.flatMap(UIColor.init(hex:)).map { Color(dashboardColor: DashboardColors.noteBackground($0)) }
+                  ?? (index < table.headerRowCount ? theme.palette.themeWhisper : .clear))
                 .overlay(Rectangle().stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)).textSelection(.enabled)
             }
           }
@@ -297,6 +301,7 @@ private extension UIColor {
 }
 
 struct SafeHTMLPreview: UIViewRepresentable {
+  @Environment(\.colorScheme) private var colorScheme
   let html: String
   var linkedDataJSON: String? = nil
   func makeCoordinator() -> Coordinator { Coordinator() }
@@ -309,7 +314,11 @@ struct SafeHTMLPreview: UIViewRepresentable {
     return view
   }
   func updateUIView(_ view: WKWebView, context: Context) {
-    let rendered = MobileArtifactPreview.renderedHTML(html: html, linkedDataJSON: linkedDataJSON)
+    // Only the app-owned empty canvas follows the theme. Authored documents
+    // keep their exact HTML and are not reloaded when the theme changes.
+    let emptyDark = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && colorScheme == .dark
+    let body = emptyDark ? String(format: "<style>body{background:#%06X}</style>", DashboardColors.darkWorkspace) : html
+    let rendered = MobileArtifactPreview.renderedHTML(html: body, linkedDataJSON: linkedDataJSON)
     guard context.coordinator.loaded != rendered else { return }
     context.coordinator.loaded = rendered
     view.loadHTMLString(rendered, baseURL: nil)

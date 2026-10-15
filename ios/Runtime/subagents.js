@@ -13,7 +13,7 @@ export function createSubagents(rootID,policy={}) {
       // Two total levels: the root may create children; children cannot delegate.
       // Check ownership as well as removing the tool, including legacy recovered children.
       if (api.conversationId !== rootID()) throw new Error('Only the root session can create subagents. Grandchildren are not supported.');
-      if (active >= (policy.concurrentSubagents??4)) return {isError:true,content:[{type:'text',text:'The configured child-agent capacity is in use. Complete existing child work before delegating more.'}]};
+      if (active >= (policy.concurrentSubagents??4)) return {isError:true,output:[{type:'text',text:'The configured child-agent capacity is in use. Complete existing child work before delegating more.'}]};
       active++;
       try {
         const childID = await api.commit(async tx => {
@@ -30,10 +30,10 @@ export function createSubagents(rootID,policy={}) {
         if (!child) throw new Error('The durable child conversation is unavailable.');
         const submission = await child.submit({type:'input',content:args.task,requestId:`subagent:${api.taskId}`},context);
         const settled = await submission.wait(context);
-        if (settled.status !== 'done') return {isError:true,content:[{type:'text',text:`Subagent did not complete: ${settled.reason??settled.status}`}],details:{nativeConversationID:childID}};
+        if (settled.status !== 'done') return {isError:true,output:[{type:'text',text:`Subagent did not complete: ${settled.reason??settled.status}`}],details:{nativeConversationID:childID}};
         const answer = await api.commit(tx => tx.entry(settled.answer),context);
         const content = (answer?.model??[]).flatMap(message => Array.isArray(message.content)?message.content.filter(block=>block.type==='text'||block.type==='image'):[]);
-        return {content:content.length?content:[{type:'text',text:'Subagent completed without a text answer.'}],details:{nativeConversationID:childID}};
+        return {output:content.length?content:[{type:'text',text:'Subagent completed without a text answer.'}],details:{nativeConversationID:childID}};
       } finally { active--; }
     },
   })]});

@@ -8,7 +8,7 @@ notes, persistence, and model-control presentation. It never invokes the
 external `pi` command.
 
 `default-agent/package-lock.json` pins the SDK dependency graph. The macOS build
-prepares Node 24.21.0 with pinned archive SHA-256 checks and includes its license.
+prepares Node 24.22.0 with pinned archive SHA-256 checks and includes its license.
 The workspace image uses its pinned Node base and installs the same locked SDK.
 Node receives its own JIT entitlement when the app is signed. SDK dependencies
 and runtime binaries are build products, not checked into Git. Remote deployment

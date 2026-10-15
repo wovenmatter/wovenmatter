@@ -34,11 +34,11 @@ enum DashboardCalendarColor: String, CaseIterable {
         case .green: .hex(0x84CC16)
         case .blue: DashboardPalette.calendarTask
         case .purple: DashboardPalette.calendarRecurringEvent
-        case .red: .hex(0xD23F3F)
-        case .pink: .hex(0xD75A95)
-        case .orange: .hex(0xE67E22)
+        case .red: .adaptiveHex(0xD23F3F, dark: 0xFF8383)
+        case .pink: .adaptiveHex(0xD75A95, dark: 0xED98B6)
+        case .orange: .adaptiveHex(0xE67E22, dark: 0xEBA563)
         case .yellow: .hex(0xE6B800)
-        case .black: .black
+        case .black: .adaptiveHex(0x000000, dark: DashboardColors.darkMutedForeground)
         }
     }
 }
