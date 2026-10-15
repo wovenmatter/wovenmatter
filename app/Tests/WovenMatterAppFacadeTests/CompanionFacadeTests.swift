@@ -225,7 +225,7 @@ struct CompanionFacadeTests {
         let applied = try #require(fixture.model.sessionSelectionPreferences.conversation(id: id))
         #expect(applied.workspace == scope)
         #expect(applied.desiredSelections == SessionSelections(model: "provider-confirmed-model",
-            thinking: desired.thinking, permission: desired.permission, tools: desired.tools))
+            thinking: desired.thinking, permission: desired.permission, tools: ["goals", "history"]))
         #expect(!applied.requiresApplication && applied.selections.model == "provider-confirmed-model")
         #expect(applied.selections.thinking == desired.thinking && applied.selections.permission == desired.permission)
         #expect(try await fixture.database.sessionTools(id).enabled == [.history, .goals])
@@ -277,7 +277,9 @@ struct CompanionFacadeTests {
         await fixture.recorder.rejectConfiguration(false)
         let retry = CompanionCommand(deviceID: fixture.device, kind: .send, conversationID: id, text: "Use captured configuration")
         #expect(try await fixture.model.companionCommands.execute(retry, deviceID: fixture.device).status == .completed)
-        #expect(fixture.model.sessionSelectionPreferences.conversation(id: id)?.desiredSelections == desired)
+        var expected = desired
+        expected.tools = ["goals", "notes"]
+        #expect(fixture.model.sessionSelectionPreferences.conversation(id: id)?.desiredSelections == expected)
         #expect(fixture.model.sessionSelectionPreferences.conversation(id: id)?.requiresApplication == false)
         #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .goals])
         #expect(await fixture.recorder.configurations.last?.selections.model == "captured-model")
