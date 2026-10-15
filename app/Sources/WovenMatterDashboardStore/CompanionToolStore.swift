@@ -70,7 +70,7 @@ extension WorkspaceDatabaseConnection {
       guard let host = workspaces.first(where: { $0.kind == .mac && !$0.deleted && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID }) else { return }
       let denied = try companionIDsUnlocked("SELECT workspace_id FROM companion_workspace_access WHERE device_id=? AND workspace_id=? AND enabled=0", bindings: [owner.executionDeviceID ?? owner.ownerDeviceID, host.id])
       guard denied.isEmpty else {
-        throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this Mac is disabled in Device Connections.")
+        throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this Mac is disabled in Devices.")
       }
     }
   }

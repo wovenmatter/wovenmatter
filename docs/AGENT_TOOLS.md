@@ -72,7 +72,7 @@ Secondary Mac agents use their own visible browser, shared with the client's
 Browser pane. Device-owned Pi Durable on iPhone routes browser/computer commands
 to the paired central Mac and returns screenshots inline. The device's tool
 selection narrows the central chat's policy; Computer Use must be enabled there
-as well. Existing Device Connections execution access applies, including checks
+as well. Existing Devices execution access applies, including checks
 between input steps. Local command help is available while offline.
 
 Browser Use controls only the browser inside Woven Matter. It shares the user's

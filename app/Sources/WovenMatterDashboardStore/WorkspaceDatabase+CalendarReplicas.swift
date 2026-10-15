@@ -126,7 +126,7 @@ extension WorkspaceDatabaseConnection {
     } else if let workspaceID = task.workspaceID { target = UUID(uuidString: workspaceID)?.uuidString.lowercased() }
     else { target = workspaces.first { $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID && !$0.deleted }?.id }
     if let target, denied.contains(target) {
-      throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this scheduled task is disabled in Device Connections on the central Mac.")
+      throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this scheduled task is disabled in Devices on the central Mac.")
     }
   }
 
