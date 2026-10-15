@@ -945,7 +945,7 @@ struct DashboardSidebarNavigationPage: View {
 
     private var folderContentCounts: [String: DashboardFolderContentCounts] {
         var counts: [String: DashboardFolderContentCounts] = [:]
-        for conversation in conversations where !conversation.isArchived {
+        for conversation in conversations {
             if let folderID = conversation.folderID {
                 counts[folderID, default: .init()].chats += 1
             }
