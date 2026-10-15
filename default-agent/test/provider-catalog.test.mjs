@@ -63,6 +63,70 @@ test('only supported chat types/APIs survive; complete metadata and xAI identity
   assert.deepEqual(parseProviderModels({ models: [xai] }, 'xai-api'), [{ ...xai, provider: 'xai-api' }]);
 });
 
+test('OpenCode Go accepts current and pinned legacy destinations, rejecting nearby URLs and headers', () => {
+  for (const api of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
+    const suffix = api === 'anthropic-messages' ? '' : '/v1';
+    for (const route of ['inference', 'zen']) {
+      const model = descriptor({ provider: 'opencode-go', api, baseUrl: `https://opencode.ai/${route}/go${suffix}` });
+      assert.deepEqual(parseProviderModels([model], 'opencode-go'), [model]);
+      for (const baseUrl of [model.baseUrl + '/other', model.baseUrl + '?key=secret',
+        model.baseUrl.replace('opencode.ai', 'opencode.ai.foreign.invalid'), model.baseUrl.replace('https://', 'http://'),
+        model.baseUrl.replace('opencode.ai', 'user:secret@opencode.ai'), model.baseUrl.replace('opencode.ai', 'opencode.ai:8443')]) {
+        assert.throws(() => parseProviderModels([{ ...model, baseUrl }], 'opencode-go'), /invalid model metadata/);
+      }
+      assert.throws(() => validatePublicModel({ ...model, headers: { Authorization: 'fixture-secret' } }), /invalid model metadata/);
+    }
+  }
+});
+
+test('OpenCode Go cold startup and ID-only session restore pin current metadata for offline reopening', async t => {
+  const root = await directory(t), reference = 'opencode-go/glm-5.3-flash'; let requests = 0;
+  const model = descriptor({ id: 'glm-5.3-flash', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1' });
+  const config = { providers: ['opencode-go'], defaultModel: reference };
+  const makeEngine = catalog => new DefaultAgentEngine({ cwd: root, directory: root, config, catalog,
+    claude: { models: [], loadModels: async () => {} } }).initialize();
+  const catalog = () => new ProviderCatalog(root, { fetchCatalog: async () => { requests++; return reply([model]); } });
+  const engine = await makeEngine(catalog());
+  assert.equal(requests, 0);
+  const record = await engine.create(), sessionID = record.session.sessionId;
+  assert.equal(record.selected, reference); assert.deepEqual(record.session.model, model);
+  // Older sessions stored only the model ID, before descriptors were pinned.
+  record.saveOptions({ selectedModel: null });
+  await record.configurationQueue;
+  await record.session.dispose();
+  const freshCatalog = catalog(); await freshCatalog.delete('opencode-go');
+  const restarted = await makeEngine(freshCatalog);
+  const restored = await restarted.create(sessionID);
+  assert.equal(restored.selected, reference); assert.deepEqual(restored.session.model, model);
+  assert.equal(requests, 2);
+  await restored.session.dispose();
+  const offline = new ProviderCatalog(root, { fetchCatalog: async () => { throw Error('Reopening a pinned session must stay offline'); } });
+  await offline.delete('opencode-go');
+  const offlineEngine = await makeEngine(offline), reopened = await offlineEngine.create(sessionID);
+  t.after(() => reopened.session.dispose());
+  assert.deepEqual(reopened.session.model, model);
+});
+
+test('OpenCode Go legacy pinned sessions reopen after their catalog adopts the current endpoint', async t => {
+  const root = await directory(t);
+  const legacy = descriptor({ provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/zen/go/v1' });
+  let published = legacy;
+  const cache = new ProviderCatalog(root, { fetchCatalog: async () => reply([published]) });
+  const config = { providers: ['opencode-go'], defaultModel: 'opencode-go/fixture-chat' };
+  const makeEngine = catalog => new DefaultAgentEngine({ cwd: root, directory: root, config, catalog,
+    claude: { models: [], loadModels: async () => {} } }).initialize();
+  const engine = await makeEngine(cache), record = await engine.create();
+  published = { ...legacy, baseUrl: 'https://opencode.ai/inference/go/v1' };
+  await engine.browse('opencode-go', { force: true });
+  assert.deepEqual(record.session.model, legacy);
+  await record.session.dispose();
+  const restarted = await makeEngine(new ProviderCatalog(root, { fetchCatalog: async () => { throw Error('Unexpected catalog request'); } }));
+  const restored = await restarted.create(record.session.sessionId);
+  t.after(() => restored.session.dispose());
+  assert.deepEqual(restored.session.model, legacy);
+  assert.deepEqual(restarted.resolveModel(config.defaultModel), published);
+});
+
 test('OpenRouter sentinel-price routers are excluded without weakening routing or price validation', () => {
   const normal = descriptor({ provider: 'openrouter', api: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1' });
   const routers = ['openrouter/auto', 'openrouter/auto-beta', 'typesafe/jev-router'].map(id => ({ ...normal, id, cost: { input: -1_000_000, output: -1_000_000 } }));

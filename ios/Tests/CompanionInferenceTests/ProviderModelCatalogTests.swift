@@ -128,6 +128,37 @@ final class ProviderModelCatalogTests: XCTestCase {
     XCTAssertEqual(xai.first?.provider, "xai-api")
     XCTAssertEqual(xai.first?.api, "openai-responses")
   }
+  func testOpenCodeGoCurrentAndLegacyDestinationsSurviveCacheRestart() async throws {
+    for api in ["openai-completions", "openai-responses", "anthropic-messages"] {
+      let suffix = api == "anthropic-messages" ? "" : "/v1"
+      for route in ["inference", "zen"] {
+        let model = InferenceModel(id: "glm-5.3-flash", name: "GLM-5.3 Flash", provider: "opencode-go", api: api,
+          baseUrl: "https://opencode.ai/\(route)/go\(suffix)")
+        XCTAssertEqual(try InferenceModelPolicy.parse(data([model]), provider: "opencode-go"), [model])
+        let directory = root(), transport = CatalogFixture([.init(status: 200, data: try data([model]))])
+        let cache = ProviderModelCatalog(directory: directory, transport: transport)
+        let loaded = try await cache.load(provider: "opencode-go")
+        XCTAssertEqual(loaded, [model])
+        let restarted = ProviderModelCatalog(directory: directory, transport: CatalogFixture([]))
+        let restored = try await restarted.load(provider: "opencode-go")
+        XCTAssertEqual(restored, [model])
+        for endpoint in [model.baseUrl + "/other", model.baseUrl + "?key=secret",
+          model.baseUrl.replacingOccurrences(of: "opencode.ai", with: "opencode.ai.foreign.invalid"),
+          model.baseUrl.replacingOccurrences(of: "https://", with: "http://"),
+          model.baseUrl.replacingOccurrences(of: "opencode.ai", with: "user:secret@opencode.ai"),
+          model.baseUrl.replacingOccurrences(of: "opencode.ai", with: "opencode.ai:8443")] {
+          var bad = model; bad.baseUrl = endpoint
+          XCTAssertThrowsError(try InferenceModelPolicy.parse(data([bad]), provider: "opencode-go")) {
+            XCTAssertEqual($0 as? InferenceError, .invalidEndpoint)
+          }
+        }
+        var bad = model; bad.metadata["headers"] = .object(["Authorization": .string("fixture-secret")])
+        XCTAssertThrowsError(try InferenceModelPolicy.validate(bad, provider: "opencode-go")) {
+          XCTAssertEqual($0 as? InferenceError, .invalidEndpoint)
+        }
+      }
+    }
+  }
   func testOpenRouterExcludesOnlySentinelPricedRoutersWithoutWeakeningDestinationValidation() throws {
     let normal = InferenceModel(id: "fixture-chat", name: "Priced model", provider: "openrouter", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1", cost: ["input": 1, "output": 2])
     let routers = ["openrouter/auto", "openrouter/auto-beta", "typesafe/jev-router"].map { id in
