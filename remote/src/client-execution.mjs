@@ -318,7 +318,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(slash) {
         const objective=slash[1]?.trim()??''
         const controls={
-          '':'Read the current Woven Matter goal using the goal tools and report its status.',
+          '':'Establish a Woven Matter goal from our current conversation using the goal tools, then work toward it. If the intended objective is unclear, ask me to clarify before setting the goal.',
+          show:'Read the current Woven Matter goal using the goal tools and report its status.',
           pause:'Pause the current Woven Matter goal using the goal tools.',
           resume:'Resume the current Woven Matter goal using the goal tools and continue working toward it.',
           clear:'Delete the current Woven Matter goal using the goal tools.'
