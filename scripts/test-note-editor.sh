@@ -31,6 +31,7 @@ xcrun swiftc \
   -Xlinker -rpath -Xlinker "$cache_root" \
   "$repo_root/app/App/Services/DictationEditor.swift" \
   "$repo_root/scripts/test-support/DictationFocusFixture.swift" \
+  "$repo_root/app/App/Views/DashboardColors.swift" \
   "$repo_root/app/App/Views/NoteEditor.swift" \
   "$repo_root/app/App/Services/DashboardNoteDocumentCache.swift" \
   "$repo_root/scripts/test-support/DashboardNoteEditorTests.swift" \

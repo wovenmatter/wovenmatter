@@ -44,6 +44,7 @@ struct DashboardNoteEditorTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         try verifyNativeListPersistence(in: directory)
+        try verifyDarkAppearancePersistence(in: directory)
 
         let link = DatabaseArtifactLink(
             sourceID: "test-source",
@@ -553,6 +554,76 @@ struct DashboardNoteEditorTests {
         let reopened = try JSONDecoder().decode(NoteTextRun.self, from: raw)
         try require(reopened.databaseLink == link && reopened.databaseValueID != nil, "JSON discarded inline metadata")
         print("PASS: inline database values preserve metadata, formatting, prose, native selection, empty results and explicit text-edit unlinking")
+    }
+
+    static func verifyDarkAppearancePersistence(in directory: URL) throws {
+        var table = NoteTableBlock(rows: 1, columns: 1, headerRow: false)
+        table.rows[0].cells[0].backgroundHex = "#FFFFFF"
+        table.rows[0].cells[0].runs = [NoteTextRun(text: "Stored cell", foregroundHex: "#004225")]
+        let original = NoteDocument(blocks: [
+            .richText(NoteRichTextBlock(id: "dark-ink", runs: [
+                NoteTextRun(text: "Legacy dark ink", foregroundHex: "#111827", highlightHex: "#FFEB94")
+            ])), .table(table)
+        ])
+        var saved = original
+        let controller = DashboardNoteEditorController()
+        let editor = DashboardNoteEditor(document: Binding(get: { saved }, set: { saved = $0 }), controller: controller)
+        let host = NSHostingView(rootView: editor.environment(\.colorScheme, .light))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 360),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        defer { window.close() }
+        guard let textView = controller.textView, let manager = textView.undoManager else {
+            throw Failure(description: "Dark appearance fixture did not attach the native editor")
+        }
+        manager.removeAllActions()
+        let selection = NSRange(location: 0, length: 6)
+        textView.setSelectedRange(selection)
+        for scheme in [ColorScheme.dark, .light, .dark] {
+            host.rootView = editor.environment(\.colorScheme, scheme)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+            try require(saved == original, "Switching appearance changed the stored note")
+            try require(!manager.canUndo, "Switching appearance added an undo operation")
+            try require(textView.selectedRange() == selection, "Switching appearance lost note selection")
+            try require(DashboardColors.isDark(textView.effectiveAppearance) == (scheme == .dark),
+                        "The native editor did not follow the selected theme")
+            if scheme == .light {
+                let nativeLinks = NSTextView().linkTextAttributes
+                let expected = DashboardColors.documentColorHex(nativeLinks?[.foregroundColor] as? NSColor)
+                let actual = DashboardColors.documentColorHex(textView.linkTextAttributes?[.foregroundColor] as? NSColor)
+                try require(actual == expected, "Returning to Light changed the native Notes link color")
+            }
+        }
+        let ink = textView.textStorage!.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor
+        let highlight = textView.textStorage!.attribute(.backgroundColor, at: 0, effectiveRange: nil) as! NSColor
+        var darkInk: NSColor?, darkHighlight: NSColor?
+        textView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            darkInk = ink.usingColorSpace(.sRGB)
+            darkHighlight = highlight.usingColorSpace(.sRGB)
+        }
+        try require(darkInk!.redComponent > 0.5 && darkHighlight!.redComponent < 0.4,
+                    "Dark notes retained dark ink or a glaring light highlight")
+        guard let coordinator = textView.delegate as? DashboardNoteEditor.Coordinator else {
+            throw Failure(description: "Dark appearance fixture lost its real coordinator")
+        }
+        textView.textStorage!.replaceCharacters(in: NSRange(location: 0, length: 6), with: "Edited")
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        guard case .richText(let block) = saved.blocks[0], case .table(let storedTable) = saved.blocks[1] else {
+            throw Failure(description: "Dark edit lost note structure")
+        }
+        try require(block.runs.first?.foregroundHex == "#111827", "Dark edit persisted bright display ink")
+        try require(block.runs.first?.highlightHex == "#FFEB94", "Dark edit persisted the dimmed highlight")
+        try require(storedTable.rows[0].cells[0].backgroundHex == "#FFFFFF", "Dark edit changed the authored table fill")
+        try require(storedTable.rows[0].cells[0].runs.first?.foregroundHex == "#004225", "Dark edit changed authored cell ink")
+        let path = directory.appendingPathComponent("dark-note.json")
+        try saved.encoded().write(to: path, atomically: true, encoding: .utf8)
+        let reopened = NoteDocument.decode(try String(contentsOf: path, encoding: .utf8))
+        try require(reopened == saved, "Dark note formatting did not survive save and reopen")
+        print("PASS: native light/dark switching preserves note selection, undo history, authored ink, highlights and table fills through edit/save/reopen")
     }
 
     static func verifyMetadata(_ document: NoteDocument, original: NoteDocument, label: String) throws {

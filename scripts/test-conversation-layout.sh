@@ -16,6 +16,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$cache_root/ModuleCache" \
 
 xcrun swiftc -parse-as-library -module-cache-path "$cache_root/ModuleCache" \
   "$repo_root/app/App/Models/ConversationMarkdownDocument.swift" \
+  "$repo_root/app/App/Views/DashboardColors.swift" \
   "$repo_root/app/App/Views/ConversationResponse.swift" \
   "$repo_root/scripts/test-support/ConversationResponseTests.swift" \
   -o "$cache_root/ConversationResponseTests"
@@ -28,5 +29,6 @@ xcrun --sdk iphonesimulator swiftc -typecheck -parse-as-library \
   -target "$(uname -m)-apple-ios18.0-simulator" -sdk "$ios_sdk" \
   -module-cache-path "$cache_root/UIKitModuleCache" \
   "$repo_root/app/App/Models/ConversationMarkdownDocument.swift" \
+  "$repo_root/app/App/Views/DashboardColors.swift" \
   "$repo_root/app/App/Views/ConversationResponse.swift" \
   "$repo_root/scripts/test-support/ConversationResponseTests.swift"

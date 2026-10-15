@@ -51,6 +51,17 @@ struct ConversationResponseTests {
         view.apply(content: source, document: ConversationMarkdownDocument(source), isStreaming: false)
         require(view.isSelectable && !view.isEditable && view.isRichText, "Response must support read-only native selection")
         require(view.enclosingScrollView == nil, "Response added a competing scroll view")
+        view.setSelectedRange(NSRange(location: 0, length: 7))
+        require(view.apply(content: source, document: ConversationMarkdownDocument(source), isStreaming: false, colorScheme: .dark),
+                "Unchanged native responses did not refresh when switching to Dark")
+        require(view.selectedRange() == NSRange(location: 0, length: 7), "Theme switching lost native response selection")
+        let darkInk = view.textStorage!.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor
+        var resolvedInk: NSColor?
+        view.effectiveAppearance.performAsCurrentDrawingAppearance { resolvedInk = darkInk.usingColorSpace(.sRGB) }
+        require(resolvedInk!.redComponent > 0.7, "Native response ink did not resolve against Dark appearance")
+        require(view.apply(content: source, document: nil, isStreaming: false, colorScheme: .light),
+                "Native responses did not refresh when returning to a light theme")
+        view.setSelectedRange(NSRange(location: 0, length: 0))
         let storage = view.textStorage!
         for text in ["Heading", "First item", "☑", "Quoted text.", "print(value)", "Cell A", "Cell B", "Last paragraph"] {
             require(view.string.contains(text), "Rendered response lost \(text)")

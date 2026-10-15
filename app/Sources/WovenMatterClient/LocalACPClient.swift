@@ -2417,7 +2417,7 @@ public actor LocalACPClient {
             .joined(separator: ": ")
         return .agent(
             code: error.code ?? -32_000,
-            message: message.isEmpty ? "Unknown ACP error" : message
+            message: message
         )
     }
 
@@ -2710,8 +2710,9 @@ public enum LocalACPClientError: LocalizedError, Sendable {
             "This harness requires reconnecting the session to change its permission mode."
         case .invalidConfigurationValue(let field, let value):
             "The ACP agent did not advertise \"\(value)\" as a selectable \(field) for this session."
-        case .agent(let code, let message):
-            "The ACP agent reported error \(code): \(message)"
+        case .agent(_, let message):
+            message.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? "The agent could not complete this operation. Try again."
         }
     }
 }

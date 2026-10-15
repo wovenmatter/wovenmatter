@@ -13,7 +13,7 @@ chmod 700 "$wm_root" "$wm_root/data"
 tailscale status --json > "$wm_root/host.json"
 tailscale serve status --json > "$wm_root/serve.json"
 python3 - "$wm_payload" "$wm_root" <<'PY'
-import json, pathlib, re, sys, urllib.parse
+import hashlib, json, pathlib, re, sys, urllib.parse
 payload=json.load(open(sys.argv[1])); root=pathlib.Path(sys.argv[2])
 assert re.fullmatch(r'2\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', payload['version'])
 (root/'version').write_text(payload['version'])
@@ -33,11 +33,11 @@ if env.exists():
         assert next(x for x in previous.splitlines() if x.startswith(key+'=')) == next(x for x in content.splitlines() if x.startswith(key+'=')), 'Existing Executor keys differ; refusing to replace credentials'
 env.write_text(content); env.chmod(0o600)
 (root/'Dockerfile').write_text(payload['dockerfile'])
+(root/'image-tag').write_text(payload['version']+'-'+hashlib.sha256(payload['dockerfile'].encode()).hexdigest()[:16])
 PY
 # Build before retiring the previous owned runtime. Exact image tags identify
 # this transaction; later setup resolves the supported channel again.
-wm_version=$(cat "$wm_root/version")
-wm_image="wovenmatter/executor:$wm_version"
+wm_image="wovenmatter/executor:$(cat "$wm_root/image-tag")"
 wm_previous=false
 wm_new=false
 wm_healthy=false
@@ -71,7 +71,7 @@ PY_PORT
 fi
 if [ "$wm_current" = false ]; then
   printf '%s\n' '*' '!Dockerfile' > "$wm_root/.dockerignore"
-  $wm_docker build --tag "$wm_image" "$wm_root" >/dev/null 2>&1
+  $wm_docker build --pull --no-cache --tag "$wm_image" "$wm_root" >/dev/null 2>&1
   if $wm_docker inspect wovenmatter-executor >/dev/null 2>&1; then
     # A previous failed rollback is retained for inspection, never overwritten.
     if $wm_docker inspect wovenmatter-executor-previous >/dev/null 2>&1; then exit 69; fi

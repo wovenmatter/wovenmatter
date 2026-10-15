@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 struct DashboardComposerTextEditor: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var text: String
     @Binding var isFocused: Bool
     let placeholder: String
@@ -63,6 +64,11 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: DashboardComposerScrollView, context: Context) {
         context.coordinator.parent = self
+        let appearanceName: NSAppearance.Name = colorScheme == .dark ? .darkAqua : .aqua
+        if scrollView.appearance?.name != appearanceName {
+            scrollView.appearance = NSAppearance(named: appearanceName)
+            scrollView.composerTextView.needsDisplay = true
+        }
         scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
         dictationEditor?.bind(textView, identity: dictationIdentity)
@@ -543,12 +549,12 @@ final class DashboardComposerNativeTextView: NSTextView {
         textContainer?.widthTracksTextView = true
         textContainer?.heightTracksTextView = false
         font = Self.composerFont
-        textColor = .labelColor
-        insertionPointColor = .labelColor
+        textColor = DashboardColors.noteForeground()
+        insertionPointColor = DashboardColors.noteForeground()
         defaultParagraphStyle = paragraphStyle
         typingAttributes = [
             .font: Self.composerFont,
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: DashboardColors.noteForeground(),
             .paragraphStyle: paragraphStyle,
         ]
     }

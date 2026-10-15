@@ -210,9 +210,7 @@ enum DashboardPiDurableLogoStyle: String, CaseIterable, Sendable {
 struct DashboardHarnessLogoIcon: View {
     let logo: DashboardHarnessLogo
     var size: CGFloat
-    #if os(iOS)
     @Environment(\.colorScheme) private var colorScheme
-    #endif
     @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
         DashboardCodexLogoStyle.defaultStyle.rawValue
 
@@ -236,10 +234,8 @@ struct DashboardHarnessLogoIcon: View {
     }
 
     private var usesTemplateRendering: Bool {
-        #if os(iOS)
         // The original monochrome marks need a contrasting tint on dark surfaces.
         if colorScheme == .dark && [.grok, .hermes].contains(logo) { return true }
-        #endif
         return logo == .codex ? codexLogoStyle.usesTemplateRendering : logo.usesTemplateRendering
     }
 
@@ -256,6 +252,7 @@ struct DashboardHarnessLogoIcon: View {
 enum DashboardTheme: String, CaseIterable, Identifiable {
     case green
     case cognac
+    case dark
 
     static let storageKey = "wovenmatter.dashboard.theme"
 
@@ -265,14 +262,17 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
         switch self {
         case .green: "Green"
         case .cognac: "Cognac"
+        case .dark: "Dark"
         }
     }
+
+    var colorScheme: ColorScheme { self == .dark ? .dark : .light }
 
     var palette: DashboardPalette {
         switch self {
         case .green:
             DashboardPalette(
-                workspace: .dashboardAdaptive(0xFFFFFF, dark: 0x171C19),
+                workspace: .hex(0xFFFFFF),
                 railFill: .hex(0x004225, opacity: 0.10),
                 railRim: .hex(0xFFFFFF, opacity: 0.48),
                 railInnerLight: .hex(0xFFFFFF, opacity: 0.10),
@@ -280,17 +280,17 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
                 railHoverRim: .hex(0xFFFFFF, opacity: 0.64),
                 railHoverInner: .hex(0xFFFFFF, opacity: 0.14),
                 railReducedFill: .hex(0xE4ECE8),
-                themeAccent: .dashboardAdaptive(0x004225, dark: 0x6EC799),
-                themeWhisper: .dashboardAdaptive(0x004225, dark: 0x6EC799, opacity: 0.05),
-                themeSoft: .dashboardAdaptive(0x004225, dark: 0x6EC799, opacity: 0.10),
-                themeStrong: .dashboardAdaptive(0x004225, dark: 0x6EC799, opacity: 0.30),
-                themeRing: .dashboardAdaptive(0x004225, dark: 0x6EC799, opacity: 0.42),
-                border: .dashboardAdaptive(0x004225, dark: 0x6EC799, opacity: 0.11),
-                input: .dashboardAdaptive(0x004225, dark: 0x6EC799, opacity: 0.09)
+                themeAccent: .hex(0x004225),
+                themeWhisper: .hex(0x004225, opacity: 0.05),
+                themeSoft: .hex(0x004225, opacity: 0.10),
+                themeStrong: .hex(0x004225, opacity: 0.30),
+                themeRing: .hex(0x004225, opacity: 0.42),
+                border: .hex(0x004225, opacity: 0.11),
+                input: .hex(0x004225, opacity: 0.09)
             )
         case .cognac:
             DashboardPalette(
-                workspace: .dashboardAdaptive(0xF7F6F3, dark: 0x211C18),
+                workspace: .hex(0xF7F6F3),
                 railFill: .hex(0xFFFFFF, opacity: 0.88),
                 railRim: .clear,
                 railInnerLight: .hex(0xFFFFFF, opacity: 0.72),
@@ -298,32 +298,58 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
                 railHoverRim: .clear,
                 railHoverInner: .hex(0xFFFFFF, opacity: 0.88),
                 railReducedFill: .hex(0xFFFFFF),
-                themeAccent: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83),
-                themeWhisper: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83, opacity: 0.05),
-                themeSoft: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83, opacity: 0.07),
-                themeStrong: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83, opacity: 0.11),
-                themeRing: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83, opacity: 0.35),
-                border: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83, opacity: 0.10),
-                input: .dashboardAdaptive(0x9A5A2A, dark: 0xDCAB83, opacity: 0.08)
+                themeAccent: .hex(0x9A5A2A),
+                themeWhisper: .hex(0x9A5A2A, opacity: 0.05),
+                themeSoft: .hex(0x9A5A2A, opacity: 0.07),
+                themeStrong: .hex(0x9A5A2A, opacity: 0.11),
+                themeRing: .hex(0x9A5A2A, opacity: 0.35),
+                border: .hex(0x9A5A2A, opacity: 0.10),
+                input: .hex(0x9A5A2A, opacity: 0.08)
+            )
+        case .dark:
+            DashboardPalette(
+                workspace: .hex(DashboardColors.darkWorkspace),
+                railFill: .hex(DashboardColors.darkRail),
+                railRim: .hex(0x3B443B, opacity: 0.65),
+                railInnerLight: .clear,
+                railEdge: .clear,
+                railHoverRim: .hex(0x526553, opacity: 0.75),
+                railHoverInner: .clear,
+                railReducedFill: .hex(DashboardColors.darkRail),
+                themeAccent: .hex(DashboardColors.darkGreen),
+                themeWhisper: .hex(DashboardColors.darkGreen, opacity: 0.05),
+                themeSoft: .hex(DashboardColors.darkGreen, opacity: 0.10),
+                themeStrong: .hex(DashboardColors.darkGreen, opacity: 0.18),
+                themeRing: .hex(DashboardColors.darkGreen, opacity: 0.42),
+                border: .hex(0x3B443B),
+                input: .hex(DashboardColors.darkSurface)
             )
         }
     }
 }
 
 struct DashboardPalette {
-    static let calendarEvent = DashboardTheme.green.palette.themeAccent
-    static let calendarTask = Color.hex(0x4169E1)
-    static let calendarRecurringEvent = Color.hex(0x7462A6)
-    static let calendarRecurringTask = DashboardTheme.cognac.palette.themeAccent
-    static let foreground = Color.dashboardAdaptive(0x0A1F16, dark: 0xE6F2EB)
-    static let mutedForeground = Color.dashboardAdaptive(0x5C6F64, dark: 0xA9B9AF)
-    static let primary = Color.hex(0x004225)
-    static let primaryForeground = Color.white
-    static let background = Color.dashboardAdaptive(0xFFFFFF, dark: 0x252D28)
-    static let muted = Color.hex(0x004225, opacity: 0.07)
-    static let success = Color.dashboardAdaptive(0x0D8F5A, dark: 0x6EC799)
-    static let warning = Color.hex(0xF59E0B)
-    static let danger = Color.hex(0xEF4444)
+    static let calendarEvent = Color(dashboardColor: DashboardColors.primary)
+    static let calendarTask = Color(dashboardColor: DashboardColors.calendarTask)
+    static let calendarRecurringEvent = Color(dashboardColor: DashboardColors.calendarRecurringEvent)
+    static let calendarRecurringTask = Color(dashboardColor: DashboardColors.calendarRecurringTask)
+    static let foreground = Color(dashboardColor: DashboardColors.foreground)
+    static let mutedForeground = Color(dashboardColor: DashboardColors.mutedForeground)
+    static let primary = Color(dashboardColor: DashboardColors.primary)
+    static let primaryFill = Color(dashboardColor: DashboardColors.primaryFill)
+    static let primaryForeground = Color(dashboardColor: DashboardColors.primaryForeground)
+    static let background = Color(dashboardColor: DashboardColors.background)
+    static let muted = primary.opacity(0.07)
+    static let success = Color(dashboardColor: DashboardColors.success)
+    static let warning = Color(dashboardColor: DashboardColors.warning)
+    static let danger = Color(dashboardColor: DashboardColors.danger)
+    static let usageBlue = Color.adaptiveHex(0x4D69D8, dark: 0x96A7EE)
+    static let usageOrange = Color.adaptiveHex(0xC46B3C, dark: 0xE3A07A)
+    static let usageGray = Color.adaptiveHex(0x535A63, dark: 0xA4ACB7)
+    static let usagePurple = Color.adaptiveHex(0x8B5CF6, dark: 0xB69BF4)
+    static let usagePink = Color.adaptiveHex(0xE05D8B, dark: 0xED98B6)
+    static let usageYellow = Color.adaptiveHex(0xC28A20, dark: 0xE3B95A)
+    static let usageUnknown = Color.adaptiveHex(0x8A8F98, dark: 0xB0B5BE)
 
     let workspace: Color
     let railFill: Color
@@ -454,6 +480,7 @@ struct DashboardSearchField: View {
 }
 
 struct DashboardPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
@@ -465,11 +492,17 @@ struct DashboardPrimaryButtonStyle: ButtonStyle {
             .padding(.horizontal, 14)
             .frame(minHeight: DashboardControlMetrics.minimumHeight)
             .background(
-                DashboardPalette.primary.opacity(
+                DashboardPalette.primaryFill.opacity(
                     configuration.isPressed ? 0.78 : (isEnabled && isHovering ? 0.9 : 1)
                 )
             )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .overlay {
+                if theme == .dark {
+                    RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous)
+                        .stroke(theme.palette.themeRing, lineWidth: 1)
+                }
+            }
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { isHovering = $0 }
@@ -635,17 +668,15 @@ private enum DashboardControlMetrics {
 }
 
 extension Color {
-    /// Mobile supports system dark appearance; desktop retains its light palettes.
-    static func dashboardAdaptive(_ light: UInt32, dark: UInt32, opacity: Double = 1) -> Color {
-        #if os(iOS)
-        Color(uiColor: UIColor { traits in
-            let value = traits.userInterfaceStyle == .dark ? dark : light
-            return UIColor(red: CGFloat((value >> 16) & 0xFF) / 255,
-                           green: CGFloat((value >> 8) & 0xFF) / 255,
-                           blue: CGFloat(value & 0xFF) / 255, alpha: opacity)
-        })
+    init(dashboardColor: DashboardNativeColor) {
+        #if os(macOS)
+        self.init(nsColor: dashboardColor)
         #else
-        .hex(light, opacity: opacity)
+        self.init(uiColor: dashboardColor)
         #endif
+    }
+
+    static func adaptiveHex(_ light: UInt32, dark: UInt32) -> Color {
+        Color(dashboardColor: DashboardColors.adaptive(light: light, dark: dark))
     }
 }

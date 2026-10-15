@@ -4,6 +4,14 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct ACPHarnessStreamingReviewTests {
+  @Test("Agent errors show recovery guidance without protocol codes")
+  func agentErrorPresentation() {
+    let guidance = "The provider returned invalid model metadata. Refresh models to retry."
+    #expect(LocalACPClientError.agent(code: -32000, message: guidance).localizedDescription == guidance)
+    #expect(LocalACPClientError.agent(code: -32000, message: " \n").localizedDescription
+      == "The agent could not complete this operation. Try again.")
+  }
+
   @Test("Pi Durable status records retain run identity and reject malformed reports")
   func builtInProgramStatusWireReplay() async throws {
     let fixture = try ACPHarnessFixture(kind: .defaultAgent,
@@ -159,6 +167,7 @@ struct ACPHarnessStreamingReviewTests {
       Issue.record("Rejected command must report its native error")
     } catch LocalACPClientError.agent(let code, let message) {
       #expect(code == -32602 && message == "Command rejected")
+      #expect(LocalACPClientError.agent(code: code, message: message).localizedDescription == "Command rejected")
     }
     #expect(try await client.prompt("ordinary message") == .endTurn)
     await client.shutdown()

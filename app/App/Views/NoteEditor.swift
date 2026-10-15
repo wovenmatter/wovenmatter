@@ -255,7 +255,7 @@ final class DashboardNoteEditorController {
         let range = editableRange(in: textView)
         if range.length == 0 {
             let isHighlighted = textView.typingAttributes[.backgroundColor] != nil
-            applyAttribute(.backgroundColor, value: isHighlighted ? nil : color)
+            applyAttribute(.backgroundColor, value: isHighlighted ? nil : DashboardColors.noteBackground(color))
             return
         }
 
@@ -265,7 +265,7 @@ final class DashboardNoteEditorController {
             isFullyHighlighted = false
             stop.pointee = true
         }
-        applyAttribute(.backgroundColor, value: isFullyHighlighted ? nil : color)
+        applyAttribute(.backgroundColor, value: isFullyHighlighted ? nil : DashboardColors.noteBackground(color))
     }
 
     func recolorSelectedHighlights(_ color: NSColor) {
@@ -281,7 +281,7 @@ final class DashboardNoteEditorController {
               textView.shouldChangeText(in: range, replacementString: nil) else { return }
         storage.beginEditing()
         for highlightedRange in highlightedRanges {
-            storage.addAttribute(.backgroundColor, value: color, range: highlightedRange)
+            storage.addAttribute(.backgroundColor, value: DashboardColors.noteBackground(color), range: highlightedRange)
         }
         storage.endEditing()
         textView.didChangeText()
@@ -454,6 +454,7 @@ final class DashboardNoteEditorController {
 
 struct DashboardNoteEditor: NSViewRepresentable {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var document: NoteDocument
     let controller: DashboardNoteEditorController
     var dictationEditor: DictationEditor? = nil
@@ -463,6 +464,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
+        scrollView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
@@ -500,6 +502,11 @@ struct DashboardNoteEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        let appearanceName: NSAppearance.Name = colorScheme == .dark ? .darkAqua : .aqua
+        if scrollView.appearance?.name != appearanceName {
+            scrollView.appearance = NSAppearance(named: appearanceName)
+            scrollView.documentView?.needsDisplay = true
+        }
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.isEditable = isEnabled
         dictationEditor?.bind(textView, identity: dictationIdentity)
@@ -682,6 +689,8 @@ private final class NoteTextView: NSTextView {
     // Each note owns its editing history; the window's title fields and other
     // editors must not become targets of these toolbar actions.
     private let noteUndoManager = UndoManager()
+    private var standardLinkTextAttributes: [NSAttributedString.Key: Any]?
+    private var didCaptureStandardLinkTextAttributes = false
     override var undoManager: UndoManager? { noteUndoManager }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
@@ -719,6 +728,23 @@ private final class NoteTextView: NSTextView {
         case #selector(redo(_:)): return isEditable && noteUndoManager.canRedo
         default: return super.validateUserInterfaceItem(item)
         }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        insertionPointColor = DashboardColors.noteForeground()
+        if !didCaptureStandardLinkTextAttributes {
+            standardLinkTextAttributes = linkTextAttributes
+            didCaptureStandardLinkTextAttributes = true
+        }
+        if DashboardColors.isDark(effectiveAppearance) {
+            var attributes = standardLinkTextAttributes ?? [:]
+            attributes[.foregroundColor] = DashboardColors.success
+            linkTextAttributes = attributes
+        } else {
+            linkTextAttributes = standardLinkTextAttributes
+        }
+        needsDisplay = true
     }
 
     override func didChangeText() {
@@ -767,7 +793,7 @@ private final class NoteTextView: NSTextView {
 private enum NoteAttributedDocument {
     static let defaultAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 14),
-        .foregroundColor: NSColor.labelColor,
+        .foregroundColor: DashboardColors.noteForeground(),
     ]
 
     static func render(_ document: NoteDocument) -> NSAttributedString {
@@ -831,9 +857,8 @@ private enum NoteAttributedDocument {
                    let row = table.rows.firstIndex(where: { $0.id == rowID }),
                    let column = table.columns.firstIndex(where: { $0.id == columnID }) {
                     table.rows[row].cells[column].runs = runs(in: attributed, range: contentRange)
-                    table.rows[row].cells[column].backgroundHex = colorHex(
-                        attributes[.backgroundColor] as? NSColor
-                    )
+                    // Cell fills are table metadata; a run's highlight is separate.
+                    // Keep the authored fill when parsing edits in either appearance.
                     tables[tableID] = table
                 }
                 if emittedTables.insert(tableID).inserted { blocks.append(.table(table)) }
@@ -951,8 +976,9 @@ private enum NoteAttributedDocument {
                 cellBlock.setWidth(1, type: .absoluteValueType, for: .border)
                 cellBlock.setBorderColor(.separatorColor)
                 cellBlock.setWidth(7, type: .absoluteValueType, for: .padding)
-                cellBlock.backgroundColor = color(from: cell.backgroundHex)
-                    ?? (rowIndex < table.headerRowCount ? .controlBackgroundColor : .clear)
+                cellBlock.backgroundColor = color(from: cell.backgroundHex).map(DashboardColors.noteBackground)
+                    ?? (rowIndex < table.headerRowCount
+                        ? DashboardColors.noteBackground(.controlBackgroundColor) : .clear)
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.textBlocks = [cellBlock]
                 paragraph.paragraphSpacing = 0
@@ -990,10 +1016,10 @@ private enum NoteAttributedDocument {
         if run.italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: color(from: run.foregroundHex) ?? NSColor.labelColor,
+            .foregroundColor: DashboardColors.noteForeground(color(from: run.foregroundHex) ?? .labelColor),
         ]
         if run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-        if let color = color(from: run.highlightHex) { attributes[.backgroundColor] = color }
+        if let color = color(from: run.highlightHex) { attributes[.backgroundColor] = DashboardColors.noteBackground(color) }
         if let link = run.link.flatMap(URL.init(string:)) { attributes[.link] = link }
         if let link = run.databaseLink, let encoded = try? JSONEncoder().encode(link) {
             attributes[.noteDatabaseLink] = encoded
@@ -1144,13 +1170,7 @@ private func color(from hex: String?) -> NSColor? {
 }
 
 private func colorHex(_ color: NSColor?) -> String? {
-    guard let color = color?.usingColorSpace(.sRGB) else { return nil }
-    return String(
-        format: "#%02X%02X%02X",
-        Int(round(color.redComponent * 255)),
-        Int(round(color.greenComponent * 255)),
-        Int(round(color.blueComponent * 255))
-    )
+    DashboardColors.documentColorHex(color)
 }
 
 private extension NSTextStorage {
@@ -1361,7 +1381,7 @@ private enum DashboardNoteHighlightColor: String, CaseIterable, Identifiable {
         }
     }
 
-    var color: Color { Color(nsColor: nsColor) }
+    var color: Color { Color(nsColor: DashboardColors.noteBackground(nsColor)) }
 }
 
 private struct DashboardNoteHighlightColorControl: View {

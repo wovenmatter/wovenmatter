@@ -266,7 +266,7 @@ struct WorkspaceView: View {
             destination = .workspace
             selectConversation(id)
         })
-        .preferredColorScheme(.light)
+        .preferredColorScheme(theme.colorScheme)
         .tint(DashboardPalette.primary)
         .foregroundStyle(DashboardPalette.foreground)
     }

@@ -1,6 +1,7 @@
 """Exercise the real deployment script with deterministic Docker/Tailscale commands.
 No Docker daemon, SSH, accounts, or network services are used on the test machine.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,16 +12,21 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = (ROOT / 'remote/executor-deploy.sh').read_text()
 DOCKERFILE = (ROOT / 'remote/Executor.Dockerfile').read_text()
+CURRENT_IMAGE = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(DOCKERFILE.encode()).hexdigest()[:16]
 
 class ExecutorDeploymentTests(unittest.TestCase):
-    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False):
+    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False):
         commands = root / 'commands'
         commands.mkdir()
         log = root / 'commands.log'
         docker = commands / 'docker'
         state = root / 'docker.json'
         containers = {}
-        if existing: containers['wovenmatter-executor'] = 'wovenmatter/executor:' + ('2.0.0-beta.7' if old_version else '2.0.0-beta.12')
+        if existing:
+            containers['wovenmatter-executor'] = 'wovenmatter/executor:2.0.0-beta.7' if old_version else CURRENT_IMAGE
+            if old_recipe:
+                old_dockerfile = DOCKERFILE.replace('trixie-slim', 'bookworm-slim')
+                containers['wovenmatter-executor'] = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(old_dockerfile.encode()).hexdigest()[:16]
         if previous: containers['wovenmatter-executor-previous'] = 'wovenmatter/executor:2.0.0-beta.6'
         state.write_text(json.dumps(containers))
         docker.write_text('''#!/usr/bin/env python3
@@ -93,6 +99,9 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertIn('--restart', run)
             self.assertIn('--env-file', run)
             self.assertIn('--mount', run)
+            build = next(call for call in calls if call[:2] == ['docker', 'build'])
+            self.assertIn('--pull', build)
+            self.assertIn('--no-cache', build)
             self.assertFalse(any('funnel' in call for call in calls))
             env = root / 'runtime/runtime.env'
             self.assertEqual(env.stat().st_mode & 0o777, 0o600)
@@ -121,7 +130,17 @@ elif sys.argv[1:]==['serve','status','--json']:
             remove = calls.index(['docker', 'rm', 'wovenmatter-executor-previous'])
             self.assertLess(build, stop)
             self.assertLess(ready, remove)
-            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.12'})
+            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': CURRENT_IMAGE})
+
+    def test_base_image_change_replaces_the_same_executor_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result, log = self.fixture(root, existing=True, old_recipe=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertTrue(any(call[:2] == ['docker', 'build'] for call in calls))
+            self.assertIn(['docker', 'stop', 'wovenmatter-executor'], calls)
+            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': CURRENT_IMAGE})
 
     def test_failed_readiness_restores_previous_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:

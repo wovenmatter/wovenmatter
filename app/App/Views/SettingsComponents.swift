@@ -786,9 +786,11 @@ struct SettingsThemePreview: View {
     let theme: DashboardTheme
 
     private var railFill: Color {
-        theme == .green
-            ? .hex(0x004225, opacity: 0.16)
-            : .hex(0xFFFFFF, opacity: 0.96)
+        switch theme {
+        case .green: .hex(0x004225, opacity: 0.16)
+        case .cognac: .hex(0xFFFFFF, opacity: 0.96)
+        case .dark: .hex(DashboardColors.darkRail)
+        }
     }
 
     var body: some View {
@@ -800,7 +802,7 @@ struct SettingsThemePreview: View {
                     .fill(DashboardPalette.primary)
                     .frame(width: 32, height: 6)
                 Capsule()
-                    .fill(Color.black.opacity(0.06))
+                    .fill(theme == .dark ? .hex(DashboardColors.darkMutedForeground, opacity: 0.18) : Color.black.opacity(0.06))
                     .frame(height: 6)
             }
             .padding(8)
@@ -820,6 +822,7 @@ struct SettingsThemePreview: View {
         .padding(8)
         .frame(height: 80)
         .background(theme.palette.workspace)
+        .environment(\.colorScheme, theme.colorScheme)
         .clipShape(DashboardShapes.card)
         .shadow(color: .hex(0x0A1F16, opacity: 0.07), radius: 6, y: 2)
     }
