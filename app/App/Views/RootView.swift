@@ -21,6 +21,10 @@ struct RootView: View {
                 failureView(message: message)
             }
         }
+        .task(id:model.state) {
+            guard model.state == .ready, !model.isLibraryClient else { return }
+            await model.analytics.openInterface()
+        }
         .environment(\.dashboardTheme, theme)
         .toggleStyle(DashboardSwitchToggleStyle())
         .preferredColorScheme(theme.colorScheme)

@@ -13,6 +13,9 @@ extension ApplicationModel {
             try await dashboardStore.mutateConversation(id: id, mutation: mutation)
         }
         await refreshWorkspace()
+        if LocalExecutionRole.current != .backend {
+            await analytics.record(.active)
+        }
     }
 
     func trashedConversations() async throws -> [WorkspaceTrashedConversation] {

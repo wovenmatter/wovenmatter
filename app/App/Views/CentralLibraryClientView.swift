@@ -60,7 +60,12 @@ struct CentralLibraryClientView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .disabled(model.preparingTransition)
-        .task { await model.run() }
+        .task {
+            await model.initialize()
+            await model.analytics.openInterface()
+            await model.configureUpdateAnalytics(application.analytics)
+            await model.run()
+        }
         .onChange(of: application.workspaceAssets.tabs.selected) { _, tab in
             if case .browser = tab { model.section = .browser }
         }

@@ -514,6 +514,7 @@ public actor WorkspaceClient {
     // New commands carry their owner before persistence. Legacy saved commands
     // keep their exact payload; the journal key and transport still bind them.
     let command = try await store.journal.rememberCommand(saved ?? scoped, workspaceID: workspaceID)
+    if saved == nil { try? await store.analytics.recordCommand(command) }
     // An explicit retry always uses the persisted payload, even if the composer
     // has since changed. Recording a different payload under that ID is rejected.
     // Recover an acknowledgement before resubmitting the exact same command.

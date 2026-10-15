@@ -296,6 +296,7 @@ final class ApplicationModel {
     private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var shownLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
+    let analytics = ProductAnalyticsModel()
     private(set) var dashboardStore: DashboardStore?
     @ObservationIgnored
     var federatedExecutionClient: CentralExecutionClient?
@@ -626,6 +627,8 @@ final class ApplicationModel {
             )
             let dashboardStore = try await DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
+            analytics.configure(database: dashboardStore.database, publisher: true)
+            await analytics.refresh()
             await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
                 await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
             }
@@ -1544,6 +1547,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot)))
                 await refreshWorkspace()
+                if result.entityID != nil, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.entityID
             }
             guard let dashboardStore else {
@@ -1575,6 +1581,7 @@ final class ApplicationModel {
             let folderID = try await dashboardStore.createFolder(name: name,
                 location: .init(workspaceID: owner, rootPath: path, managed: managed))
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return folderID
         } catch {
             folderMutationError = error.localizedDescription
@@ -1588,6 +1595,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.renameFolder(id: id, name: name)))
                 await refreshWorkspace()
+                if result.accepted, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.accepted
             }
             guard let dashboardStore else {
@@ -1595,6 +1605,7 @@ final class ApplicationModel {
             }
             try await dashboardStore.renameFolder(id: id, name: name)
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1608,6 +1619,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.pinFolder(id: id, isPinned: isPinned)))
                 await refreshWorkspace()
+                if result.accepted, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.accepted
             }
             guard let dashboardStore else {
@@ -1615,6 +1629,7 @@ final class ApplicationModel {
             }
             try await dashboardStore.setFolderPinned(id: id, isPinned: isPinned)
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1628,6 +1643,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.moveFolder(id: id, up: { if case .up = direction { return true }; return false }())))
                 await refreshWorkspace()
+                if result.accepted, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.accepted
             }
             guard let dashboardStore else {
@@ -1641,6 +1659,7 @@ final class ApplicationModel {
                 return false
             }
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1654,6 +1673,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.deleteFolder(id: id, deleteRoot: deleteRoot)))
                 await refreshWorkspace()
+                if result.accepted, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.accepted
             }
             guard let dashboardStore else {
@@ -1679,6 +1701,7 @@ final class ApplicationModel {
             }
             try await dashboardStore.deleteFolder(id: id)
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1696,6 +1719,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.moveConversation(id: id, folderID: folderID)))
                 await refreshWorkspace()
+                if result.accepted, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.accepted
             }
             guard let dashboardStore else {
@@ -1725,6 +1751,7 @@ final class ApplicationModel {
             // already confirmed controls visible in the meantime.
             localACPSessionMetadata[id] = localACPSessionMetadata[id]?.withWorkingDirectory(root.path)
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch {
             folderMutationError = error.localizedDescription
@@ -1741,6 +1768,9 @@ final class ApplicationModel {
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.createNote(folderID: folderID, kind: kind)))
                 await refreshWorkspace()
+                if result.entityID != nil, LocalExecutionRole.current != .backend {
+                    await analytics.record(.active)
+                }
                 return result.entityID
             }
             guard let dashboardStore else {
@@ -1751,6 +1781,7 @@ final class ApplicationModel {
                 kind: kind
             )
             await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return noteID
         } catch {
             noteMutationError = error.localizedDescription
@@ -1849,8 +1880,12 @@ final class ApplicationModel {
         guard !noteActionIDs.contains(note.id) else { return }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
+        let before = draft
         draft.edit(title: title, content: content)
         persistNoteDraft(note: note, draft: draft)
+        if draft.title != before.title || draft.content != before.content {
+            Task { await analytics.record(.active) }
+        }
     }
 
     func retryNoteDraft(note: WorkspaceNoteRecord) {
@@ -2321,6 +2356,7 @@ final class ApplicationModel {
                 return false
             }
             state.setError(nil)
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return true
         } catch LocalACPSessionDatabaseError.steeringUnsupported {
             state.setError(ApplicationModelError.steeringUnavailable.localizedDescription)
@@ -4306,6 +4342,18 @@ extension ApplicationModel {
         if isCommand { backendCommandsInFlight += 1 }
         defer { if isCommand { backendCommandsInFlight -= 1 } }
         do {
+            if request.method == "analytics.preference" {
+                await analytics.refresh()
+                return .init(id: request.id, result: try JSONEncoder().encode(analytics.preference))
+            }
+            if request.method == "analytics.setPreference" {
+                let change = try JSONDecoder().decode(ProductAnalyticsPreferenceChange.self, from: request.payload)
+                return .init(id: request.id, result: try JSONEncoder().encode(await setProductAnalyticsPreference(change)))
+            }
+            if request.method == "analytics.events" {
+                let batch = try JSONDecoder().decode(ProductAnalyticsBatch.self, from: request.payload)
+                return .init(id: request.id, result: try JSONEncoder().encode(await analytics.ingest(batch)))
+            }
             if request.method.hasPrefix("speech.") {
                 return .init(id: request.id, result: try await backendSpeech.handle(method: request.method, payload: request.payload))
             }
@@ -4380,6 +4428,13 @@ extension ApplicationModel {
         } catch { return .init(id: request.id, error: error.localizedDescription) }
     }
 
+    func setProductAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference {
+        let preference = try await analytics.change(change)
+        // Wake connected frontends even when there is no workspace/content change.
+        await backendApplicationService?.invalidations.publish(scopes: [.settings])
+        return preference
+    }
+
     private func backendApplicationState() -> BackendApplicationState {
         .init(runningConversationIDs: localRunningConversationIDs, metadata: localACPSessionMetadata,
               permissions: pendingLocalACPPermissions, interactions: pendingLocalACPInteractions,
@@ -4452,6 +4507,7 @@ extension ApplicationModel {
             let support = try Self.dashboardSupportDirectory()
             let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: support))
             backendRPCClient = client
+            analytics.configure(rpc: client)
             // A running owner is the common path: connect directly without any
             // launchctl subprocesses or main-thread startup waits.
             let existing = try? await client.call(method: "application.readiness", timeout: 0.5)
@@ -4536,6 +4592,7 @@ extension ApplicationModel {
                         if change.requiresReload || change.scopes.contains(.settings) {
                             try await self.refreshBackendConnectionsState()
                             try await self.refreshBackendSurfaceProfile()
+                            await self.analytics.refresh()
                         }
                         if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
                         if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }

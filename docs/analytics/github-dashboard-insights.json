@@ -1,0 +1,78 @@
+[
+  {
+    "name": "GitHub views and clones \u2014 daily",
+    "description": "Latest observed count per UTC reporting day. Repeated collections replace earlier snapshots. Missing days remain missing; GitHub traffic is separate from app activity.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT day,\n    sumIf(total_count, metric = 'views') AS views,\n    sumIf(total_count, metric = 'clones') AS clones\nFROM (\n    SELECT toDate(properties.report_day) AS day,\n        properties.traffic_metric AS metric,\n        argMax(toInt(properties.total_count), timestamp) AS total_count\n    FROM events\n    WHERE event = 'github_traffic_snapshot'\n        AND properties.source = 'github'\n        AND properties.repository = 'wovenmatter/wovenmatter'\n        AND timestamp >= now() - INTERVAL 45 DAY\n        AND toDate(properties.report_day) >= toDate(now() - INTERVAL 30 DAY)\n    GROUP BY day, metric\n)\nGROUP BY day\nORDER BY day"
+      },
+      "display": "ActionsLineGraph",
+      "chartSettings": {
+        "xAxis": {
+          "column": "day"
+        },
+        "yAxis": [
+          {
+            "column": "views"
+          },
+          {
+            "column": "clones"
+          }
+        ],
+        "showLegend": true
+      }
+    }
+  },
+  {
+    "name": "Installer downloads \u2014 cumulative observations",
+    "description": "Last known installer-only DMG counters by observation day, including replaced installers and repeats. Supporting files are excluded. Historical daily download deltas are not inferred.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT toDate(properties.report_day) AS day,\n    argMax(toInt(properties.cumulative_dmg_downloads), timestamp) AS dmg_downloads\nFROM events\nWHERE event = 'github_download_snapshot'\n    AND properties.source = 'github'\n    AND properties.repository = 'wovenmatter/wovenmatter'\n    AND timestamp >= now() - INTERVAL 45 DAY\n    AND toDate(properties.report_day) >= toDate(now() - INTERVAL 30 DAY)\nGROUP BY day\nORDER BY day"
+      },
+      "display": "ActionsBar",
+      "chartSettings": {
+        "xAxis": {
+          "column": "day"
+        },
+        "yAxis": [
+          {
+            "column": "dmg_downloads"
+          }
+        ],
+        "showLegend": true,
+        "showValuesOnSeries": true
+      }
+    }
+  },
+  {
+    "name": "GitHub stars and forks \u2014 daily",
+    "description": "Latest repository totals per UTC observation day; no account identities or inferred historical counts.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT toDate(properties.report_day) AS day, argMax(toInt(properties.stars), timestamp) AS stars, argMax(toInt(properties.forks), timestamp) AS forks FROM events WHERE event = 'github_repository_snapshot' AND properties.source = 'github' AND properties.repository = 'wovenmatter/wovenmatter' AND timestamp >= now() - INTERVAL 30 DAY GROUP BY day ORDER BY day"
+      },
+      "display": "ActionsLineGraph",
+      "chartSettings": {
+        "xAxis": {
+          "column": "day"
+        },
+        "yAxis": [
+          {
+            "column": "stars"
+          },
+          {
+            "column": "forks"
+          }
+        ],
+        "showLegend": true
+      }
+    }
+  }
+]

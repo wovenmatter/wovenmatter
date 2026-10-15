@@ -84,6 +84,7 @@ public actor MobileStore {
       }
     }
   }
+  public nonisolated let analytics: MobileProductAnalytics
   public nonisolated let calendar: MobileCalendarStore
   public nonisolated let journal: WorkspaceJournal
   public nonisolated let artifacts: SavedArtifactStore
@@ -95,6 +96,7 @@ public actor MobileStore {
   private var lastWriteBytes = 0
   public init(file: URL, budget: Budget = .init()) throws {
     self.file = file; self.budget = budget
+    analytics = try MobileProductAnalytics(file: file.appendingPathExtension("analytics"))
     journal = try WorkspaceJournal(file: file.appendingPathExtension("execution"))
     artifacts = try SavedArtifactStore(directory: file.appendingPathExtension("artifacts"))
     if FileManager.default.fileExists(atPath: file.path) {

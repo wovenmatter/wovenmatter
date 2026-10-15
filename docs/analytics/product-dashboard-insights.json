@@ -1,0 +1,116 @@
+[
+  {
+    "short_id": "tTQt82KB",
+    "name": "DAU \u2014 qualified active libraries, rolling 24 hours",
+    "description": "Distinct central-library IDs with a qualifying human action during the last 24 hours, up to now. This is the headline daily active metric; opens and updates do not qualify. Opted-out activity is excluded.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 24 HOUR AND timestamp < now()"
+      },
+      "display": "BoldNumber"
+    }
+  },
+  {
+    "short_id": "TFtQSjU3",
+    "name": "WAU \u2014 active libraries, rolling 7 days",
+    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 7 DAY AND timestamp < now()"
+      },
+      "display": "BoldNumber"
+    }
+  },
+  {
+    "short_id": "b1lYwhWw",
+    "name": "MAU \u2014 active libraries, rolling 30 days",
+    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now()"
+      },
+      "display": "BoldNumber"
+    }
+  },
+  {
+    "short_id": "z2fDY4L3",
+    "name": "Qualified libraries by UTC date \u2014 30 day trend",
+    "description": "Distinct libraries with generic qualifying activity signals; at most one signal per six hours. Rolling 24-hour/7-day/30-day windows are approximate, exclude offline/failed sends, and never sum daily uniques.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT toDate(timestamp) AS day, count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now() GROUP BY day ORDER BY day"
+      },
+      "display": "ActionsLineGraph",
+      "chartSettings": {
+        "xAxis": {
+          "column": "day"
+        },
+        "yAxis": [
+          {
+            "column": "active_libraries"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "short_id": "1rpLMpaC",
+    "name": "App-open signals \u2014 rolling 24 hours, 7 days, 30 days",
+    "description": "At most one app-open signal per library per six hours, triggered by opening the interface. Counts are sampled signals, not total launches. Opens do not qualify for DAU/WAU/MAU; offline and failed sends are excluded.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT period, app_opens, opening_libraries FROM (\nSELECT 1 AS period_order, '24 hours' AS period, count(DISTINCT uuid) AS app_opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 24 HOUR AND timestamp < now()\nUNION ALL\nSELECT 2 AS period_order, '7 days' AS period, count(DISTINCT uuid) AS app_opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 7 DAY AND timestamp < now()\nUNION ALL\nSELECT 3 AS period_order, '30 days' AS period, count(DISTINCT uuid) AS app_opens, count(DISTINCT distinct_id) AS opening_libraries FROM events WHERE properties.source = 'app' AND event = 'app_opened' AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now()\n) ORDER BY period_order"
+      },
+      "display": "ActionsTable"
+    }
+  },
+  {
+    "short_id": "4GBAnZ6I",
+    "name": "Active libraries by country \u2014 30 days",
+    "description": "Distinct libraries with generic qualifying activity signals; at most one signal per six hours. Rolling 24-hour/7-day/30-day windows are approximate, exclude offline/failed sends, and never sum daily uniques.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT properties.$geoip_country_code AS country, count(DISTINCT distinct_id) AS active_libraries FROM events WHERE properties.source = 'app' AND properties.qualifying_activity = true AND event = 'app_active' AND timestamp >= now() - INTERVAL 30 DAY GROUP BY country ORDER BY active_libraries DESC"
+      },
+      "display": "ActionsTable"
+    }
+  },
+  {
+    "short_id": "wly9WaDB",
+    "name": "Website visitors and conversions \u2014 30 days",
+    "description": "Explicit event contract. Distinct central-library IDs are a user proxy; opt-outs are excluded. Website IDs remain separate. Data appears after release.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT event, count() AS events, count(DISTINCT distinct_id) AS browsers FROM events WHERE properties.source = 'website' AND event IN ('$pageview','download_clicked','download_redirected','github_clicked') AND timestamp >= now() - INTERVAL 30 DAY GROUP BY event ORDER BY events DESC"
+      },
+      "display": "ActionsTable"
+    }
+  },
+  {
+    "short_id": "kR3rOphU",
+    "name": "In-app update stages \u2014 30 days",
+    "description": "Clicks, verified fresh downloads, and replacement-app launches by target version. Cache reuse is excluded from completed downloads. Stages overlap and are never added to GitHub totals or qualified actives. Empty until the analytics release ships.",
+    "query": {
+      "kind": "DataVisualizationNode",
+      "source": {
+        "kind": "HogQLQuery",
+        "query": "SELECT event AS update_stage, properties.target_version AS target_version, count(DISTINCT uuid) AS events, count(DISTINCT distinct_id) AS libraries FROM events WHERE properties.source = 'app' AND event IN ('update_check_clicked','update_download_clicked','update_download_completed','update_download_failed','update_install_clicked','update_install_completed','update_install_failed') AND timestamp >= now() - INTERVAL 30 DAY AND timestamp < now() GROUP BY update_stage, target_version ORDER BY target_version, update_stage"
+      },
+      "display": "ActionsTable"
+    }
+  }
+]

@@ -23,6 +23,7 @@ import CompanionInference
       }
     }
   }
+  let analytics = MobileAnalyticsModel()
   var tab: Tab = .home
   var state = MobileStoreState()
   var providers: [CompanionProvider] = []
@@ -224,10 +225,12 @@ import CompanionInference
         catch { errorMessage = error.localizedDescription }
       }
     }
+    if let store { await analytics.configure(store.analytics, transport: transport) }
     if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
     await maintainConnections()
   }
   func reload() async {
+    await analytics.refresh()
     if let store {
       let next = await store.snapshot()
       let changedOutbox = next.outbox != state.outbox
@@ -335,13 +338,14 @@ import CompanionInference
   func closeFolder() { selectedFolderID = nil; folderContentsPresented = false }
   func newFolder(name: String) async {
     guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    do { let folder = try await store.createFolder(name: name); await reload(); openFolder(folder.id) }
+    do { let folder = try await store.createFolder(name: name); await analytics.record(.active); await reload(); openFolder(folder.id) }
     catch { errorMessage = error.localizedDescription }
   }
   func newNote() async {
     guard let store else { return }
     do {
       let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled note", content: NoteDocument().encoded())
+      await analytics.record(.active)
       selectedNoteID = note.id; tab = .note; await reload()
     } catch { errorMessage = error.localizedDescription }
   }
@@ -395,6 +399,7 @@ import CompanionInference
       await previous?.value
       do {
         try await store.editNote(id: id, title: title, content: content, folderID: folder, base: base)
+        await analytics.record(.active)
         await reload()
         if saveGenerations[id] == generation {
           saveStates[id] = "Saved on this device"
@@ -561,7 +566,10 @@ import CompanionInference
   }
   @discardableResult
   func perform(_ action: CompanionWorkspaceAction) async -> Bool {
-    if let result = await performLocalCalendar(action) { return result }
+    if let result = await performLocalCalendar(action) {
+      if result, action.qualifiesForAnalytics { await analytics.record(.active) }
+      return result
+    }
     let conversationID: String?
     switch action {
     case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
@@ -569,13 +577,18 @@ import CompanionInference
     }
     if let id = conversationID {
       let owner = executionRoute(for: id)
-      if owner == "local" { return await performDeviceAction(action) }
+      if owner == "local" {
+        let accepted=await performDeviceAction(action)
+        if accepted, action.qualifiesForAnalytics { await analytics.record(.active) }
+        return accepted
+      }
       if owner != "central" {
         guard let client = workspaceClients[owner] else { errorMessage = "This execution workspace is unavailable."; return false }
         do {
           let command = CompanionCommand(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: action)
           let result = try await client.submit(command)
           guard result.status == .completed else { errorMessage = result.message ?? "The workspace has not confirmed this change."; return false }
+          if action.qualifiesForAnalytics { await analytics.record(.active) }
           await refreshExecutionWorkspaces(); return true
         } catch { errorMessage = error.localizedDescription; return false }
       }
@@ -598,6 +611,7 @@ import CompanionInference
         errorMessage = result.message ?? "The Mac has not confirmed this change. Check its acknowledgement before retrying."
         return false
       }
+      if pending == nil, action.qualifiesForAnalytics { await analytics.record(.active) }
       await refresh()
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }

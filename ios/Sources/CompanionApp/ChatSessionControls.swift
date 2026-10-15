@@ -29,6 +29,7 @@ extension CompanionModel {
           connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         executionRecords[id] = record
         do { try persistExecutionConfiguration() } catch { executionRecords.removeValue(forKey: id); throw error }
+        await analytics.record(.active)
         try await adoptDeviceConversation(record, transcript: .init(conversationID: id))
         await reload(); conversationID = id
       } else if workspaceID != "local" {

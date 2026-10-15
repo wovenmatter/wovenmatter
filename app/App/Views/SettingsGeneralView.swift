@@ -1,10 +1,12 @@
 import AppKit
+import CompanionClient
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
+    var clientAnalytics: MobileAnalyticsModel?
     var showsBackgroundExecution = true
     var reservesRailControlSpace = false
     var onBack: () -> Void
@@ -43,6 +45,11 @@ struct SettingsGeneralView: View {
             if showsBackgroundExecution { backgroundExecutionCard }
             idleSleepProtectionCard
             closedLidProtectionCard
+            if let clientAnalytics {
+                MobileAnalyticsSettingsCard(analytics: clientAnalytics)
+            } else {
+                ProductAnalyticsSettingsCard(analytics: model.analytics)
+            }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -275,6 +282,7 @@ struct SettingsGeneralView: View {
     private func checkForRelease() {
         releaseUpdateState = .checking
         Task {
+            await model.analytics.record(.updateCheckClicked)
             do {
                 switch try await WovenMatterReleaseUpdateClient().check(
                     currentVersion: currentVersion
@@ -299,11 +307,16 @@ struct SettingsGeneralView: View {
     private func downloadRelease(_ manifest: WovenMatterReleaseManifest) {
         releaseUpdateState = .downloading(manifest)
         Task {
+            let properties = ["target_version": manifest.version]
+            await model.analytics.record(.updateDownloadClicked, properties: properties)
             do {
                 releaseUpdateState = .ready(
-                    try await releaseUpdateInstaller.download(manifest)
+                    try await releaseUpdateInstaller.download(manifest, onDownloaded: {
+                        await model.analytics.record(.updateDownloadCompleted, properties: properties)
+                    })
                 )
             } catch {
+                await model.analytics.record(.updateDownloadFailed, properties: properties)
                 releaseUpdateState = .downloadFailed(
                     manifest,
                     error.localizedDescription
@@ -315,19 +328,27 @@ struct SettingsGeneralView: View {
     private func installRelease(_ release: WovenMatterDownloadedRelease) {
         releaseUpdateState = .installing(release)
         Task {
+            let properties = ["target_version": release.manifest.version]
+            await model.analytics.record(.updateInstallClicked, properties: properties)
             do {
                 guard await WorkspaceAssetSession.prepareForRestart() else {
+                    await model.analytics.record(.updateInstallFailed,
+                        properties: properties)
                     releaseUpdateState = .ready(release)
                     return
                 }
+                let installationID = await model.analytics.prepareUpdateInstallation(release.manifest)
                 try await model.prepareBackendForUpdate()
-                try await releaseUpdateInstaller.beginInstallation(of: release)
+                try await releaseUpdateInstaller.beginInstallation(of: release, installationID: installationID)
                 WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
             } catch {
+                model.analytics.cancelUpdateInstallation()
                 WorkspaceAssetSession.cancelPreparedRestart()
                 var message = error.localizedDescription
                 do { try await model.recoverBackendAfterFailedUpdate() }
                 catch { message += " " + error.localizedDescription }
+                await model.analytics.record(.updateInstallFailed,
+                    properties: properties)
                 releaseUpdateState = .installFailed(release, message)
             }
         }

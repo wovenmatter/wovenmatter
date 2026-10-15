@@ -114,6 +114,7 @@ struct DashboardDatabasesView: View {
                         name: name,
                         preference: .sqlite
                     ) {
+                        await model.analytics.record(.active)
                         selectedSourceID = sourceID
                         selectedDatabaseID = id
                         showsCreateDatabase = false

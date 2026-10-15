@@ -5,6 +5,7 @@ public actor MobileSyncEngine {
   public let store: MobileStore
   private let transport: any CompanionTransport
   private var syncTask: Task<Void, Error>?
+  private var analyticsTask: Task<Void, Never>?
   private var syncGeneration: UInt64 = 0
   var launchTasks: [String: Task<MobileLaunchRecord, Error>] = [:]
   public init(store: MobileStore, transport: any CompanionTransport) { self.store = store; self.transport = transport }
@@ -66,8 +67,13 @@ public actor MobileSyncEngine {
     let running = syncTask
     scheduledTask?.cancel(); scheduledTask = nil
     running?.cancel()
+    await store.analytics.disconnect()
+    let analytics = analyticsTask
+    analytics?.cancel()
     await store.artifacts.cancelSynchronization()
     _ = try? await running?.value
+    await analytics?.value
+    analyticsTask = nil
     syncTask = nil
     status.centralReachable = nil
   }
@@ -135,9 +141,19 @@ public actor MobileSyncEngine {
       try await store.bindWorkspace(identity)
       verifiedThisPass = true
     } catch {
+      await store.analytics.disconnect()
       if case MobileConnectionError.http = error { status.centralReachable = true; status.lastContactAt = Date() }
       else if !(error is MobileStore.Failure) { status.centralReachable = false }
       throw error
+    }
+    try Task.checkCancellation()
+    if analyticsTask == nil, let analyticsTransport = transport as? any ProductAnalyticsTransport {
+      // A single optional telemetry task must not delay any content lane.
+      analyticsTask = Task {
+        defer { analyticsTask = nil }
+        do { try await store.analytics.synchronize(using: analyticsTransport) }
+        catch { await store.analytics.disconnect() }
+      }
     }
     var errors: [any Error] = []
     if let error = await synchronizeLane(.library, { try await self.synchronizeLibrary() }) { errors.append(error) }
@@ -273,6 +289,7 @@ public actor MobileSyncEngine {
       command.noteRevision = note.revision
     }
     try await store.rememberCommand(command)
+    if stored == nil { try? await store.analytics.recordCommand(command) }
     let receipt = try await transport.command(command)
     try await store.rememberReceipt(receipt)
     return receipt

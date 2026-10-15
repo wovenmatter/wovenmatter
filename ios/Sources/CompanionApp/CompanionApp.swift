@@ -20,7 +20,10 @@ import SwiftUI
           #endif
           await model.run()
         }
-        .onChange(of: scenePhase) { _, phase in model.sceneChanged(phase) }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+          model.sceneChanged(phase)
+          if phase == .active { Task { await model.analytics.openInterface() } }
+        }
         .onOpenURL { url in
           guard url.scheme == "wovenmatter", url.host == "pair" else { return }
           model.tab = .settings; model.pairingPresented = true
@@ -428,6 +431,13 @@ struct GeneralSettingsPane: View {
       Section("About") {
         LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
         LabeledContent("Build", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
+      }
+      Section("Product analytics") {
+        Toggle("Share product analytics",isOn:Binding(get:{model.analytics.enabled},set:{value in Task { await model.analytics.setEnabled(value) } }))
+        Text("App opens and active use are sampled at most once every six hours. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.").font(.caption).foregroundStyle(.secondary)
+        if model.analytics.state.pendingEnabled != nil { Text("Preference waiting to sync.").font(.caption).foregroundStyle(.secondary) }
+        Link("Privacy policy",destination:ProductAnalyticsPolicy.url).foregroundStyle(DashboardPalette.success)
+        if let error=model.analytics.errorMessage { Text(error).foregroundStyle(.red) }
       }
     }.scrollIndicators(.never).mobileNavigationPage("General")
   }

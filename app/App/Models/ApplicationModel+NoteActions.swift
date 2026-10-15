@@ -22,6 +22,9 @@ extension ApplicationModel {
         // Keep the admission fence through refresh. Existing write acknowledgements
         // reconcile drafts without adopting a stale response or resetting counters here.
         await refreshWorkspace()
+        if LocalExecutionRole.current != .backend {
+            await analytics.record(.active)
+        }
     }
 
     func trashedNotes() async throws -> [WorkspaceTrashedNote] {

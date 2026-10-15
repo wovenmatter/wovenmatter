@@ -5,6 +5,7 @@ import WovenMatterCore
 extension WorkspaceDatabaseConnection {
   func createCompanionSchemaUnlocked() throws {
     try createCompanionFederationSchemaUnlocked()
+    try createProductAnalyticsSchemaUnlocked()
     try createCompanionToolSchemaUnlocked()
     try executeUnlocked("""
       CREATE INDEX IF NOT EXISTS desktop_cache_runs_active_conversation

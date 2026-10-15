@@ -62,6 +62,7 @@ struct SettingsView: View {
             case .general:
                 SettingsGeneralView(
                     model: applicationContext ?? model,
+                    clientAnalytics: clientContext?.analytics,
                     showsBackgroundExecution: clientContext == nil,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }

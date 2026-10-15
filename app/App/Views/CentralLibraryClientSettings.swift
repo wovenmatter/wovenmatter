@@ -19,6 +19,7 @@ struct CentralLibraryClientSettings: View {
                     SettingsDestinationRow(title: "Devices", icon: { DashboardLucideIcon(glyph: .monitor, size: 15) }) {
                         showingDevices = true
                     }
+                    MobileAnalyticsSettingsCard(analytics: model.analytics)
                     if let error = model.errorMessage {
                         Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                         Button("Retry opening workspace") { Task { await model.initializeClientWorkspace() } }

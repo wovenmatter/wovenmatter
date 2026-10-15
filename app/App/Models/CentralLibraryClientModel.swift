@@ -30,6 +30,7 @@ final class CentralLibraryClientModel {
             }
         }
     }
+    let analytics = MobileAnalyticsModel()
     var section: Section = .home
     private(set) var state = MobileStoreState()
     private(set) var credential: MobileCredential?
@@ -198,6 +199,7 @@ final class CentralLibraryClientModel {
         if let store {
             do { try await store.restoreExecutionProjection() } catch { errorMessage = error.localizedDescription }
         }
+        if let store { await analytics.configure(store.analytics, transport: transport) }
         await reload()
         defer { initialized = true }
         guard engine == nil else { return }
@@ -205,6 +207,7 @@ final class CentralLibraryClientModel {
             credential = try MobileCredentialVault.load()
             try configureTransport()
             try configureDirectClients()
+            if let store { await analytics.configure(store.analytics, transport: transport) }
         } catch { errorMessage = error.localizedDescription }
     }
     func run() async {
@@ -280,7 +283,11 @@ final class CentralLibraryClientModel {
         let transport = try HTTPSCompanionTransport(credential: credential)
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
     }
+    func configureUpdateAnalytics(_ analytics: ProductAnalyticsModel) async {
+        if let store { await analytics.configure(client: store.analytics) }
+    }
     func reload() async {
+        await analytics.refresh()
         calendarRevision &+= 1
         if let store {
             state = await store.snapshot(); journal = await store.journal.snapshot(); artifacts = await store.artifacts.manifests().filter { !$0.deleted }
@@ -544,6 +551,7 @@ final class CentralLibraryClientModel {
         noteWriteVersions[note.id] = version
         enqueueWrite(key: "note:" + note.id) { [weak self] store in
             try await store.editNote(id: draft.id, title: draft.title, content: draft.content, folderID: draft.folderID, base: base)
+            await self?.analytics.record(.active)
             if self?.noteWriteVersions[note.id] == version { self?.draftNotes[note.id] = nil }
         }
     }
@@ -552,12 +560,13 @@ final class CentralLibraryClientModel {
         do {
             let content = try NoteDocument(kind: kind).encoded()
             let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled " + kind.displayName, content: content)
+            await analytics.record(.active)
             await engine?.scheduleSynchronization(); await reload(); selectedNoteID = note.id; section = .notes
         } catch { errorMessage = error.localizedDescription }
     }
     func createFolder(_ name: String) async {
         guard !preparingTransition, let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        do { selectedFolderID = try await store.createFolder(name: name).id; await engine?.scheduleSynchronization(); await reload(); section = .folders }
+        do { selectedFolderID = try await store.createFolder(name: name).id; await analytics.record(.active); await engine?.scheduleSynchronization(); await reload(); section = .folders }
         catch { errorMessage = error.localizedDescription }
     }
     func selectNote(_ id: String) async {
@@ -742,10 +751,12 @@ final class CentralLibraryClientModel {
                     let owner = previous?.event.draft.task != nil ? previous?.ownerDeviceID :
                         (draft.task?.workspaceID == localExecution?.descriptor.id && localExecution != nil ? state.deviceID : nil)
                     _ = try await store.calendar.save(id: id, expectedRevision: revision, draft: draft, ownerDeviceID: owner)
+                    if action.qualifiesForAnalytics { await analytics.record(.active) }
                     await projectLocalCalendar()
                     await engine?.scheduleSynchronization(); await reload(); return true
                 case .deleteCalendar(let id, let revision, let occurrence):
                     try await store.calendar.delete(id: id, expectedRevision: revision, occurrence: occurrence)
+                    if action.qualifiesForAnalytics { await analytics.record(.active) }
                     await projectLocalCalendar()
                     await engine?.scheduleSynchronization(); await reload(); return true
                 default: break
@@ -760,6 +771,7 @@ final class CentralLibraryClientModel {
         let owner = conversationID.flatMap { executionOwner(for: $0) } ?? "central"
         do {
             try requireAccepted(await submit(.init(deviceID: state.deviceID, kind: .workspace, conversationID: conversationID, workspaceAction: action), workspaceID: owner))
+            if action.qualifiesForAnalytics { await analytics.record(.active) }
             await refresh(); return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
