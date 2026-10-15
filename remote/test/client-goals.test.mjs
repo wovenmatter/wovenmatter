@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -21,7 +22,7 @@ function fixture(t, runtimeKind='default_agent') {
   const command=(kind,values={})=>({commandID:randomUUID(),deviceID:principal.id,kind,...values})
   const read=async id=>(await service.readWorkspace({session:{id}})).session._0.goal
   const mutate=(id,mutation)=>service.command(command('workspace',{conversationID:id,workspaceAction:{goal:{id,mutation}}}),principal)
-  const cliWith=async (context,cwd,...args)=>JSON.parse((await exec('python3',[resolve('remote/src/wovenmatter'),'goals',...args],{cwd,env:{...process.env,WOVENMATTER_SOCKET:context.socketPath,WOVENMATTER_CONTEXT_ID:context.captureID}})).stdout)
+  const cliWith=async (context,cwd,...args)=>JSON.parse((await exec('python3',[fileURLToPath(new URL('../src/wovenmatter',import.meta.url)),'goals',...args],{cwd,env:{...process.env,WOVENMATTER_SOCKET:context.socketPath,WOVENMATTER_CONTEXT_ID:context.captureID}})).stdout)
   const cli=async (...args)=>cliWith(runs.at(-1).command.goalToolContext,directory,...args)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
   return {directory,runs,runtime,command,principal,read,mutate,cli,cliWith,get service(){return service},async restart(){await service.close();service=createClientExecution({directory,runtime,goalIntervalMilliseconds:3600000})}}
