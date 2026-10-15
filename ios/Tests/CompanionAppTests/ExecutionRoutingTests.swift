@@ -75,7 +75,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let resume = await model.perform(.goal(id: id, mutation: .resume(id: goal.id)))
     XCTAssertTrue(resume)
     try await model.configureDeviceChat(tools: [], conversationID: id)
-    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.status, .paused)
+    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.status, .active)
     let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
     try await reopened.loadExecutionConfiguration()
