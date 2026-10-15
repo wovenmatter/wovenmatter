@@ -5,25 +5,21 @@ public struct ProductAnalyticsPreference: Codable, Equatable, Sendable {
   public var analyticsID: String
   public var enabled: Bool
   public var revision: Int64
-  public var disclosedAt: Date?
   public init(
-    analyticsID: String, enabled: Bool = true, revision: Int64 = 1, disclosedAt: Date? = nil
+    analyticsID: String, enabled: Bool = true, revision: Int64 = 1
   ) {
     self.analyticsID = analyticsID
     self.enabled = enabled
     self.revision = revision
-    self.disclosedAt = disclosedAt
   }
-  public var collects: Bool { enabled && disclosedAt != nil }
+  public var collects: Bool { enabled }
 }
 public struct ProductAnalyticsPreferenceChange: Codable, Sendable {
   public var enabled: Bool
   public var expectedRevision: Int64
-  public var acknowledgeDisclosure: Bool
-  public init(enabled: Bool, expectedRevision: Int64, acknowledgeDisclosure: Bool = false) {
+  public init(enabled: Bool, expectedRevision: Int64) {
     self.enabled = enabled
     self.expectedRevision = expectedRevision
-    self.acknowledgeDisclosure = acknowledgeDisclosure
   }
 }
 public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable {
@@ -88,20 +84,11 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
       "timestamp": ISO8601DateFormatter().string(from: timestamp), "properties": values,
     ]
   }
-  public func inspectionJSON(analyticsID: String) -> String {
-    guard
-      let data = try? JSONSerialization.data(
-        withJSONObject: postHogObject(analyticsID: analyticsID),
-        options: [.prettyPrinted, .sortedKeys])
-    else { return "" }
-    return String(decoding: data, as: UTF8.self)
-  }
   public func validated(preference: ProductAnalyticsPreference, now: Date = Date())
     -> ProductAnalyticsEvent?
   {
     guard UUID(uuidString: id) != nil, preference.collects,
       preferenceRevision == preference.revision,
-      let start = preference.disclosedAt, timestamp >= start,
       timestamp > now.addingTimeInterval(-60), timestamp <= now.addingTimeInterval(60)
     else { return nil }
     var value = self
@@ -132,19 +119,8 @@ public struct ProductAnalyticsAcknowledgement: Codable, Sendable {
     self.nextSignalAt = nextSignalAt
   }
 }
-public struct ProductAnalyticsLogEntry: Codable, Equatable, Identifiable, Sendable {
-  public var id: String { event.id }
-  public var event: ProductAnalyticsEvent
-  public var status: String
-  public init(event: ProductAnalyticsEvent, status: String) {
-    self.event = event
-    self.status = status
-  }
-}
 public enum ProductAnalyticsPolicy {
   public static let url = URL(string: "https://wovenmatter.com/privacy")!
-  public static let disclosure =
-    "Woven Matter shares limited product analytics by default to help improve the app. We send an app-open signal and a generic active-use signal, each at most once every six hours per library, plus app update clicks and outcomes, basic technical metadata, and approximate country. We do not report which content you change or which qualifying action you perform. Offline activity and failed sends are dropped without replay. A random ID belongs to your central library and is shared across its connected devices. We do not collect your notes, messages, files, account identities, or precise location. You can turn analytics off for the whole library in General Settings and inspect the analytics log."
 }
 
 extension CompanionWorkspaceAction {

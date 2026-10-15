@@ -39,12 +39,9 @@ extension WorkspaceDatabaseConnection {
       }
       // Reaffirming opt-out is a newer choice too: invalidate any queued opt-in,
       // even when the library was already disabled when this request arrived.
-      if value.enabled != change.enabled || !change.enabled
-        || (change.acknowledgeDisclosure && value.disclosedAt == nil)
-      {
+      if value.enabled != change.enabled || !change.enabled {
         value.revision += 1
         value.enabled = change.enabled
-        value.disclosedAt = change.acknowledgeDisclosure || value.disclosedAt != nil ? Date() : nil
         let stmt = try prepareUnlocked(
           "UPDATE product_analytics_preference SET payload=? WHERE singleton=1")
         defer { sqlite3_finalize(stmt) }
@@ -104,7 +101,7 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked(
         "DELETE FROM product_analytics_events WHERE id NOT IN (SELECT id FROM product_analytics_events ORDER BY created DESC LIMIT 500)"
       )
-      // The log is inspection-only. It is never read for delivery or replay.
+      // These bounded receipts deduplicate attempts; they are never replayed.
       let limits = try prepareUnlocked("SELECT name,last_attempt FROM product_analytics_limits")
       defer { sqlite3_finalize(limits) }
       var next: [String: Date] = [:]
@@ -114,29 +111,6 @@ extension WorkspaceDatabaseConnection {
       }
       return .init(acceptedEventIDs: accepted, preference: preference,
         discardedEventIDs: discarded, nextSignalAt: next)
-    }
-  }
-  func pruneProductAnalytics() throws {
-    try withLock {
-      try executeUnlocked(
-        "DELETE FROM product_analytics_events WHERE created < \(Date().addingTimeInterval(-7*86400).timeIntervalSince1970)")
-    }
-  }
-  func productAnalyticsLog(limit: Int = 500) throws -> [ProductAnalyticsLogEntry] {
-    try withLock {
-      let stmt = try prepareUnlocked(
-        "SELECT payload,status FROM product_analytics_events ORDER BY created DESC LIMIT ?")
-      defer { sqlite3_finalize(stmt) }
-      sqlite3_bind_int(stmt, 1, Int32(max(1, min(500, limit))))
-      var rows: [ProductAnalyticsLogEntry] = []
-      while sqlite3_step(stmt) == SQLITE_ROW {
-        rows.append(
-          .init(
-            event: try JSONDecoder().decode(
-              ProductAnalyticsEvent.self, from: blob(stmt, column: 0)),
-            status: try text(stmt, column: 1)))
-      }
-      return rows
     }
   }
   func markProductAnalytics(_ ids: [String], status: String) throws {
@@ -162,11 +136,6 @@ extension WorkspaceDatabase {
   public func acceptProductAnalytics(_ events: [ProductAnalyticsEvent]) async throws
     -> ProductAnalyticsAcknowledgement
   { try await write { try $0.acceptProductAnalytics(events) } }
-  public func productAnalyticsLog(limit: Int = 500) async throws -> [ProductAnalyticsLogEntry] {
-    // Inspection history expires independently of delivery. It is never a queue.
-    if !isReadOnlyProjection { try await write { try $0.pruneProductAnalytics() } }
-    return try await read { try $0.productAnalyticsLog(limit: limit) }
-  }
   public func markProductAnalytics(_ ids: [String], status: String) async throws {
     try await write { try $0.markProductAnalytics(ids, status: status) }
   }

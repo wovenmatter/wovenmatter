@@ -34,17 +34,17 @@ limit attempts as well as successful signals, so a failure does not cause every
 subsequent edit to retry. Future eligible actions can make a new attempt.
 Companion sends do not block content synchronization or user actions.
 
-Privacy choices still persist and synchronize. Analytics default to on after
-local disclosure and central acknowledgement. Opt-out stops local collection and
+Privacy choices still persist and synchronize. Analytics default to on, with the toggle and explanation in General settings;
+there is no launch disclosure or acknowledgement step. Opt-out stops local collection and
 cancels outstanding requests; an already-sent request cannot be recalled. Offline
 opt-out reaches other devices on reconnection. Old opt-ins cannot override newer
 choices. Re-enabling collects only future activity, without resetting signal limits.
 
 The toggle and policy link are at the bottom of General settings on Mac, iPhone,
 and iPad. The policy lives at [wovenmatter.com/privacy](https://wovenmatter.com/privacy).
-The inspectable local log holds at most 500 recent send attempts for seven days;
-it is never used for delivery. Companion acceptance means the central library
-accepted the attempt, not that PostHog received it.
+There is no user-facing analytics log. The central library retains bounded
+receipts solely to deduplicate attempts, never for delivery. Companion acceptance
+means the central library accepted the attempt, not that PostHog received it.
 
 Only platform, app version, OS major version, and updater target version are
 allowlisted. No action categories, agent outcomes, content, titles, messages,

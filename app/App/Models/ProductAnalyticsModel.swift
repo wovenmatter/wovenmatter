@@ -7,18 +7,11 @@ import WovenMatterDashboardStore
 
 @MainActor @Observable
 final class ProductAnalyticsModel {
-  private(set) var preference: ProductAnalyticsPreference? {
-    didSet {
-      if interface, client == nil { disclosurePresented = !localDisclosureAcknowledged }
-    }
-  }
-  private(set) var log: [ProductAnalyticsLogEntry] = []
+  private(set) var preference: ProductAnalyticsPreference?
   var errorMessage: String?
-  var disclosurePresented = false
   private let defaults: UserDefaults
   init(defaults: UserDefaults = .standard) { self.defaults = defaults }
   private var client: MobileProductAnalytics?
-  private var clientDisclosed = false
   private var database: WorkspaceDatabase?
   private var rpc: BackendRPCClient?
   private var uploads: [UUID: Task<Void, Never>] = [:]
@@ -28,14 +21,6 @@ final class ProductAnalyticsModel {
   private var locallyDisabled = false
   private var pendingLocalChoice = false
   var enabled: Bool { !locallyDisabled && (preference?.enabled ?? true) }
-  private var disclosureKey: String? {
-    preference.map { "wovenmatter.analytics.disclosed." + $0.analyticsID }
-  }
-  // The library acknowledgement does not replace this frontend’s disclosure.
-  private var localDisclosureAcknowledged: Bool {
-    if client != nil { return clientDisclosed }
-    return disclosureKey.map { defaults.bool(forKey: $0) } ?? false
-  }
   private var session = URLSession(configuration: .ephemeral)
   static let updateReceiptKey = "wovenmatter.analytics.pending-update.v1"
   static let projectToken = "phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh"
@@ -45,7 +30,7 @@ final class ProductAnalyticsModel {
   }
   func configure(rpc: BackendRPCClient) { self.rpc = rpc }
   /// The secondary Mac relays updater events through its central library too.
-  /// Its interface/open and disclosure lifecycle belongs to MobileAnalyticsModel.
+  /// Its interface/open lifecycle belongs to MobileAnalyticsModel.
   func configure(client: MobileProductAnalytics) async {
     self.client = client
     database = nil
@@ -58,35 +43,25 @@ final class ProductAnalyticsModel {
     interface = true
     await refresh()
     await confirmUpdateInstallation()
-    guard preference != nil else { return }
-    disclosurePresented = !localDisclosureAcknowledged
-    if !disclosurePresented {
-      await record(.appOpened)
-    }
+    await record(.appOpened)
   }
   func refresh() async {
     let epoch = generation
     do {
       if let client {
         let state = await client.snapshot()
-        clientDisclosed = state.disclosed
         locallyDisabled = state.pendingEnabled != nil || state.preference?.collects != true
         preference = state.preference
-        log = Array(state.log.reversed())
       } else if let rpc {
         let current = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
           from: await rpc.call(method: "analytics.preference", payload: Data()))
         guard acceptPreference(current, epoch: epoch) else { return }
         if !pendingLocalChoice { locallyDisabled = !current.enabled }
-        log = try JSONDecoder().decode(
-          [ProductAnalyticsLogEntry].self,
-          from: await rpc.call(method: "analytics.log", payload: Data()))
       } else if let database {
         let current = try await database.productAnalyticsPreference()
         guard acceptPreference(current, epoch: epoch) else { return }
         if !pendingLocalChoice { locallyDisabled = !current.enabled }
-        log = try await database.productAnalyticsLog()
       }
       await confirmUpdateInstallation()
     } catch { errorMessage = "Analytics settings are temporarily unavailable." }
@@ -98,21 +73,19 @@ final class ProductAnalyticsModel {
     preference = current
     return true
   }
-  func setEnabled(_ enabled: Bool, disclose: Bool = false) async {
+  func setEnabled(_ enabled: Bool) async {
     generation += 1
-    let effectiveEnabled = disclose && enabled ? (preference?.enabled ?? true) : enabled
     let epoch = generation
     pendingLocalChoice = true
-    locallyDisabled = !effectiveEnabled
-    if !effectiveEnabled {
+    locallyDisabled = !enabled
+    if !enabled {
       defaults.removeObject(forKey: Self.updateReceiptKey)
       cancelUploads()
     }
     guard let preference else { return }
     do {
       let change = ProductAnalyticsPreferenceChange(
-        enabled: effectiveEnabled, expectedRevision: preference.revision,
-        acknowledgeDisclosure: disclose)
+        enabled: enabled, expectedRevision: preference.revision)
       let updated: ProductAnalyticsPreference
       if let rpc {
         updated = try JSONDecoder().decode(
@@ -127,14 +100,9 @@ final class ProductAnalyticsModel {
       guard epoch == generation else { return }
       pendingLocalChoice = false
       self.preference = updated
-      if disclose, let key = disclosureKey { defaults.set(true, forKey: key) }
-      disclosurePresented = false
       errorMessage = nil
-      if effectiveEnabled, let database {
+      if enabled, let database {
         configure(database: database, publisher: !database.isReadOnlyProjection)
-      }
-      if disclose, effectiveEnabled, interface {
-        await record(.appOpened)
       }
       await refresh()
     } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
@@ -144,7 +112,7 @@ final class ProductAnalyticsModel {
       try? await client.record(name, properties: properties, platform: "macos")
       return
     }
-    guard !locallyDisabled, !disclosurePresented, !interface || localDisclosureAcknowledged,
+    guard !locallyDisabled,
       let preference, preference.collects else {
       return
     }
@@ -196,7 +164,7 @@ final class ProductAnalyticsModel {
     await refresh()
     let installationID = UUID()
     defaults.removeObject(forKey: Self.updateReceiptKey)
-    guard !locallyDisabled, localDisclosureAcknowledged, let preference,
+    guard !locallyDisabled, let preference,
       preference.collects else { return installationID }
     let receipt = ProductAnalyticsUpdateReceipt(
       analyticsID: preference.analyticsID, version: manifest.version, build: manifest.build,
@@ -238,8 +206,7 @@ final class ProductAnalyticsModel {
       cancelUpdateInstallation()
       return
     }
-    guard localDisclosureAcknowledged,
-      receipt.version == version, receipt.build == build
+    guard receipt.version == version, receipt.build == build
     else { return }
     guard receipt.event.validated(preference: preference) != nil else {
       cancelUpdateInstallation()

@@ -66,7 +66,6 @@ struct CentralLibraryClientView: View {
             await model.configureUpdateAnalytics(application.analytics)
             await model.run()
         }
-        .sheet(isPresented:Binding(get:{model.analytics.disclosurePresented},set:{model.analytics.disclosurePresented=$0})) { ProductAnalyticsDisclosureView(errorMessage: model.analytics.errorMessage) { enabled in Task { await model.analytics.setEnabled(enabled,disclose:true) } } }
         .onChange(of: application.workspaceAssets.tabs.selected) { _, tab in
             if case .browser = tab { model.section = .browser }
         }

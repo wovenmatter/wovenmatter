@@ -4346,10 +4346,6 @@ extension ApplicationModel {
                 await analytics.refresh()
                 return .init(id: request.id, result: try JSONEncoder().encode(analytics.preference))
             }
-            if request.method == "analytics.log" {
-                await analytics.refresh()
-                return .init(id: request.id, result: try JSONEncoder().encode(analytics.log))
-            }
             if request.method == "analytics.setPreference" {
                 let change = try JSONDecoder().decode(ProductAnalyticsPreferenceChange.self, from: request.payload)
                 return .init(id: request.id, result: try JSONEncoder().encode(await setProductAnalyticsPreference(change)))

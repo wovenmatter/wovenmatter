@@ -3,14 +3,12 @@ import WovenMatterCompanion
 
 public struct MobileProductAnalyticsState: Codable, Sendable {
   public var preference: ProductAnalyticsPreference?
-  public var disclosed = false
   public var pendingEnabled: Bool?
   public var pendingRevision: Int64?
   public var lastAttempts: [String: Date]?
-  public var log: [ProductAnalyticsLogEntry] = []
   public init() {}
 }
-/// Persists privacy choices, two signal timestamps, and an inspection log; never an event queue.
+/// Persists privacy choices and two signal timestamps; never an event queue.
 public actor MobileProductAnalytics {
   private let file: URL
   private var state: MobileProductAnalyticsState
@@ -20,20 +18,13 @@ public actor MobileProductAnalytics {
   public init(file: URL) throws {
     self.file = file
     // A damaged telemetry file must not prevent the content library from opening.
-    // Reset without disclosure or an identity, so collection remains suspended.
+    // Reset without an identity, so collection waits for the central preference.
     state =
       (try? JSONDecoder().decode(MobileProductAnalyticsState.self, from: Data(contentsOf: file)))
       ?? .init()
   }
   public func snapshot() -> MobileProductAnalyticsState {
-    if state.log.contains(where: { $0.event.timestamp < Date().addingTimeInterval(-7 * 86400) }) {
-      try? persist()
-    }
     return state
-  }
-  public func disclose(enabled: Bool) throws {
-    state.disclosed = true
-    try setEnabled(enabled && (state.preference?.enabled ?? true))
   }
   public func setEnabled(_ enabled: Bool) throws {
     state.pendingEnabled = enabled
@@ -47,11 +38,9 @@ public actor MobileProductAnalytics {
     if let previous = state.preference, previous.analyticsID == preference.analyticsID,
       previous.revision > preference.revision { return }
     if let previous = state.preference, previous.analyticsID != preference.analyticsID {
-      state.disclosed = false
       state.pendingEnabled = nil
       state.pendingRevision = nil
       cancelSends()
-      state.log.removeAll()
       state.lastAttempts = nil
     }
     if state.preference?.revision != preference.revision || !preference.collects {
@@ -63,7 +52,7 @@ public actor MobileProductAnalytics {
   public func record(
     _ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:], platform: String
   ) throws {
-    guard state.disclosed, state.pendingEnabled == nil, let preference = state.preference,
+    guard state.pendingEnabled == nil, let preference = state.preference,
       preference.collects
     else { return }
     var values = properties
@@ -78,7 +67,7 @@ public actor MobileProductAnalytics {
     send(event)
   }
   private func send(_ event: ProductAnalyticsEvent) {
-    guard let transport, state.disclosed, state.pendingEnabled == nil,
+    guard let transport, state.pendingEnabled == nil,
       let preference = state.preference, let event = event.validated(preference: preference),
       sends.count < 20 else { return }
     let now = Date()
@@ -89,12 +78,10 @@ public actor MobileProductAnalytics {
       state.lastAttempts?[event.name.rawValue] = now
     }
     let generation = choiceGeneration
-    state.log.append(.init(event: event, status: "attempted"))
     try? persist()
     let id = UUID()
     sends[id] = Task {
       defer { sends.removeValue(forKey: id) }
-      var status = "dropped"
       do {
         try Task.checkCancellation()
         let ack = try await transport.sendAnalytics(.init(events: [event], analyticsID: preference.analyticsID))
@@ -105,12 +92,8 @@ public actor MobileProductAnalytics {
         for (name, next) in ack.nextSignalAt {
           state.lastAttempts?[name] = next.addingTimeInterval(-ProductAnalyticsEvent.signalInterval)
         }
-        status = ack.acceptedEventIDs.contains(event.id) ? "central library accepted" : "suppressed by central library"
-      } catch { /* No retention, retry, or replay. */ }
-      if let index = state.log.firstIndex(where: { $0.id == event.id }) {
-        state.log[index].status = status
         try? persist()
-      }
+      } catch { /* No retention, retry, or replay. */ }
     }
   }
   public func connect(using transport: (any ProductAnalyticsTransport)?) {
@@ -148,19 +131,16 @@ public actor MobileProductAnalytics {
         try apply(current)
         return
       }
-      // A disclosure adopts an existing library opt-out. A cached, older opt-in
-      // must not overwrite a newer choice merely because we refreshed first.
+      // A cached, older opt-in must not overwrite a newer choice.
       if enabled, let revision = state.pendingRevision, revision != current.revision {
         state.pendingEnabled = nil
         state.pendingRevision = nil
         try apply(current)
         return
       }
-      let effectiveEnabled = enabled && state.pendingRevision == nil ? current.enabled : enabled
       let result = try await transport.setAnalyticsPreference(
         .init(
-          enabled: effectiveEnabled, expectedRevision: state.pendingRevision ?? current.revision,
-          acknowledgeDisclosure: state.disclosed))
+          enabled: enabled, expectedRevision: state.pendingRevision ?? current.revision))
       // An opt-out made while the request was suspended must survive this response.
       try Task.checkCancellation()
       guard generation == choiceGeneration else { return }
@@ -183,8 +163,6 @@ public actor MobileProductAnalytics {
     sends.removeAll()
   }
   private func persist() throws {
-    state.log.removeAll { $0.event.timestamp < Date().addingTimeInterval(-7 * 86400) }
-    state.log = Array(state.log.suffix(500))
     try MobileStorePersistence.writeDurably(JSONEncoder().encode(state), at: file)
   }
 }

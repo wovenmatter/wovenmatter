@@ -4,7 +4,6 @@ import WovenMatterCompanion
 
 @MainActor @Observable public final class MobileAnalyticsModel {
   public private(set) var state = MobileProductAnalyticsState()
-  public var disclosurePresented = false
   public var errorMessage: String?
   private var store: MobileProductAnalytics?
   private var interface = false
@@ -24,20 +23,15 @@ import WovenMatterCompanion
   public func refresh() async {
     guard let store else { return }
     state = await store.snapshot()
-    disclosurePresented = !state.disclosed
   }
-  public func setEnabled(_ enabled: Bool, disclose: Bool = false) async {
+  public func setEnabled(_ enabled: Bool) async {
     guard let store else { return }
     do {
-      if disclose {
-        try await store.disclose(enabled: enabled)
-      } else {
-        try await store.setEnabled(enabled)
-      }
+      try await store.setEnabled(enabled)
+      await refresh()
       try? await store.synchronizePreference()
       errorMessage = nil
       await refresh()
-      if disclose, interface { await record(.appOpened) }
     } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
   }
   public func record(_ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:]) async {

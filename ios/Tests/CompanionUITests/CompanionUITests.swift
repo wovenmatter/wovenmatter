@@ -7,8 +7,7 @@ final class CompanionUITests: XCTestCase {
     app.launchEnvironment["WOVENMATTER_UI_FIXTURE"] = "1"
     app.launchEnvironment["WOVENMATTER_UI_TAB"] = tab
     app.launch()
-    let analyticsOptOut = app.buttons["Turn off analytics"]
-    XCTAssertTrue(analyticsOptOut.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["tab-folders"].waitForExistence(timeout: 10))
     if app.buttons["tab-library"].exists {
       // Settle the iPad window transform before the first pointer event. On the
       // iOS 27 simulator, a fresh window can otherwise synthesize its first tap
@@ -16,9 +15,6 @@ final class CompanionUITests: XCTestCase {
       XCUIDevice.shared.orientation = .landscapeLeft
       XCUIDevice.shared.orientation = .portrait
     }
-    analyticsOptOut.tap()
-    XCTAssertTrue(analyticsOptOut.waitForNonExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["tab-folders"].waitForExistence(timeout: 10))
     return app
   }
   @MainActor func testDarkThemeSelectionPersistsAcrossLaunch() {
