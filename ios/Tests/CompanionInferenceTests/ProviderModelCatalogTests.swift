@@ -79,8 +79,8 @@ final class ProviderModelCatalogTests: XCTestCase {
     XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-None-Match"), "\"fixture\"")
     XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-Modified-Since"), "Thu, 01 Oct 2026 12:00:00 GMT")
     for request in requests {
-      XCTAssertEqual(request.url?.absoluteString, "https://pi.dev/api/models/providers/openai?types=chat&pi-version=1.1.0")
-      XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "pi/1.1.0")
+      XCTAssertEqual(request.url?.absoluteString, "https://pi.dev/api/models/providers/openai?types=chat&pi-version=\(ProviderModelCatalog.piVersion)")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "pi/\(ProviderModelCatalog.piVersion)")
       XCTAssertNil(request.httpBody)
       let allowed = Set(["accept", "user-agent", "if-none-match", "if-modified-since"])
       XCTAssertTrue(Set((request.allHTTPHeaderFields ?? [:]).keys.map { $0.lowercased() }).isSubset(of: allowed))

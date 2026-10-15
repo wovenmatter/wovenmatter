@@ -1,7 +1,7 @@
 # On-device Pi Durable
 
 The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, and `chord`
-1.1.0 packages already locked in `default-agent/package-lock.json`. It does not
+1.2.0 packages already locked in `default-agent/package-lock.json`. It does not
 ship Node, run a remote agent loop, or download executable SDK code. Rebuild
 with `node scripts/build-ios-pi-runtime.mjs`; use `--check` to verify committed
 resources match the reviewed sources and installed locked dependencies.
@@ -74,13 +74,25 @@ re-run unknown side effects. Output and tool argument sizes are bounded.
 
 ## Reviewed SDK generation
 
-The 1.1.0 update retains the upstream JSONL storage implementation, including
-its new ascending/descending cursor contract. Native history keeps the default
+The locked SDK retains the upstream JSONL storage implementation and its
+ascending/descending cursor contract. Native history keeps the default
 newest-first entry order and passes each opaque cursor back unchanged. No host
 adapter uses the changed `TaskRuntime.context` cutoff signature. Tool execution
 timing uses native system uptime rather than the adjustable wall clock. The
 same model/tool bridge runs the updated SDK context retention and system-message
 ordering; credentials and execution ownership retain their native boundaries.
+
+The 1.2 tool bridge maps the native/classic `content` result to Durable's new
+`output` field and tags manually created tool tasks as model-issued calls.
+Stored transcript messages retain their `content` shape. Nested code-mode
+ownership, replay policy, cancellation, and output visibility retain their
+existing behavior.
+
+`scripts/update-runtime-dependencies.mjs --write` refreshes the shared lockfile
+and regenerates this bundle. Its version, provenance, notice headings, and
+provider-catalog version constant derive from the locked SDK rather than
+separate handwritten version strings. esbuild is an explicit build dependency;
+it is omitted from the shipped desktop/server runtime.
 
 ## Verification
 

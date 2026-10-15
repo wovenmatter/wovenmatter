@@ -110,7 +110,7 @@ private final class CatalogURLSessionTransport: NSObject, CatalogHTTPTransport, 
 /// No initialization network or polling. Call cached/load only for the provider currently in use.
 public actor ProviderModelCatalog {
   public static let shared = ProviderModelCatalog()
-  public static let piVersion = "1.1.0"
+  public static let piVersion = PiSDKVersion.value
   static let byteLimit = 4 * 1024 * 1024
   static let refreshInterval: TimeInterval = 4 * 60 * 60
   private struct Entry: Codable {
