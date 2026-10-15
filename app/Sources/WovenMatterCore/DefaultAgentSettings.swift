@@ -60,6 +60,12 @@ public struct DefaultAgentSettingsScope: Codable, Equatable, Sendable {
     public func resolved(_ workspace: String) -> DefaultAgentSettings { workspaces[workspace] ?? global }
 }
 
+public struct DefaultAgentRunRecoveryRequest: Codable, Equatable, Sendable {
+    public let runID: String
+    public let inputIDs: [String]
+    public init(runID: String, inputIDs: [String]) { self.runID = runID; self.inputIDs = inputIDs }
+}
+
 public struct DefaultAgentRunSnapshot: Codable, Equatable, Sendable {
     public let runID: String
     public let content: String

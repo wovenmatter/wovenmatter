@@ -31,6 +31,7 @@ struct LocalACPSessionDriver: Sendable {
     let setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)?
     let finishRun: (@Sendable () async -> Void)?
     let awaitIdle: (@Sendable () async throws -> Void)?
+    let recoverBuiltInRuns: (@Sendable ([DefaultAgentRunRecoveryRequest]) async throws -> [DefaultAgentRunSnapshot])?
     let shutdown: @Sendable () async -> Void
     let fencedPrompt: (@Sendable (AgentMessageInput, LocalACPClient.EventHandler?, LocalACPClient.PermissionHandler?, LocalACPClient.InteractionHandler?, AgentDispatchFence) async throws -> LocalACPStopReason)?
     let fencedActiveInput: (@Sendable (AgentMessageInput, AgentDispatchFence) async throws -> LocalACPActiveInputReceipt)?
@@ -65,6 +66,7 @@ struct LocalACPSessionDriver: Sendable {
         setRunID: (@Sendable (String) async throws -> Void)? = nil,
         setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)? = nil,
         awaitIdle: (@Sendable () async throws -> Void)? = nil,
+        recoverBuiltInRuns: (@Sendable ([DefaultAgentRunRecoveryRequest]) async throws -> [DefaultAgentRunSnapshot])? = nil,
         fencedPrompt: (@Sendable (AgentMessageInput, LocalACPClient.EventHandler?, LocalACPClient.PermissionHandler?, LocalACPClient.InteractionHandler?, AgentDispatchFence) async throws -> LocalACPStopReason)? = nil,
         fencedActiveInput: (@Sendable (AgentMessageInput, AgentDispatchFence) async throws -> LocalACPActiveInputReceipt)? = nil
     ) {
@@ -80,6 +82,7 @@ struct LocalACPSessionDriver: Sendable {
         self.setRunID = setRunID
         self.setResumePermissionHandler = setResumePermissionHandler
         self.awaitIdle = awaitIdle
+        self.recoverBuiltInRuns = recoverBuiltInRuns
         self.shutdown = shutdown
         self.finishRun = finishRun
         self.fencedPrompt = fencedPrompt
@@ -172,6 +175,7 @@ struct LocalACPSessionDriver: Sendable {
                 await client.setResumePermissionHandler(handler)
             },
             awaitIdle: awaitIdle,
+            recoverBuiltInRuns: { try await client.recoverBuiltInRuns($0) },
             fencedPrompt: { input, event, permission, interaction, fence in
                 try await client.prompt(input, onEvent: event, onPermission: permission,
                     onInteraction: interaction, dispatchFence: fence)
@@ -1703,6 +1707,19 @@ public actor LocalACPSessionCoordinator {
             } else if descriptor.runtimeKind != .defaultAgent, !initialized.recoveredDefaultAgentRuns.isEmpty {
                 try await database.recoverRemoteAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
                 publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
+            }
+            if descriptor.runtimeKind == .defaultAgent, initialized.loadedExistingSession,
+               initialized.sessionID == descriptor.acpSessionID, let recover = started.recoverBuiltInRuns {
+                let requests = try await database.builtInRunRecoveryRequests(
+                    conversationID: descriptor.conversationID, sessionID: initialized.sessionID)
+                if !requests.isEmpty {
+                    let snapshots = try await recover(requests)
+                    try await database.recoverBuiltInAgentRuns(conversationID: descriptor.conversationID,
+                        sessionID: initialized.sessionID, snapshots: snapshots)
+                    if !snapshots.isEmpty {
+                        publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
+                    }
+                }
             }
             var configuration = initialized.configuration
             if let permission = descriptor.permission, permission != configuration.permission {

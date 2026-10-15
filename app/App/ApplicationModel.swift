@@ -2797,7 +2797,22 @@ final class ApplicationModel {
             return
         }
 
-        do { try await applyPendingSessionSelections(conversationID: conversation.id) }
+        var defersPendingSelectionsForRecovery = false
+        do {
+            if conversation.localRuntimeKind == .defaultAgent,
+               conversation.remoteWorkspaceID == nil,
+               sessionSelectionPreferences.conversation(id: conversation.id)?.requiresApplication == true,
+               let dashboardStore {
+                let persisted = try await dashboardStore.database.workspaceOverview().conversations
+                    .first { $0.id == conversation.id }
+                defersPendingSelectionsForRecovery = persisted?.programStatus?.executionStatus == "uncertain"
+            }
+            // An uncertain Pi run must reconnect before pending preferences can
+            // pass the active-run guard. Attachment reconciles its native outcome.
+            if !defersPendingSelectionsForRecovery {
+                try await applyPendingSessionSelections(conversationID: conversation.id)
+            }
+        }
         catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         if conversation.localRuntimeKind == .opencode {
             if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
@@ -2848,6 +2863,15 @@ final class ApplicationModel {
             )
             if let metadata = localACPSessionMetadata[conversation.id] {
                 await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
+            }
+            if defersPendingSelectionsForRecovery {
+                let active = try await dashboardStore.activeAgentConversationIDs()
+                guard !Task.isCancelled,
+                      localACPSessionRefreshLifecycle.isCurrent(request) else { return }
+                if !active.contains(conversation.id) {
+                    localRunningConversationIDs.remove(conversation.id)
+                    try await applyPendingSessionSelections(conversationID: conversation.id)
+                }
             }
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {

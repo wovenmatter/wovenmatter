@@ -25,7 +25,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   const attachmentTokens = new Map(attachmentState?.tokens);
   const cancellationRevisions = new Map(attachmentState?.cancellations);
   function admit(message, fingerprint) {
-    if (!['session/load', 'woven/adopt', 'session/prompt', '_session/steering', 'session/set_config_option', 'woven/history'].includes(message.method)) return invokeOperation(message, fingerprint);
+    if (!['session/load', 'woven/adopt', 'session/prompt', '_session/steering', 'session/set_config_option', 'woven/history', 'woven/recover'].includes(message.method)) return invokeOperation(message, fingerprint);
     const sessionID = message.params?.sessionId, cancellationRevision = cancellationRevisions.get(sessionID) ?? 0;
     const pending = (admissionQueues.get(sessionID) ?? Promise.resolve()).then(() => invokeOperation(message, fingerprint, cancellationRevision));
     const tail = pending.catch(() => {});
@@ -93,7 +93,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   }
   async function invokeOperation(message, fingerprint = requestFingerprint(message), cancellationRevision) {
     const e = await engine(), sessionID = message.params?.sessionId;
-    if (['session/prompt', '_session/steering', 'session/load', 'woven/adopt', 'session/cancel', 'session/set_config_option', 'woven/history', 'woven/idle'].includes(message.method)
+    if (['session/prompt', '_session/steering', 'session/load', 'woven/adopt', 'session/cancel', 'session/set_config_option', 'woven/history', 'woven/idle', 'woven/recover'].includes(message.method)
       && (attachmentTokens.has(sessionID) || message.attachmentToken)) {
       const freshLoad = ['session/load','woven/adopt'].includes(message.method) && message.attachmentProtocol === 1 && !message.attachmentToken;
       if (!freshLoad && message.attachmentToken !== attachmentTokens.get(sessionID)) throw new DefaultAgentError('This session attachment was replaced. Reconnect before sending another message.');

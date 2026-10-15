@@ -489,6 +489,7 @@ export class DefaultAgentEngine {
     if (method === 'session/set_config_option') return this.select(record, params.value, params.configId ?? params.id ?? 'model');
     if (method === 'woven/history') return record.history(params.after ?? 0, params.limit ?? 200);
     if (method === 'woven/idle') return record.waitIdle();
+    if (method === 'woven/recover') return record.recoverRuns(params.runs);
     if (method === 'session/cancel') {
       record.promptController?.abort();
       await record.session.abort();

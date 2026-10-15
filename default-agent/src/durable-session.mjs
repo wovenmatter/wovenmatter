@@ -22,6 +22,7 @@ import { createNativeCompactionRegistry } from './native-compaction-registry.mjs
 import { createSubagentContext } from './subagent-context.mjs';
 import { ChildContext, Subagents, createSubagents } from './subagents.mjs';
 import { reportProgramStatus } from './program-status.mjs';
+import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 
 const context = BACKGROUND_CONTEXT;
 const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
@@ -520,6 +521,14 @@ export async function openDurableSession(engine, id, requested) {
       await session.refreshContext(); await record.archiveQueue;
       if (record.archiveError) throw new DefaultAgentError('The native archive copy could not be saved. Check runtime storage before continuing.');
       return { idle: true };
+    };
+    record.recoverRuns = async runs => {
+      validateRecoveryRuns(runs);
+      if (record.busy) await record.promptFinished;
+      await record.waitIdle();
+      const requests = (await harness.snapshot(Requests, conversation.id, context))?.requests;
+      const recovered = await conversation.commit(tx => recoverNativeRuns(runs, requests, conversation.id, tx), context);
+      return { sessionId: sessionID, idle: true, runs: recovered };
     };
     record.resumeNative = () => harness.resume();
     await record.subagents.start();
