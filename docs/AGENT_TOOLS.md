@@ -34,7 +34,7 @@ execution model without a borrowed Mac CLI connection.
 
 ## Tools and access
 
-The composer has a compact Tools dropdown with seven independent groups:
+The composer has a compact Tools dropdown with independent groups:
 
 | Group | Contract |
 | --- | --- |
@@ -45,12 +45,90 @@ The composer has a compact Tools dropdown with seven independent groups:
 | Usage data | Read recorded usage analytics and available cached account usage limits; no mutation or credential access |
 | Calendar | Read, create, edit, copy, detach and delete events and scheduled tasks, subject to the configured access mode |
 | Library | List and read exchanged-item metadata, original links, retention status, and source message IDs |
+| Browser Use | Open and control Woven Matter's shared Chromium tabs with Playwright, including snapshots, screenshots, forms, JavaScript, uploads and downloads |
+| Computer Use | Broad control of the Mac desktop and apps through embedded Peekaboo; off by default |
+| Executor | Execute programs through the user's enabled Executor connections and scopes; off by default |
 
-All groups initially default to enabled. General settings, below Conversation
+Browser Use initially defaults to enabled, including existing chats. Computer Use
+and Executor initially default to disabled; the other groups default to enabled.
+General settings, below Conversation
 titles, defines defaults for newly opened sessions. Session controls enable or
 disable groups without changing the General defaults. Calendar defaults to Full
 access, with Read only configurable in General; the composer indicates the mode
 but does not change it. Usage data is always read-only.
+
+## Browser and computer automation
+
+Pi Durable exposes native `browser` and `computer` tools, including inline images.
+ACP harnesses receive the session-bound `woven-automation` stdio MCP server.
+Every harness can also use `wovenmatter browser call --json OBJECT` or
+`wovenmatter computer call --json OBJECT` through its existing CLI binding.
+This includes Codex CLI; the OpenAI desktop application is not required.
+The bundled server is available as `wovenmatter mcp`, without editing global
+harness configuration. Managed remote agents use the same tools on the Mac
+hosting Woven Matter; remote schedules without a Mac connection do not borrow one.
+
+Secondary Mac agents use their own visible browser, shared with the client's
+Browser pane. Device-owned Pi Durable on iPhone routes browser/computer commands
+to the paired central Mac and returns screenshots inline. The device's tool
+selection narrows the central chat's policy; Computer Use must be enabled there
+as well. Existing Devices execution access applies, including checks
+between input steps. Local command help is available while offline.
+
+Browser Use controls only the browser inside Woven Matter. It shares the user's
+tabs, profile and signed-in sessions. Start with `{"action":"tabs"}` or
+`{"action":"open","url":"https://example.com"}`, then use its `tabId`.
+
+Click and hover accept either a CSS selector or viewport `x`/`y` coordinates,
+matching the browser screenshot's CSS pixels. Coordinate actions omit `frame`.
+
+```sh
+wovenmatter browser call --json '{"action":"snapshot","tabId":"UUID"}'
+wovenmatter browser call --json '{"action":"fill","tabId":"UUID","selector":"input[name=q]","text":"example"}'
+wovenmatter browser call --json '{"action":"screenshot","tabId":"UUID"}' --image scratch/browser.jpg
+```
+
+Selectors accept Playwright CSS, text and role selectors. Use optional `frame`
+with an iframe selector to inspect or interact inside it, including across origins. Page JavaScript uses
+`evaluate` with `code`. Uploads use `upload`, `selector`, `name`, `mimeType` and
+base64 `data` (at most 2 MiB). `download` clicks a selector and waits for a native
+receipt; `downloads` lists receipts and `read-download` reads a completed opaque
+`id` at a byte `offset`. Each read returns at most 384 KiB of base64 data.
+Agent downloads remain temporary, never execute, and are capped at 16 files of
+64 MiB per tab. Closing the tab removes them. Ordinary user downloads retain
+the native save dialog. Dialogs can be accepted/dismissed with `accept` on the
+triggering action, or an explicit `dialog` action. Website content is untrusted.
+
+Use `--json -` to read large browser/computer payloads from stdin (at most 3 MiB),
+avoiding OS command-line limits. Native tools and the MCP adapter use this path.
+
+Computer Use grants broad access to the Mac desktop; there are no per-app
+allowlists. Enable it in the chat's Tools menu, or set a default for new chats.
+Grant Woven Matter Screen Recording and Accessibility in macOS System Settings.
+The tool's `status` reports those grants; agents cannot grant them. `apps` lists
+app bundle IDs and `launch` activates an installed app. `press` uses comma-separated
+macOS keys, such as `cmd,c` or `cmd,shift,t`. Capture a `screenshot`
+(optional zero-based `screen`), then supply its `frameId` to `click`, `type`,
+`press` or `scroll`. Coordinates are screenshot pixels. Frames expire after 30
+seconds, belong to the calling chat, and are consumed by one input action.
+Capture again to verify the effect. `press` accepts Peekaboo key combinations
+such as `cmd,a`; scroll takes `direction` and integer `amount` from 1 to 50.
+
+CLI-only harnesses can save screenshots with `--image NEW_FILE` and use their
+image reader. The file is created on the caller's machine, never at an arbitrary
+path on the Mac host, and existing files are not overwritten. Browser and
+Computer Use are independent: normal web workflows do not require Computer Use.
+
+The visible Mac app must remain open to own Chromium and desktop permissions.
+One automation action runs at a time across chats. Stop, tool cancellation, and
+revocation cancel active work and invalidate desktop frames. Permissions are
+rechecked immediately before native dispatch. Request IDs are admitted durably
+before input; a lost reply or host restart cannot silently replay it. Inspect
+fresh state after interrupted input. Request-specific cancellation is also
+durable, so Stop arriving before an action prevents its later dispatch.
+Persistent request journals and activity
+metadata do not store page content, screenshots or typed text; ordinary model
+tool results follow the chat's existing history and provider behavior.
 
 History enabled permits relevant retrieval at the agent's discretion or at the
 user's instruction. Nothing preloads the complete database or entire transcripts.

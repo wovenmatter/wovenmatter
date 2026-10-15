@@ -7,6 +7,25 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CompanionWorkspaceFeaturesTests {
+    @Test func goalControlsUseTheOwningSessionAndPublishStatus() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let id = try await fixture.createConversation()
+        let service = fixture.model.companionCommands
+        let command = CompanionCommand(deviceID: fixture.device, kind: .workspace,
+            workspaceAction: .goal(id: id, mutation: .set(objective: "Verify owner work", tokenBudget: nil, turnBudget: 2)))
+        let receipt = try await service.execute(command, deviceID: fixture.device)
+        #expect(receipt.status == .completed, "\(receipt.message ?? "")")
+        #expect(try await service.execute(command, deviceID: fixture.device) == receipt)
+        guard case .session(let settings) = try await service.readWorkspace(.session(id: id)) else { Issue.record("Missing session status"); return }
+        let goal = try #require(settings.goal)
+        #expect(goal.sessionID == id && goal.status == .active)
+        try await service.performWorkspaceAction(.goal(id: id, mutation: .pause(id: goal.id)))
+        #expect(try await fixture.database.sessionGoals().first?.status == .paused)
+        try await service.performWorkspaceAction(.goal(id: id, mutation: .clear(id: goal.id)))
+        #expect(try await fixture.database.sessionGoals().isEmpty)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
     @Test func managementExportsAndReplayPreserveCanonicalState() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let service = fixture.model.companionCommands
@@ -60,13 +79,13 @@ struct CompanionWorkspaceFeaturesTests {
         guard case .session(let settings) = try await service.readWorkspace(.session(id: id)) else { Issue.record("Missing settings"); return }
         #expect(settings.availableTools.map(\.id).contains("calendar"))
         try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["notes", "library"], confirmPausingTimers: true))
-        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals])
         // Enabling Executor must go through the desktop broker. An unconfigured
         // broker cannot grant mobile authority by merely changing database flags.
         await #expect(throws: (any Error).self) {
             try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["notes", "library", "executor"], confirmPausingTimers: true))
         }
-        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals])
         await #expect(throws: (any Error).self) { try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["unknown"], confirmPausingTimers: false)) }
         #expect(await fixture.recorder.deliveries.isEmpty)
         #expect(await fixture.recorder.configurations.isEmpty)

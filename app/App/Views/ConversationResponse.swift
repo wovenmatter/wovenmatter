@@ -1,14 +1,12 @@
 #if os(macOS)
 import AppKit
 private typealias ResponseFont = NSFont
-private typealias ResponseColor = NSColor
 private let responseAbsolute = NSTextBlock.ValueType.absoluteValueType
 private let responsePercentage = NSTextBlock.ValueType.percentageValueType
 #else
 import UIKit
 import CoreText
 private typealias ResponseFont = UIFont
-private typealias ResponseColor = UIColor
 #endif
 import SwiftUI
 
@@ -78,6 +76,7 @@ struct ConversationResponse: View {
 
 #if os(macOS)
 private struct ConversationResponseText: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let content: String
     let document: ConversationMarkdownDocument?
     let isStreaming: Bool
@@ -88,9 +87,10 @@ private struct ConversationResponseText: NSViewRepresentable {
     }
 
     func updateNSView(_ viewport: ConversationResponseViewport, context: Context) {
+        viewport.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         let textView = viewport.textView
         textView.onOpenLink = onOpenLink
-        if textView.apply(content: content, document: document, isStreaming: isStreaming) {
+        if textView.apply(content: content, document: document, isStreaming: isStreaming, colorScheme: colorScheme) {
             viewport.invalidateIntrinsicContentSize()
         }
     }
@@ -165,6 +165,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     var onOpenLink: ((URL) -> Void)?
     private var appliedContent: String?
     private var appliedStreaming: Bool?
+    private var appliedColorScheme: ColorScheme?
     private var measuredSize: CGSize?
     private var decorations: [(key: NSAttributedString.Key, range: NSRange)] = []
 
@@ -186,15 +187,19 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         isVerticallyResizable = false
         textContainer?.widthTracksTextView = false
         delegate = self
-        linkTextAttributes = [.foregroundColor: NSColor(DashboardPalette.success), .underlineStyle: 0]
+        linkTextAttributes = [.foregroundColor: DashboardColors.success, .underlineStyle: 0]
         setAccessibilityLabel("Agent response")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     @discardableResult
-    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool) -> Bool {
-        guard appliedContent != content || appliedStreaming != isStreaming else { return false }
+    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool,
+               colorScheme: ColorScheme = .light) -> Bool {
+        guard appliedContent != content || appliedStreaming != isStreaming
+            || appliedColorScheme != colorScheme else { return false }
+        appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        appliedColorScheme = colorScheme
         let selection = selectedRange()
         let previous = selection.length > 0 ? NSString(string: string) : nil
         let rendered = ConversationResponseAttributedText.render(
@@ -248,10 +253,10 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
                 var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
                 if decoration.key == .responseCode {
                     rect = NSRect(x: 0, y: rect.minY - 6, width: bounds.width, height: rect.height + 12)
-                    NSColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()
+                    DashboardColors.primary.withAlphaComponent(0.05).setFill()
                     NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
                 } else {
-                    NSColor(DashboardPalette.foreground).withAlphaComponent(0.16).setFill()
+                    DashboardColors.foreground.withAlphaComponent(0.16).setFill()
                     if decoration.key == .responseQuote {
                         NSRect(x: max(0, rect.minX - 14), y: rect.minY, width: 2, height: rect.height).fill()
                     } else {
@@ -280,6 +285,7 @@ private struct ConversationResponseText: UIViewRepresentable {
     let isStreaming: Bool
     let onOpenLink: (URL) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeUIView(context: Context) -> ConversationResponseNativeTextView {
         ConversationResponseNativeTextView()
@@ -287,7 +293,7 @@ private struct ConversationResponseText: UIViewRepresentable {
     func updateUIView(_ view: ConversationResponseNativeTextView, context: Context) {
         view.onOpenLink = onOpenLink
         view.apply(content: content, document: document, isStreaming: isStreaming,
-                   typeSize: dynamicTypeSize)
+                   typeSize: dynamicTypeSize, colorScheme: colorScheme)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationResponseNativeTextView,
                      context: Context) -> CGSize? {
@@ -300,6 +306,7 @@ final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
     private var appliedContent: String?
     private var appliedStreaming: Bool?
     private var appliedTypeSize: DynamicTypeSize?
+    private var appliedColorScheme: ColorScheme?
     private var appliedDocument: ConversationMarkdownDocument?
     private var renderedWidth: CGFloat = 680
 
@@ -321,14 +328,18 @@ final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
         showsHorizontalScrollIndicator = false
         contentInset = .zero
         delegate = self
-        linkTextAttributes = [.foregroundColor: UIColor(DashboardPalette.success), .underlineStyle: 0]
+        linkTextAttributes = [.foregroundColor: DashboardColors.success, .underlineStyle: 0]
         accessibilityLabel = "Agent response"
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool, typeSize: DynamicTypeSize) {
-        guard appliedContent != content || appliedStreaming != isStreaming || appliedTypeSize != typeSize else { return }
+    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool,
+               typeSize: DynamicTypeSize, colorScheme: ColorScheme = .light) {
+        guard appliedContent != content || appliedStreaming != isStreaming || appliedTypeSize != typeSize
+            || appliedColorScheme != colorScheme else { return }
+        overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        appliedColorScheme = colorScheme
         appliedContent = content; appliedStreaming = isStreaming; appliedTypeSize = typeSize
         appliedDocument = document ?? ConversationMarkdownDocument(content)
         renderAtCurrentWidth()
@@ -398,11 +409,11 @@ private final class ConversationResponseLayoutManager: NSLayoutManager {
                 let glyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
                 let rect = self.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
                 if key == .responseCode {
-                    UIColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()
+                    DashboardColors.primary.withAlphaComponent(0.05).setFill()
                     UIBezierPath(roundedRect: CGRect(x: origin.x, y: rect.minY - 6,
                         width: container.size.width, height: rect.height + 12), cornerRadius: 12).fill()
                 } else {
-                    UIColor(DashboardPalette.foreground).withAlphaComponent(0.16).setFill()
+                    DashboardColors.foreground.withAlphaComponent(0.16).setFill()
                     let mark = key == .responseQuote
                         ? CGRect(x: max(origin.x, rect.minX - 14), y: rect.minY, width: 2, height: rect.height)
                         : CGRect(x: origin.x, y: rect.midY, width: container.size.width, height: 1)
@@ -418,9 +429,9 @@ private final class ConversationResponseLayoutManager: NSLayoutManager {
             let rowGlyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
             let used = self.boundingRect(forGlyphRange: rowGlyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
             let rect = CGRect(x: origin.x, y: used.minY - 9, width: container.size.width, height: used.height + 18)
-            UIColor(DashboardPalette.primary).withAlphaComponent(0.032).setFill()
+            DashboardColors.primary.withAlphaComponent(0.032).setFill()
             UIBezierPath(rect: rect).fill()
-            UIColor(DashboardPalette.foreground).withAlphaComponent(0.09).setStroke()
+            DashboardColors.foreground.withAlphaComponent(0.09).setStroke()
             let border = UIBezierPath(rect: rect)
             for column in 1..<columns {
                 let x = rect.minX + rect.width * CGFloat(column) / CGFloat(columns)
@@ -528,7 +539,7 @@ private enum ConversationResponseAttributedText {
     static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool, width: CGFloat = 680,
                        scaleFont: (ResponseFont) -> ResponseFont = { $0 }) -> NSAttributedString {
         let output = NSMutableAttributedString(string: "")
-        let foreground = ResponseColor(DashboardPalette.foreground).withAlphaComponent(isStreaming ? 0.76 : 1)
+        let foreground = DashboardColors.foreground.withAlphaComponent(isStreaming ? 0.76 : 1)
 
         func paragraphStyle(indent: CGFloat = 0) -> NSMutableParagraphStyle {
             let style = NSMutableParagraphStyle()
@@ -556,7 +567,7 @@ private enum ConversationResponseAttributedText {
                 }
                 #endif
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
-                if intent.contains(.code) { attributes[.backgroundColor] = ResponseColor(DashboardPalette.primary).withAlphaComponent(0.075) }
+                if intent.contains(.code) { attributes[.backgroundColor] = DashboardColors.primary.withAlphaComponent(0.075) }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
                 if let link = run.link, ConversationMarkdownDocument.isSafeExternalLink(link) { attributes[.link] = link }
                 result.append(NSAttributedString(string: String(text.rendered[run.range].characters), attributes: attributes))
@@ -644,7 +655,7 @@ private enum ConversationResponseAttributedText {
                             cell.setWidth(9, type: responseAbsolute, for: .padding)
                             cell.setWidth(0.5, type: responseAbsolute, for: .border)
                             cell.setBorderColor(foreground.withAlphaComponent(0.09))
-                            cell.backgroundColor = ResponseColor(DashboardPalette.primary).withAlphaComponent(0.032)
+                            cell.backgroundColor = DashboardColors.primary.withAlphaComponent(0.032)
                             let cellStyle = paragraphStyle()
                             cellStyle.paragraphSpacing = 0
                             cellStyle.textBlocks = [cell]

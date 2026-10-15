@@ -2,6 +2,8 @@ import SwiftUI
 
 @main struct WovenMatterCompanionApp: App {
   @State private var model = CompanionModel()
+  @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
+  private var theme: DashboardTheme { DashboardTheme(rawValue: storedTheme) ?? .green }
   @Environment(\.scenePhase) private var scenePhase
   var body: some Scene {
     WindowGroup {
@@ -9,6 +11,9 @@ import SwiftUI
         if model.initialized { CompanionShell(model: model) }
         else { ProgressView("Opening your library…") }
       }
+        .preferredColorScheme(theme.colorScheme)
+        .environment(\.dashboardTheme, theme)
+        .background(theme.palette.workspace)
         .task {
           #if DEBUG
           if DeviceRuntimeSmoke.enabled { await DeviceRuntimeSmoke.run(); return }
@@ -31,8 +36,7 @@ import SwiftUI
 
 struct CompanionShell: View {
   @Bindable var model: CompanionModel
-  @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
-  private var theme: DashboardTheme { DashboardTheme(rawValue: storedTheme) ?? .green }
+  @Environment(\.dashboardTheme) private var theme
   @State private var keyboardVisible = false
   @State private var navigationReset = UUID()
   @Environment(\.horizontalSizeClass) private var sizeClass
@@ -49,7 +53,7 @@ struct CompanionShell: View {
               ForEach(Array(CompanionModel.Tab.allCases.dropFirst(5).filter { $0 != .trash }), id: \.self) { tab in sidebarRow(tab) }
             }.padding(.horizontal, 12)
           }
-        }.frame(width: DashboardMetrics.railWidth).background(theme.palette.themeWhisper)
+        }.frame(width: DashboardMetrics.railWidth).background(theme == .dark ? theme.palette.railFill : theme.palette.themeWhisper)
         Divider()
       }
       VStack(spacing: 0) {
@@ -87,7 +91,7 @@ struct CompanionShell: View {
               }.accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
                 .accessibilityAddTraits(isSelected(tab) ? .isSelected : [])
             }
-          }.background(theme.palette.themeWhisper).overlay(alignment: .top) { Divider() }
+          }.background(theme == .dark ? theme.palette.railFill : theme.palette.themeWhisper).overlay(alignment: .top) { Divider() }
         }
       }
     }
@@ -422,7 +426,8 @@ struct GeneralSettingsPane: View {
       Section("Appearance") {
         DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
           DashboardTheme(rawValue: $0)?.title ?? $0
-        }.accessibilityLabel("Theme").listRowBackground(Color.clear)
+        }.accessibilityElement(children: .contain)
+          .accessibilityLabel("Theme").listRowBackground(Color.clear)
       }
       Section("About") {
         LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")

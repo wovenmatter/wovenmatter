@@ -108,7 +108,7 @@ struct WorkspaceCalendarTests {
     #expect(first.id != second.id)
     try await accept(second, in: db, now: start.addingTimeInterval(86_400))
     #expect(try await db.toolSessionCreationConfiguration(targetID: second.sessionID)?.model == "fixture-model")
-    #expect(try await db.sessionTools(first.sessionID).enabled == [.notes, .calendar])
+    #expect(try await db.sessionTools(first.sessionID).enabled == [.notes, .calendar, .goals])
     #expect(try await db.workspaceOverview().conversations.first { $0.id == first.sessionID }?.title == "My review")
   }
 
@@ -437,7 +437,7 @@ extension WorkspaceCalendarTests {
       #expect(retry.id == run.id && retry.sessionID == run.sessionID)
       try await db.setSessionTools(retry.task.configuration.tools, sessionID: retry.sessionID)
     }, dispatch: { delivery in
-      #expect(try await db.sessionTools(delivery.targetID).enabled == [.notes, .calendar])
+      #expect(try await db.sessionTools(delivery.targetID).enabled == [.notes, .calendar, .goals])
       _ = try await db.claimToolDelivery(id: delivery.id, now: now)
       try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
     })
@@ -599,7 +599,7 @@ extension WorkspaceCalendarTests {
     try await accept(replacement, in: db, now: start)
     let session = try await #require(db.workspaceOverview().conversations.first { $0.id == replacement.sessionID })
     #expect(session.folderID == folder && session.title == "Scheduled: Updated task")
-    #expect(try await db.sessionTools(session.id).enabled == [.notes])
+    #expect(try await db.sessionTools(session.id).enabled == [.notes, .goals])
   }
 }
 

@@ -22,6 +22,27 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.buttons["tab-folders"].waitForExistence(timeout: 10))
     return app
   }
+  @MainActor func testDarkThemeSelectionPersistsAcrossLaunch() {
+    let app = launch(tab: "Settings")
+    app.buttons["General"].tap()
+    let dark = app.buttons["Dark"]
+    XCTAssertTrue(dark.waitForExistence(timeout: 5))
+    dark.tap()
+    XCTAssertTrue(dark.isSelected)
+    let capture = XCTAttachment(screenshot: app.screenshot())
+    capture.name = "Dark theme settings"
+    capture.lifetime = .keepAlways
+    add(capture)
+    app.terminate()
+    app.launch()
+    XCTAssertTrue(app.buttons["General"].waitForExistence(timeout: 10))
+    app.buttons["General"].tap()
+    XCTAssertTrue(app.buttons["Dark"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Dark"].isSelected)
+    // Keep the other UI tests on their original light appearance.
+    app.buttons["Green"].tap()
+  }
+
   @MainActor func testFiveNativeTabsAndFocusedSurfaces() {
     let app = launch()
     XCTAssertTrue(app.staticTexts["Folders"].exists)

@@ -18,7 +18,7 @@ rather than maintaining a separate SSH key store.
 
 ## Create a workspace
 
-1. Open **Settings → Remote agent workspaces** and select or enter a host.
+1. Open **Settings → Remote Agent Workspaces** and select or enter a host.
 2. Inspect the host and review the result; inspection does not install software.
 3. If preparation is offered, review and authorize the listed changes; the app
    verifies the host again before creating the workspace.

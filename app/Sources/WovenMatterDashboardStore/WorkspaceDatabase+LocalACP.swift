@@ -1510,6 +1510,59 @@ extension WorkspaceDatabaseConnection {
       try storeActivitySummaryUnlocked(recordID: recordID, activity: activity)
   }
 
+  /// Recover only input identities recorded in this exact native session's archive.
+  public func builtInRunRecoveryRequests(conversationID: String, sessionID: String) throws -> [DefaultAgentRunRecoveryRequest] {
+    try withLock {
+      let rows = try historyRowsUnlocked("""
+        SELECT r.id AS run_id,json_extract(h.payload,'$.value.requestId') AS request_id
+        FROM dashboard_runs r JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
+        JOIN workspace_history_events h ON h.run_id=r.id AND h.conversation_id=r.conversation_id
+        WHERE r.conversation_id=? AND r.desktop_owned=1 AND r.status='uncertain'
+          AND s.runtime_kind='default_agent' AND s.acp_session_id=?
+          AND h.harness='default_agent' AND h.native_session_id=? AND json_valid(h.payload)
+          AND json_extract(h.payload,'$.type')='submission'
+          AND json_extract(h.payload,'$.value.type')='input'
+          AND json_valid(h.projection_json) AND json_extract(h.projection_json,'$.childID') IS NULL
+        ORDER BY h.sequence
+        """, values: [conversationID, sessionID, sessionID])
+      var inputs: [String: [String]] = [:]
+      for row in rows {
+        guard let value = row.objectValue, let runID = value["run_id"]?.stringValue,
+              let requestID = value["request_id"]?.stringValue,
+              let suffix = requestID.range(of: ":attempt:", options: .backwards),
+              Int(requestID[suffix.upperBound...]) != nil else { continue }
+        let inputID = String(requestID[..<suffix.lowerBound])
+        guard UUID(uuidString: inputID) != nil else { continue }
+        if !inputs[runID, default: []].contains(inputID) { inputs[runID, default: []].append(inputID) }
+      }
+      return inputs.keys.sorted().map { .init(runID: $0, inputIDs: inputs[$0] ?? []) }
+    }
+  }
+
+  /// Called only after the attached owner proved idle and returned exact native receipts.
+  public func recoverBuiltInAgentRuns(conversationID: String, sessionID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
+    try transaction {
+      let route = try localACPSession(conversationID: conversationID)
+      guard route.runtimeKind == .defaultAgent, route.acpSessionID == sessionID else {
+        throw LocalACPSessionDatabaseError.sessionNotFound
+      }
+      let allowed = Set(try builtInRunRecoveryRequests(conversationID: conversationID, sessionID: sessionID).map(\.runID))
+      let now = Self.timestamp(Date())
+      for snapshot in snapshots where allowed.contains(snapshot.runID) {
+        let status = snapshot.error == nil ? "completed" : "failed"
+        try toolsExecuteUnlocked("""
+          UPDATE dashboard_messages SET content=CASE WHEN ?='' THEN content ELSE ? END,status=?,updated_at=?
+          WHERE id IN (SELECT assistant_message_id FROM dashboard_runs WHERE id=? AND conversation_id=?
+            AND desktop_owned=1 AND status='uncertain')
+          """, [snapshot.content, snapshot.content, status, now, snapshot.runID, conversationID])
+        try toolsExecuteUnlocked("""
+          UPDATE dashboard_runs SET status=?,error=?,completed_at=?,updated_at=?
+          WHERE id=? AND conversation_id=? AND desktop_owned=1 AND status='uncertain'
+          """, [status, snapshot.error, now, now, snapshot.runID, conversationID])
+      }
+    }
+  }
+
   /// Reconcile only the exact remote run identities that this Mac submitted.
   /// A disconnected transport may have marked them failed while the workspace kept running.
   public func recoverRemoteAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
@@ -1990,6 +2043,14 @@ extension WorkspaceDatabase {
     runID: String
   ) async throws -> [(sequence: Int, rawEventJSON: String)] {
     try await read { try $0.deviceOwnedGatewayTraceEvents(runID: runID) }
+  }
+
+  public func builtInRunRecoveryRequests(conversationID: String, sessionID: String) async throws -> [DefaultAgentRunRecoveryRequest] {
+    try await read { try $0.builtInRunRecoveryRequests(conversationID: conversationID, sessionID: sessionID) }
+  }
+
+  public func recoverBuiltInAgentRuns(conversationID: String, sessionID: String, snapshots: [DefaultAgentRunSnapshot]) async throws {
+    try await finishWrite { try $0.recoverBuiltInAgentRuns(conversationID: conversationID, sessionID: sessionID, snapshots: snapshots) }
   }
 
   public func recoverRemoteAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) async throws {

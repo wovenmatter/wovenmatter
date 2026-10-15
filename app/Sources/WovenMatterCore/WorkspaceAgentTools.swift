@@ -1,7 +1,6 @@
 import Foundation
 import WovenMatterCompanion
 
-
 public enum WorkspaceCalendarAccess: String, CaseIterable, Codable, Sendable {
   case readOnly, full
   public var title: String { self == .full ? "Full access" : "Read only" }
@@ -15,7 +14,7 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
   public var executor: ExecutorConfiguration?
   public var maximumRunningSessions: Int
 
-  public init(enabledByDefault: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }),
+  public init(enabledByDefault: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }),
               calendarAccess: WorkspaceCalendarAccess = .full,
               maximumManagedSessions: Int = 4, maximumRunningSessions: Int = 16) {
     self.enabledByDefault = enabledByDefault
@@ -50,28 +49,36 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
 
 public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public var executorProfiles: Set<String>?
-  public var enabled: Set<WorkspaceToolGroup>
-  public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }), executorProfiles: Set<String>? = nil) {
+  private var selectedGroups: Set<WorkspaceToolGroup>
+  /// Goals stay available even when older saved selections omitted them.
+  public var enabled: Set<WorkspaceToolGroup> {
+    get { selectedGroups.union([.goals]) }
+    set { selectedGroups = newValue.union([.goals]) }
+  }
+  public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }), executorProfiles: Set<String>? = nil) {
     self.executorProfiles = executorProfiles
-    self.enabled = enabled
+    self.selectedGroups = enabled.union([.goals])
   }
 
   public static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.enabled == rhs.enabled && (lhs.executorProfiles ?? []) == (rhs.executorProfiles ?? [])
   }
-  private enum CodingKeys: String, CodingKey { case enabled, executorProfiles }
+  private enum CodingKeys: String, CodingKey {
+    case selectedGroups = "enabled"
+    case executorProfiles
+  }
   public func encode(to encoder: any Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encodeIfPresent(executorProfiles?.sorted(), forKey: .executorProfiles)
-    try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .enabled)
+    try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .selectedGroups)
   }
 
   public init(identifiers: [String]) throws {
     let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == identifiers.count else {
-      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, timers, usage, calendar, library, or executor.")
+      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, goals, timers, usage, calendar, library, executor, browser, or computer.")
     }
-    self.enabled = Set(groups)
+    self.selectedGroups = Set(groups).union([.goals])
   }
 }
 
@@ -224,7 +231,7 @@ public struct WorkspaceSessionTimerDraft: Sendable {
 
 
 public enum WorkspaceSessionDeliveryKind: String, Codable, Sendable {
-  case message, created, timer, notification, calendar
+  case message, created, timer, notification, calendar, goal
 }
 
 public struct WorkspaceSessionDelivery: Codable, Identifiable, Equatable, Sendable {

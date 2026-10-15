@@ -115,7 +115,7 @@ struct WorkspaceView: View {
     @AppStorage(DashboardAgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
     @State private var selectedAgentID: UUID?
     @State private var chatPanels = DashboardChatPanelState()
-    @State private var assets = WorkspaceAssetSession()
+    private var assets: WorkspaceAssetSession { model.workspaceAssets }
     private var selectedNoteID: String? { assets.tabs.selectedNoteID }
     @State private var selectedFolderID: String?
     @State private var localExecutionWorkspaceID: String?
@@ -266,7 +266,7 @@ struct WorkspaceView: View {
             destination = .workspace
             selectConversation(id)
         })
-        .preferredColorScheme(.light)
+        .preferredColorScheme(theme.colorScheme)
         .tint(DashboardPalette.primary)
         .foregroundStyle(DashboardPalette.foreground)
     }
@@ -295,6 +295,7 @@ struct WorkspaceView: View {
     private var workspaceNavigation: some View {
         workspaceLayout
         .onAppear {
+            model.startAutomationHost()
             selectDefaults()
         }
         .overlay(alignment: .top) { DictationFeedback().padding(.top, 12) }

@@ -23,7 +23,6 @@ private enum SettingsSection: Equatable {
     case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case companion
-    case workspaces
     case openCode
     case openCodeAgent(UUID?)
     case openCodeWorkspace(UUID?)
@@ -58,10 +57,6 @@ struct SettingsView: View {
                 SettingsCompanionView(model: applicationContext ?? model, host: (applicationContext ?? model).companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
-            case .workspaces:
-                SettingsDeviceWorkspacesView(application: applicationContext ?? model, client: clientContext,
-                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing },
-                    onLocalSettings: { section = .localWorkspace }, onRemoteSettings: { section = .remoteWorkspaces })
             case .defaultAgent(let scope, let origin):
                 SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
@@ -137,7 +132,7 @@ struct SettingsView: View {
         }
         .foregroundStyle(DashboardPalette.foreground)
         .environment(\.dashboardTheme, theme)
-        .preferredColorScheme(.light)
+        .preferredColorScheme(theme.colorScheme)
         .tint(DashboardPalette.primary)
         .task {
             model.refreshLocalACPRuntimesNow()
@@ -176,7 +171,7 @@ struct SettingsView: View {
                 }
                 if !executionOnly {
                 SettingsDestinationRow(
-                    title: "Device Connections",
+                    title: "Devices",
                     detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
                     icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
                     action: { section = .companion }
@@ -192,29 +187,33 @@ struct SettingsView: View {
                     action: { section = .connections("global") }
                 )
                 SettingsDestinationRow(
-                    title: AgentRuntimeKind.defaultAgent.displayName,
-                    detail: "Conversation defaults, subagents, providers, and models.",
-                    icon: { DashboardHarnessLogoIcon(logo: .defaultAgent, size: 15) },
-                    action: { section = .defaultAgent("global", .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "Local agent workspace",
+                    title: "Local Agent Workspace",
                     detail: "Agents and files on this Mac.",
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
-                if !executionOnly {
-                SettingsDestinationRow(title: "Workspaces", detail: "Local, Mac, and Linux agent workspaces.",
-                    icon: { DashboardLucideIcon(glyph: .panelsTopLeft, size: 15) }, action: { section = .workspaces })
-                }
                 if !executionOnly && clientContext == nil {
                 SettingsDestinationRow(
-                    title: "Remote agent workspaces",
+                    title: "Remote Agent Workspaces",
                     detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
                 )
                 }
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Usage",
+                    detail: "Accounts and usage tracking.",
+                    icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
+                    action: { section = .usage }
+                )
+                }
+                SettingsDestinationRow(
+                    title: AgentRuntimeKind.defaultAgent.displayName,
+                    detail: "Conversation defaults, subagents, providers, and models.",
+                    icon: { DashboardHarnessLogoIcon(logo: .defaultAgent, size: 15) },
+                    action: { section = .defaultAgent("global", .landing) }
+                )
                 SettingsDestinationRow(
                     title: "Codex",
                     detail: "Local runtime status and workspace settings.",
@@ -234,19 +233,11 @@ struct SettingsView: View {
                     action: { section = .harness(.grokBuild, nil, .landing) }
                 )
                 SettingsDestinationRow(
-                    title: "OpenCode",
+                    title: "Open Code",
                     detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Usage",
-                    detail: "Accounts and usage tracking.",
-                    icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
-                    action: { section = .usage }
-                )
-                }
             }
         }
     }

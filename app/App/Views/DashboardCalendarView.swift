@@ -211,7 +211,7 @@ struct DashboardCalendarSurface: View {
             } label: {
                 Text(day.date.formatted(.dateTime.day())).font(.system(size: 11.5, weight: today ? .bold : .medium))
                     .foregroundStyle(today ? DashboardPalette.primaryForeground : DashboardPalette.foreground)
-                    .frame(width: 25, height: 25).background(today ? DashboardPalette.primary : .clear, in: Circle())
+                    .frame(width: 25, height: 25).background(today ? DashboardPalette.primaryFill : .clear, in: Circle())
             }.buttonStyle(.plain).accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
             ForEach(occurrences.prefix(3)) { occurrence in
                 monthOccurrenceButton(occurrence)

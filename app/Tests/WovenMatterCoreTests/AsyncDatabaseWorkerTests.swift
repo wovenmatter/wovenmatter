@@ -291,7 +291,7 @@ struct AsyncDatabaseWorkerTests {
     async let first = database.setSessionToolEnabled(.calendar, enabled: true, sessionID: id)
     async let second = database.setSessionToolEnabled(.timers, enabled: true, sessionID: id)
     _ = try await (first, second)
-    #expect(try await database.sessionTools(id).enabled == [.calendar, .timers])
+    #expect(try await database.sessionTools(id).enabled == [.calendar, .timers, .goals])
   }
 
   @Test func cancelledRunStillFlushesItsTailAndPersistsTerminalState() async throws {

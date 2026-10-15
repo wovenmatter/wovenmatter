@@ -10,6 +10,22 @@ const delay = milliseconds => new Promise(resolve => setTimeout(resolve,millisec
 const fail = message => Object.assign(new Error(message), { statusCode: 409 })
 const deferred = () => { let resolve,reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); promise.catch(()=>{}); return {promise,resolve,reject} }
 
+// Match the desktop's ACP usage contract. Missing counts stay unknown.
+export function clientRunTokens(result) {
+  const usage=result?.usage
+  if(!usage)return undefined
+  if(Number.isSafeInteger(usage.totalTokens)&&usage.totalTokens>=0)return usage.totalTokens
+  if(!Number.isSafeInteger(usage.inputTokens)||usage.inputTokens<0||!Number.isSafeInteger(usage.outputTokens)||usage.outputTokens<0)return undefined
+  const values=[usage.inputTokens,usage.outputTokens,usage.cachedReadTokens??0,usage.cachedWriteTokens??0]
+  if(values.some(value=>!Number.isSafeInteger(value)||value<0))return undefined
+  const total=values.reduce((sum,value)=>sum+value,0)
+  return Number.isSafeInteger(total)?total:undefined
+}
+function publishRunUsage(result,publish) {
+  const totalTokens=clientRunTokens(result)
+  if(totalTokens!=null)publish({sessionUpdate:'woven_usage',usage:{totalTokens}})
+}
+
 // Native runtimes remain the execution owners. This adapter projects their
 // output into the common client contract without lending a client process any
 // ownership over the run or replaying a prompt on reconnect.
@@ -171,13 +187,13 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
         await fence.stopping?.promise; requireActive(fence)
         publish({sessionUpdate:'woven_execution_binding',native})
         const reply=await defaultAgent.invoke({operationID:command.runID,method:'session/prompt',attachmentToken:native.attachmentToken,
-          params:{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,wovenInputID:command.commandID}}})
+          params:{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,wovenInputID:command.commandID,...(command.goalToolContext?{wovenTools:command.goalToolContext}:{})}}})
         let after=0
         while(!closed) {
           const page=await defaultAgent.poll(reply.operationID,after)
           for(const update of page.updates)publish(update)
           after=page.cursor
-          if(page.done){if(page.error)throw fail('Pi Durable could not complete this run. Its accepted input will not be replayed.');return}
+          if(page.done){publishRunUsage(page.result,publish);if(page.error||page.result?.stopReason==='cancelled')throw fail('Pi Durable could not complete this run. Its accepted input will not be replayed.');return}
           await delay(100)
         }
       } finally {builtIn.delete(command.runID)}
@@ -185,7 +201,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     }
     if(runtimeKind==='opencode') {
       const controller=new AbortController(),job={controller,native,control:null};nativeJobs.set(command.runID,job)
-      try {return await nativeExecutor({run:{id:command.runID,title:command.text.slice(0,100),task:{prompt:command.text,configuration:{runtimeKind,workspaceID:native.workspaceID,nativeWorkingDirectory:native.nativeWorkingDirectory}}},nativeSessionID:native.sessionID,signal:controller.signal,publish,
+      try {return await nativeExecutor({run:{id:command.runID,title:command.text.slice(0,100),task:{prompt:command.text,configuration:{runtimeKind,workspaceID:native.workspaceID,nativeWorkingDirectory:native.nativeWorkingDirectory}}},nativeSessionID:native.sessionID,signal:controller.signal,publish,cliContext:command.goalToolContext,
         bindSession:id=>{native.sessionID=id;publish({sessionUpdate:'woven_execution_binding',native})},
         interactive:{publish:interaction,bind:control=>{job.control=control}}})}
       finally {nativeJobs.delete(command.runID)}
@@ -207,7 +223,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       await Promise.race([(async()=>{
         let failure
         await fence.stopping?.promise; requireActive(fence)
-        try {await rpc(channel,'session/prompt',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID}},command.commandID)} catch(error){failure=error}
+        try {const result=await rpc(channel,'session/prompt',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,...(command.goalToolContext?{wovenTools:command.goalToolContext}:{})}},command.commandID);publishRunUsage(result,publish);if(result.stopReason==='cancelled')throw fail('The native run was cancelled.')} catch(error){failure=error}
         while(!closed&&!channel.stopped&&(channel.busy||channel.pendingInputs))await delay(25)
         if(closed||channel.stopped)throw fail('The native workspace session stopped.')
         if(failure||channel.run?.nativeError)throw failure??channel.run.nativeError
@@ -230,16 +246,16 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   }
   async function steer({native,runtimeKind,command}) {
     if(runtimeKind==='default_agent') {
-      const result=await invoke(native,'_session/steering',{prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,wovenInputID:command.commandID}})
+      const result=await invoke(native,'_session/steering',{prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,wovenInputID:command.commandID,...(command.goalToolContext?{wovenTools:command.goalToolContext}:{})}})
       if(result.outcome==='promptRequired')throw fail('That run has finished. Send a new message.')
       return
     }
     if(runtimeKind==='opencode'){const control=nativeJobs.get(command.runID)?.control;if(!control?.steer)throw fail('This native run does not support steering.');return control.steer(command.text,command.commandID)}
     const channel=await attach(native,runtimeKind)
     if(!channel.run||channel.run.command.runID!==command.runID)throw fail('That run has finished. Send a new message.')
-    if(runtimeKind==='grok_build')return rpc(channel,'_x.ai/interject',{sessionId:native.sessionID,text:command.text},command.commandID)
+    if(runtimeKind==='grok_build')return rpc(channel,'_x.ai/interject',{sessionId:native.sessionID,text:command.text,...(command.goalToolContext?{_meta:{wovenTools:command.goalToolContext}}:{})},command.commandID)
     if(!native.steeringSupported)throw fail('This native agent does not support steering.')
-    const result=await rpc(channel,'_session/steering',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,steering:{idleBehavior:'promptRequired'}}},command.commandID)
+    const result=await rpc(channel,'_session/steering',{sessionId:native.sessionID,prompt:[{type:'text',text:command.text}],_meta:{wovenRunID:command.runID,steering:{idleBehavior:'promptRequired'},...(command.goalToolContext?{wovenTools:command.goalToolContext}:{})}},command.commandID)
     if(!['injected','startedNewTurn'].includes(result.outcome))throw fail('That run has finished. Send a new message.')
     return result
   }
@@ -272,7 +288,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     const model=initial.configOptions?.find(item=>item.id==='model'||item.category==='model')
     const thinking=initial.configOptions?.find(item=>['effort','thinking','reasoning_effort'].includes(item.id)||item.category==='thought_level')
     const permission=initial.configOptions?.find(item=>['permission_mode','approval_mode','mode'].includes(item.id))
-    return {model:model?.currentValue??initial.models?.currentModelId,thinking:thinking?.currentValue,permission:permission?.currentValue,
+    return {model:model?.currentValue??initial.models?.currentModelId,thinking:thinking?.currentValue,permission:permission?.currentValue??initial.modes?.currentModeId,
       models:model?selections(model.options):(initial.models?.availableModels??[]).map(item=>({id:item.modelId,label:item.name??item.modelId})),
       thinkingLevels:selections(thinking?.options),permissions:selections(permission?.options),availableTools:[],enabledTools:[],canConfigure:!(runtimeKind==='opencode')}
   }

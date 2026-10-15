@@ -126,6 +126,7 @@ const methods = {
     if (!submission) throw new Error('Unknown submission');
     return submission.wait(context);
   },
+  async usage() { return harness.usage(context); },
   async snapshot() {
     const temporaryWatch = await watchEvents(harness,root.id,context);
     const snapshot = temporaryWatch.snapshot; await temporaryWatch.stop(); return snapshot;

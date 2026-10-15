@@ -18,6 +18,7 @@ targets:
     sources:
       - path: Sources/CompanionApp
       - path: ../app/App/Views/DashboardStyle.swift
+      - path: ../app/App/Views/DashboardColors.swift
       - path: ../app/App/Models/ConversationMarkdownDocument.swift
       - path: ../app/App/Views/ConversationResponse.swift
       - path: ../app/Sources/WovenMatterCore/AgentRunActivity.swift

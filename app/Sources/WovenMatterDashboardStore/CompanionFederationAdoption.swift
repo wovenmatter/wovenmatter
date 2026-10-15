@@ -36,6 +36,12 @@ extension WorkspaceDatabaseConnection {
       guard try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_runs WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [conversationID]) == 0 else {
         throw federationError("execution_busy", "Wait for the current run to settle before transferring this conversation's execution control.")
       }
+      var transferredGoal = try goalUnlocked(conversationID)
+      if var goal = transferredGoal {
+        try cancelQueuedGoalDeliveryUnlocked(goal)
+        if goal.status == .active { goal.status = .paused; goal.evidence = "Execution ownership changed. Resume on the new owner." }
+        goal.pendingDeliveryID = nil; try saveGoalUnlocked(goal); transferredGoal = goal
+      }
       if let existing = try federationConversationUnlocked(conversationID) {
         guard existing.workspaceID == workspaceID else { throw federationError("wrong_owner", "This conversation already belongs to another execution workspace.") }
         conversation = existing
@@ -56,7 +62,7 @@ extension WorkspaceDatabaseConnection {
       let adoption = try CompanionExecutionAdoption(workspaceID: workspaceID, conversation: conversation,
         runtimeKind: text(session, column: 0), nativeSessionID: nativeID, model: optionalText(session, column: 2),
         thinking: optionalText(session, column: 3), permission: optionalText(session, column: 4),
-        knownRunIDs: companionIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]), nativeWorkingDirectory: root.rootPath)
+        knownRunIDs: companionIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]), nativeWorkingDirectory: root.rootPath, goal: transferredGoal)
       let saved = try prepareUnlocked("INSERT INTO companion_execution_adoptions(conversation_id,workspace_id,payload) VALUES (?,?,?)")
       defer { sqlite3_finalize(saved) }
       try bind(conversationID, at: 1, to: saved); try bind(workspaceID, at: 2, to: saved)
@@ -66,7 +72,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> CompanionTranscript {
-    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
+    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,(SELECT kind FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id) FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)
     var transcript = CompanionTranscript(conversationID: conversationID)
@@ -75,7 +81,7 @@ extension WorkspaceDatabaseConnection {
       if code == SQLITE_DONE { break }
       guard code == SQLITE_ROW else { throw stepError() }
       transcript.messages.append(try CompanionMessage(id: text(statement, column: 0), conversationID: conversationID,
-        runID: optionalText(statement, column: 1), role: text(statement, column: 2), content: text(statement, column: 3),
+        runID: optionalText(statement, column: 1), role: text(statement, column: 2), content: text(statement, column: 2) == "user" ? (optionalText(statement, column: 6) == "goal" ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt(text(statement, column: 3))) : text(statement, column: 3),
         status: optionalText(statement, column: 4), createdAt: text(statement, column: 5)))
     }
     let events = try prepareUnlocked("SELECT id,run_id,content FROM dashboard_run_events WHERE conversation_id=? ORDER BY created_at,id")

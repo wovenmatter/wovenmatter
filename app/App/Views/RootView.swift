@@ -30,7 +30,7 @@ struct RootView: View {
         }
         .environment(\.dashboardTheme, theme)
         .toggleStyle(DashboardSwitchToggleStyle())
-        .preferredColorScheme(.light)
+        .preferredColorScheme(theme.colorScheme)
         .background(theme.palette.workspace)
         .onReceive(NotificationCenter.default.publisher(for: DefaultAgentSupport.credentialsChanged)) { _ in
             Task { await model.sharedConnectionsChanged(); await DictationModel.shared.refreshAvailability() }
@@ -66,12 +66,12 @@ struct RootView: View {
         VStack(spacing: 0) {
             ZStack {
                 Circle()
-                    .fill(DashboardPalette.primary)
+                    .fill(DashboardPalette.primaryFill)
                     .frame(width: 56, height: 56)
-                    .shadow(color: DashboardPalette.primary.opacity(0.3), radius: 15, y: 8)
+                    .shadow(color: DashboardPalette.primaryFill.opacity(0.3), radius: 15, y: 8)
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.white)
+                    .tint(DashboardPalette.primaryForeground)
             }
             Text("Opening workspace…")
                 .font(.system(size: 15, weight: .medium))
@@ -86,11 +86,11 @@ struct RootView: View {
         VStack(spacing: 0) {
             ZStack {
                 Circle()
-                    .fill(DashboardPalette.primary)
+                    .fill(DashboardPalette.primaryFill)
                     .frame(width: 56, height: 56)
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 21, weight: .light))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(DashboardPalette.primaryForeground)
             }
             Text("Workspace unavailable")
                 .font(.system(size: 15, weight: .medium))

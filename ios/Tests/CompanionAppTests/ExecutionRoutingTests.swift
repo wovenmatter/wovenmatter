@@ -48,6 +48,45 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
+  @MainActor func testDeviceGoalsPersistAndRouteWithoutStartingInference() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let id = UUID().uuidString.lowercased()
+    let descriptor = InferenceModel(id: "gpt-test", name: "Test model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
+    model.executionRecords[id] = DeviceConversationRecord(id: id, title: "Goal chat", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
+    let set = await model.perform(.goal(id: id, mutation: .set(objective: "Verify device work", tokenBudget: nil, turnBudget: 2)))
+    XCTAssertTrue(set)
+    guard case .session(let settings) = try await model.workspace(.session(id: id)) else { XCTFail("Missing owner status"); return }
+    let goal = try XCTUnwrap(settings.goal)
+    XCTAssertEqual(goal.sessionID, id)
+    XCTAssertTrue(model.localRuntimes.isEmpty)
+    let requestID = UUID().uuidString
+    let arguments = ["goals", "checkpoint", "--id", goal.id, "--evidence", "Verified a change", "--request-id", requestID]
+    let first = try await model.performDeviceCLI(arguments: arguments, conversationID: id, requestID: requestID)
+    let retry = try await model.performDeviceCLI(arguments: arguments, conversationID: id, requestID: requestID)
+    XCTAssertEqual(first, retry)
+    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.progressRevision, 1)
+    XCTAssertTrue(model.localPending.isEmpty, "Goal evidence does not require approval for an external effect")
+    let pause = await model.perform(.goal(id: id, mutation: .pause(id: goal.id)))
+    XCTAssertTrue(pause)
+    let resume = await model.perform(.goal(id: id, mutation: .resume(id: goal.id)))
+    XCTAssertTrue(resume)
+    try await model.configureDeviceChat(tools: [], conversationID: id)
+    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.status, .paused)
+    let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    reopened.executionDirectory = model.executionDirectory
+    try await reopened.loadExecutionConfiguration()
+    XCTAssertEqual(reopened.executionRecords[id]?.goalLedger?.goal?.status, .paused)
+    XCTAssertTrue(reopened.localRuntimes.isEmpty)
+    let clear = await reopened.perform(.goal(id: id, mutation: .clear(id: goal.id)))
+    XCTAssertTrue(clear)
+    XCTAssertNil(reopened.executionRecords[id]?.goalLedger?.goal)
+  }
+
+
   @MainActor func testFallbackRouteControlsTheChatWithoutChangingHistoryOwnership() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -288,10 +327,10 @@ final class ExecutionRoutingTests: XCTestCase {
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
     XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command"]))
-    XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
+    XCTAssertEqual(names.filter { $0.hasPrefix("wovenmatter_") }, ["wovenmatter_goals"])
     XCTAssertFalse(names.contains("read_note"))
     let context = try model.deviceToolContext(conversationID: record.id)
-    XCTAssertTrue(context.enabled.isEmpty)
+    XCTAssertEqual(context.enabled, [.goals])
     for name in ["wovenmatter_calendar", "read_note"] {
       do {
         _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
@@ -299,9 +338,13 @@ final class ExecutionRoutingTests: XCTestCase {
       } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
     }
     XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["wovenmatter_notes"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_browser", selection: nil))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: ["wovenmatter_computer"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_notes", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.map { "wovenmatter_" + $0.rawValue }))
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.filter { $0 != .goals }.map { "wovenmatter_" + $0.rawValue }))
+    XCTAssertTrue(CompanionModel.deviceCLITools.contains { $0["name"] as? String == "wovenmatter_goals" })
   }
 
   @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {
