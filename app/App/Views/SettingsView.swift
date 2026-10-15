@@ -136,7 +136,7 @@ struct SettingsView: View {
         }
         .foregroundStyle(DashboardPalette.foreground)
         .environment(\.dashboardTheme, theme)
-        .preferredColorScheme(.light)
+        .preferredColorScheme(theme.colorScheme)
         .tint(DashboardPalette.primary)
         .task {
             model.refreshLocalACPRuntimesNow()

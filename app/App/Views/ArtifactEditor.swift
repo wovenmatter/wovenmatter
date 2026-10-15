@@ -199,6 +199,7 @@ struct DashboardSpreadsheetEditor: View {
 }
 
 struct DashboardHTMLArtifactView: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let html: String
     let linkedDataJSON: String?
 
@@ -215,56 +216,23 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
-        guard coordinator.html != html || coordinator.linkedDataJSON != linkedDataJSON else { return }
+        let emptyAppearance = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? colorScheme : nil
+        guard coordinator.html != html || coordinator.linkedDataJSON != linkedDataJSON
+            || coordinator.emptyAppearance != emptyAppearance else { return }
+        coordinator.emptyAppearance = emptyAppearance
         coordinator.html = html
         coordinator.linkedDataJSON = linkedDataJSON
-        let rendered = Self.renderedHTML(html: html, linkedDataJSON: linkedDataJSON)
+        let rendered = DashboardHTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON, emptyAppearance: emptyAppearance)
         guard context.coordinator.renderedHTML != rendered else { return }
         context.coordinator.renderedHTML = rendered
         webView.loadHTMLString(rendered, baseURL: nil)
-    }
-
-    static func renderedHTML(html: String, linkedDataJSON: String?) -> String {
-        let body = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? """
-              <main class="woven-empty">
-                <h2>HTML artifact</h2>
-                <p>Ask your agent to build a visualization here.</p>
-              </main>
-              """
-            : html
-        let data = (linkedDataJSON ?? "null")
-            .replacingOccurrences(of: "&", with: "\\u0026")
-            .replacingOccurrences(of: "<", with: "\\u003c")
-            .replacingOccurrences(of: ">", with: "\\u003e")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-        return """
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
-          <style>
-            :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-            html, body { min-height: 100%; margin: 0; }
-            body { padding: 24px; box-sizing: border-box; }
-            .woven-empty { min-height: calc(100vh - 48px); display: grid; place-content: center; text-align: center; color: #64706b; }
-            .woven-empty h2 { margin: 0 0 6px; color: #15382d; font-size: 18px; }
-            .woven-empty p { margin: 0; font-size: 13px; }
-          </style>
-          <script>window.wovenMatterData = \(data);</script>
-        </head>
-        <body>\(body)</body>
-        </html>
-        """
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var html: String?
         var linkedDataJSON: String?
         var renderedHTML: String?
+        var emptyAppearance: ColorScheme?
 
         func webView(
             _ webView: WKWebView,

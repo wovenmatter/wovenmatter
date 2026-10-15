@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */; };
+		DA4C00000000000000000001 /* DashboardColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000002 /* DashboardColors.swift */; };
 		E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */; };
 		FCF465ABA5EF4C84A9433309 /* ConversationTranscriptState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */; };
 		8CF0AF093FDD4417AE3CE998 /* ConversationTasksBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */; };
@@ -140,6 +142,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHTMLArtifactDocument.swift; sourceTree = "<group>"; };
+		DA4C00000000000000000002 /* DashboardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardColors.swift; sourceTree = "<group>"; };
 		FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = App/ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
 		ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranscriptState.swift; sourceTree = "<group>"; };
 		AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTasksBadge.swift; sourceTree = "<group>"; };
@@ -420,6 +424,8 @@
 				D45400000000000000000002 /* DashboardUsageView.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				D57100000000000000000002 /* DashboardStyle.swift */,
+				DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */,
+				DA4C00000000000000000002 /* DashboardColors.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
@@ -705,6 +711,8 @@
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				D57100000000000000000001 /* DashboardStyle.swift in Sources */,
+				DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */,
+				DA4C00000000000000000001 /* DashboardColors.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
