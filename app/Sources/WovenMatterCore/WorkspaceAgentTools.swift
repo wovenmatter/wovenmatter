@@ -1,7 +1,6 @@
 import Foundation
 import WovenMatterCompanion
 
-
 public enum WorkspaceCalendarAccess: String, CaseIterable, Codable, Sendable {
   case readOnly, full
   public var title: String { self == .full ? "Full access" : "Read only" }
@@ -15,7 +14,7 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
   public var executor: ExecutorConfiguration?
   public var maximumRunningSessions: Int
 
-  public init(enabledByDefault: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }),
+  public init(enabledByDefault: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }),
               calendarAccess: WorkspaceCalendarAccess = .full,
               maximumManagedSessions: Int = 4, maximumRunningSessions: Int = 16) {
     self.enabledByDefault = enabledByDefault
@@ -56,7 +55,7 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
     get { selectedGroups.union([.goals]) }
     set { selectedGroups = newValue.union([.goals]) }
   }
-  public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }), executorProfiles: Set<String>? = nil) {
+  public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }), executorProfiles: Set<String>? = nil) {
     self.executorProfiles = executorProfiles
     self.selectedGroups = enabled.union([.goals])
   }
@@ -77,7 +76,7 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public init(identifiers: [String]) throws {
     let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == identifiers.count else {
-      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, goals, timers, usage, calendar, library, or executor.")
+      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, goals, timers, usage, calendar, library, executor, browser, or computer.")
     }
     self.selectedGroups = Set(groups).union([.goals])
   }

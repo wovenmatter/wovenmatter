@@ -2,6 +2,8 @@
 #include "include/cef_app.h"
 #include "include/cef_application_mac.h"
 #include "include/cef_browser.h"
+#include "include/cef_devtools_message_observer.h"
+#include "include/cef_version.h"
 #include "include/cef_client.h"
 #include "include/cef_parser.h"
 #include "include/wrapper/cef_helpers.h"
@@ -40,10 +42,13 @@ static NSString *PasswordOrigin(NSString *address) {
 }
 
 class BrowserClient;
+class AutomationObserver;
 @interface WMBrowserPage () {
  @public
   CefRefPtr<CefBrowser> browser_;
   CefRefPtr<BrowserClient> client_;
+  CefRefPtr<CefRegistration> automationRegistration_;
+  std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> automationDownloadCallbacks_;
 }
 @property(nonatomic, readwrite) NSView *view;
 @property(nonatomic, readwrite) NSString *url;
@@ -61,6 +66,9 @@ class BrowserClient;
 @property(nonatomic, readwrite) NSString *passwordOfferOrigin;
 @property(nonatomic) NSString *offeredUsername;
 @property(nonatomic) NSString *offeredPassword;
+@property(nonatomic) NSMutableDictionary<NSNumber *, NSMutableDictionary *> *downloads;
+@property(nonatomic) NSString *downloadDirectory;
+@property(nonatomic) NSMutableSet<NSString *> *automationScripts;
 - (void)changed;
 @end
 @interface WMBrowserRuntime () {
@@ -217,6 +225,7 @@ class BrowserClient final : public CefClient,
     CEF_REQUIRE_UI_THREAD();
     WMBrowserPage *page = page_;
     if (!page) return;
+    [page detachAutomation];
     page.closed = YES;
     page->browser_ = nullptr;
     page->client_ = nullptr;
@@ -334,13 +343,42 @@ class BrowserClient final : public CefClient,
     page.errorMessage = @"This page stopped responding. Reload to try again.";
     [page changed];
   }
-  bool OnBeforeDownload(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>,
-      const CefString &, CefRefPtr<CefBeforeDownloadCallback> callback) override {
-    CEF_REQUIRE_UI_THREAD(); callback->Continue(CefString(), true); return true;
+  bool OnBeforeDownload(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem> item,
+      const CefString &name, CefRefPtr<CefBeforeDownloadCallback> callback) override {
+    CEF_REQUIRE_UI_THREAD(); WMBrowserPage *page = page_;
+    if (page.automationMessageHandler) {
+      if (!page.downloadDirectory) {
+        page.downloadDirectory = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"woven-download-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+        if (![NSFileManager.defaultManager createDirectoryAtPath:page.downloadDirectory withIntermediateDirectories:NO attributes:@{NSFilePosixPermissions:@0700} error:nil]) return true;
+      }
+      // Native-owned opaque IDs prevent path selection/traversal by an agent.
+      if (page.downloads.count >= 16) return true;
+      NSString *identifier = NSUUID.UUID.UUIDString.lowercaseString;
+      NSString *path = [page.downloadDirectory stringByAppendingPathComponent:identifier];
+      page.downloads[@(item->GetId())] = [@{@"id":identifier,@"name":[String(name) lastPathComponent],@"path":path,@"mimeType":String(item->GetMimeType()),@"status":@"running",@"bytes":@0} mutableCopy];
+      callback->Continue(Cef(path), false); return true;
+    }
+    callback->Continue(CefString(), true); return true;
   }
   void OnDownloadUpdated(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem> item,
-                          CefRefPtr<CefDownloadItemCallback>) override {
+                          CefRefPtr<CefDownloadItemCallback> callback) override {
     CEF_REQUIRE_UI_THREAD(); WMBrowserPage *page = page_;
+    NSMutableDictionary *receipt = page.downloads[@(item->GetId())];
+    if (receipt) {
+      page->automationDownloadCallbacks_[item->GetId()] = callback;
+      receipt[@"bytes"] = @(item->GetReceivedBytes());
+      // Bound native temporary storage; never run downloaded files.
+      if (item->GetReceivedBytes() > 64 * 1024 * 1024) { callback->Cancel(); receipt[@"status"] = @"cancelled"; }
+      else if (item->IsComplete()) receipt[@"status"] = @"complete";
+      else if (item->IsCanceled() || item->IsInterrupted()) receipt[@"status"] = @"cancelled";
+      if (![receipt[@"status"] isEqualToString:@"running"] && page.automationMessageHandler) {
+        NSMutableDictionary *safe = [receipt mutableCopy]; [safe removeObjectForKey:@"path"];
+        NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"method":@"Woven.downloadComplete",@"params":safe} options:0 error:nil];
+        page.automationMessageHandler([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+      }
+      if (![receipt[@"status"] isEqualToString:@"running"]) page->automationDownloadCallbacks_.erase(item->GetId());
+      return;
+    }
     if (item->IsComplete()) {
       [page.delegate browserPage:page showMessage:[@"Downloaded " stringByAppendingString:
           [String(item->GetFullPath()) lastPathComponent]]];
@@ -353,11 +391,91 @@ class BrowserClient final : public CefClient,
   IMPLEMENT_REFCOUNTING(BrowserClient);
 };
 
+class AutomationObserver final : public CefDevToolsMessageObserver {
+ public:
+  explicit AutomationObserver(WMBrowserPage *page) : page_(page) {}
+  bool OnDevToolsMessage(CefRefPtr<CefBrowser>, const void *message, size_t size) override {
+    CEF_REQUIRE_UI_THREAD();
+    WMBrowserPage *page = page_;
+    if (size <= 8 * 1024 * 1024 && page.automationMessageHandler) {
+      NSString *json = [[NSString alloc] initWithBytes:message length:size encoding:NSUTF8StringEncoding];
+      NSDictionary *packet = json ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : nil;
+      NSString *identifier = packet[@"result"][@"identifier"];
+      if ([identifier isKindOfClass:NSString.class]) [page.automationScripts addObject:identifier];
+      if (json) page.automationMessageHandler(json);
+    }
+    return true;
+  }
+ private:
+  __weak WMBrowserPage *page_;
+  IMPLEMENT_REFCOUNTING(AutomationObserver);
+};
+
 @implementation WMBrowserPage
+- (NSString *)chromiumVersion {
+  return [NSString stringWithFormat:@"%d.%d.%d.%d", CHROME_VERSION_MAJOR, CHROME_VERSION_MINOR, CHROME_VERSION_BUILD, CHROME_VERSION_PATCH];
+}
+- (BOOL)sendAutomationMessage:(NSString *)message {
+  NSAssert(NSThread.isMainThread, @"Automation requires the main thread");
+  if (!browser_ || _closing || _closed || !self.automationMessageHandler) return NO;
+  if (!automationRegistration_) {
+    automationRegistration_ = browser_->GetHost()->AddDevToolsMessageObserver(new AutomationObserver(self));
+  }
+  NSData *data = [message dataUsingEncoding:NSUTF8StringEncoding];
+  if (!data || data.length > 4 * 1024 * 1024) return NO;
+  return browser_->GetHost()->SendDevToolsMessage(data.bytes, data.length);
+}
+- (void)detachAutomation {
+  self.automationMessageHandler = nil;
+  if (automationRegistration_ && browser_) {
+    // Observer removal alone leaves CEF's domains enabled. Reset our domains so
+    // the next invocation receives fresh main-world execution contexts.
+    for (NSString *identifier in _automationScripts) {
+      auto params = CefDictionaryValue::Create(); params->SetString("identifier", Cef(identifier));
+      browser_->GetHost()->ExecuteDevToolsMethod(0, "Page.removeScriptToEvaluateOnNewDocument", params);
+    }
+    [_automationScripts removeAllObjects];
+    for (const char *method : {"Runtime.disable", "Page.disable", "Network.disable", "Log.disable", "Inspector.disable"})
+      browser_->GetHost()->ExecuteDevToolsMethod(0, method, nullptr);
+    auto params = CefDictionaryValue::Create(); params->SetBool("autoAttach", false); params->SetBool("waitForDebuggerOnStart", false); params->SetBool("flatten", true);
+    browser_->GetHost()->ExecuteDevToolsMethod(0, "Target.setAutoAttach", params);
+    params = CefDictionaryValue::Create(); params->SetBool("enabled", false);
+    browser_->GetHost()->ExecuteDevToolsMethod(0, "Page.setInterceptFileChooserDialog", params);
+    browser_->GetHost()->ExecuteDevToolsMethod(0, "Page.setLifecycleEventsEnabled", params);
+  }
+  automationRegistration_ = nullptr;
+  std::vector<CefRefPtr<CefDownloadItemCallback>> callbacks;
+  for (const auto &entry : automationDownloadCallbacks_) callbacks.push_back(entry.second);
+  automationDownloadCallbacks_.clear();
+  for (const auto &callback : callbacks) callback->Cancel();
+}
+- (NSArray<NSDictionary *> *)automationDownloads {
+  NSMutableArray *result = [NSMutableArray new];
+  for (NSDictionary *receipt in _downloads.allValues) {
+    NSMutableDictionary *safe = [receipt mutableCopy]; [safe removeObjectForKey:@"path"]; [result addObject:safe];
+  }
+  return result;
+}
+- (NSDictionary *)readAutomationDownload:(NSString *)identifier offset:(NSUInteger)offset {
+  for (NSDictionary *receipt in _downloads.allValues) {
+    if (![receipt[@"id"] isEqualToString:identifier] || ![receipt[@"status"] isEqualToString:@"complete"]) continue;
+    if (offset > [receipt[@"bytes"] unsignedLongLongValue]) return nil;
+    NSFileHandle *file = [NSFileHandle fileHandleForReadingAtPath:receipt[@"path"]];
+    if (!file) return nil;
+    [file seekToFileOffset:offset]; NSData *data = [file readDataOfLength:384 * 1024]; [file closeFile];
+    return @{@"id":identifier,@"name":receipt[@"name"],@"mimeType":receipt[@"mimeType"],@"offset":@(offset),@"nextOffset":@(offset+data.length),@"totalBytes":receipt[@"bytes"],@"data":[data base64EncodedStringWithOptions:0]};
+  }
+  return nil;
+}
+- (void)dealloc {
+  if (_downloadDirectory) [NSFileManager.defaultManager removeItemAtPath:_downloadDirectory error:nil];
+}
 - (instancetype)init {
   if ((self = [super init])) {
     _view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, 600)];
     _url = @"about:blank"; _title = @"New tab";
+    _downloads = [NSMutableDictionary new];
+    _automationScripts = [NSMutableSet new];
     client_ = new BrowserClient(self);
   }
   return self;

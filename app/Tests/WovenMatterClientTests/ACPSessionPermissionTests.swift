@@ -6,6 +6,26 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSessionPermissionTests {
+    @Test(arguments: [false, true]) func codexReceivesSessionBoundAutomationMCP(loading: Bool) async throws {
+        let fixture = try PermissionFixture(kind: .codex, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex, executableURL: fixture.executable, arguments: [])
+        launch.cliConnection = .init(executablePath: "/fixture/wovenmatter", socketPath: "/fixture/caller.sock", captureID: "input")
+        let client = try LocalACPClient.start(launch: launch, workingDirectory: fixture.root)
+        do {
+            _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: loading ? "existing" : nil, title: nil)
+            let request = try #require(fixture.requests(method: loading ? "session/load" : "session/new").first)
+            let params = try #require(request["params"] as? [String: Any])
+            let servers = try #require(params["mcpServers"] as? [[String: Any]])
+            let server = try #require(servers.first)
+            #expect(servers.count == 1 && server["command"] as? String == "/fixture/wovenmatter")
+            #expect(server["args"] as? [String] == ["mcp"])
+            let env = try #require(server["env"] as? [[String: String]])
+            #expect(env.contains(["name": "WOVENMATTER_SOCKET", "value": "/fixture/caller.sock"]))
+            await client.shutdown()
+        } catch { await client.shutdown(); throw error }
+    }
+
     @Test func cancellingFixtureOwnerReapsAPeerBlockedDuringInitialization() async throws {
         let markerRoot = FileManager.default.temporaryDirectory.appending(path: "permission-owner-\(UUID())")
         try FileManager.default.createDirectory(at: markerRoot, withIntermediateDirectories: true)

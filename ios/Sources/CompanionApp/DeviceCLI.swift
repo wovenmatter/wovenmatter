@@ -15,22 +15,24 @@ extension CompanionModel {
     if ["list_notes", "read_note", "save_note"].contains(name) { group = "wovenmatter_notes" }
     else if name.hasPrefix("wovenmatter_") { group = name }
     else { return true }
-    guard let selection else { return true }
+    guard let selection else { return group != "wovenmatter_computer" }
     // Retain access granted by older note-only selections, without broadening
     // those individual aliases into additional CLI capabilities.
     return selection.contains(group) || (group == "wovenmatter_notes" && selection.contains(name))
   }
   static var deviceCLITools: [[String: Any]] {
     deviceToolGroups.map { group in
-      ["name": "wovenmatter_" + group.rawValue,
-       "description": "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations require approval and use a stable request ID.",
+      let description = group.isAutomation
+        ? "Control the paired central Mac's \(group == .browser ? "embedded Woven Matter browser" : "desktop after Computer Use is enabled"). This capability runs on the Mac, requires its execution access, and never controls this iPhone. Arguments omit the group name. Use [\"--help\"] for commands. Input uses a stable request ID; inspect fresh state after interruption."
+        : "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations require approval and use a stable request ID."
+      return ["name": "wovenmatter_" + group.rawValue,
+       "description": description,
        "parameters": ["type": "object", "properties": ["arguments": ["type": "array", "items": ["type": "string"]], "target": ["type": "string", "enum": ["local", "central"]]], "required": ["arguments"]]]
     }
   }
   func deviceToolContext(conversationID: String) throws -> MobileToolContext {
     guard let record = executionRecords[conversationID] else { throw DeviceExecutionError.unavailable("This tool request has no device execution owner.") }
-    let selected = record.enabledTools.map(Set.init)
-    let enabled = Set(Self.deviceToolGroups.filter { $0 == .goals || selected == nil || selected!.contains("wovenmatter_" + $0.rawValue) })
+    let enabled = Set(Self.deviceToolGroups.filter { Self.deviceToolEnabled("wovenmatter_" + $0.rawValue, selection: record.enabledTools) })
     return .init(sessionID: conversationID, workspaceID: deviceWorkspaceID,
       folderID: state.conversations[conversationID]?.folderID, enabled: enabled, nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) })
   }
@@ -50,6 +52,7 @@ extension CompanionModel {
       var command = try WovenMatterToolCommand(arguments)
       try context.authorize(command)
       guard target == "local" || target == "central" else { throw WorkspaceToolError.invalid("Choose local or central.") }
+      let target = command.group?.isAutomation == true ? "central" : target
       // --file is resolved solely against the caller's workspace before transport;
       // the central Mac never receives or reads an arbitrary device path.
       if let path = command.options["file"], let index = command.optionIndices["file"] {
@@ -61,7 +64,7 @@ extension CompanionModel {
       }
       let id = Self.deviceCLIRequestID(command.options["request-id"] ?? requestID)
       let request = WovenMatterToolRequest(arguments: arguments, requestID: id)
-      if command.isMutation, !command.wantsHelp {
+      if command.isMutation, !command.wantsHelp, command.group?.isAutomation != true {
         if target == "local" { try await store.reserveToolInvocation(request, context: context) }
         if command.group != .goals || ["set", "resume"].contains(command.action) {
         try await requireDeviceApproval(id: conversationID + ":cli:" + id, conversationID: conversationID,
@@ -70,11 +73,24 @@ extension CompanionModel {
         }
       }
       if target == "central", command.group == .goals { throw WorkspaceToolError.invalid("Goals belong to this session’s execution owner. Use the local target.") }
-      if target == "central" {
+      if command.wantsHelp {
+        response = .init(result: .object(["help": .string(WovenMatterToolCommand.help(for: command))]), requestID: id)
+      } else if target == "central" {
         guard let transport else { throw MobileConnectionError.offline }
         try await publishDeviceToolCaller(conversationID)
         try Task.checkCancellation()
-        response = try await transport.executeTool(.init(conversationID: conversationID, request: request, enabledGroups: context.enabled.sorted { $0.rawValue < $1.rawValue }))
+        let call = CompanionToolRequest(conversationID: conversationID, request: request, enabledGroups: context.enabled.sorted { $0.rawValue < $1.rawValue })
+        let automationGroup = command.group?.isAutomation == true && command.action == "call" ? command.group : nil
+        response = try await withTaskCancellationHandler {
+          try await transport.executeTool(call)
+        } onCancel: {
+          guard let group = automationGroup else { return }
+          // Accepted central work survives HTTP disconnection. Send scoped
+          // cancellation even if the local task stopped before admission.
+          let cancel = CompanionToolRequest(conversationID: conversationID,
+            request: .init(arguments: [group.rawValue, "cancel", "--id", id]), enabledGroups: [])
+          Task { _ = try? await transport.executeTool(cancel) }
+        }
       } else if command.group == .goals, !command.wantsHelp {
         let value: WorkspaceGoal?
         if command.action == "get" { value = executionRecords[conversationID]?.goalLedger?.goal }

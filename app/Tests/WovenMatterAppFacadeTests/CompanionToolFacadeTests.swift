@@ -43,7 +43,12 @@ struct CompanionToolFacadeTests {
             request(["calendar", "update", scheduledID, "--revision", String(scheduled.calendar.revision), "--title", "Denied change"]),
             request(["calendar", "copy", scheduledID, "--starts-at", "2026-12-02T12:00:00Z"])
         ]
-        if !remoteDenied { deniedCalls.append(request(["executor", "execute", "--code", "throw new Error('must not execute')"])) }
+        if !remoteDenied {
+            deniedCalls.append(request(["executor", "execute", "--code", "throw new Error('must not execute')"]))
+            for group in ["browser", "computer"] {
+                deniedCalls.append(request([group, "call", "--json", "{\"action\":\"screenshot\"}"]))
+            }
+        }
         for call in deniedCalls {
             do {
                 _ = try await fixture.model.companionCommands.executeTool(call, deviceID: fixture.device)
@@ -160,6 +165,43 @@ struct CompanionToolFacadeTests {
         #expect(await api.handle(.init(method: "POST", target: "/v1/tools", headers: headers,
             body: try JSONEncoder().encode(call))).status == 401)
         #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
+    @Test func automationUsesConfiguredWorkspaceAndCancellationSurvivesDisable() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        fixture.model.clientExecutionDirectory = fixture.directory
+        let caller = try await importPhone(fixture)
+        let request = CompanionToolRequest(conversationID: caller,
+            request: .init(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"]), enabledGroups: [.browser])
+        let response = try await fixture.model.companionCommands.executeTool(request, deviceID: fixture.device)
+        #expect(response.success && response.result?.objectValue?["content"] != nil, "\(response.error ?? "")")
+        #expect(fixture.model.automationHost != nil)
+        try await fixture.database.setSessionTools(.init(enabled: []), sessionID: caller)
+        let cancel = CompanionToolRequest(conversationID: caller,
+            request: .init(arguments: ["browser", "cancel", "--id", request.request.requestID]), enabledGroups: [])
+        #expect(try await fixture.model.companionCommands.executeTool(cancel, deviceID: fixture.device).success)
+        await #expect(throws: (any Error).self) {
+            _ = try await fixture.model.companionCommands.executeTool(cancel, deviceID: UUID().uuidString.lowercased())
+        }
+    }
+
+    @Test func companionToolRevocationFencesAutomationEvenAfterReenable() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        fixture.model.clientExecutionDirectory = fixture.directory
+        let caller = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Mac caller", ownerDeviceID: UUID())
+        try await fixture.database.setSessionTools(.init(enabled: [.browser, .computer]), sessionID: caller)
+        let call = WovenMatterToolRequest(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"])
+        let tools = try #require(fixture.model.agentTools)
+        #expect(await tools.handle(call, callerID: caller).success)
+        for enabled in [["browser"], ["browser", "computer"]] {
+            let command = CompanionCommand(deviceID: fixture.device, kind: .workspace,
+                workspaceAction: .sessionTools(id: caller, enabled: enabled, confirmPausingTimers: true))
+            #expect(try await fixture.model.companionCommands.execute(command, deviceID: fixture.device).status == .completed)
+        }
+        #expect(try await fixture.database.sessionTools(caller).enabled.contains(.computer))
+        await #expect(throws: (any Error).self) {
+            try await fixture.database.requireAutomationRequest(.browser, callerID: caller, requestID: call.requestID)
+        }
     }
 
     private func importPhone(_ fixture: FacadeFixture) async throws -> String {

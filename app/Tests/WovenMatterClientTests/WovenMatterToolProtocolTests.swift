@@ -4,6 +4,20 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct WovenMatterToolProtocolTests {
+  @Test func automationJSONAndScreenshotExportKeepAuthorityOnTheCaller() throws {
+    let command = try WovenMatterToolCommand(["browser", "call", "--json", "--image", "--request-id", "fixture"])
+    #expect(command.options["json"] == "--image")
+    #expect(throws: (any Error).self) { try WovenMatterToolCommand(["computer", "call", "--json", "{}", "--session", "other"]) }
+    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let bytes = Data("synthetic screenshot".utf8)
+    let response = WovenMatterToolResponse(result: .object(["content": .array([.object(["type": .string("image"), "mimeType": .string("image/jpeg"), "data": .string(bytes.base64EncodedString())])])]))
+    let exported = try WovenAutomationOutput.exportImage(response, to: file)
+    #expect(try Data(contentsOf: file) == bytes)
+    #expect(exported.result?.objectValue?["content"]?.arrayValue?.first?.objectValue?["type"]?.stringValue == "text")
+    #expect(throws: (any Error).self) { try WovenAutomationOutput.exportImage(response, to: file) }
+  }
+
   @Test func contextIsAReadWithoutCallerSelectedMessageOrNote() throws {
     let command = try WovenMatterToolCommand(["context"])
     #expect(command.action == "context" && !command.isMutation && !command.wantsHelp)

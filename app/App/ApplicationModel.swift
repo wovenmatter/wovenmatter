@@ -69,7 +69,7 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     let isLibraryClient: Bool
-    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel()
+    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel(assets: workspaceAssets)
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
@@ -180,6 +180,9 @@ final class ApplicationModel {
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
+    let workspaceAssets: WorkspaceAssetSession
+    @ObservationIgnored var clientExecutionDirectory: URL?
+    @ObservationIgnored var automationHost: WovenAutomationHost?
     var activeSessionLimitPresented = false
     var pendingSessionAccess: [WorkspaceCoordinationAccessRequest] = []
     var sessionAccessError: String?
@@ -374,8 +377,10 @@ final class ApplicationModel {
         dashboardStore: DashboardStore? = nil,
         startsAutomatically: Bool? = nil,
         ownsExecutionOverride: Bool? = nil,
-        localUsageService: LocalUsageService? = nil
+        localUsageService: LocalUsageService? = nil,
+        workspaceAssets: WorkspaceAssetSession? = nil
     ) {
+        self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
         self.isLibraryClient = LocalExecutionRole.current != .backend
             && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
@@ -515,6 +520,7 @@ final class ApplicationModel {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
+        clientExecutionDirectory = directory
         try await dashboardStore.prepareLocalWorkspace()
         await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
             await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
@@ -591,6 +597,11 @@ final class ApplicationModel {
         try await dashboardStore.setCLIConnectionProvider { [weak self] id in
             try await self?.sessionCLIConnection(id)
         }
+        agentTools?.automationHandler = { [weak self] caller, command, request in
+            guard let self else { throw CancellationError() }
+            return try await self.handleAutomationTool(callerID: caller, command: command, request: request)
+        }
+        agentTools?.automationDidDisable = { [weak self] caller in await self?.cancelAutomation(callerID: caller) }
         try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
     }
@@ -2396,6 +2407,7 @@ final class ApplicationModel {
     }
 
     private func stopBackendAgentDispatch(conversationID: String) async throws {
+        await cancelAutomation(callerID: conversationID)
         guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
         if (try await dashboardStore?.database.companionExecutionOwner(conversationID: conversationID)) != nil {
             let client = try centralExecutionClient()
@@ -3531,6 +3543,7 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        automationHost?.stop(); automationHost = nil
         executorRuntime.setupTask?.cancel()
         for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
         Task { await executorRuntime.client?.shutdown() }

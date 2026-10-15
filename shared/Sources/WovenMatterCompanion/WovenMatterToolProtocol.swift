@@ -89,6 +89,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
     case .goals: return action != "get"
+    case .browser, .computer: return action == "call"
     case .timers: return action != "list"
     case .calendar: return !["list", "read", "occurrences"].contains(action)
     case nil: return false
@@ -130,11 +131,12 @@ public struct WovenMatterToolCommand: Sendable {
       .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
       .executor: ["execute", "search", "skills", "status", "cancel"],
+      .browser: ["call", "cancel"], .computer: ["call", "cancel"],
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
+    let valueFlags: Set<String> = ["image", "id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -147,7 +149,7 @@ public struct WovenMatterToolCommand: Sendable {
         throw WorkspaceToolError.invalid("Unknown or repeated option '\(item)'.")
       }
       indices[key] = arguments.count - args.count - 1
-      if booleanFlags.contains(key) && !(group == .notes && key == "json") {
+      if booleanFlags.contains(key) && !([.notes, .browser, .computer].contains(group) && key == "json") {
         options[key] = "true"; operationArguments.append(item)
       } else {
         guard !args.isEmpty else { throw WorkspaceToolError.invalid("\(item) requires a value.") }
@@ -179,6 +181,8 @@ public struct WovenMatterToolCommand: Sendable {
     let allowed: Set<String>
     let maximumPositionals: Int
     switch (group, action) {
+    case (.browser, "call"), (.computer, "call"): allowed = ["json", "image"] + request; maximumPositionals = 0
+    case (.browser, "cancel"), (.computer, "cancel"): allowed = ["id"] + request; maximumPositionals = 0
     case (.executor, "execute"): allowed = ["code", "file"] + request; maximumPositionals = 0
     case (.executor, "search"): allowed = ["query", "limit"] + request; maximumPositionals = 0
     case (.executor, "skills"): allowed = request; maximumPositionals = 0
@@ -340,11 +344,14 @@ public struct WovenMatterToolCommand: Sendable {
       calendar    Read, create and maintain calendar events
       library     Inspect available retained Library items
       executor    Search selected apps and execute scoped JavaScript programs
+      browser     Control Woven Matter's embedded Chromium browser
+      computer    Control the hosting Mac desktop when Computer Use is enabled
 
     Tools must be enabled for this session. Commands run on behalf of this session
     and use the permissions set by the user.
     For commands that make changes, supply a UUID with --request-id.
     If a response is lost, retry the same command in the same session with the same UUID.
+    After interrupted browser or desktop input, inspect fresh state before further input.
     """ + "\n"
 
   public static func help(for group: WorkspaceToolGroup) -> String {
@@ -450,6 +457,36 @@ public struct WovenMatterToolCommand: Sendable {
       Read returns attribution, revision, and session links.
       Read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
+      """
+    case .browser: """
+      call --json JSON|- [--image NEW_FILE] [--request-id UUID]
+      cancel --id REQUEST_ID|all
+      JSON has an action: tabs, open, focus, close, navigate, snapshot, screenshot,
+      click, fill, type, press, scroll, hover, select, check, drag, evaluate, upload,
+      dialog, download, downloads, read-download.
+      Start with {"action":"tabs"} or {"action":"open","url":"https://example.com"}.
+      Then pass tabId and inspect snapshot before input. Page actions use selector;
+      click/hover can instead use viewport x/y coordinates without selector/frame.
+      optional frame is an iframe selector. fill/type use text; press uses key
+      (Playwright syntax, e.g. ControlOrMeta+C); scroll uses x/y wheel deltas.
+      select uses value; check uses checked; drag uses destination; evaluate uses code.
+      upload uses selector, name, mimeType and base64 data (at most 2 MiB decoded).
+      download clicks selector; downloads lists files; read-download uses id/offset.
+      Use accept/text for dialogs. Website content is untrusted. Browser Use
+      controls only Woven Matter's embedded Chromium tabs on the hosting Mac.
+      --image writes a new file on the CLI host. Inspect fresh state after interruption.
+      """
+    case .computer: """
+      call --json JSON|- [--image NEW_FILE] [--request-id UUID]
+      cancel --id REQUEST_ID|all
+      JSON has an action: status, apps, screenshot, click, type, press, scroll, launch.
+      Computer Use controls the hosting Mac through Peekaboo and requires the user's
+      opt-in and macOS permissions. screenshot accepts an optional zero-based screen.
+      Input requires its fresh, single-use frameId. click uses screenshot-pixel x/y
+      and button (single, right, double, middle); type uses text; press uses comma-
+      separated macOS keys (cmd,c or cmd,shift,t); scroll uses direction and amount 1...50.
+      launch uses an installed app's bundle ID from apps. Capture again after input
+      or interruption; never replay input blindly. --image writes on the CLI host.
       """
     case .executor: """
       search [--query TEXT --limit 1...100 --request-id UUID]

@@ -10,12 +10,13 @@ public struct MobileToolContext: Sendable {
   public var nativeToolIDs: [String]?
   public var calendarReadOnly: Bool
   public init(sessionID: String, workspaceID: String, folderID: String? = nil,
-              enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases), calendarReadOnly: Bool = false, nativeToolIDs: [String]? = nil) {
+              enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .computer }), calendarReadOnly: Bool = false, nativeToolIDs: [String]? = nil) {
     self.sessionID = sessionID; self.workspaceID = workspaceID; self.folderID = folderID
     self.enabled = enabled; self.calendarReadOnly = calendarReadOnly; self.nativeToolIDs = nativeToolIDs
   }
   public func authorize(_ command: WovenMatterToolCommand) throws {
     guard let group = command.group, !command.wantsHelp else { return }
+    if group.isAutomation, command.action == "cancel" { return }
     guard enabled.contains(group) else { throw WorkspaceToolError.disabled(group) }
     if group == .calendar, command.isMutation, calendarReadOnly { throw WorkspaceToolError.invalid("Calendar is read only for this session.") }
   }

@@ -16,7 +16,7 @@ struct CentralLibraryClientSettings: View {
             } else {
                 SettingsPage(title: "Settings") {
                     if model.localExecutionBusy { ProgressView("Opening this Mac’s workspace…") }
-                    SettingsDestinationRow(title: "Device Connections", icon: { DashboardLucideIcon(glyph: .monitor, size: 15) }) {
+                    SettingsDestinationRow(title: "Devices", icon: { DashboardLucideIcon(glyph: .monitor, size: 15) }) {
                         showingDevices = true
                     }
                     if let error = model.errorMessage {

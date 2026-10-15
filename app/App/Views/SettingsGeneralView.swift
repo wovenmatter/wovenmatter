@@ -37,12 +37,12 @@ struct SettingsGeneralView: View {
             credentialAccessCard
             appearanceCard
             sidebarLayoutCard
+            if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
+            dictationCard
+            conversationTitlesCard
             if showsBackgroundExecution { backgroundExecutionCard }
             idleSleepProtectionCard
             closedLidProtectionCard
-            dictationCard
-            conversationTitlesCard
-            if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()

@@ -169,6 +169,9 @@ extension CompanionCommandService {
             if current.enabled.contains(.executor) { ordinary.enabled.insert(.executor) }
             else { ordinary.enabled.remove(.executor) }
             try await store.database.setSessionTools(ordinary, sessionID: id, confirmedPausingTimers: confirmed)
+            if !current.enabled.intersection([.browser, .computer]).subtracting(requested.enabled).isEmpty {
+                await model.cancelAutomation(callerID: id)
+            }
             if current.enabled.contains(.executor) != requested.enabled.contains(.executor) {
                 try await tools.setEnabled(.executor, enabled: requested.enabled.contains(.executor), sessionID: id)
             }
