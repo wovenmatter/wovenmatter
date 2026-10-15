@@ -284,6 +284,7 @@ struct DashboardNewArtifactButton: View {
 struct DashboardRailRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
+    @State private var folderHoverTask: Task<Void, Never>?
     let icon: DashboardLucideGlyph
     var harnessLogo: DashboardHarnessLogo? = nil
     let title: String
@@ -310,6 +311,8 @@ struct DashboardRailRow: View {
     var onManageReferences: (() -> Void)? = nil
     var destructiveMenuTitle: String? = nil
     var onDelete: (() -> Void)? = nil
+    var folderDetails: DashboardFolderHoverDetails? = nil
+    var presentedFolderID: Binding<String?> = .constant(nil)
     let action: () -> Void
 
     private var hasContextMenu: Bool {
@@ -322,7 +325,10 @@ struct DashboardRailRow: View {
             isRunning: isRunningConversation,
             reduceMotion: reduceMotion
         )
-        Button(action: action) {
+        Button {
+            dismissFolderDetails()
+            action()
+        } label: {
             HStack(spacing: 8) {
                 Group {
                     if let harnessLogo {
@@ -365,6 +371,30 @@ struct DashboardRailRow: View {
         }
         .buttonStyle(DashboardRailButtonStyle())
         .dashboardScrollAwareHover($hovered, token: hoverID)
+        .accessibilityValue(folderDetails?.accessibilityValue ?? "")
+        .onChange(of: hovered) { _, isHovered in
+            folderHoverTask?.cancel()
+            if isHovered, let folderDetails {
+                folderHoverTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled, hovered, NSEvent.pressedMouseButtons == 0 else { return }
+                    presentedFolderID.wrappedValue = folderDetails.folder.id
+                }
+            } else {
+                dismissFolderDetails()
+            }
+        }
+        .background {
+            if let folderDetails {
+                DashboardConversationPopover(isPresented: Binding(
+                    get: { presentedFolderID.wrappedValue == folderDetails.folder.id },
+                    set: { if !$0 { dismissFolderDetails() } }
+                )) {
+                    DashboardFolderHoverCard(details: folderDetails)
+                }
+            }
+        }
+        .onDisappear { dismissFolderDetails() }
         .contextMenu {
             if hasContextMenu {
                 if let pinMenuTitle, let onTogglePin {
@@ -405,6 +435,13 @@ struct DashboardRailRow: View {
                     Button(destructiveMenuTitle, role: .destructive, action: onDelete)
                 }
             }
+        }
+    }
+    private func dismissFolderDetails() {
+        folderHoverTask?.cancel()
+        folderHoverTask = nil
+        if let folderDetails, presentedFolderID.wrappedValue == folderDetails.folder.id {
+            presentedFolderID.wrappedValue = nil
         }
     }
 }
@@ -939,3 +976,77 @@ func dashboardParsedDate(_ value: String) -> Date? {
 
 let dashboardFractionalDateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 let dashboardDateStyle = Date.ISO8601FormatStyle()
+
+struct DashboardFolderContentCounts: Equatable {
+    var chats = 0
+    var notes = 0
+    var total: Int { chats + notes }
+    var summary: String {
+        "\(chats) \(chats == 1 ? "chat" : "chats") · \(notes) \(notes == 1 ? "note" : "notes")"
+    }
+}
+
+struct DashboardFolderHoverDetails {
+    let folder: WorkspaceFolderRecord
+    let workspaceTitle: String
+    let counts: DashboardFolderContentCounts
+
+    var accessibilityValue: String {
+        ([workspaceTitle, counts.summary, "Root folder: " + (folder.rootPath ?? "Not linked")]
+            + folder.referencePaths.map { "Additional folder: " + $0 }).joined(separator: ", ")
+    }
+}
+
+struct DashboardFolderHoverCard: View {
+    let details: DashboardFolderHoverDetails
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(details.folder.name)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                DashboardLucideIcon(glyph: .panelsTopLeft, size: 13)
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                Text(details.workspaceTitle).font(.system(size: 12.5))
+            }
+            Text(details.counts.summary)
+                .font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Divider().opacity(0.35)
+            ViewThatFits(in: .vertical) {
+                paths
+                ScrollView { paths }
+                    .scrollIndicators(.never)
+            }
+            .frame(maxHeight: 280)
+        }
+        .foregroundStyle(DashboardPalette.foreground)
+        .padding(14)
+        .frame(width: 260, alignment: .leading)
+    }
+
+    private var paths: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Root folder").font(.system(size: 11.5, weight: .medium))
+            path(details.folder.rootPath ?? "Not linked")
+            if !details.folder.referencePaths.isEmpty {
+                Text(details.folder.referencePaths.count == 1 ? "Additional folder" : "Additional folders")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .padding(.top, 3)
+                ForEach(Array(details.folder.referencePaths.enumerated()), id: \.offset) { _, reference in
+                    path(reference)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func path(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 12.5))
+            .foregroundStyle(DashboardPalette.foreground.opacity(0.92))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}

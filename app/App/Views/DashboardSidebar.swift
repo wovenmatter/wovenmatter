@@ -284,8 +284,7 @@ struct DashboardSidebarNavigationPage: View {
     @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
 
-    @State private var agentsOpen = true
-    @State private var foldersOpen = true
+    @State private var presentedFolderID: String?
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
     @State private var showsNewFolderPopover = false
@@ -315,8 +314,8 @@ struct DashboardSidebarNavigationPage: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     topActions
-                    agentsSection
-                    foldersSection
+                    workspacesSection
+                    globalFolderActions
                     recentsSection
                 }
                 .padding(.horizontal, 8)
@@ -333,9 +332,9 @@ struct DashboardSidebarNavigationPage: View {
     private var railHeader: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Agents")
+                Text("Workspaces")
                     .font(.system(size: 13, weight: .semibold))
-                Text("\(agents.count) \(agents.count == 1 ? "agent" : "agents")")
+                Text("\(remoteWorkspaceLinks.count + 1) \(remoteWorkspaceLinks.isEmpty ? "workspace" : "workspaces")")
                 .font(.system(size: 11))
                 .foregroundStyle(DashboardPalette.foreground)
             }
@@ -363,7 +362,7 @@ struct DashboardSidebarNavigationPage: View {
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(DashboardIconButtonStyle())
-                .help(onMove == nil ? "Hide agents" : "Hide sidebar")
+                .help("Hide sidebar")
             }
         }
         .padding(.horizontal, 16)
@@ -429,91 +428,126 @@ struct DashboardSidebarNavigationPage: View {
         .padding(.bottom, 10)
     }
 
-    private var agentsSection: some View {
-        let pinOrder = pinnedAgentOrder
-        let pinIDs = pinnedAgentIDs
-        return VStack(alignment: .leading, spacing: 0) {
-            DashboardDisclosureHeading(title: "Agents", expanded: agentsOpen) { agentsOpen.toggle() }
-            if agentsOpen {
-                let pinnedAgents = groupAgents(in: .pinned, pinIDs: pinIDs, pinOrder: pinOrder)
-                if !pinnedAgents.isEmpty {
-                    ForEach(pinnedAgents) { agent in
-                        agentRow(
-                            agent,
-                            moveScope: .pinned,
-                            groupAgents: pinnedAgents,
-                            isPinned: true
-                        )
+    private var workspacesSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showsLocalWorkspace {
+                let key = DashboardAgentDisclosureKey.localWorkspace
+                agentDisclosureHeading(title: "Local agent workspace", key: key)
+                if agentSectionExpanded(key) {
+                    workspaceContents(
+                        key: key,
+                        title: "Local agent workspace",
+                        workspaceAgents: agents.filter { $0.bucket == .localCLIAgents },
+                        workspaceFolders: localExecutionWorkspaceID.map { owner in
+                            folders.filter { $0.executionWorkspaceID == owner }
+                        } ?? []
+                    )
+                }
+            }
+            if showsRemoteWorkspaces {
+                let key = DashboardAgentDisclosureKey.remoteWorkspaces
+                agentDisclosureHeading(title: "Remote agent workspaces", key: key)
+                if agentSectionExpanded(key) {
+                    if remoteWorkspaceLinks.isEmpty {
+                        agentEmptyLabel("No remote workspaces yet")
+                    }
+                    ForEach(remoteWorkspaceLinks) { workspace in
+                        remoteWorkspaceSection(workspace)
                     }
                 }
-
-                if showsLocalWorkspace {
-                    // Direct local agent workspace
-                    let workspaceAgents = groupAgents(
-                        in: .localWorkspace,
-                        pinIDs: pinIDs,
-                        pinOrder: pinOrder
+            }
+            // Keep folders from disconnected/deleted configurations and legacy
+            // unassigned folders reachable without claiming they belong to this Mac.
+            ForEach(unavailableFolderOwnerIDs, id: \.self) { ownerID in
+                let key = "unavailable-workspace:" + ownerID
+                let title = ownerID.isEmpty ? "Unassigned workspace" : "Unavailable workspace"
+                agentDisclosureHeading(title: title, key: key)
+                if agentSectionExpanded(key) {
+                    workspaceContents(
+                        key: key,
+                        title: title, workspaceAgents: [],
+                        workspaceFolders: folders.filter { ($0.executionWorkspaceID ?? "") == ownerID }
                     )
-                    agentDisclosureHeading(
-                        title: DashboardAgentSidebarGroup.localWorkspace.title,
-                        key: DashboardAgentDisclosureKey.localWorkspace
-                    )
-                    if agentSectionExpanded(DashboardAgentDisclosureKey.localWorkspace) {
-                        if workspaceAgents.isEmpty {
-                            agentEmptyLabel("None on this Mac")
-                        } else {
-                            ForEach(workspaceAgents) { agent in
-                                agentRow(
-                                    agent,
-                                    moveScope: .stored(
-                                        DashboardAgentSidebarGroup.localWorkspace.orderKey
-                                    ),
-                                    groupAgents: workspaceAgents,
-                                    isPinned: false
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if showsRemoteWorkspaces {
-                    agentDisclosureHeading(
-                        title: DashboardAgentSidebarGroup.remoteWorkspaces.title,
-                        key: DashboardAgentDisclosureKey.remoteWorkspaces
-                    )
-                    if agentSectionExpanded(DashboardAgentDisclosureKey.remoteWorkspaces) {
-                        if remoteWorkspaceLinks.isEmpty {
-                            agentEmptyLabel("No remote workspaces yet")
-                        } else {
-                            ForEach(remoteWorkspaceLinks) { workspace in
-                                remoteWorkspaceSection(workspace)
-                            }
-                        }
-                    }
                 }
             }
         }
     }
 
-    private func groupAgents(
-        in group: DashboardAgentSidebarGroup,
-        pinIDs: Set<UUID>,
-        pinOrder: [UUID]
-    ) -> [WorkspaceAgent] {
-        let customOrder: [UUID]
-        switch group {
-        case .pinned:
-            customOrder = pinOrder
-        case .localWorkspace, .remoteWorkspaces:
-            customOrder = DashboardAgentOrderStore.order(for: group, in: agentOrderRaw)
-        }
-        return DashboardAgentSidebarGroup.agents(
-            from: agents,
-            in: group,
-            pinnedIDs: pinIDs,
-            pinOrder: pinOrder,
-            customOrder: customOrder
+    private var unavailableFolderOwnerIDs: [String] {
+        let known = Set(remoteWorkspaceLinks.map { "remote:" + $0.id.uuidString.lowercased() }
+            + [localExecutionWorkspaceID].compactMap { $0 })
+        return Set(folders.map { $0.executionWorkspaceID ?? "" }).subtracting(known).sorted()
+    }
+
+    @ViewBuilder
+    private func workspaceContents(
+        key: String,
+        title: String,
+        workspaceAgents: [WorkspaceAgent],
+        workspaceFolders: [WorkspaceFolderRecord],
+        remoteWorkspace: DashboardRemoteWorkspaceSidebarLink? = nil
+    ) -> some View {
+        let sections = DashboardFolderSections(folders: workspaceFolders)
+        let counts = folderContentCounts
+        let pinned = DashboardAgentSidebarGroup.applyOrder(
+            workspaceAgents.filter { pinnedAgentIDs.contains($0.id) }, preferred: pinnedAgentOrder
         )
+        let regular = DashboardAgentSidebarGroup.agents(
+            from: workspaceAgents,
+            in: remoteWorkspace == nil ? .localWorkspace : .remoteWorkspaces,
+            pinnedIDs: pinnedAgentIDs,
+            customOrder: DashboardAgentOrderStore.order(
+                forKey: remoteWorkspace == nil ? DashboardAgentSidebarGroup.localWorkspace.orderKey : key,
+                in: agentOrderRaw
+            )
+        )
+        VStack(alignment: .leading, spacing: 0) {
+            agentDisclosureHeading(title: "Pinned", key: key + ":pinned")
+            if agentSectionExpanded(key + ":pinned") {
+                if pinned.isEmpty && sections.pinned.isEmpty {
+                    agentEmptyLabel("No pinned items")
+                }
+                ForEach(pinned) { agent in
+                    agentRow(agent, moveScope: .pinned, groupAgents: pinned, isPinned: true)
+                }
+                ForEach(sections.pinned) { folder in
+                    folderRow(folder, sectionFolders: sections.pinned,
+                              counts: counts[folder.id, default: .init()], workspaceTitle: title)
+                }
+            }
+            agentDisclosureHeading(title: "Agents", key: key + ":agents")
+            if agentSectionExpanded(key + ":agents") {
+                ForEach(regular) { agent in
+                    agentRow(agent, moveScope: .stored(remoteWorkspace == nil
+                        ? DashboardAgentSidebarGroup.localWorkspace.orderKey : key),
+                        groupAgents: regular, isPinned: false)
+                }
+                if let remoteWorkspace {
+                    let pendingTargets = remoteWorkspace.readyTargets.filter { remoteAgent(for: $0) == nil }
+                    ForEach(pendingTargets) { target in
+                        remoteTargetRow(target)
+                    }
+                    if regular.isEmpty && pendingTargets.isEmpty {
+                        agentEmptyLabel(pinned.isEmpty
+                            ? remoteWorkspaceEmptyLabel(remoteWorkspace, hasPinnedReadyAgent: false)
+                            : "Agents are pinned above")
+                    }
+                } else if regular.isEmpty {
+                    agentEmptyLabel(pinned.isEmpty ? "No agents" : "Agents are pinned above")
+                }
+            }
+            agentDisclosureHeading(title: "Folders", key: key + ":folders")
+            if agentSectionExpanded(key + ":folders") {
+                if sections.unpinned.isEmpty {
+                    agentEmptyLabel(sections.pinned.isEmpty ? "No folders" : "Folders are pinned above")
+                }
+                ForEach(sections.unpinned) { folder in
+                    folderRow(folder, sectionFolders: sections.unpinned,
+                              counts: counts[folder.id, default: .init()], workspaceTitle: title)
+                }
+            }
+        }
+        .padding(.leading, 8)
     }
 
     private func agentSectionExpanded(_ key: String) -> Bool {
@@ -539,51 +573,38 @@ struct DashboardSidebarNavigationPage: View {
         _ workspace: DashboardRemoteWorkspaceSidebarLink
     ) -> some View {
         let key = DashboardAgentDisclosureKey.workspace(workspace.id)
-        let visibleTargets = workspace.readyTargets.filter { target in
-            guard let agent = remoteAgent(for: target) else { return true }
-            return !pinnedAgentIDs.contains(agent.id)
-        }
-        agentDisclosureHeading(
-            title: workspace.configuration.name,
-            key: key,
-            level: 1
-        )
+        let ownerID = "remote:" + workspace.id.uuidString.lowercased()
+        // Remote workspace names deliberately align with the local heading.
+        agentDisclosureHeading(title: workspace.configuration.name, key: key)
         if agentSectionExpanded(key) {
-            if visibleTargets.isEmpty {
-                agentEmptyLabel(
-                    remoteWorkspaceEmptyLabel(
-                        workspace,
-                        hasPinnedReadyAgent: !workspace.readyTargets.isEmpty
-                    ),
-                    level: 2
-                )
-            } else {
-                ForEach(visibleTargets) { target in
-                    let agent = remoteAgent(for: target)
-                    HStack(spacing: 0) {
-                        DashboardRailRow(
-                            icon: .container,
-                            harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
-                            title: target.harness.presentationName,
-                            hoverID: "remote-harness:\(target.id)",
-                            selected: agent.map {
-                                destination == .workspace && selectedAgentID == $0.id
-                            } ?? false
-                        ) {
-                            if let agent {
-                                onSelectAgent(agent.id)
-                            } else {
-                                onSelectRemoteAgent(target)
-                            }
-                        }
-                        newChatButton(label: "New chat with \(target.harness.presentationName) in \(workspace.configuration.name)") {
-                            onStartRemoteChat(target)
-                        }
-                        .disabled(!canCreateChat(workspaceID: "remote:" + target.configuration.id.uuidString.lowercased()))
-                    }
-                    .padding(.leading, 16)
-                }
+            workspaceContents(
+                key: key, title: workspace.configuration.name,
+                workspaceAgents: agents.filter { agent in
+                    agent.governingPlane == .remoteWorkspace && agent.runtimeDeviceID == workspace.id
+                        && (pinnedAgentIDs.contains(agent.id) || workspace.readyTargets.contains { target in
+                            target.harness.id == agent.runtimeKind
+                        })
+                },
+                workspaceFolders: folders.filter { $0.executionWorkspaceID == ownerID },
+                remoteWorkspace: workspace
+            )
+        }
+    }
+
+    private func remoteTargetRow(_ target: RemoteHarnessChatTarget) -> some View {
+        HStack(spacing: 0) {
+            DashboardRailRow(
+                icon: .container,
+                harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
+                title: target.harness.presentationName,
+                hoverID: "remote-harness:\(target.id)"
+            ) {
+                onSelectRemoteAgent(target)
             }
+            newChatButton(label: "New chat with \(target.harness.presentationName) in \(target.configuration.name)") {
+                onStartRemoteChat(target)
+            }
+            .disabled(!canCreateChat(workspaceID: "remote:" + target.configuration.id.uuidString.lowercased()))
         }
     }
 
@@ -728,65 +749,41 @@ struct DashboardSidebarNavigationPage: View {
         }
     }
 
-    private var foldersSection: some View {
-        let itemCounts = folderItemCounts
-        let sections = DashboardFolderSections(folders: folders)
-        return VStack(alignment: .leading, spacing: 0) {
-            DashboardDisclosureHeading(title: "Folders", expanded: foldersOpen) { foldersOpen.toggle() }
-                .padding(.top, 8)
-            if foldersOpen {
-                DashboardRailRow(icon: .plus, title: "New folder", hoverID: "folder:create") {
-                    showsNewFolderPopover = true
-                }
-                .popover(isPresented: $showsNewFolderPopover, arrowEdge: .trailing) {
-                    DashboardNewFolderPopover(
-                        remoteWorkspaces: remoteWorkspaces,
-                        localWorkspaceReady: localWorkspaceReady,
-                        onCancel: { showsNewFolderPopover = false },
-                        onCreate: { name, workspaceID, externalRoot in
-                            showsNewFolderPopover = false
-                            onCreateFolder(name, workspaceID, externalRoot)
-                        }
-                    )
-                }
-                HStack(spacing: 0) {
-                    DashboardRailRow(
-                        icon: .folderOpen,
-                        title: "All Workspaces",
-                        hoverID: "folder:all",
-                        selected: selectedFolderID == nil
-                    ) { onSelectFolder(nil) }
-                    newChatButton(label: "New chat in All Workspaces") { onCreateChatInFolder(nil) }
-                }
-                ForEach(sections.pinned) { folder in
-                    folderRow(
-                        folder,
-                        sectionFolders: sections.pinned,
-                        itemCount: itemCounts[folder.id, default: 0]
-                    )
-                }
-                ForEach(sections.unpinned) { folder in
-                    folderRow(
-                        folder,
-                        sectionFolders: sections.unpinned,
-                        itemCount: itemCounts[folder.id, default: 0]
-                    )
-                }
+    private var globalFolderActions: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DashboardRailRow(icon: .plus, title: "New folder", hoverID: "folder:create") {
+                showsNewFolderPopover = true
+            }
+            .popover(isPresented: $showsNewFolderPopover, arrowEdge: .trailing) {
+                DashboardNewFolderPopover(
+                    remoteWorkspaces: remoteWorkspaces,
+                    localWorkspaceReady: localWorkspaceReady,
+                    onCancel: { showsNewFolderPopover = false },
+                    onCreate: { name, workspaceID, externalRoot in
+                        showsNewFolderPopover = false
+                        onCreateFolder(name, workspaceID, externalRoot)
+                    }
+                )
+            }
+            HStack(spacing: 0) {
                 DashboardRailRow(
-                    icon: .trash,
-                    title: "Trash",
-                    hoverID: "folder:trash"
-                ) {
-                    onShowTrash()
-                }
+                    icon: .folderOpen, title: "All Workspaces", hoverID: "folder:all",
+                    selected: selectedFolderID == nil
+                ) { onSelectFolder(nil) }
+                newChatButton(label: "New chat in All Workspaces") { onCreateChatInFolder(nil) }
+            }
+            DashboardRailRow(icon: .trash, title: "Trash", hoverID: "folder:trash") {
+                onShowTrash()
             }
         }
+        .padding(.top, 8)
     }
 
     private func folderRow(
         _ folder: WorkspaceFolderRecord,
         sectionFolders: [WorkspaceFolderRecord],
-        itemCount: Int
+        counts: DashboardFolderContentCounts,
+        workspaceTitle: String
     ) -> some View {
         let index = sectionFolders.firstIndex(where: { $0.id == folder.id })
         let canMoveUp = index.map { $0 > 0 } ?? false
@@ -796,7 +793,7 @@ struct DashboardSidebarNavigationPage: View {
                 icon: .folder,
                 title: folder.name,
                 hoverID: "folder:\(folder.id)",
-                trailing: "\(itemCount)",
+                trailing: "\(counts.total)",
                 showsPin: folder.isPinned,
                 selected: selectedFolderID == folder.id,
                 pinMenuTitle: folder.isPinned ? "Unpin" : "Pin",
@@ -817,7 +814,11 @@ struct DashboardSidebarNavigationPage: View {
                 referenceMenuTitle: "Reference locations…",
                 onManageReferences: { editingReferenceFolderID = folder.id },
                 destructiveMenuTitle: "Remove folder…",
-                onDelete: { deletingFolder = folder }
+                onDelete: { deletingFolder = folder },
+                folderDetails: DashboardFolderHoverDetails(
+                    folder: folder, workspaceTitle: workspaceTitle, counts: counts
+                ),
+                presentedFolderID: $presentedFolderID
             ) {
                 onSelectFolder(folder.id)
             }
@@ -939,16 +940,16 @@ struct DashboardSidebarNavigationPage: View {
         }
     }
 
-    private var folderItemCounts: [String: Int] {
-        var counts: [String: Int] = [:]
-        for conversation in conversations {
+    private var folderContentCounts: [String: DashboardFolderContentCounts] {
+        var counts: [String: DashboardFolderContentCounts] = [:]
+        for conversation in conversations where !conversation.isArchived {
             if let folderID = conversation.folderID {
-                counts[folderID, default: 0] += 1
+                counts[folderID, default: .init()].chats += 1
             }
         }
         for note in notes {
             if let folderID = note.folderID {
-                counts[folderID, default: 0] += 1
+                counts[folderID, default: .init()].notes += 1
             }
         }
         return counts
@@ -1970,7 +1971,7 @@ enum DashboardReadFilter: String, Hashable, Sendable {
 struct DashboardConversationListMeta: Equatable, Sendable {
     let agentLabel: String
     let folderLabel: String
-    /// Product location bucket, e.g. "Local workspace agents".
+    /// Product location bucket, e.g. "Local agent workspace".
     let locationLabel: String
     let locationKind: DashboardConversationLocationKind
     /// Runtime product name when known, e.g. "Codex", "Claude Code".
@@ -1995,7 +1996,7 @@ struct DashboardConversationListMeta: Equatable, Sendable {
             runtimeKind = agent.runtimeKind
         } else if let runtime = conversation.localRuntimeKind {
             agentLabel = runtime.displayName
-            locationLabel = AgentBucket.localCLIAgents.label
+            locationLabel = DashboardConversationLocationKind.workspaceAgent.label
             locationKind = .workspaceAgent
             runtimeLabel = runtime.displayName
             runtimeKind = runtime
@@ -2003,7 +2004,7 @@ struct DashboardConversationListMeta: Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !codename.isEmpty {
             agentLabel = codename
-            locationLabel = "Local workspace agents"
+            locationLabel = "Local agent workspace"
             locationKind = .workspaceAgent
             runtimeLabel = nil
             runtimeKind = nil
@@ -2051,7 +2052,7 @@ enum DashboardConversationLocationKind: Equatable, Sendable {
     var label: String {
         switch self {
         case .workspaceAgent:
-            AgentBucket.localCLIAgents.label
+            "Local agent workspace"
         case .remoteWorkspace:
             "Remote workspace"
         }
