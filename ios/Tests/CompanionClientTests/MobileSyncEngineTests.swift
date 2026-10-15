@@ -2,7 +2,26 @@ import XCTest
 @testable import CompanionClient
 import WovenMatterCompanion
 
-private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport {
+private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport, ProductAnalyticsTransport {
+  var analyticsGate: CheckedContinuation<Void, Never>?
+  var holdAnalytics = false
+  var analyticsWaiting = false
+  func pauseAnalytics() { holdAnalytics = true }
+  func releaseAnalytics() { holdAnalytics = false; analyticsGate?.resume(); analyticsGate = nil }
+  func analyticsPreference() async throws -> ProductAnalyticsPreference {
+    if holdAnalytics {
+      analyticsWaiting = true
+      await withCheckedContinuation { analyticsGate = $0 }
+    }
+    throw MobileConnectionError.offline
+  }
+  func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) throws -> ProductAnalyticsPreference {
+    throw MobileConnectionError.offline
+  }
+  func sendAnalytics(_ batch: ProductAnalyticsBatch) throws -> ProductAnalyticsAcknowledgement {
+    throw MobileConnectionError.offline
+  }
+
   var workspace = "mac-a"
   var refusedFolderIDs = Set<String>()
   var failArtifacts = false
@@ -121,6 +140,24 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
 }
 
 final class MobileSyncEngineTests: XCTestCase {
+  func testAnalyticsCannotBlockContentSynchronization() async throws {
+    let path = file()
+    defer { try? FileManager.default.removeItem(at: path.deletingLastPathComponent()) }
+    let store = try MobileStore(file: path)
+    let note = try await store.createNote(folderID: nil, title: "Offline note", content: content("writing"))
+    let mac = FakeMac()
+    await mac.pauseAnalytics()
+    let engine = MobileSyncEngine(store: store, transport: mac)
+    let finished = expectation(description: "Content sync completes while analytics is suspended")
+    let sync = Task { try await engine.synchronize(); finished.fulfill() }
+    await fulfillment(of: [finished], timeout: 5)
+    let remoteNote = await mac.notes[note.id]
+    XCTAssertNotNil(remoteNote)
+    await mac.releaseAnalytics()
+    try await sync.value
+    await engine.cancelSynchronization()
+  }
+
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 

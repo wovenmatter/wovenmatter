@@ -4285,7 +4285,7 @@ extension ApplicationModel {
             }
             if request.method == "analytics.setPreference" {
                 let change = try JSONDecoder().decode(ProductAnalyticsPreferenceChange.self, from: request.payload)
-                return .init(id: request.id, result: try JSONEncoder().encode(await analytics.change(change)))
+                return .init(id: request.id, result: try JSONEncoder().encode(await setProductAnalyticsPreference(change)))
             }
             if request.method == "analytics.events" {
                 let batch = try JSONDecoder().decode(ProductAnalyticsBatch.self, from: request.payload)
@@ -4363,6 +4363,13 @@ extension ApplicationModel {
             guard let service = backendApplicationService else { throw BackendRPCError.remote("The background service is starting.") }
             return await service.handle(request)
         } catch { return .init(id: request.id, error: error.localizedDescription) }
+    }
+
+    func setProductAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference {
+        let preference = try await analytics.change(change)
+        // Wake connected frontends even when there is no workspace/content change.
+        await backendApplicationService?.invalidations.publish(scopes: [.settings])
+        return preference
     }
 
     private func backendApplicationState() -> BackendApplicationState {
@@ -4516,6 +4523,7 @@ extension ApplicationModel {
                         if change.requiresReload || change.scopes.contains(.settings) {
                             try await self.refreshBackendConnectionsState()
                             try await self.refreshBackendSurfaceProfile()
+                            await self.analytics.refresh()
                         }
                         if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
                         if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }

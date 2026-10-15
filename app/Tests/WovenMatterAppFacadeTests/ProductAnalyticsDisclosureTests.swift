@@ -7,6 +7,27 @@ import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 struct ProductAnalyticsDisclosureTests {
+    @Test @MainActor func remoteReenableResumesFrontendCollection() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let db = try await WorkspaceDatabase(url: directory.appending(path: "library.sqlite"))
+        let domain = "wovenmatter.analytics.test." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let model = ProductAnalyticsModel(defaults: defaults)
+        model.configure(database: db, publisher: false)
+        await model.openInterface()
+        await model.setEnabled(true, disclose: true)
+        await model.setEnabled(false)
+        let off = try await db.productAnalyticsPreference()
+        _ = try await db.setProductAnalyticsPreference(.init(enabled: true, expectedRevision: off.revision))
+        await model.refresh()
+        #expect(model.enabled)
+        await model.record(.messageSubmitted)
+        #expect(try await db.productAnalyticsLog().map(\.event.name) == [.messageSubmitted])
+    }
+
     @Test @MainActor func secondaryMacUpdatesUseTheCentralLibraryAndRespectOfflineOptOut() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

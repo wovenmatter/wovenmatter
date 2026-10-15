@@ -3,6 +3,11 @@ on:
   schedule:
     - cron: '17 5 * * *'
   workflow_dispatch:
+    inputs:
+      bootstrap_history:
+        description: Complete history JSON for initial setup or recovery when no retained archive exists
+        required: false
+        type: string
 permissions:
   contents: read
   actions: read
@@ -20,19 +25,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ANALYTICS_REPOSITORY: ${{ github.repository }}
-        run: |
-          mkdir -p analytics-history
-          previous=$(gh api "repos/$ANALYTICS_REPOSITORY/actions/artifacts?name=analytics-history&per_page=100" --jq '[.artifacts[] | select(.expired == false)] | first | .id // empty')
-          if [ -n "$previous" ]; then
-            gh api "repos/$ANALYTICS_REPOSITORY/actions/artifacts/$previous/zip" > "$RUNNER_TEMP/analytics-history.zip"
-            python3 - <<'PYTHON'
-          import os, zipfile
-          from pathlib import Path
-          archive = zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'analytics-history.zip')
-          Path('analytics-history/history.json').write_bytes(archive.read('history.json'))
-          PYTHON
-          fi
+          ANALYTICS_BOOTSTRAP_HISTORY: ${{ inputs.bootstrap_history }}
+        run: python3 scripts/restore-github-analytics.py --repository "$ANALYTICS_REPOSITORY" --output analytics-history/history.json
       - name: Collect aggregate traffic and downloads
+        id: collection
         env:
           GH_TOKEN: ${{ secrets.ANALYTICS_GITHUB_TOKEN }}
           ANALYTICS_REPOSITORY: ${{ github.repository }}
@@ -48,7 +44,7 @@ jobs:
           POSTHOG_PROJECT_TOKEN: phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh
         run: python3 scripts/publish-github-analytics.py --history analytics-history/history.json
       - name: Preserve complete rolling history
-        if: ${{ always() && hashFiles('analytics-history/history.json') != '' }}
+        if: ${{ always() && steps.collection.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: analytics-history

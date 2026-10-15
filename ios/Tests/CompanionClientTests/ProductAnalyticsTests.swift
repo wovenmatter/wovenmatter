@@ -5,6 +5,46 @@ import WovenMatterCompanion
 @testable import CompanionClient
 
 @Suite("Client analytics privacy") struct ProductAnalyticsClientTests {
+  @Test("cancelling an old connection prevents its delayed preference from applying")
+  func cancelledPreference() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let store = try MobileProductAnalytics(file: file)
+    let old = ProductAnalyticsPreference(analyticsID: UUID().uuidString,
+      disclosedAt: Date().addingTimeInterval(-60))
+    let fixture = AnalyticsFixture(preference: old)
+    await fixture.pauseNextPreferenceRead()
+    let synchronization = Task { try await store.synchronize(using: fixture) }
+    await fixture.waitForRead()
+    synchronization.cancel()
+    let new = ProductAnalyticsPreference(analyticsID: UUID().uuidString, enabled: false)
+    try await store.apply(new)
+    await fixture.finishRead()
+    do { try await synchronization.value; Issue.record("Cancelled telemetry resumed") }
+    catch is CancellationError { }
+    #expect(await store.snapshot().preference == new)
+  }
+
+  @Test("delayed preferences cannot restore an older privacy epoch")
+  func outOfOrderPreference() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let store = try MobileProductAnalytics(file: file)
+    let old = ProductAnalyticsPreference(analyticsID: UUID().uuidString,
+      disclosedAt: Date().addingTimeInterval(-60))
+    try await store.apply(old)
+    try await store.disclose(enabled: true)
+    try await store.synchronize(using: AnalyticsFixture(preference: old))
+    var off = old
+    off.enabled = false
+    off.revision += 1
+    try await store.apply(off)
+    try await store.apply(old)
+    try await store.record(.messageSubmitted, platform: "ios")
+    #expect(await store.snapshot().preference == off)
+    #expect(await store.snapshot().events.isEmpty)
+  }
+
   @Test("background refresh never counts an open; repeated interface calls count once")
   @MainActor func openingRequiresInterface() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -140,7 +180,16 @@ private actor AnalyticsFixture: ProductAnalyticsTransport {
     waiting = nil
   }
   init(preference: ProductAnalyticsPreference) { self.preference = preference }
-  func analyticsPreference() -> ProductAnalyticsPreference { preference }
+  private var pauseRead = false
+  private var readWaiter: CheckedContinuation<Void, Never>?
+  func pauseNextPreferenceRead() { pauseRead = true }
+  func waitForRead() async { while readWaiter == nil { await Task.yield() } }
+  func finishRead() { pauseRead = false; readWaiter?.resume(); readWaiter = nil }
+  func analyticsPreference() async -> ProductAnalyticsPreference {
+    let captured = preference
+    if pauseRead { await withCheckedContinuation { readWaiter = $0 } }
+    return captured
+  }
   func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async
     -> ProductAnalyticsPreference
   {

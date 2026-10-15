@@ -83,7 +83,8 @@ It consumes rejected events so clients do not replay disabled-period activity.
 Queues are bounded to 1,000 events, and events older than seven days cannot be
 uploaded. Inspectable logs show up to 500 records and the exact pre-enrichment
 PostHog event payload. Client logs distinguish central acceptance from PostHog
-delivery. Changes to a library identity discard the old local queue.
+delivery. Companion telemetry runs separately from content synchronization; slow
+or unsupported analytics endpoints do not delay the content lanes. Changes to a library identity discard the old local queue.
 
 Metadata is a strict allowlist: app version, OS major version, platform, coarse
 item category/action, known harness/provider categories, bounded outcome, duration,
@@ -175,7 +176,19 @@ The daily `Analytics history` workflow restores the full previous artifact and
 uploads a complete successor, so the artifact's 90-day retention does not trim
 rows from the history while daily collection continues. Download durable backups
 periodically: an outage longer than artifact retention can lose the latest archive.
-The workflow fails visibly if its credential or prior archive cannot be read.
+The workflow fails visibly if its credential or prior archive cannot be read,
+including when every prior artifact has expired. It restores only main-branch
+archives from this workflow, and never silently starts an empty history. Only a
+successful new collection renews the archive, so repeated credential/API failures
+do not make stale data appear newly collected.
+
+For the first manual run (or recovery after artifact expiry), pass the **complete**
+existing `history.json` as the `bootstrap_history` dispatch input. Preserve the
+local bootstrap archive and its PostHog checkpoints; do not substitute a fresh
+snapshot, which would lose older traffic and deleted-asset counters. The input is
+ignored when a valid retained archive exists. GitHub dispatch payloads are bounded;
+if the complete backup exceeds that limit, stop and arrange an artifact-based
+migration rather than truncating the backup.
 If PostHog publication fails, the complete history and acknowledged checkpoints
 are still uploaded as an artifact so the next run can retry.
 Artifact access follows repository Actions permissions; only aggregate counts

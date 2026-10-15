@@ -8,6 +8,21 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CompanionFacadeTests {
+    @Test func analyticsPreferenceChangesWakeConnectedMacSettings() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let backend = BackendApplicationService(model: fixture.model)
+        fixture.model.backendApplicationService = backend
+        defer { fixture.model.backendApplicationService = nil }
+        fixture.model.analytics.configure(database: fixture.database, publisher: false)
+        let cursor = await backend.invalidations.changes(after: nil).cursor
+        let service = CompanionCommandService(model: fixture.model)
+        let preference = try await service.analyticsPreference()
+        _ = try await service.setAnalyticsPreference(.init(enabled: false, expectedRevision: preference.revision))
+        let changes = await backend.invalidations.changes(after: cursor)
+        #expect(changes.scopes.contains(.settings))
+        #expect(try await service.analyticsPreference().enabled == false)
+    }
+
     @Test(arguments: ["local", "remote"])
     func executionPolicyCoversCentralCommandRoutesAndKeepsLibraryActionsShared(route: String) async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }

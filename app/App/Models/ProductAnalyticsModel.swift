@@ -29,6 +29,7 @@ final class ProductAnalyticsModel {
   private var opened = false
   private var interface = false
   private var locallyDisabled = false
+  private var pendingLocalChoice = false
   var enabled: Bool { !locallyDisabled && (preference?.enabled ?? true) }
   private var disclosureKey: String? {
     preference.map { "wovenmatter.analytics.disclosed." + $0.analyticsID }
@@ -78,6 +79,7 @@ final class ProductAnalyticsModel {
     }
   }
   func refresh() async {
+    let epoch = generation
     do {
       if let client {
         let state = await client.snapshot()
@@ -86,23 +88,35 @@ final class ProductAnalyticsModel {
         preference = state.preference
         log = Array(state.log.reversed())
       } else if let rpc {
-        preference = try JSONDecoder().decode(
+        let current = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
           from: await rpc.call(method: "analytics.preference", payload: Data()))
+        guard acceptPreference(current, epoch: epoch) else { return }
+        if !pendingLocalChoice { locallyDisabled = !current.enabled }
         log = try JSONDecoder().decode(
           [ProductAnalyticsLogEntry].self,
           from: await rpc.call(method: "analytics.log", payload: Data()))
       } else if let database {
-        preference = try await database.productAnalyticsPreference()
+        let current = try await database.productAnalyticsPreference()
+        guard acceptPreference(current, epoch: epoch) else { return }
+        if !pendingLocalChoice { locallyDisabled = !current.enabled }
         log = try await database.productAnalyticsLog()
       }
       await confirmUpdateInstallation()
     } catch { errorMessage = "Analytics settings are temporarily unavailable." }
   }
+  private func acceptPreference(_ current: ProductAnalyticsPreference, epoch: Int) -> Bool {
+    guard epoch == generation else { return false }
+    if let previous = preference, previous.analyticsID == current.analyticsID,
+      previous.revision > current.revision { return false }
+    preference = current
+    return true
+  }
   func setEnabled(_ enabled: Bool, disclose: Bool = false) async {
     generation += 1
     let effectiveEnabled = disclose && enabled ? (preference?.enabled ?? true) : enabled
     let epoch = generation
+    pendingLocalChoice = true
     locallyDisabled = !effectiveEnabled
     if !effectiveEnabled {
       defaults.removeObject(forKey: Self.updateReceiptKey)
@@ -127,6 +141,7 @@ final class ProductAnalyticsModel {
         return
       }
       guard epoch == generation else { return }
+      pendingLocalChoice = false
       self.preference = updated
       if disclose, let key = disclosureKey { defaults.set(true, forKey: key) }
       disclosurePresented = false
@@ -176,7 +191,7 @@ final class ProductAnalyticsModel {
           from: await rpc.call(
             method: "analytics.events",
             payload: JSONEncoder().encode(ProductAnalyticsBatch(events: [event]))))
-        if epoch == generation { self.preference = acknowledgement.preference }
+        _ = acceptPreference(acknowledgement.preference, epoch: epoch)
         return acknowledgement.acceptedEventIDs.contains(event.id)
           || acknowledgement.discardedEventIDs.contains(event.id)
       } else if let database {
@@ -296,8 +311,7 @@ final class ProductAnalyticsModel {
       let epoch = generation
       do {
         let current = try await database.productAnalyticsPreference()
-        preference = current
-        guard current.collects else { return }
+        guard acceptPreference(current, epoch: epoch), current.collects else { return }
         let rows = try await database.productAnalyticsLog(limit: 1000)
         let events = rows.filter { $0.status == "pending" }.reversed().compactMap {
           $0.event.validated(preference: current)

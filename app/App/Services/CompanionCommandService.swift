@@ -511,6 +511,6 @@ extension CompanionCommandService {
         guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         return try await database.productAnalyticsPreference()
     }
-    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { try await model.analytics.change(change) }
+    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { try await model.setProductAnalyticsPreference(change) }
     func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement { try await model.analytics.ingest(batch) }
 }

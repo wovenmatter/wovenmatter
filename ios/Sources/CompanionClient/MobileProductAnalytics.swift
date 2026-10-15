@@ -42,6 +42,10 @@ public actor MobileProductAnalytics {
     try persist()
   }
   public func apply(_ preference: ProductAnalyticsPreference) throws {
+    // Reentrant requests may finish out of order. Never roll back a known
+    // privacy epoch for the same library.
+    if let previous = state.preference, previous.analyticsID == preference.analyticsID,
+      previous.revision > preference.revision { return }
     if let previous = state.preference, previous.analyticsID != preference.analyticsID {
       state.disclosed = false
       state.pendingEnabled = nil
@@ -123,6 +127,7 @@ public actor MobileProductAnalytics {
     if let enabled = state.pendingEnabled {
       let generation = choiceGeneration
       let current = try await transport.analyticsPreference()
+      try Task.checkCancellation()
       guard generation == choiceGeneration else { return }
       if let previous = state.preference, previous.analyticsID != current.analyticsID {
         try apply(current)
@@ -142,6 +147,7 @@ public actor MobileProductAnalytics {
           enabled: effectiveEnabled, expectedRevision: state.pendingRevision ?? current.revision,
           acknowledgeDisclosure: state.disclosed))
       // An opt-out made while the request was suspended must survive this response.
+      try Task.checkCancellation()
       guard generation == choiceGeneration else { return }
       if state.pendingEnabled == enabled {
         state.pendingEnabled = nil
@@ -149,7 +155,9 @@ public actor MobileProductAnalytics {
       }
       try apply(result)
     } else {
-      try apply(await transport.analyticsPreference())
+      let current = try await transport.analyticsPreference()
+      try Task.checkCancellation()
+      try apply(current)
     }
     guard state.pendingEnabled == nil, state.disclosed, state.preference?.collects == true else {
       return
@@ -158,6 +166,7 @@ public actor MobileProductAnalytics {
     if !events.isEmpty {
       let generation = choiceGeneration
       let acknowledgement = try await transport.sendAnalytics(.init(events: events))
+      try Task.checkCancellation()
       guard generation == choiceGeneration else { return }
       try acknowledge(acknowledgement)
     }
