@@ -52,9 +52,14 @@ extension CompanionModel {
     try Task.checkCancellation()
     guard let store, let record = executionRecords[job.sessionID], record.isTrashed != true else { throw WorkspaceToolError.notFound("The device session is no longer available.") }
     let id = job.sessionID
+    if job.text.hasPrefix("<wovenmatter-goal-continuation>\n"), record.goalLedger?.authorizes(job.id) != true {
+      try await store.updateToolSubmission(id: job.id, state: "cancelled"); return
+    }
     guard !DeviceToolSubmissionTasks.starting.contains(id), !localStopping.contains(id), !localInterrupting.contains(id), !configuringDeviceSessions.contains(id) else { return }
     if let runID = record.runID, runID != job.id { return }
     if localRunTasks[id] != nil { return }
+    if job.text.hasPrefix("<wovenmatter-goal-continuation>\n"),
+       await store.toolSubmissions().contains(where: { $0.sessionID == id && $0.id != job.id && $0.state == "queued" && !$0.text.hasPrefix("<wovenmatter-goal-continuation>\n") }) { return }
     DeviceToolSubmissionTasks.starting.insert(id); configuringDeviceSessions.insert(id)
     defer { DeviceToolSubmissionTasks.starting.remove(id); configuringDeviceSessions.remove(id) }
     var activeRuntime: PiDurableRuntime?
@@ -69,8 +74,19 @@ extension CompanionModel {
       activeRuntime = runtime
       try Task.checkCancellation()
       guard executionRecords[id]?.runID == job.id, executionRecords[id]?.status == "running", !localInterrupting.contains(id), !localStopping.contains(id) else { throw CancellationError() }
+      executionRecords[id]?.goalUsageBaseline = try await deviceTokenUsage(runtime)
+      if job.text.hasPrefix("<wovenmatter-goal-continuation>\n"), executionRecords[id]?.goalLedger?.authorizes(job.id) != true {
+        try await store.updateToolSubmission(id: job.id, state: "cancelled")
+        if executionRecords[id]?.runID == job.id, !localStopping.contains(id), !localInterrupting.contains(id) {
+          executionRecords[id]?.runID = nil; executionRecords[id]?.pendingInput = nil; executionRecords[id]?.status = "ready"
+          try persistExecutionConfiguration()
+        }
+        return
+      }
+      executionRecords[id]?.goalLedger?.enroll(job.id)
+      try persistExecutionConfiguration()
       attemptID = beginDeviceExecutionAttempt(id, runID: job.id, runtime: runtime, userInitiated: false)
-      let receipt = try Self.executionObject(await runtime.submit(text: job.text, requestID: job.id))
+      let receipt = try Self.executionObject(await runtime.submit(text: (WorkspaceGoalCommand(job.text)?.agentPrompt ?? job.text) + ((try? deviceToolContext(conversationID: id).enabled.contains(.goals)) == true ? WorkspaceGoal.guidance : ""), requestID: job.id))
       guard executionRecords[id]?.runID == job.id, executionRecords[id]?.status == "running" else { throw CancellationError() }
       guard let submissionID = (receipt["submissionId"] ?? receipt["submissionID"] ?? receipt["id"]) as? Int else { throw DeviceExecutionError.unavailable("Pi Durable did not return a saved submission receipt.") }
       executionRecords[id]?.submissionID = submissionID; executionRecords[id]?.pendingInput = nil

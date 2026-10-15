@@ -113,6 +113,23 @@ public final class PiDurableRuntime {
   public func wait(submissionID: Int) async throws -> String {
     try await invoke("wait", value: ["submissionID": submissionID])
   }
+  /// Committed lifetime model usage across the root and child conversations.
+  /// Unlike display entries, these SDK counters survive transcript compaction.
+  public func tokenUsage() async throws -> Int64? {
+    let json = try await invoke("usage")
+    guard let usage = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+          let models = usage["models"] as? [String: [String: Any]] else { return nil }
+    var total: Int64 = 0
+    for model in models.values {
+      guard let number = model["totalTokens"] as? NSNumber else { return nil }
+      let value = number.doubleValue
+      guard value.isFinite, value >= 0, value.rounded(.towardZero) == value else { return nil }
+      let count = value >= Double(Int64.max) ? Int64.max : Int64(value)
+      let sum = total.addingReportingOverflow(count)
+      total = sum.overflow ? Int64.max : sum.partialValue
+    }
+    return total
+  }
   public func snapshot() async throws -> String { try await invoke("snapshot") }
   public func resume() async throws { _ = try await invoke("resume") }
   public func abort() async throws { _ = try await invoke("abort") }

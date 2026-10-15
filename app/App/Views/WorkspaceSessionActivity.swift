@@ -60,7 +60,10 @@ struct WorkspaceIncomingAgentHeader: View {
         if let source = message.senderSessionID {
             let receipt = model?.agentTools?.receipts[message.conversationID]?.first { $0.messageID == message.id }
             let kind = message.senderKind ?? receipt?.kind
-            if kind == .timer {
+            if kind == .goal {
+                HStack(spacing: 5) { DashboardLucideIcon(glyph: .compass, size: 12); Text("Goal continuation") }
+                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
+            } else if kind == .timer {
                 Label("Timer", systemImage: "timer").font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             } else {

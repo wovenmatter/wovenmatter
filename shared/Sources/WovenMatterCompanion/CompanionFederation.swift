@@ -207,11 +207,12 @@ public struct CompanionExecutionAdoption: Codable, Equatable, Sendable {
   public var permission: String?
   public var nativeWorkingDirectory: String?
   public var knownRunIDs: [String]?
+  public var goal: WorkspaceGoal?
   public init(workspaceID: String, conversation: CompanionConversation, runtimeKind: String, nativeSessionID: String,
-              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil) {
+              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil, goal: WorkspaceGoal? = nil) {
     self.workspaceID = workspaceID; self.conversation = conversation; self.runtimeKind = runtimeKind
     self.nativeWorkingDirectory = nativeWorkingDirectory
-    self.knownRunIDs = knownRunIDs
+    self.knownRunIDs = knownRunIDs; self.goal = goal
     self.nativeSessionID = nativeSessionID; self.model = model; self.thinking = thinking; self.permission = permission
   }
 }

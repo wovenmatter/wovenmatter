@@ -8,6 +8,23 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CompanionFacadeTests {
+    @Test func goalSlashCommandAtCapacityDoesNotPersistOrDispatch() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let id = try await fixture.createConversation()
+        let conversation = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
+        var settings = try await fixture.database.toolSettings()
+        settings.maximumRunningSessions = 1
+        try await fixture.database.saveToolSettings(settings)
+        try await fixture.model.agentTools?.reload()
+        let busyID = try await fixture.createConversation()
+        let busy = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == busyID })
+        #expect(try await fixture.model.dispatchAgentMessage(conversation: busy, input: .init(text: "Occupy the slot")))
+        #expect(try await fixture.model.dispatchAgentMessage(conversation: conversation,
+            input: .init(text: "/goal Fix the fixture")) == false)
+        #expect(try await fixture.database.sessionGoals().isEmpty)
+        #expect(await fixture.recorder.deliveries.count == 1)
+    }
+
     @Test(arguments: ["local", "remote"])
     func executionPolicyCoversCentralCommandRoutesAndKeepsLibraryActionsShared(route: String) async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
@@ -211,7 +228,7 @@ struct CompanionFacadeTests {
             thinking: desired.thinking, permission: desired.permission, tools: desired.tools))
         #expect(!applied.requiresApplication && applied.selections.model == "provider-confirmed-model")
         #expect(applied.selections.thinking == desired.thinking && applied.selections.permission == desired.permission)
-        #expect(try await fixture.database.sessionTools(id).enabled == [.history])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.history, .goals])
         let configurations = await fixture.recorder.configurations
         #expect(configurations.count == 1)
         #expect(configurations.first?.selections == SessionSelections(model: desired.model,
@@ -231,7 +248,7 @@ struct CompanionFacadeTests {
         #expect(delivery.route == .localACP)
         #expect(delivery.context == nil && delivery.input.references.first?.contentSnapshot == raw)
         #expect(delivery.input.cliContext != nil)
-        #expect(try await fixture.database.sessionTools(id).enabled == [.history])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.history, .goals])
         let tools = try #require(fixture.model.agentTools)
         let deniedNote = await tools.handle(.init(arguments: ["notes", "read", noteID]), callerID: id)
         #expect(!deniedNote.success)
@@ -262,7 +279,7 @@ struct CompanionFacadeTests {
         #expect(try await fixture.model.companionCommands.execute(retry, deviceID: fixture.device).status == .completed)
         #expect(fixture.model.sessionSelectionPreferences.conversation(id: id)?.desiredSelections == desired)
         #expect(fixture.model.sessionSelectionPreferences.conversation(id: id)?.requiresApplication == false)
-        #expect(try await fixture.database.sessionTools(id).enabled == [.notes])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .goals])
         #expect(await fixture.recorder.configurations.last?.selections.model == "captured-model")
         #expect(await fixture.recorder.deliveries.count == 1)
     }

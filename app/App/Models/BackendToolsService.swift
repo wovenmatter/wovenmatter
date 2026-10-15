@@ -27,6 +27,8 @@ extension BackendApplicationService {
                 }
             case let .pauseTimer(id, paused): try await database.pauseSessionTimer(id: id, paused: paused)
             case let .removeTimer(id): try await database.removeSessionTimer(id: id)
+            case .goal:
+                throw AgentDispatchAdmissionError.invalid
             }
             try await tools.reload()
             await invalidations.publish(scopes: [.settings])

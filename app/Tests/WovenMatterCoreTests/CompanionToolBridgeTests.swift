@@ -88,7 +88,7 @@ struct CompanionToolBridgeTests {
     await #expect(throws: (any Error).self) {
       try await fixture.database.authorizeCompanionTool(request, deviceID: fixture.deviceID)
     }
-    #expect(try await fixture.database.sessionTools(fixture.conversationID).enabled.isEmpty)
+    #expect(try await fixture.database.sessionTools(fixture.conversationID).enabled == [.goals])
   }
 
   @Test func lostReplyAndRestartReturnOriginalResultWithoutRepeatingMutation() async throws {

@@ -2,12 +2,15 @@ import Foundation
 import CryptoKit
 import CompanionClient
 import WovenMatterCompanion
+import PiDurableRuntime
 
 extension CompanionModel {
+  static var deviceToolGroups: [WorkspaceToolGroup] { WorkspaceToolGroup.allCases }
   static var deviceToolAccessOptions: [CompanionSelection] {
-    WorkspaceToolGroup.allCases.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
+    deviceToolGroups.filter { $0 != .goals }.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
   }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool {
+    if name == "wovenmatter_goals" { return true }
     let group: String
     if ["list_notes", "read_note", "save_note"].contains(name) { group = "wovenmatter_notes" }
     else if name.hasPrefix("wovenmatter_") { group = name }
@@ -18,7 +21,7 @@ extension CompanionModel {
     return selection.contains(group) || (group == "wovenmatter_notes" && selection.contains(name))
   }
   static var deviceCLITools: [[String: Any]] {
-    WorkspaceToolGroup.allCases.map { group in
+    deviceToolGroups.map { group in
       let description = group.isAutomation
         ? "Control the paired central Mac's \(group == .browser ? "embedded Woven Matter browser" : "desktop after Computer Use is enabled"). This capability runs on the Mac, requires its execution access, and never controls this iPhone. Arguments omit the group name. Use [\"--help\"] for commands. Input uses a stable request ID; inspect fresh state after interruption."
         : "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations require approval and use a stable request ID."
@@ -29,7 +32,7 @@ extension CompanionModel {
   }
   func deviceToolContext(conversationID: String) throws -> MobileToolContext {
     guard let record = executionRecords[conversationID] else { throw DeviceExecutionError.unavailable("This tool request has no device execution owner.") }
-    let enabled = Set(WorkspaceToolGroup.allCases.filter { Self.deviceToolEnabled("wovenmatter_" + $0.rawValue, selection: record.enabledTools) })
+    let enabled = Set(Self.deviceToolGroups.filter { Self.deviceToolEnabled("wovenmatter_" + $0.rawValue, selection: record.enabledTools) })
     return .init(sessionID: conversationID, workspaceID: deviceWorkspaceID,
       folderID: state.conversations[conversationID]?.folderID, enabled: enabled, nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) })
   }
@@ -63,10 +66,13 @@ extension CompanionModel {
       let request = WovenMatterToolRequest(arguments: arguments, requestID: id)
       if command.isMutation, !command.wantsHelp, command.group?.isAutomation != true {
         if target == "local" { try await store.reserveToolInvocation(request, context: context) }
+        if command.group != .goals || ["set", "resume"].contains(command.action) {
         try await requireDeviceApproval(id: conversationID + ":cli:" + id, conversationID: conversationID,
           title: "Woven Matter · " + command.commandPath,
           detail: (target == "central" ? "Central Mac\n" : "This device\n") + String(arguments.joined(separator: " ").prefix(2_000)))
+        }
       }
+      if target == "central", command.group == .goals { throw WorkspaceToolError.invalid("Goals belong to this session’s execution owner. Use the local target.") }
       if command.wantsHelp {
         response = .init(result: .object(["help": .string(WovenMatterToolCommand.help(for: command))]), requestID: id)
       } else if target == "central" {
@@ -85,6 +91,11 @@ extension CompanionModel {
             request: .init(arguments: [group.rawValue, "cancel", "--id", id]), enabledGroups: [])
           Task { _ = try? await transport.executeTool(cancel) }
         }
+      } else if command.group == .goals, !command.wantsHelp {
+        let value: WorkspaceGoal?
+        if command.action == "get" { value = executionRecords[conversationID]?.goalLedger?.goal }
+        else { value = try await mutateDeviceGoal(conversationID, mutation: command.goalMutation(), requestID: id, agentInitiated: true) }
+        response = .init(result: try MobileToolSupport.value(value), requestID: id)
       } else if command.group == .calendar, !command.wantsHelp {
         try Task.checkCancellation()
         response = try await store.executeCalendarTool(command, request: request, context: context)
@@ -118,5 +129,63 @@ extension CompanionModel {
     } catch { response = MobileToolSupport.response(error: error, requestID: Self.deviceCLIRequestID(requestID)) }
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     return String(decoding: try encoder.encode(response.bounded()), as: UTF8.self)
+  }
+}
+
+extension CompanionModel {
+  @discardableResult
+  func mutateDeviceGoal(_ id: String, mutation: WorkspaceGoalMutation, requestID: String? = nil,
+                        agentInitiated: Bool = false, preparingInput: Bool = false) async throws -> WorkspaceGoal? {
+    guard let record = executionRecords[id], record.isTrashed != true else { throw WorkspaceToolError.notFound("This session has no active device execution owner.") }
+    let context = try deviceToolContext(conversationID: id)
+    let starts: Bool
+    switch mutation { case .set, .resume: starts = true; default: starts = false }
+    guard !starts || !configuringDeviceSessions.contains(id) || agentInitiated || preparingInput else { throw WorkspaceToolError.invalid("Wait for this session’s configuration to finish.") }
+    guard (!agentInitiated && !starts) || context.enabled.contains(.goals) else { throw WorkspaceToolError.invalid("Goals are disabled for this session.") }
+    var ledger = record.goalLedger ?? .init()
+    _ = try ledger.mutate(mutation, requestID: requestID, currentRunID: record.runID, sessionID: id)
+    ledger.goal?.sessionID = id
+    let stops: Bool
+    switch mutation { case .pause, .clear, .edit: stops = !agentInitiated; default: stops = false }
+    executionRecords[id]?.goalLedger = ledger
+    do { try persistExecutionConfiguration() } catch { executionRecords[id] = record; throw error }
+    if stops, record.runID != nil {
+      // Fence continuation durably before cancelling this exact session.
+      try await stopDeviceConversation(id)
+    }
+    return executionRecords[id]?.goalLedger?.goal
+  }
+  func deviceTokenUsage(_ runtime: PiDurableRuntime) async throws -> Int64? {
+    try await runtime.tokenUsage()
+  }
+
+  func processDeviceGoals() async throws {
+    guard let store else { return }
+    let inbox = await store.toolSubmissions()
+    for id in executionRecords.keys.sorted() {
+      try Task.checkCancellation()
+      guard let record = executionRecords[id], record.isTrashed != true, record.runID == nil,
+            !["interrupted", "stopping", "failed"].contains(record.status), localRunTasks[id] == nil,
+            !localStopping.contains(id), !localInterrupting.contains(id), !configuringDeviceSessions.contains(id),
+            !(sending && selectedConversationID == id),
+            !localPending.contains(where: { $0.conversationID == id }),
+            !inbox.contains(where: { $0.sessionID == id && ["queued", "submitting", "accepted", "interrupted"].contains($0.state) }),
+            (try? deviceToolContext(conversationID: id).enabled.contains(.goals)) == true else { continue }
+      var ledger = record.goalLedger ?? .init()
+      let requestID = UUID().uuidString.lowercased()
+      guard let prompt = ledger.claimContinuation(id: requestID) else {
+        if ledger != record.goalLedger { executionRecords[id]?.goalLedger = ledger; try persistExecutionConfiguration() }
+        continue
+      }
+      executionRecords[id]?.goalLedger = ledger
+      try persistExecutionConfiguration()
+      do { _ = try await submitDevicePrompt(sessionID: id, requestID: requestID, text: prompt) }
+      catch {
+        // Unknown acceptance keeps the durable inbox; it is never replayed by a goal.
+        if let goal = executionRecords[id]?.goalLedger?.goal, goal.status == .active {
+          _ = try await mutateDeviceGoal(id, mutation: .block(id: goal.id, evidence: String(error.localizedDescription.prefix(1024))), agentInitiated: true)
+        }
+      }
+    }
   }
 }

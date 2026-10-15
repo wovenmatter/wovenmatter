@@ -120,6 +120,7 @@ extension CompanionModel {
     if let id, var record = executionRecords[id] {
       // The runtime captures its credential/model binding; reopen it only after the idle change is saved.
       try await localRuntimes[id]?.close(); localRuntimes.removeValue(forKey: id)
+      record.goalLedger = executionRecords[id]?.goalLedger
       let previous = record
       if let connection, let selected { record.connectionID = connection.id; record.connection = connection; record.modelJSON = try selected.descriptorJSON() }
       if let thinking { record.thinkingLevel = thinking }

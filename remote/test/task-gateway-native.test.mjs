@@ -21,7 +21,7 @@ function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_
     const body=request.body&&JSON.parse(request.body);calls.push({method:request.method,path:url.pathname,query:url.searchParams.toString(),body})
     let response
     if(url.pathname==='/api/info')response={healthy:true,pid:healthPID,version:fixtureVersion}
-    else if(url.pathname==='/api/rpc/wovenmatter-cli/connect'){assert.equal(body.input.sessionID,session.id);assert.match(body.input.context.executablePath,/remote\/src\/wovenmatter$/);assert.equal(body.input.context.socketPath,undefined);response={}}
+    else if(url.pathname==='/api/rpc/wovenmatter-cli/connect'){assert.equal(body.input.sessionID,session.id);assert.match(body.input.context.executablePath,/remote\/src\/wovenmatter$/);response={}}
     else if(url.pathname==='/api/session/ses_fixture/model'){session.model=body.model;response={}}
     else if(url.pathname==='/api/session/ses_fixture'){
       if(request.method==='PATCH'&&!ignorePolicy)session.permissions=body.permissions
@@ -181,4 +181,14 @@ test('direct OpenCode projects native text snapshots and tool/thinking activity 
   assert.equal(updates.find(update=>update.sessionUpdate==='agent_thought_chunk').content.text,'Considering the file')
   assert.equal(updates.find(update=>update.sessionUpdate==='tool_call_update').status,'completed')
   assert.ok(nativeRecords(updates).some(record=>record.id==='message:msg_answer'))
+})
+
+
+test('OpenCode binds goal CLI authority to prompt metadata as well as its connection',async()=>{
+  const fixture=openCodeFixture()
+  const context={executablePath:new URL('../src/wovenmatter',import.meta.url).pathname,socketPath:'/tmp/fixture-goals.sock',captureID:'run-binding'}
+  fixture.context.cliContext=context
+  await fixture.execute(fixture.context)
+  assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/connect')).body.input.context,context)
+  assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/prompt')).body.metadata.wovenTools,context)
 })

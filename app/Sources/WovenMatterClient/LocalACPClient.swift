@@ -1586,6 +1586,25 @@ public actor LocalACPClient {
 
     /// Normal retirement must include committed background compaction and its
     /// archive notifications. Forced shutdown remains an independent abort path.
+    public func recoverBuiltInRuns(_ runs: [DefaultAgentRunRecoveryRequest]) async throws -> [DefaultAgentRunSnapshot] {
+        guard runtimeKind == .defaultAgent, let sessionID, !runs.isEmpty else { return [] }
+        let encoded = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(runs))
+        let result = try await request(method: "woven/recover", params: .object([
+            "sessionId": .string(sessionID), "runs": encoded,
+        ]))
+        guard self.sessionID == sessionID, result?["sessionId"]?.stringValue == sessionID,
+              result?["idle"]?.boolValue == true, let values = result?["runs"] else {
+            throw LocalACPClientError.invalidResponse("Pi Durable did not confirm native run recovery")
+        }
+        let snapshots = try JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(values))
+        guard Set(snapshots.map(\.runID)).count == snapshots.count,
+              snapshots.allSatisfy({ snapshot in runs.contains { $0.runID == snapshot.runID } }) else {
+            throw LocalACPClientError.invalidResponse("Pi Durable returned an unrelated run outcome")
+        }
+        try await reconcileBuiltInNativeHistory()
+        return snapshots
+    }
+
     public func awaitIdle() async throws {
         guard runtimeKind == .defaultAgent, let sessionID else { return }
         let result = try await request(method: "woven/idle", params: .object(["sessionId": .string(sessionID)]))

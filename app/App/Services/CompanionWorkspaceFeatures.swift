@@ -71,7 +71,9 @@ extension CompanionCommandService {
             if try await store.database.companionExecutionOwner(conversationID: id) != nil {
                 return try await model.centralExecutionClient().readWorkspace(conversationID: id, request: request)
             }
-            return .session(try await sessionSettings(id))
+            var settings = try await sessionSettings(id)
+            settings.goal = try await store.database.sessionGoals().first { $0.sessionID == id }
+            return .session(settings)
         case .trash:
             var values = try await store.trashedConversations().prefix(500).map {
                 CompanionTrashedItem(id: $0.id, title: $0.title, kind: "conversation")
@@ -127,6 +129,12 @@ extension CompanionCommandService {
             default: throw CommandError.invalidCommand
             }
             try await store.mutateNote(id: id, mutation: mutation, expectedRevision: revision)
+        case let .goal(id, mutation):
+            if try await store.database.companionExecutionOwner(conversationID: id) != nil {
+                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+            } else {
+                _ = try await model.mutateConversationGoal(id: id, mutation: mutation)
+            }
         case let .configureSession(id, selectedModel, thinking, permission):
             if try await store.database.companionExecutionOwner(conversationID: id) != nil {
                 _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
@@ -218,7 +226,7 @@ extension CompanionCommandService {
             models: options(metadata?.selectableModels, metadata?.modelOptionMetadata, current: metadata?.model ?? saved?.model),
             thinkingLevels: options(metadata?.thinkingLevels, metadata?.thinkingOptionMetadata, current: metadata?.thinking ?? saved?.thinking),
             permissions: options(metadata?.permissionOptions, metadata?.permissionOptionMetadata, current: metadata?.permission ?? saved?.permission),
-            availableTools: WorkspaceToolGroup.allCases.map { .init(id: $0.rawValue, label: $0.title) },
+            availableTools: WorkspaceToolGroup.configurableCases.map { .init(id: $0.rawValue, label: $0.title) },
             enabledTools: tools.enabled.map(\.rawValue).sorted(), canConfigure: !model.runningToolSessionIDs.contains(id))
     }
 
