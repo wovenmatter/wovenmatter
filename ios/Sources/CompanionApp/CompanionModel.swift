@@ -693,7 +693,7 @@ import CompanionInference
         online = true // Fixture presentation only; no transport or inference is configured.
         await reload()
       }
-      if scenario == "permissions" {
+      if scenario == "permissions" || scenario == "tools-menu" {
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
       }

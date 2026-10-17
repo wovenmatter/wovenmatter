@@ -9,6 +9,28 @@ private struct ChatModelOption: Identifiable {
   var id: String { connection.id + ":" + descriptor.id }
 }
 
+/// Keep native switch semantics while reserving the complete touch frame inside
+/// the popover. Scaling the glyph must not leave its full-size layout at the edge.
+private struct CompactToolToggleStyle: ToggleStyle {
+  @Environment(\.isEnabled) private var isEnabled
+
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: 8) {
+      configuration.label.font(.callout)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+      Toggle(isOn: configuration.$isOn) { configuration.label }
+        .labelsHidden().toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+        .fixedSize().scaleEffect(0.65).frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .accessibilityRepresentation {
+      Toggle(isOn: configuration.$isOn) { configuration.label }.toggleStyle(.switch)
+    }
+  }
+}
+
 struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   @Bindable var model: CompanionModel
   @ViewBuilder var accessory: () -> Accessory
@@ -131,7 +153,8 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
                 if enabled { tools.insert(tool.id) } else { tools.remove(tool.id) }
                 if !local && tool.id == "timers" && !enabled { pendingTools = tools.sorted(); confirmTimers = true }
                 else { saveTools(tools.sorted(), confirmed: false) }
-              })).disabled(!configurable).frame(minHeight: 44)
+              })).toggleStyle(CompactToolToggleStyle()).disabled(!configurable)
+                .padding(.horizontal, 4)
             }
             if toolOptions.isEmpty { Text("No configurable tools.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
           }.confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
@@ -142,7 +165,11 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
       Spacer(minLength: 0)
       submission()
     }
-    .task(id: context) { settings = nil; problem = nil; if !local { await loadSession() } }
+    .task(id: context) {
+      settings = nil; problem = nil
+      if !local { await loadSession() }
+      if model.fixture, ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "tools-menu" { toolsOpen = true }
+    }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
   }
   private func dismissKeyboard() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
