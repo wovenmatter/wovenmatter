@@ -75,6 +75,15 @@ final class CompanionUITests: XCTestCase {
     let permissions = app.buttons["chat-permissions"]
     XCTAssertTrue(permissions.waitForExistence(timeout: 5))
     XCTAssertTrue(permissions.isHittable)
+    XCTAssertEqual(permissions.value as? String, "Full Access")
+    let controls = [app.buttons["Add to chat"], app.buttons["chat-model"], app.buttons["chat-thinking"], permissions, app.buttons["chat-tools"], app.buttons["Send message"]]
+    XCTAssertEqual(controls[1].value as? String, "GPT-6.1 Sol")
+    XCTAssertEqual(controls[2].value as? String, "High")
+    for (left, right) in zip(controls, controls.dropFirst()) {
+      XCTAssertEqual(left.frame.midY, right.frame.midY, accuracy: 1, "Composer controls stay on one row")
+      XCTAssertLessThanOrEqual(left.frame.maxX, right.frame.minX + 1, "Composer controls retain their order without overlap")
+    }
+    XCTAssertLessThanOrEqual(controls.last!.frame.maxX, app.frame.maxX)
     permissions.tap()
     XCTAssertTrue(app.staticTexts["Permissions"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["Ask for Approval"].exists)

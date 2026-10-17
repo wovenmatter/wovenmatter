@@ -7,6 +7,7 @@ import PiDurableRuntime
 
 enum DevicePermissionMode: String, Codable, CaseIterable {
   case ask, full
+  static let defaultMode: Self = .full
   var label: String { self == .full ? "Full Access" : "Ask for Approval" }
   var detail: String {
     self == .full ? "Enabled tools run without approval prompts in this chat." : "Ask before tool actions that need approval."

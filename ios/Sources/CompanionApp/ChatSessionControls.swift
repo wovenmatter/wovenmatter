@@ -91,7 +91,7 @@ extension CompanionModel {
     selectedConversationID.flatMap { executionRecords[$0]?.thinkingLevel } ?? (selectedConversationID == nil ? draftDeviceSettings.thinkingLevel ?? deviceAgentDefaults.thinking(for: deviceChatModel) : "off")
   }
   var deviceChatPermission: DevicePermissionMode {
-    selectedConversationID.flatMap { executionRecords[$0]?.permissionMode } ?? (selectedConversationID == nil ? draftDeviceSettings.permissionMode ?? .ask : .ask)
+    selectedConversationID.flatMap { executionRecords[$0]?.permissionMode } ?? (selectedConversationID == nil ? draftDeviceSettings.permissionMode ?? .defaultMode : .defaultMode)
   }
   static var devicePermissionOptions: [CompanionSelection] {
     DevicePermissionMode.allCases.map { .init(id: $0.rawValue, label: $0.label) }

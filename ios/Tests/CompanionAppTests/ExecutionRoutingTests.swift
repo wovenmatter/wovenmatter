@@ -425,8 +425,8 @@ final class ExecutionRoutingTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    let full = DeviceConversationRecord(id: "full", title: "Full", permissionMode: .full, connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
-    var ask = full; ask.id = "ask"; ask.permissionMode = nil
+    let full = DeviceConversationRecord(id: "full", title: "Full", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    var ask = full; ask.id = "ask"; ask.permissionMode = .ask
     model.executionRecords = [full.id: full, ask.id: ask]
     model.selectedConversationID = ask.id
     let request = try CompanionModel.toolJSON(["name": "write_file", "conversationID": full.id, "arguments": ["path": "result.txt", "content": "Saved"]])
@@ -434,9 +434,12 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(try String(contentsOf: model.deviceWorkspaceURL(conversationID: full.id, path: "result.txt"), encoding: .utf8), "Saved")
     XCTAssertTrue(model.localPending.isEmpty, "Permission belongs to the tool's owner, not the selected chat")
     model.selectedConversationID = full.id
+    XCTAssertEqual(model.deviceChatPermission, .full, "Chats saved before the selector existed default to full access")
+    guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: full.id)) else { return XCTFail("Missing settings") }
+    XCTAssertEqual(settings.permission, "full")
     let waiting = Task { try await model.requireDeviceApproval(id: "ask-write", conversationID: ask.id, title: "Write", detail: "File") }
     for _ in 0..<100 where model.localApprovals["ask-write"] == nil { await Task.yield() }
-    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "Legacy chats keep asking until explicitly changed")
+    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "An explicit Ask for Approval choice keeps prompting")
     waiting.cancel()
     do { try await waiting.value; XCTFail("Cancelled approval must not continue") } catch is CancellationError { }
     let question = Task { try await model.askDeviceQuestion(id: "question", conversationID: full.id, question: "Which file?") }
@@ -452,12 +455,12 @@ final class ExecutionRoutingTests: XCTestCase {
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    XCTAssertEqual(model.deviceChatPermission, .ask)
-    try await model.configureDeviceChat(permission: .full)
+    XCTAssertEqual(model.deviceChatPermission, .full)
+    try await model.configureDeviceChat(permission: .ask)
     let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
     try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(reopened.deviceChatPermission, .full)
+    XCTAssertEqual(reopened.deviceChatPermission, .ask)
     model.executionRecords["chat"] = .init(id: "chat", title: "Chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
     let changed = await model.performDeviceAction(.configureSession(id: "chat", model: nil, thinking: nil, permission: "unknown"))
     XCTAssertFalse(changed)

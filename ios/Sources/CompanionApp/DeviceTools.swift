@@ -166,7 +166,7 @@ extension CompanionModel {
   }
   func requireDeviceApproval(id: String, conversationID: String, title: String, detail: String) async throws {
     try Task.checkCancellation()
-    if executionRecords[conversationID]?.permissionMode == .full { return }
+    if let record = executionRecords[conversationID], (record.permissionMode ?? .defaultMode) == .full { return }
     let token = UUID().uuidString
     let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
       self?.cancelDeviceApproval(id, token: token)

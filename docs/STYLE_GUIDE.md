@@ -24,7 +24,10 @@ when an intentional design change is accepted.
   Permission buttons use the fullest label that fits, then explicit shorter
   labels, then an icon. Never ellipsize these labels or collapse distinct modes
   such as Auto and Auto Accept into the same text. Popouts retain full labels
-  and descriptions.
+  and descriptions. On iPhone, keep the composer controls on one compact row:
+  add, model name, thinking level, permission key, tools icon, and send. Keep
+  permission and tool labels inside their popouts so the model and thinking
+  selection stay visible.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
   patterns in

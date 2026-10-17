@@ -24,7 +24,7 @@ extension CompanionModel {
     case .session(let id):
       guard let record = executionRecords[id] else { throw DeviceExecutionError.unavailable("This device conversation is unavailable.") }
       let tools = Self.deviceToolAccessOptions
-      return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: (record.permissionMode ?? .ask).rawValue,
+      return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: (record.permissionMode ?? .defaultMode).rawValue,
         models: inferenceConnections.map { .init(id: $0.id, label: $0.name + " · " + $0.modelID) }, thinkingLevels: ((try? JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8)))?.supportedThinkingLevels ?? []).map { .init(id: $0, label: $0.capitalized) }, permissions: Self.devicePermissionOptions,
         availableTools: tools, enabledTools: tools.filter { Self.deviceToolEnabled($0.id, selection: record.enabledTools) }.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted", goal: record.goalLedger?.goal))
     case .exportConversation(let id, let format):

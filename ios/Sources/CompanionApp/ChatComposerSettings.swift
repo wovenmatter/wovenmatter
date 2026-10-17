@@ -52,14 +52,15 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   private var permissionLabel: String { permissionOptions.first { $0.id == permissionID }?.label ?? "Permissions" }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }
   var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 8) {
+    HStack(spacing: 2) {
+      accessory()
       Button { dismissKeyboard(); problem = nil; modelOpen = true } label: {
         HStack(spacing: 3) {
-          Text(modelLabel).lineLimit(1)
+          Text(modelLabel).lineLimit(1).minimumScaleFactor(0.8)
           DashboardLucideIcon(glyph: .chevronDown, size: 10)
-        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-      }.buttonStyle(.plain).accessibilityLabel("Choose model").disabled(saving)
+        }.font(.caption.weight(.medium)).frame(minHeight: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Choose model").accessibilityValue(modelLabel)
+        .accessibilityIdentifier("chat-model").layoutPriority(1).disabled(saving)
         .popover(isPresented: $modelOpen) {
           popout("Model", height: min(420, max(160, CGFloat(local ? options.count : settings?.models.count ?? 0) * 44 + 130))) {
             DashboardSearchField(text: $search, prompt: "Search models").padding(.bottom, 8)
@@ -86,11 +87,10 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
           }.task { if local { await loadModels() } else { await loadSession() } }
         }
       Button { dismissKeyboard(); problem = nil; thinkingOpen = true } label: {
-        HStack(spacing: 3) {
-          DashboardLucideIcon(glyph: .brain, size: 16)
-          Text(thinkingLabel).lineLimit(1).minimumScaleFactor(0.8)
-        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-      }.buttonStyle(.plain).accessibilityLabel("Thinking level").disabled(thinkingOptions.isEmpty || !configurable)
+        Text(thinkingLabel).font(.caption.weight(.medium)).lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false).frame(minWidth: 44, minHeight: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Thinking level").accessibilityValue(thinkingLabel)
+        .accessibilityIdentifier("chat-thinking").disabled(thinkingOptions.isEmpty || !configurable)
         .popover(isPresented: $thinkingOpen) {
           popout("Thinking Level", height: min(380, CGFloat(thinkingOptions.count) * 44 + 70)) {
             ForEach(thinkingOptions) { option in
@@ -101,35 +101,8 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
             }
           }
         }
-      Button { dismissKeyboard(); problem = nil; toolsOpen = true } label: {
-        HStack(spacing: 3) { Text("Tools"); DashboardLucideIcon(glyph: .chevronDown, size: 10) }
-          .font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-      }.buttonStyle(.plain).accessibilityLabel("Session tools").disabled(saving)
-        .popover(isPresented: $toolsOpen) {
-          popout("Tools") {
-            ForEach(toolOptions) { tool in
-              Toggle(tool.label, isOn: Binding(get: { enabledTools.contains(tool.id) }, set: { enabled in
-                var tools = Set(enabledTools)
-                if enabled { tools.insert(tool.id) } else { tools.remove(tool.id) }
-                if !local && tool.id == "timers" && !enabled { pendingTools = tools.sorted(); confirmTimers = true }
-                else { saveTools(tools.sorted(), confirmed: false) }
-              })).disabled(!configurable).frame(minHeight: 44)
-            }
-            if toolOptions.isEmpty { Text("No configurable tools.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
-          }.confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
-            Button("Pause timers and remove access") { if let pendingTools { saveTools(pendingTools, confirmed: true) } }
-            Button("Cancel", role: .cancel) { pendingTools = nil }
-          }
-        }
-      }
-      HStack(spacing: 8) {
-      accessory()
       Button { dismissKeyboard(); problem = nil; permissionOpen = true } label: {
-        ViewThatFits(in: .horizontal) {
-          permissionTitle(permissionLabel)
-          if local { permissionTitle(model.deviceChatPermission == .full ? "Full" : "Ask") }
-          DashboardLucideIcon(glyph: .keyRound, size: 16)
-        }.font(.caption.weight(.medium)).frame(minWidth: 44, minHeight: 44, alignment: .leading)
+        DashboardLucideIcon(glyph: .keyRound, size: 18).frame(width: 44, height: 44)
       }.buttonStyle(.plain).accessibilityLabel("Choose session permissions").accessibilityValue(permissionLabel)
         .accessibilityIdentifier("chat-permissions").disabled(saving)
         .popover(isPresented: $permissionOpen) {
@@ -147,18 +120,30 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
             if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
           }
         }
-      Spacer(minLength: 8)
+      Button { dismissKeyboard(); problem = nil; toolsOpen = true } label: {
+        DashboardLucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Session tools").accessibilityIdentifier("chat-tools").disabled(saving)
+        .popover(isPresented: $toolsOpen) {
+          popout("Tools") {
+            ForEach(toolOptions) { tool in
+              Toggle(tool.label, isOn: Binding(get: { enabledTools.contains(tool.id) }, set: { enabled in
+                var tools = Set(enabledTools)
+                if enabled { tools.insert(tool.id) } else { tools.remove(tool.id) }
+                if !local && tool.id == "timers" && !enabled { pendingTools = tools.sorted(); confirmTimers = true }
+                else { saveTools(tools.sorted(), confirmed: false) }
+              })).disabled(!configurable).frame(minHeight: 44)
+            }
+            if toolOptions.isEmpty { Text("No configurable tools.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+          }.confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
+            Button("Pause timers and remove access") { if let pendingTools { saveTools(pendingTools, confirmed: true) } }
+            Button("Cancel", role: .cancel) { pendingTools = nil }
+          }
+        }
+      Spacer(minLength: 0)
       submission()
-      }
     }
     .task(id: context) { settings = nil; problem = nil; if !local { await loadSession() } }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
-  }
-  private func permissionTitle(_ title: String) -> some View {
-    HStack(spacing: 3) {
-      DashboardLucideIcon(glyph: .keyRound, size: 16)
-      Text(title).fixedSize(horizontal: true, vertical: false)
-    }
   }
   private func dismissKeyboard() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
   private func popout<Content: View>(_ title: String, height: CGFloat = 380, @ViewBuilder content: () -> Content) -> some View {
