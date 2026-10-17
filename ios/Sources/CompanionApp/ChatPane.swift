@@ -182,7 +182,7 @@ struct ChatPane: View {
       }
       TextField(model.activeRunID == nil ? "Chat…" : "Steer this run…", text: $model.composer, axis: .vertical)
         .lineLimit(2...6).focused($composerFocused).accessibilityIdentifier("chat-composer")
-      HStack(spacing: 8) {
+      ChatComposerSettings(model: model) {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
           if model.selectedExecutionWorkspaceID == "local", model.selectedConversationID != nil {
@@ -190,7 +190,7 @@ struct ChatPane: View {
           }
         } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Add to chat")
-        ChatComposerSettings(model: model)
+      } submission: {
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
           Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
             .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)

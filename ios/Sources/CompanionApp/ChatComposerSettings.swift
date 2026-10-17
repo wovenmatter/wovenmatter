@@ -9,8 +9,10 @@ private struct ChatModelOption: Identifiable {
   var id: String { connection.id + ":" + descriptor.id }
 }
 
-struct ChatComposerSettings: View {
+struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   @Bindable var model: CompanionModel
+  @ViewBuilder var accessory: () -> Accessory
+  @ViewBuilder var submission: () -> Submission
   @Environment(\.dashboardTheme) private var theme
   @State private var settings: CompanionSessionSettings?
   @State private var modelOpen = false
@@ -50,7 +52,8 @@ struct ChatComposerSettings: View {
   private var permissionLabel: String { permissionOptions.first { $0.id == permissionID }?.label ?? "Permissions" }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }
   var body: some View {
-    Group {
+    VStack(spacing: 0) {
+      HStack(spacing: 8) {
       Button { dismissKeyboard(); problem = nil; modelOpen = true } label: {
         HStack(spacing: 3) {
           Text(modelLabel).lineLimit(1)
@@ -118,12 +121,15 @@ struct ChatComposerSettings: View {
             Button("Cancel", role: .cancel) { pendingTools = nil }
           }
         }
+      }
+      HStack(spacing: 8) {
+      accessory()
       Button { dismissKeyboard(); problem = nil; permissionOpen = true } label: {
         ViewThatFits(in: .horizontal) {
           permissionTitle(permissionLabel)
           if local { permissionTitle(model.deviceChatPermission == .full ? "Full" : "Ask") }
           DashboardLucideIcon(glyph: .keyRound, size: 16)
-        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
+        }.font(.caption.weight(.medium)).frame(minWidth: 44, minHeight: 44, alignment: .leading)
       }.buttonStyle(.plain).accessibilityLabel("Choose session permissions").accessibilityValue(permissionLabel)
         .accessibilityIdentifier("chat-permissions").disabled(saving)
         .popover(isPresented: $permissionOpen) {
@@ -141,6 +147,9 @@ struct ChatComposerSettings: View {
             if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
           }
         }
+      Spacer(minLength: 8)
+      submission()
+      }
     }
     .task(id: context) { settings = nil; problem = nil; if !local { await loadSession() } }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
