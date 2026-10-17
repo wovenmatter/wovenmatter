@@ -70,6 +70,25 @@ final class CompanionUITests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
+  @MainActor func testRunningToolsDoNotDuplicateProgressWhenExpanded() {
+    let app = launch(tab: "Chats", scenario: "running-tools")
+    let group = app.buttons["work-group:group:fixture-read"]
+    XCTAssertTrue(group.waitForExistence(timeout: 5))
+    XCTAssertEqual(app.progressIndicators.count, 1, "Collapsed work has one progress indicator")
+    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
+    group.tap()
+    let activity = app.buttons["work-activity:fixture-current"]
+    XCTAssertTrue(activity.waitForExistence(timeout: 5))
+    XCTAssertEqual(app.progressIndicators.count, 1, "Expanded work moves progress to the current tool")
+    activity.tap()
+    XCTAssertTrue(app.staticTexts["Input"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.progressIndicators.count, 1, "Opening tool details does not add a spinner")
+    let capture = XCTAttachment(screenshot: app.screenshot())
+    capture.name = "Running tool details without duplicate spinners"
+    capture.lifetime = .keepAlways
+    add(capture)
+  }
+
   @MainActor func testComposerShowsPermissionChoices() {
     let app = launch(tab: "Chats", scenario: "permissions")
     let permissions = app.buttons["chat-permissions"]

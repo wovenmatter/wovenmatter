@@ -669,7 +669,27 @@ import CompanionInference
         }
         await reload()
       }
-      if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "permissions" {
+      let scenario = ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] ?? ""
+      if scenario.hasPrefix("running-tools") {
+        let runID = "11111111-1111-4111-8111-111111111111"
+        let startedAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-8))
+        let activities = try [("fixture-read", "completed"), ("fixture-current", "running")].enumerated().map { index, value in
+          let projection = try Self.toolJSON(["id": value.0, "kind": "tool", "title": "Read file", "toolName": "read_file", "status": value.1,
+            "rawInputJSON": "{\"path\":\"plan.md\"}"])
+          return CompanionActivity(id: value.0, runID: runID, title: "Read file", status: value.1, projectionJSON: projection, sequence: Int64(index + 1))
+        }
+        try await store.cache(.init(conversationID: "fixture-chat", messages: [
+          .init(id: "user", conversationID: "fixture-chat", runID: runID, role: "user", content: "Inspect the launch plan.", createdAt: startedAt, sequence: 0)
+        ], activities: activities, activeRunID: runID, runs: [.init(id: runID, status: "running", startedAt: startedAt)]))
+        if scenario == "running-tools-expanded" {
+          let state = transcriptStates.state(for: "fixture-chat")
+          state.setExpanded(ConversationTranscriptState.disclosureKey(runID: runID, itemID: "group:fixture-read"), true)
+          state.setExpanded(ConversationTranscriptState.disclosureKey(runID: runID, itemID: "activity:fixture-current"), true)
+        }
+        online = true // Fixture presentation only; no transport or inference is configured.
+        await reload()
+      }
+      if scenario == "permissions" {
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
       }

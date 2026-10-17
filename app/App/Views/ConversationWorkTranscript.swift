@@ -339,6 +339,7 @@ private struct ConversationWorkGroupRow: View {
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
                 .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
+                .accessibilityIdentifier("work-group:" + group.id)
 
                 // Rows exist only while expanded; collapsed groups build nothing.
                 if expanded.wrappedValue {
@@ -358,7 +359,8 @@ private struct ConversationWorkGroupRow: View {
     private func header(liveLabel: String?, expanded: Bool) -> some View {
         HStack(spacing: 9) {
             Group {
-                if liveLabel != nil {
+                // Expanded child rows already show the current tool's progress.
+                if liveLabel != nil && !expanded {
                     ProgressView()
                         .controlSize(.mini)
                 } else if group.hasFailure {
@@ -452,6 +454,7 @@ private struct ConversationActivityRow: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
+                    .accessibilityIdentifier("work-activity:" + activity.id)
                     if expanded.wrappedValue {
                         ConversationActivityDetails(
                             activity: activity,
@@ -674,12 +677,9 @@ private struct ConversationActivityDetails: View {
             rawBlock("Output", field(\.rawOutputJSON))
             rawBlock("Event", field(\.rawPayloadJSON))
             if loadToken != nil {
-                HStack(spacing: 7) {
-                    ProgressView().controlSize(.small)
-                    Text("Loading details…")
-                }
-                .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Loading details…")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
             }
             if let error {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {

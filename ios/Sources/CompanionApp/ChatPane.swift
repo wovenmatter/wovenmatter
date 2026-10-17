@@ -57,8 +57,9 @@ struct ChatPane: View {
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
             }
-            if model.activeRunID != nil {
-              HStack { ProgressView(); Text(model.executionOnline ? "Running on \(model.executionName.lowercased())" : "Workspace connection interrupted · execution stays there").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+            if model.activeRunID != nil && !model.executionOnline {
+              Text("Workspace connection interrupted · execution stays there")
+                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
