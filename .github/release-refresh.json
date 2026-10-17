@@ -1,0 +1,5 @@
+{
+  "version": "0.3.0",
+  "request": "signed-delta-updater",
+  "reason": "Refresh the desktop download and update feed after merging the updater repair, preserving the approved 0.3.0 description and version tag."
+}

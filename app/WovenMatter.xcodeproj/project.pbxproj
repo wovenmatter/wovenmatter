@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A03000000000000000000001 /* DesktopUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03000000000000000000002; };
+        A03000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A03000000000000000000004; };
 		B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = B40A00000000000000000002 /* WovenMatterAutomation */; };
 		DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */; };
 		DA4C00000000000000000001 /* DashboardColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000002 /* DashboardColors.swift */; };
@@ -149,6 +151,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        A03000000000000000000002 /* DesktopUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopUpdater.swift; sourceTree = "<group>"; };
 		DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHTMLArtifactDocument.swift; sourceTree = "<group>"; };
 		DA4C00000000000000000002 /* DashboardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardColors.swift; sourceTree = "<group>"; };
 		FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = App/ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
@@ -294,6 +297,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A03000000000000000000003 /* Sparkle in Frameworks */,
 				1865697E240F2F2763E855ED /* CompanionClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
 				B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */,
@@ -478,6 +482,7 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				A03000000000000000000002 /* DesktopUpdater.swift */,
 				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
 				4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */,
 				DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */,
@@ -522,6 +527,7 @@
 			);
 			name = WovenMatter;
 			packageProductDependencies = (
+                A03000000000000000000004 /* Sparkle */,
 				C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
 				B40A00000000000000000002 /* WovenMatterAutomation */,
@@ -555,6 +561,7 @@
 			mainGroup = 614FCD38F579029AF08B9221;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+                A03000000000000000000005 /* Sparkle */,
 				C06BA836DE1CAE4D56F3020D /* XCLocalSwiftPackageReference "../ios" */,
 				03A429A1CC1E3FDB9062F0AE /* XCLocalSwiftPackageReference "." */,
 			);
@@ -754,6 +761,7 @@
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
+				A03000000000000000000001 /* DesktopUpdater.swift in Sources */,
 				AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -814,6 +822,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				INFOPLIST_KEY_WovenMatterSourceRevision = "$(WOVENMATTER_SOURCE_REVISION)";
 				MARKETING_VERSION = 0.1.0;
 				WOVENMATTER_DEV_BUNDLE_ID = wovenmatter.desktop.dev;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(WOVENMATTER_DEV_BUNDLE_ID)";
@@ -980,7 +989,16 @@
 /* End XCLocalSwiftPackageReference section */
 
 
+/* Begin XCRemoteSwiftPackageReference section */
+        A03000000000000000000005 /* Sparkle */ = {
+            isa = XCRemoteSwiftPackageReference;
+            repositoryURL = "https://github.com/sparkle-project/Sparkle";
+            requirement = { kind = revision; revision = eef1a539a373c1f1a320624b1130fc5de7b2e100; };
+        };
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+        A03000000000000000000004 /* Sparkle */ = {isa = XCSwiftPackageProductDependency; package = A03000000000000000000005; productName = Sparkle; };
 		B40A00000000000000000002 /* WovenMatterAutomation */ = {isa = XCSwiftPackageProductDependency; productName = WovenMatterAutomation; };
 		0C11E0000000000000000004 /* WovenMatterClient */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -5,6 +5,16 @@ import Testing
 
 @Suite("Runtime boundaries", .serialized)
 struct RuntimeBoundaryTests {
+  @Test("healthy release-sized transfers can take more than five minutes, while stalled reads remain bounded")
+  func downloadDeadlines() {
+    let configuration = LocalACPBoundedHTTPSDownloader.sessionConfiguration()
+    // The current full update on a 1 MB/s connection exceeds the former deadline.
+    let transferDuration = Double(527_000_000) / 1_000_000
+    #expect(configuration.timeoutIntervalForResource > transferDuration)
+    #expect(configuration.timeoutIntervalForRequest <= 60)
+    #expect(configuration.timeoutIntervalForResource.isFinite)
+  }
+
   @Test("built-in agent stays available while external runtimes persist visibility independently")
   func localRuntimeVisibilityPreferences() throws {
     let suiteName = "wovenmatter.runtime-visibility.\(UUID().uuidString)"

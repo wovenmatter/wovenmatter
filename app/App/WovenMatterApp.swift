@@ -419,6 +419,10 @@ struct WovenMatterApp: App {
         _applicationModel = State(initialValue: ApplicationModel())
         if !isRunningUnitTests {
             Self.markUpdateReadyIfRequested()
+            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+               let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") {
+                ProductAnalyticsModel.markUpdateLaunched(version: version, build: build)
+            }
         }
     }
 
@@ -452,6 +456,7 @@ struct WovenMatterApp: App {
             RootView(model: applicationModel)
                 .onAppear {
                     lifecycleDelegate.model = applicationModel
+                    DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                     LocalBackgroundExecution.shared.transitionHandler = { enabled in
                         try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)

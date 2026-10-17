@@ -55,6 +55,10 @@ for modules in "$output/node_modules" "$output/node_modules/@earendil-works/pi-c
   rm -f "$modules/.bin/esbuild"
 done
 
+# Source maps are diagnostic build output; Node executes the original JS/TS.
+# Leave executable code, declarations, licenses, and vendor signatures intact.
+find "$output/node_modules" -type f -name '*.map' -delete
+
 claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$claude_binary"
 # Preserve Anthropic's signed, unmodified runtime. Never re-sign or patch it.

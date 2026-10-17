@@ -74,7 +74,19 @@ xcodebuild -quiet \
   WOVENMATTER_SOURCE_REVISION="$revision" \
   build
 
+release_status 'Signing nested updater helpers and sealing the app'
+scripts/sign-release-updater.sh "$app" "$signing_identity"
+
 release_status 'Validating bundled resources and code signatures'
+python3 - "$app" "$version" "$build_number" "$revision" <<'PROVENANCE'
+import plistlib, sys
+from pathlib import Path
+info = plistlib.loads((Path(sys.argv[1]) / 'Contents/Info.plist').read_bytes())
+assert info['CFBundleShortVersionString'] == sys.argv[2]
+assert info['CFBundleVersion'] == sys.argv[3]
+assert info['WovenMatterSourceRevision'] == sys.argv[4]
+assert info['SUPublicEDKey'] == 'fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI='
+PROVENANCE
 scripts/validate-native-app.sh "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 python3 scripts/validate-release-code.py "$app"
@@ -140,12 +152,14 @@ xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
+# Legacy clients have a fixed 512 MiB bound. Never publish an unusable bridge.
+test "$(stat -f %z "$dmg")" -le 536870912 \
+  || { printf '%s\n' 'Compatibility disk image exceeds the installed updater size limit.' >&2; exit 65; }
 release_status 'Generating updater manifest and checksums'
 scripts/generate-release-manifest.sh \
   "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"
-(
-  cd "$output_dir"
-  shasum -a 256 "$asset" latest-mac.json > SHA256SUMS.txt
-)
+release_status 'Generating signed delta updates from published app bundles'
+scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir" \
+  "${WOVENMATTER_UPDATE_HISTORY:?Published update history directory is required}"
 release_status 'Distribution artifacts ready'
 printf 'Release artifacts ready in %s\n' "$output_dir"

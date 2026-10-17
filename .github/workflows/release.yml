@@ -4,20 +4,26 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: Refresh the existing public release from an accepted immutable build tag
+        type: boolean
+        default: false
 
 permissions:
   actions: read
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: desktop-release-publication
   cancel-in-progress: false
 
 jobs:
   macos:
     name: Signed Apple Silicon release
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 120
     environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -27,14 +33,30 @@ jobs:
         with:
           node-version: 24
 
-      - name: Verify immutable release source
+      - name: Verify accepted release source
+        id: source
         env:
-          TAG: ${{ github.ref_name }}
+          REFRESH: ${{ inputs.refresh || false }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-          test "$(git rev-list -n 1 "$TAG")" = "$GITHUB_SHA"
+          if [ "$REFRESH" = true ]; then
+            scripts/verify-update-request.sh
+            version="$(jq -er '.version' .github/release-refresh.json)"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            build="$(git rev-list --count HEAD)"
+            test "$GITHUB_REF_NAME" = "v${version}-build${build}"
+            test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "v$version"
+            gh release view "v$version" --json isDraft --jq .isDraft | grep -qx false
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" --jq '.immutable == false' | grep -qx true
+          else
+            [[ "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]
+            version="${GITHUB_REF_NAME#v}"
+            test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
@@ -75,6 +97,16 @@ jobs:
           printf '%s' "$NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary-private-key.p8"
           chmod 600 "$RUNNER_TEMP/notary-private-key.p8"
 
+      - name: Prepare update signing key and published delta bases
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$SPARKLE_PRIVATE_KEY"
+          umask 077
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle-private-key"
+          python3 scripts/prepare-update-history.py "$RUNNER_TEMP/update-history"
+
       - name: Build, sign, notarize, and package
         env:
           WOVENMATTER_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -83,34 +115,37 @@ jobs:
           WOVENMATTER_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           WOVENMATTER_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          scripts/build-release.sh "$version"
-
-      - name: Stage immutable GitHub Release draft
-        env:
+          WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ inputs.refresh && '1' || '0' }}
+          WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
+          WOVENMATTER_UPDATE_HISTORY: ${{ runner.temp }}/update-history
+          REFRESH: ${{ inputs.refresh || false }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="$GITHUB_REF_NAME"
-          version="${tag#v}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            is_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft')"
-            if [[ "$is_draft" != "true" ]]; then
-              echo "Release $tag is already published; refusing to replace published assets." >&2
-              exit 1
+          if [ "$REFRESH" = true ]; then
+            if python3 scripts/stage-update.py dist "${{ steps.source.outputs.version }}" --restore-staged; then
+              echo "Reusing the original verified private artifacts for this build."
+              exit 0
+            else
+              status=$?
+              test "$status" -eq 3 || exit "$status"
             fi
-          else
-            gh release create "$tag" \
-              --draft \
-              --title "Woven Matter v${version}" \
+          fi
+          scripts/build-release.sh "${{ steps.source.outputs.version }}"
+
+      - name: Verify private draft and deliver authorized update refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REFRESH: ${{ inputs.refresh || false }}
+          VERSION: ${{ steps.source.outputs.version }}
+          WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
+        run: |
+          if [ "$REFRESH" != true ] && ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" --draft --title "Woven Matter v$VERSION" \
               --notes "Signed and notarized Apple Silicon release."
           fi
-          gh release upload "$tag" dist/* --clobber
-          expected="$(printf '%s\n' "SHA256SUMS.txt" "WovenMatter_${version}_arm64.dmg" "latest-mac.json" | sort)"
-          actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
-          test "$actual" = "$expected"
-          echo "Release $tag is staged as a private draft."
-          echo "Verify the draft through scripts/publish-release.sh, then write the release description and wait for Trey's explicit approval before publication."
+          options=()
+          if [ "$REFRESH" = true ]; then options+=(--refresh); fi
+          python3 scripts/stage-update.py dist "$VERSION" "${options[@]}"
 
       - name: Remove temporary signing keychain
         if: always()
@@ -119,4 +154,4 @@ jobs:
         run: |
           keychain="$RUNNER_TEMP/wovenmatter-release.keychain-db"
           security delete-keychain "$keychain" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-private-key.p8"
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-private-key.p8" "$RUNNER_TEMP/sparkle-private-key"

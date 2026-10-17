@@ -14,10 +14,8 @@ struct SettingsGeneralView: View {
     @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
-    @State private var releaseUpdateState: ReleaseUpdateState = .idle
     @State private var showsCredentialDisclosure = false
     @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
-    private let releaseUpdateInstaller = WovenMatterReleaseUpdateInstaller()
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -237,121 +235,32 @@ struct SettingsGeneralView: View {
     }
 
     private var releaseUpdateCard: some View {
-        SettingsCard(
-            title: "Software updates"
-        ) {
+        let updater = DesktopUpdater.shared
+        return SettingsCard(title: "Software updates") {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(releaseUpdateState.title(currentVersion: currentVersion))
+                    Text("Woven Matter v\(currentVersion) (build \(currentBuild))")
                         .font(.system(size: 13, weight: .medium))
-                    if let detail = releaseUpdateState.detail {
-                        Text(detail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text(updater.errorMessage ?? "Check for the latest version of Woven Matter.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                Button(releaseUpdateState.buttonTitle) {
-                    performReleaseUpdateAction()
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(releaseUpdateState.isWorking)
+                Button("Check for updates") { updater.checkForUpdates() }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(!updater.canCheckForUpdates)
             }
         }
+    }
+
+    private var currentBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 
     private var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "0.0.0"
-    }
-
-    private func performReleaseUpdateAction() {
-        switch releaseUpdateState {
-        case .available(let manifest), .downloadFailed(let manifest, _):
-            downloadRelease(manifest)
-        case .ready(let release), .installFailed(let release, _):
-            installRelease(release)
-        case .idle, .current, .failed:
-            checkForRelease()
-        case .checking, .downloading, .installing:
-            break
-        }
-    }
-
-    private func checkForRelease() {
-        releaseUpdateState = .checking
-        Task {
-            await model.analytics.record(.updateCheckClicked)
-            do {
-                switch try await WovenMatterReleaseUpdateClient().check(
-                    currentVersion: currentVersion
-                ) {
-                case .current:
-                    releaseUpdateState = .current
-                case .available(let manifest):
-                    if let cached = try await releaseUpdateInstaller.cachedRelease(
-                        for: manifest
-                    ) {
-                        releaseUpdateState = .ready(cached)
-                    } else {
-                        releaseUpdateState = .available(manifest)
-                    }
-                }
-            } catch {
-                releaseUpdateState = .failed(error.localizedDescription)
-            }
-        }
-    }
-
-    private func downloadRelease(_ manifest: WovenMatterReleaseManifest) {
-        releaseUpdateState = .downloading(manifest)
-        Task {
-            let properties = ["target_version": manifest.version]
-            await model.analytics.record(.updateDownloadClicked, properties: properties)
-            do {
-                releaseUpdateState = .ready(
-                    try await releaseUpdateInstaller.download(manifest, onDownloaded: {
-                        await model.analytics.record(.updateDownloadCompleted, properties: properties)
-                    })
-                )
-            } catch {
-                await model.analytics.record(.updateDownloadFailed, properties: properties)
-                releaseUpdateState = .downloadFailed(
-                    manifest,
-                    error.localizedDescription
-                )
-            }
-        }
-    }
-
-    private func installRelease(_ release: WovenMatterDownloadedRelease) {
-        releaseUpdateState = .installing(release)
-        Task {
-            let properties = ["target_version": release.manifest.version]
-            await model.analytics.record(.updateInstallClicked, properties: properties)
-            do {
-                guard await WorkspaceAssetSession.prepareForRestart() else {
-                    await model.analytics.record(.updateInstallFailed,
-                        properties: properties)
-                    releaseUpdateState = .ready(release)
-                    return
-                }
-                let installationID = await model.analytics.prepareUpdateInstallation(release.manifest)
-                try await model.prepareBackendForUpdate()
-                try await releaseUpdateInstaller.beginInstallation(of: release, installationID: installationID)
-                WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
-            } catch {
-                model.analytics.cancelUpdateInstallation()
-                WorkspaceAssetSession.cancelPreparedRestart()
-                var message = error.localizedDescription
-                do { try await model.recoverBackendAfterFailedUpdate() }
-                catch { message += " " + error.localizedDescription }
-                await model.analytics.record(.updateInstallFailed,
-                    properties: properties)
-                releaseUpdateState = .installFailed(release, message)
-            }
-        }
     }
 
     private var appearanceCard: some View {
@@ -502,66 +411,5 @@ private struct SettingsThemeChoiceButtonStyle: ButtonStyle {
                 }
             }
             .onHover { isHovering = $0 }
-    }
-}
-
-private enum ReleaseUpdateState {
-    case idle
-    case checking
-    case current
-    case available(WovenMatterReleaseManifest)
-    case downloading(WovenMatterReleaseManifest)
-    case ready(WovenMatterDownloadedRelease)
-    case installing(WovenMatterDownloadedRelease)
-    case downloadFailed(WovenMatterReleaseManifest, String)
-    case installFailed(WovenMatterDownloadedRelease, String)
-    case failed(String)
-
-    var isWorking: Bool {
-        switch self {
-        case .checking, .downloading, .installing: true
-        default: false
-        }
-    }
-
-    var buttonTitle: String {
-        switch self {
-        case .idle, .current, .failed: "Check for updates"
-        case .checking: "Checking…"
-        case .available: "Download update"
-        case .downloading: "Downloading…"
-        case .ready: "Install update"
-        case .installing: "Installing…"
-        case .downloadFailed: "Retry download"
-        case .installFailed: "Retry installation"
-        }
-    }
-
-    func title(currentVersion: String) -> String {
-        switch self {
-        case .available(let manifest),
-             .downloading(let manifest),
-             .downloadFailed(let manifest, _):
-            "Woven Matter v\(manifest.version) is available"
-        case .ready(let release),
-             .installing(let release),
-             .installFailed(let release, _):
-            "Woven Matter v\(release.manifest.version) is ready"
-        default: "Woven Matter v\(currentVersion)"
-        }
-    }
-
-    var detail: String? {
-        switch self {
-        case .idle: "Check for the latest version of Woven Matter."
-        case .checking: "Checking for the latest version of Woven Matter…"
-        case .current: "You’re up to date."
-        case .available: "Download and verify the signed update."
-        case .downloading: "Downloading the update…"
-        case .ready: "Installing restarts Woven Matter."
-        case .installing: "Woven Matter will restart."
-        case .downloadFailed(_, let message), .installFailed(_, let message): message
-        case .failed(let message): message
-        }
     }
 }
