@@ -17,13 +17,13 @@ extension CompanionModel {
   [
     {"name":"list_notes","description":"List notes available on this device, optionally filtering titles and content. Returns note IDs and revisions.","parameters":{"type":"object","properties":{"query":{"type":"string"}}},"replay":"safe"},
     {"name":"read_note","description":"Read a locally available Woven Matter note by ID.","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},"replay":"safe"},
-    {"name":"save_note","description":"Create a note or update an existing note. Updates require id and the localVersion returned by read_note. Content is plain text. Asks the user for approval and queues central synchronization.","parameters":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer"},"localVersion":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"folderID":{"type":"string"}},"required":["title","content"]}},
+    {"name":"save_note","description":"Create a note or update an existing note. Updates require id and the localVersion returned by read_note. Content is plain text. Uses this chat's approval mode and queues central synchronization.","parameters":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer"},"localVersion":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"folderID":{"type":"string"}},"required":["title","content"]}},
     {"name":"list_files","description":"List files inside this conversation's device workspace. Paths are relative; no unrestricted filesystem access.","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"replay":"safe"},
     {"name":"read_file","description":"Read a workspace UTF-8 file. Small files return text; large files or explicit byte offset/limit return a bounded window with nextOffset, fileSize, eof and truncated. Default large-file window is 65536 bytes; maximum limit is 1048576. When UTF-8 is split or invalid, lossyUTF8 and bytesBase64 preserve the exact bytes.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":1048576}},"required":["path"]},"replay":"safe"},
     {"name":"read_document","description":"Extract text from an imported PDF or UTF-8 document in this workspace, up to 20 MiB. Scanned PDFs may have no text.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},"replay":"safe"},
-    {"name":"read_image","description":"Read an imported image from this workspace for the model. Requires permission before sending the image to the inference provider.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
-    {"name":"write_file","description":"Write a UTF-8 file in this conversation's device workspace. Requires user approval. Workspace files remain on this device unless saved to the library.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}},
-    {"name":"fetch_url","description":"Retrieve a user-approved HTTPS URL as text, up to 1 MiB. Does not follow redirects or use browser cookies.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}},
+    {"name":"read_image","description":"Read an imported image from this workspace for the model. Uses this chat's approval mode before sending the image to the inference provider.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
+    {"name":"write_file","description":"Write a UTF-8 file in this conversation's device workspace. Uses this chat's approval mode. Workspace files remain on this device unless saved to the library.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}},
+    {"name":"fetch_url","description":"Retrieve an HTTPS URL as text, up to 1 MiB. Uses this chat's approval mode. Does not follow redirects or use browser cookies.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}},
     {"name":"ask_user","description":"Ask the user a question before continuing.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}
   ]
   """#
@@ -165,6 +165,8 @@ extension CompanionModel {
     return candidate
   }
   func requireDeviceApproval(id: String, conversationID: String, title: String, detail: String) async throws {
+    try Task.checkCancellation()
+    if executionRecords[conversationID]?.permissionMode == .full { return }
     let token = UUID().uuidString
     let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
       self?.cancelDeviceApproval(id, token: token)

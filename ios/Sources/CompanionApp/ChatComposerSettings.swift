@@ -16,6 +16,7 @@ struct ChatComposerSettings: View {
   @State private var modelOpen = false
   @State private var thinkingOpen = false
   @State private var toolsOpen = false
+  @State private var permissionOpen = false
   @State private var options: [ChatModelOption] = []
   @State private var search = ""
   @State private var loading = false
@@ -44,6 +45,9 @@ struct ChatComposerSettings: View {
   private var toolOptions: [CompanionSelection] {
     local ? CompanionModel.deviceToolAccessOptions : settings?.availableTools ?? []
   }
+  private var permissionOptions: [CompanionSelection] { local ? CompanionModel.devicePermissionOptions : settings?.permissions ?? [] }
+  private var permissionID: String? { local ? model.deviceChatPermission.rawValue : settings?.permission }
+  private var permissionLabel: String { permissionOptions.first { $0.id == permissionID }?.label ?? "Permissions" }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }
   var body: some View {
     Group {
@@ -114,9 +118,38 @@ struct ChatComposerSettings: View {
             Button("Cancel", role: .cancel) { pendingTools = nil }
           }
         }
+      Button { dismissKeyboard(); problem = nil; permissionOpen = true } label: {
+        ViewThatFits(in: .horizontal) {
+          permissionTitle(permissionLabel)
+          if local { permissionTitle(model.deviceChatPermission == .full ? "Full" : "Ask") }
+          DashboardLucideIcon(glyph: .keyRound, size: 16)
+        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Choose session permissions").accessibilityValue(permissionLabel)
+        .accessibilityIdentifier("chat-permissions").disabled(saving)
+        .popover(isPresented: $permissionOpen) {
+          popout("Permissions", height: 250) {
+            ForEach(permissionOptions) { option in
+              selectionRow(option.label, selected: option.id == permissionID) {
+                if local, let mode = DevicePermissionMode(rawValue: option.id) {
+                  Task { await apply { try await model.configureDeviceChat(permission: mode) }; if problem == nil { permissionOpen = false } }
+                } else { configureRemote(permission: option.id) }
+              }
+              if local, let mode = DevicePermissionMode(rawValue: option.id) {
+                Text(mode.detail).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.bottom, 6)
+              }
+            }
+            if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+          }
+        }
     }
     .task(id: context) { settings = nil; problem = nil; if !local { await loadSession() } }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
+  }
+  private func permissionTitle(_ title: String) -> some View {
+    HStack(spacing: 3) {
+      DashboardLucideIcon(glyph: .keyRound, size: 16)
+      Text(title).fixedSize(horizontal: true, vertical: false)
+    }
   }
   private func dismissKeyboard() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
   private func popout<Content: View>(_ title: String, height: CGFloat = 380, @ViewBuilder content: () -> Content) -> some View {
@@ -173,14 +206,14 @@ struct ChatComposerSettings: View {
     defer { saving = false; model.chatSettingsBusy = false }
     do { try await operation() } catch { problem = error.localizedDescription }
   }
-  private func configureRemote(modelID: String? = nil, thinking: String? = nil) {
+  private func configureRemote(modelID: String? = nil, thinking: String? = nil, permission: String? = nil) {
     guard let id = model.selectedConversationID, configurable else { return }
     Task {
       await apply {
-        guard await model.perform(.configureSession(id: id, model: modelID, thinking: thinking, permission: nil)) else { throw DeviceExecutionError.unavailable(model.errorMessage ?? "Couldn’t change this session.") }
+        guard await model.perform(.configureSession(id: id, model: modelID, thinking: thinking, permission: permission)) else { throw DeviceExecutionError.unavailable(model.errorMessage ?? "Couldn’t change this session.") }
         await loadSession()
       }
-      if problem == nil { modelOpen = false; thinkingOpen = false }
+      if problem == nil { modelOpen = false; thinkingOpen = false; permissionOpen = false }
     }
   }
   private func saveTools(_ tools: [String], confirmed: Bool) {

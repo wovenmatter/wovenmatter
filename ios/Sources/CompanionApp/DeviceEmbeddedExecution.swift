@@ -5,7 +5,7 @@ import WovenMatterCompanion
 extension CompanionModel {
   static var deviceEmbeddedTools: [[String: Any]] {
     [["name": "execute_command",
-      "description": "Run a bundled command in this conversation's on-device workspace. Pass argv, not shell syntax. Available: python/python3 (-c, -m or script), sqlite3, wovenmatter, pwd, ls, cat, mkdir, cp, mv, rm, find, grep, help. Python has its standard library, real SQLite and await wovenmatter([group, command, ...]); prepend --target central to CLI arguments for the paired Mac. There are no OS subprocesses, sockets, package downloads or unrestricted host files. Commands have no elapsed-time cutoff; Stop cancels execution and discards uncommitted file changes. Native CLI effects retain their receipts. Output is saved to files with a bounded inline preview. Requires approval.",
+      "description": "Run a bundled command in this conversation's on-device workspace. Pass argv, not shell syntax. Available: python/python3 (-c, -m or script), sqlite3, wovenmatter, pwd, ls, cat, mkdir, cp, mv, rm, find, grep, help. Python has its standard library, real SQLite and await wovenmatter([group, command, ...]); prepend --target central to CLI arguments for the paired Mac. There are no OS subprocesses, sockets, package downloads or unrestricted host files. Commands have no elapsed-time cutoff; Stop cancels execution and discards uncommitted file changes. Native CLI effects retain their receipts. Output is saved to files with a bounded inline preview. Uses this chat's approval mode.",
       "parameters": ["type": "object", "properties": [
         "argv": ["type": "array", "items": ["type": "string"], "minItems": 1],
         "stdin": ["type": "string"], "workingDirectory": ["type": "string"]],

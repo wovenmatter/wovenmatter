@@ -1,10 +1,11 @@
 import XCTest
 
 final class CompanionUITests: XCTestCase {
-  @MainActor func launch(tab: String = "Folders") -> XCUIApplication {
+  @MainActor func launch(tab: String = "Folders", scenario: String? = nil) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["WOVENMATTER_UI_FIXTURE_NAMESPACE"] = UUID().uuidString
     app.launchEnvironment["WOVENMATTER_UI_FIXTURE"] = "1"
+    if let scenario { app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = scenario }
     app.launchEnvironment["WOVENMATTER_UI_TAB"] = tab
     app.launch()
     XCTAssertTrue(app.buttons["tab-folders"].waitForExistence(timeout: 10))
@@ -69,6 +70,21 @@ final class CompanionUITests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
+  @MainActor func testComposerShowsPermissionChoices() {
+    let app = launch(tab: "Chats", scenario: "permissions")
+    let permissions = app.buttons["chat-permissions"]
+    XCTAssertTrue(permissions.waitForExistence(timeout: 5))
+    XCTAssertTrue(permissions.isHittable)
+    permissions.tap()
+    XCTAssertTrue(app.staticTexts["Permissions"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Ask for Approval"].exists)
+    XCTAssertTrue(app.buttons["Full Access"].exists)
+    let capture = XCTAttachment(screenshot: app.screenshot())
+    capture.name = "Composer permissions"
+    capture.lifetime = .keepAlways
+    add(capture)
+  }
+
   @MainActor func testPairingLivesInSettingsOutsideExecutionWorkspaces() {
     let app = launch(tab: "Settings")
     app.buttons["Workspaces"].tap()
