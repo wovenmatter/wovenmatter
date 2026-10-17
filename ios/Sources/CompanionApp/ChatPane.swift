@@ -57,8 +57,9 @@ struct ChatPane: View {
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
             }
-            if model.activeRunID != nil {
-              HStack { ProgressView(); Text(model.executionOnline ? "Running on \(model.executionName.lowercased())" : "Workspace connection interrupted · execution stays there").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+            if model.activeRunID != nil && !model.executionOnline {
+              Text("Workspace connection interrupted · execution stays there")
+                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
@@ -182,7 +183,7 @@ struct ChatPane: View {
       }
       TextField(model.activeRunID == nil ? "Chat…" : "Steer this run…", text: $model.composer, axis: .vertical)
         .lineLimit(2...6).focused($composerFocused).accessibilityIdentifier("chat-composer")
-      HStack(spacing: 8) {
+      ChatComposerSettings(model: model) {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
           if model.selectedExecutionWorkspaceID == "local", model.selectedConversationID != nil {
@@ -190,7 +191,7 @@ struct ChatPane: View {
           }
         } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Add to chat")
-        ChatComposerSettings(model: model)
+      } submission: {
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
           Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
             .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)

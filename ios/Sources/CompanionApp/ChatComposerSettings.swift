@@ -9,13 +9,38 @@ private struct ChatModelOption: Identifiable {
   var id: String { connection.id + ":" + descriptor.id }
 }
 
-struct ChatComposerSettings: View {
+/// Keep native switch semantics while reserving the complete touch frame inside
+/// the popover. Scaling the glyph must not leave its full-size layout at the edge.
+private struct CompactToolToggleStyle: ToggleStyle {
+  @Environment(\.isEnabled) private var isEnabled
+
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: 8) {
+      configuration.label.font(.callout)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+      Toggle(isOn: configuration.$isOn) { configuration.label }
+        .labelsHidden().toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+        .fixedSize().scaleEffect(0.65).frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .accessibilityRepresentation {
+      Toggle(isOn: configuration.$isOn) { configuration.label }.toggleStyle(.switch)
+    }
+  }
+}
+
+struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   @Bindable var model: CompanionModel
+  @ViewBuilder var accessory: () -> Accessory
+  @ViewBuilder var submission: () -> Submission
   @Environment(\.dashboardTheme) private var theme
   @State private var settings: CompanionSessionSettings?
   @State private var modelOpen = false
   @State private var thinkingOpen = false
   @State private var toolsOpen = false
+  @State private var permissionOpen = false
   @State private var options: [ChatModelOption] = []
   @State private var search = ""
   @State private var loading = false
@@ -44,15 +69,20 @@ struct ChatComposerSettings: View {
   private var toolOptions: [CompanionSelection] {
     local ? CompanionModel.deviceToolAccessOptions : settings?.availableTools ?? []
   }
+  private var permissionOptions: [CompanionSelection] { local ? CompanionModel.devicePermissionOptions : settings?.permissions ?? [] }
+  private var permissionID: String? { local ? model.deviceChatPermission.rawValue : settings?.permission }
+  private var permissionLabel: String { permissionOptions.first { $0.id == permissionID }?.label ?? "Permissions" }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }
   var body: some View {
-    Group {
+    HStack(spacing: 2) {
+      accessory()
       Button { dismissKeyboard(); problem = nil; modelOpen = true } label: {
         HStack(spacing: 3) {
-          Text(modelLabel).lineLimit(1)
+          Text(modelLabel).lineLimit(1).minimumScaleFactor(0.8)
           DashboardLucideIcon(glyph: .chevronDown, size: 10)
-        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-      }.buttonStyle(.plain).accessibilityLabel("Choose model").disabled(saving)
+        }.font(.caption.weight(.medium)).frame(minHeight: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Choose model").accessibilityValue(modelLabel)
+        .accessibilityIdentifier("chat-model").layoutPriority(1).disabled(saving)
         .popover(isPresented: $modelOpen) {
           popout("Model", height: min(420, max(160, CGFloat(local ? options.count : settings?.models.count ?? 0) * 44 + 130))) {
             DashboardSearchField(text: $search, prompt: "Search models").padding(.bottom, 8)
@@ -79,11 +109,10 @@ struct ChatComposerSettings: View {
           }.task { if local { await loadModels() } else { await loadSession() } }
         }
       Button { dismissKeyboard(); problem = nil; thinkingOpen = true } label: {
-        HStack(spacing: 3) {
-          DashboardLucideIcon(glyph: .brain, size: 16)
-          Text(thinkingLabel).lineLimit(1).minimumScaleFactor(0.8)
-        }.font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-      }.buttonStyle(.plain).accessibilityLabel("Thinking level").disabled(thinkingOptions.isEmpty || !configurable)
+        Text(thinkingLabel).font(.caption.weight(.medium)).lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false).frame(minWidth: 44, minHeight: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Thinking level").accessibilityValue(thinkingLabel)
+        .accessibilityIdentifier("chat-thinking").disabled(thinkingOptions.isEmpty || !configurable)
         .popover(isPresented: $thinkingOpen) {
           popout("Thinking Level", height: min(380, CGFloat(thinkingOptions.count) * 44 + 70)) {
             ForEach(thinkingOptions) { option in
@@ -94,10 +123,28 @@ struct ChatComposerSettings: View {
             }
           }
         }
+      Button { dismissKeyboard(); problem = nil; permissionOpen = true } label: {
+        DashboardLucideIcon(glyph: .keyRound, size: 18).frame(width: 44, height: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Choose session permissions").accessibilityValue(permissionLabel)
+        .accessibilityIdentifier("chat-permissions").disabled(saving)
+        .popover(isPresented: $permissionOpen) {
+          popout("Permissions", height: 250) {
+            ForEach(permissionOptions) { option in
+              selectionRow(option.label, selected: option.id == permissionID) {
+                if local, let mode = DevicePermissionMode(rawValue: option.id) {
+                  Task { await apply { try await model.configureDeviceChat(permission: mode) }; if problem == nil { permissionOpen = false } }
+                } else { configureRemote(permission: option.id) }
+              }
+              if local, let mode = DevicePermissionMode(rawValue: option.id) {
+                Text(mode.detail).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.bottom, 6)
+              }
+            }
+            if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+          }
+        }
       Button { dismissKeyboard(); problem = nil; toolsOpen = true } label: {
-        HStack(spacing: 3) { Text("Tools"); DashboardLucideIcon(glyph: .chevronDown, size: 10) }
-          .font(.caption.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-      }.buttonStyle(.plain).accessibilityLabel("Session tools").disabled(saving)
+        DashboardLucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Session tools").accessibilityIdentifier("chat-tools").disabled(saving)
         .popover(isPresented: $toolsOpen) {
           popout("Tools") {
             ForEach(toolOptions) { tool in
@@ -106,7 +153,8 @@ struct ChatComposerSettings: View {
                 if enabled { tools.insert(tool.id) } else { tools.remove(tool.id) }
                 if !local && tool.id == "timers" && !enabled { pendingTools = tools.sorted(); confirmTimers = true }
                 else { saveTools(tools.sorted(), confirmed: false) }
-              })).disabled(!configurable).frame(minHeight: 44)
+              })).toggleStyle(CompactToolToggleStyle()).disabled(!configurable)
+                .padding(.horizontal, 4)
             }
             if toolOptions.isEmpty { Text("No configurable tools.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
           }.confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
@@ -114,8 +162,14 @@ struct ChatComposerSettings: View {
             Button("Cancel", role: .cancel) { pendingTools = nil }
           }
         }
+      Spacer(minLength: 0)
+      submission()
     }
-    .task(id: context) { settings = nil; problem = nil; if !local { await loadSession() } }
+    .task(id: context) {
+      settings = nil; problem = nil
+      if !local { await loadSession() }
+      if model.fixture, ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "tools-menu" { toolsOpen = true }
+    }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
   }
   private func dismissKeyboard() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
@@ -173,14 +227,14 @@ struct ChatComposerSettings: View {
     defer { saving = false; model.chatSettingsBusy = false }
     do { try await operation() } catch { problem = error.localizedDescription }
   }
-  private func configureRemote(modelID: String? = nil, thinking: String? = nil) {
+  private func configureRemote(modelID: String? = nil, thinking: String? = nil, permission: String? = nil) {
     guard let id = model.selectedConversationID, configurable else { return }
     Task {
       await apply {
-        guard await model.perform(.configureSession(id: id, model: modelID, thinking: thinking, permission: nil)) else { throw DeviceExecutionError.unavailable(model.errorMessage ?? "Couldn’t change this session.") }
+        guard await model.perform(.configureSession(id: id, model: modelID, thinking: thinking, permission: permission)) else { throw DeviceExecutionError.unavailable(model.errorMessage ?? "Couldn’t change this session.") }
         await loadSession()
       }
-      if problem == nil { modelOpen = false; thinkingOpen = false }
+      if problem == nil { modelOpen = false; thinkingOpen = false; permissionOpen = false }
     }
   }
   private func saveTools(_ tools: [String], confirmed: Bool) {

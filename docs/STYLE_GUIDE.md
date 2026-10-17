@@ -24,7 +24,10 @@ when an intentional design change is accepted.
   Permission buttons use the fullest label that fits, then explicit shorter
   labels, then an icon. Never ellipsize these labels or collapse distinct modes
   such as Auto and Auto Accept into the same text. Popouts retain full labels
-  and descriptions.
+  and descriptions. On iPhone, keep the composer controls on one compact row:
+  add, model name, thinking level, permission key, tools icon, and send. Keep
+  permission and tool labels inside their popouts so the model and thinking
+  selection stay visible.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
   patterns in
@@ -71,7 +74,7 @@ when an intentional design change is accepted.
   child indentation. All Workspaces sits above the workspaces, Trash below them,
   and Recents remains global. Folder hover cards match chat previews and show the
   workspace, chat/note counts, root directory, and additional reference directories.
-- **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
+- **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
   styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
   for a neutral border without a colored focus ring. Clicking noninteractive
@@ -101,6 +104,10 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
+- **Conversation progress:** use the shared elapsed work header. A collapsed
+  live tool group shows progress once; expanding it moves the indicator to its
+  active tool rows. Keep detail-loading text quiet and avoid a separate mobile
+  running spinner below the transcript.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
