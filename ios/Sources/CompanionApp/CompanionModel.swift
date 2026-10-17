@@ -673,7 +673,8 @@ import CompanionInference
       if scenario.hasPrefix("running-tools") {
         let runID = "11111111-1111-4111-8111-111111111111"
         let startedAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-8))
-        let activities = try [("fixture-read", "completed"), ("fixture-current", "running")].enumerated().map { index, value in
+        let currentStatus = scenario == "running-tools-settled" ? "completed" : "running"
+        let activities = try [("fixture-read", "completed"), ("fixture-current", currentStatus)].enumerated().map { index, value in
           let projection = try Self.toolJSON(["id": value.0, "kind": "tool", "title": "Read file", "toolName": "read_file", "status": value.1,
             "rawInputJSON": "{\"path\":\"plan.md\"}"])
           return CompanionActivity(id: value.0, runID: runID, title: "Read file", status: value.1, projectionJSON: projection, sequence: Int64(index + 1))

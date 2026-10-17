@@ -359,8 +359,8 @@ private struct ConversationWorkGroupRow: View {
     private func header(liveLabel: String?, expanded: Bool) -> some View {
         HStack(spacing: 9) {
             Group {
-                // Expanded child rows already show the current tool's progress.
-                if liveLabel != nil && !expanded {
+                // Only collapsed groups with unsettled work need a summary spinner.
+                if liveLabel != nil && group.hasActiveActivity && !expanded {
                     ProgressView()
                         .controlSize(.mini)
                 } else if group.hasFailure {

@@ -87,6 +87,12 @@ final class CompanionUITests: XCTestCase {
     capture.name = "Running tool details without duplicate spinners"
     capture.lifetime = .keepAlways
     add(capture)
+    app.terminate()
+    app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = "running-tools-settled"
+    app.launch()
+    XCTAssertTrue(app.buttons["work-group:group:fixture-read"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.progressIndicators.count, 0, "Finished tools stop spinning while the agent continues its reply")
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Working for ")).firstMatch.exists)
   }
 
   @MainActor func testComposerShowsPermissionChoices() {
