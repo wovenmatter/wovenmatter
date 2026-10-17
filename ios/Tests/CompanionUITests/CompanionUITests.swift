@@ -81,7 +81,7 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(activity.waitForExistence(timeout: 5))
     XCTAssertEqual(app.progressIndicators.count, 1, "Expanded work moves progress to the current tool")
     activity.tap()
-    XCTAssertTrue(app.staticTexts["Input"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Input")).firstMatch.waitForExistence(timeout: 5))
     XCTAssertEqual(app.progressIndicators.count, 1, "Opening tool details does not add a spinner")
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Running tool details without duplicate spinners"

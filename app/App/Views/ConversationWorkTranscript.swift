@@ -527,7 +527,8 @@ private struct ConversationActivityRow: View {
         } else if isLive {
             ProgressView()
                 .controlSize(.mini)
-                .frame(width: 17)
+                .frame(width: 17, height: 17)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
         } else {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
