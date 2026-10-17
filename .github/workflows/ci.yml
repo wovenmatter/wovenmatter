@@ -93,7 +93,13 @@ jobs:
       - name: Test companion protocol and runtime integration
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-companion-${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/test-changes.sh --companion
+          IOS_CHANGED: ${{ needs.changes.outputs.ios }}
+        run: |
+          if [ "$IOS_CHANGED" = true ]; then
+            scripts/test-changes.sh --companion
+          else
+            scripts/test-changes.sh --companion-desktop
+          fi
 
   ios:
     name: iOS UI (${{ matrix.device.name }})

@@ -74,6 +74,9 @@ xcodebuild -quiet \
   WOVENMATTER_SOURCE_REVISION="$revision" \
   build
 
+release_status 'Signing nested updater helpers and sealing the app'
+scripts/sign-release-updater.sh "$app" "$signing_identity"
+
 release_status 'Validating bundled resources and code signatures'
 python3 - "$app" "$version" "$build_number" "$revision" <<'PROVENANCE'
 import plistlib, sys

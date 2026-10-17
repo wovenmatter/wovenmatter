@@ -23,7 +23,7 @@ jobs:
   macos:
     name: Signed Apple Silicon release
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 120
     environment: release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -42,6 +42,7 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           if [ "$REFRESH" = true ]; then
+            scripts/verify-update-request.sh
             version="$(jq -er '.version' .github/release-refresh.json)"
             [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
             build="$(git rev-list --count HEAD)"
@@ -49,6 +50,7 @@ jobs:
             test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
             test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "v$version"
             gh release view "v$version" --json isDraft --jq .isDraft | grep -qx false
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" --jq '.immutable == false' | grep -qx true
           else
             [[ "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]
             version="${GITHUB_REF_NAME#v}"
@@ -116,7 +118,18 @@ jobs:
           WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ inputs.refresh && '1' || '0' }}
           WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
           WOVENMATTER_UPDATE_HISTORY: ${{ runner.temp }}/update-history
+          REFRESH: ${{ inputs.refresh || false }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$REFRESH" = true ]; then
+            if python3 scripts/stage-update.py dist "${{ steps.source.outputs.version }}" --restore-staged; then
+              echo "Reusing the original verified private artifacts for this build."
+              exit 0
+            else
+              status=$?
+              test "$status" -eq 3 || exit "$status"
+            fi
+          fi
           scripts/build-release.sh "${{ steps.source.outputs.version }}"
 
       - name: Verify private draft and deliver authorized update refresh
@@ -124,6 +137,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REFRESH: ${{ inputs.refresh || false }}
           VERSION: ${{ steps.source.outputs.version }}
+          WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
         run: |
           if [ "$REFRESH" != true ] && ! gh release view "v$VERSION" >/dev/null 2>&1; then
             gh release create "v$VERSION" --draft --title "Woven Matter v$VERSION" \

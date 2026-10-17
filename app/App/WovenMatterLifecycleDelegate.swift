@@ -45,7 +45,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
             return .terminateLater
         }
-        if DesktopUpdater.shared.isInstalling && model.isBackendFrontend {
+        if (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend {
             guard !terminating else { return .terminateLater }
             terminating = true
             Task {

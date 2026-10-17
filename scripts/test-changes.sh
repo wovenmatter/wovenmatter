@@ -117,8 +117,10 @@ run_companion() {
     CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
     SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
     swift test --package-path shared --scratch-path "${cache_root}/SharedSwiftPM"
-  env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
-    scripts/test-ios.sh "$ios_mode"
+  if [ "$ios_mode" != --desktop-only ]; then
+    env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
+      scripts/test-ios.sh "$ios_mode"
+  fi
   env WOVENMATTER_INTEGRATION_TEST_CACHE_DIR="${cache_root}/Integration" \
     scripts/test-companion-integration.sh
 }
@@ -156,10 +158,11 @@ case "$mode" in
   --desktop) run_desktop; exit ;;
   --macos) run_macos; exit ;;
   --companion) run_companion --simulator; exit ;;
+  --companion-desktop) run_companion --desktop-only; exit ;;
   --remote) run_remote; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--desktop|--macos|--companion|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--desktop|--macos|--companion|--companion-desktop|--remote]' >&2
     exit 64
     ;;
 esac

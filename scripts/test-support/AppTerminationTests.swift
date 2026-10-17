@@ -4,6 +4,7 @@ import Foundation
 @MainActor final class DesktopUpdater {
     static let shared = DesktopUpdater()
     var isInstalling = false
+    var hasStagedUpdate = false
 }
 @MainActor enum WorkspaceAssetSession {
     static func prepareForRestart() async -> Bool { true }
@@ -59,6 +60,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
     init(resultURL: URL) {
         self.resultURL = resultURL
         DesktopUpdater.shared.isInstalling = (CommandLine.arguments.contains("--updater") || CommandLine.arguments.contains("--standalone-update"))
+        DesktopUpdater.shared.hasStagedUpdate = CommandLine.arguments.contains("--staged-update")
         super.init()
         delegate.model = model
         delegate.prepareBrowserTermination = { [model] in
@@ -75,7 +77,15 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             try! await AppTerminationTests.verifyTransitionRecovery()
             try! await AppTerminationTests.verifyExecutionLeaseWait()
-            WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
+            if DesktopUpdater.shared.hasStagedUpdate {
+                // An ordinary Cmd-Q after extraction does not call willInstallUpdate.
+                precondition(!DesktopUpdater.shared.isInstalling)
+                RunLoop.main.perform(inModes: [.common]) {
+                    MainActor.assumeIsolated { NSApplication.shared.terminate(nil) }
+                }
+            } else {
+                WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
+            }
         }
     }
 
@@ -87,7 +97,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         delegate.applicationWillTerminate(notification)
         let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1
             && model.cleanupFinished && model.sessionShutdownCount == 1
-            && model.updatePreparationCount == (DesktopUpdater.shared.isInstalling && model.isBackendFrontend ? 1 : 0)
+            && model.updatePreparationCount == ((DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend ? 1 : 0)
             && !delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared)
         try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
             .write(to: resultURL, atomically: true, encoding: .utf8)

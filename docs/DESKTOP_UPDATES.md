@@ -30,12 +30,19 @@ release. Change `.github/release-refresh.json` in the approved PR. Its merge to
 main starts **Refresh desktop update**, which creates an immutable `v*` build tag
 and dispatches the same signed Mac build workflow used for ordinary releases. It
 runs no mobile builds, test suites, or extra source CI. PR/main validation is independent.
+A bot dispatch is accepted only at the main merge/squash commit that changed the
+refresh request, on main’s first-parent history. A PR ancestor, later unrelated
+main commit, or human dispatch is rejected.
+Re-running that same authorized build remains supported.
 
 The visible version stays the same; the internal build number increases. The
 workflow verifies accepted-main source, signs and notarizes the app and DMG, checks
 source provenance, enforces archive signatures and an exact checksum inventory,
 and stages a private verification draft at `vVERSION-buildBUILD` before
-changing any existing downloads. Its immutable source tag points to the actual
+changing any existing downloads. Sparkle’s nested helpers are signed individually
+from the inside out before the containing framework and app are resealed and
+notarized. Private verification resolves the draft’s release ID and checks
+GitHub’s uploaded asset digests. Its immutable source tag points to the actual
 build commit. `release-build.json` records that source commit and build number.
 The original `vVERSION` tag and approved description are preserved. The existing
 release environment remains restricted to `v*` tags; main does not gain direct
@@ -45,9 +52,17 @@ Immutable build DMGs and delta assets are uploaded first. The legacy DMG alias a
 JSON manifest are refreshed next; the signed Sparkle feed is published last.
 The prior full build is retained under an immutable build name. Failed promotion
 attempts restore the previous aliases/feeds; the private draft remains available
-for verification and recovery. Never overwrite an immutable build asset or move
-a version tag. GitHub cannot atomically replace multiple legacy aliases, so an
-old client racing a refresh may need to retry its checksum-verified download.
+for verification and recovery. A verified `staging-ready.json` record retains the
+original signed artifacts, so retries reuse those exact bytes instead of rebuilding
+nonreproducible signed disk images. Before promotion, `rollback-index.json`
+retains the previous small manifests privately and references the prior immutable
+full DMG. Recovery therefore survives a lost runner; a partial promotion resumes
+even if its build metadata was already uploaded. A retry of a fully delivered build
+only verifies its files. Transient lookup failures stop rather than creating a
+duplicate draft. Empty failed GitHub uploads may be removed and retried; completed
+immutable artifacts are always preserved. Never overwrite an immutable build
+asset or move a version tag. GitHub cannot atomically replace multiple legacy aliases, so an old
+client racing a refresh may need to retry its checksum-verified download.
 New clients use immutable archive URLs.
 
 Normal tagged releases still stay private until the exact release description is
@@ -66,14 +81,21 @@ build-aware, signed delta path.
 
 ## Focused checks
 
-- `scripts/test-release.sh`: existing offline release/authentication/signing gates.
+- `scripts/test-release.sh`: offline release/authentication/signing gates, real
+  nested Sparkle signing with a temporary ad-hoc test identity, actual-framework
+  delegate checks, and refresh authorization across real Git merge histories.
 - `python3 scripts/test-support/test_update_refresh.py`: private verification,
-  promotion ordering, immutable history, and rollback.
+  promotion ordering, immutable history, durable rollback after runner loss,
+  original-byte reuse, and idempotent retries.
 - `python3 scripts/test-delta-updates.py`: actual signed DMGs, a same-version build
   update, a binary-delta reconstruction, unchanged runtime reuse, and rejection of
-  modified archives/source provenance. Uses a temporary test signing key.
+  modified archives/source provenance. Also exercises retained-artifact validation
+  and rejects a modified signed feed, using a temporary test key and substituted
+  Apple notarization/Gatekeeper checks.
 - `scripts/test-app-termination.sh`: actual AppKit quit with deferred cleanup,
-  including stopping a background backend before replacement.
+  including stopping a background backend on ordinary quit after extraction.
+- `scripts/test-changes.sh --companion-desktop`: shared protocol and macOS companion
+  integration for desktop package changes, without iOS simulator tests.
 - `scripts/test-changes.sh --desktop`: desktop source checks without simulators.
 
 References: [Sparkle delta updates](https://sparkle-project.org/documentation/delta-updates/)

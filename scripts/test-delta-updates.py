@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from unittest.mock import patch as mock_patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('assets', ROOT / 'scripts/release-assets.py')
@@ -82,6 +83,32 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-delta-test-') as temp:
     run(ROOT / 'scripts/generate-release-manifest.sh', '0.3.0', '2', output / 'WovenMatter_0.3.0_arm64.dmg', output / 'latest-mac.json')
     assets.prepare(output, '0.3.0', 2, 'a' * 40)
     run('swift', ROOT / 'scripts/verify-update-signatures.swift', output, public)
+    # Exercise the real retained-artifact validator too. Only the fixture's
+    # public signing identity and Apple notarization/Gatekeeper services differ
+    # from production; metadata, checksums and both Ed25519 checks run for real.
+    stage_spec = importlib.util.spec_from_file_location('stage', ROOT / 'scripts/stage-update.py')
+    stage = importlib.util.module_from_spec(stage_spec)
+    stage_spec.loader.exec_module(stage)
+    trust_checks = []
+    def reuse_run(*args):
+        if args[0] == 'swift':
+            return run(*args, public)
+        if str(args[0]).endswith('/prepare-sparkle-tools.sh'):
+            return str(tools)
+        if args[0] in ('codesign', 'xcrun', 'spctl'):
+            trust_checks.append(args)
+            return ''
+        return run(*args)
+    with mock_patch.dict(os.environ, WOVENMATTER_SPARKLE_PRIVATE_KEY=str(keyfile)), mock_patch.object(stage, 'run', side_effect=reuse_run):
+        stage.validate_reused(output, '0.3.0', 'a' * 40, 2)
+        assert [call[0] for call in trust_checks] == ['codesign', 'xcrun', 'spctl']
+        feed = output / 'appcast.xml'
+        signed = feed.read_bytes()
+        feed.write_bytes(signed.replace(b'<channel>', b'<channel><!-- tampered retained feed -->', 1))
+        assets.prepare(output, '0.3.0', 2, 'a' * 40)
+        fails(lambda: stage.validate_reused(output, '0.3.0', 'a' * 40, 2))
+        feed.write_bytes(signed)
+        assets.prepare(output, '0.3.0', 2, 'a' * 40)
     fails(lambda: assets.verify(output, '0.3.0', 'b' * 40))
     original = full.read_bytes()
     full.write_bytes(original + b'tampered')

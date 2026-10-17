@@ -11,6 +11,7 @@ final class DesktopUpdater: NSObject {
     private(set) var canCheckForUpdates = false
     private(set) var errorMessage: String?
     private(set) var isInstalling = false
+    private(set) var hasStagedUpdate = false
     weak var model: ApplicationModel?
 
     #if canImport(Sparkle)
@@ -78,6 +79,12 @@ extension DesktopUpdater: SPUUpdaterDelegate {
         return true
     }
 
+    func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
+        // Sparkle installs an extracted update on ordinary quit as well as
+        // through Install and Relaunch. Both paths must stop the old backend.
+        hasStagedUpdate = true
+    }
+
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         isInstalling = true
         Task { await model?.analytics.record(.updateInstallClicked, properties: ["target_version": item.displayVersionString]) }
@@ -87,9 +94,13 @@ extension DesktopUpdater: SPUUpdaterDelegate {
         let wasInstalling = isInstalling
         pendingInstallHandler = nil
         isInstalling = false
-        errorMessage = error.localizedDescription
-        model?.analytics.cancelUpdateInstallation()
+        hasStagedUpdate = false
+        let failure = error as NSError
+        let expected = failure.domain == SUSparkleErrorDomain &&
+            [Int(SUError.noUpdateError.rawValue), Int(SUError.installationCanceledError.rawValue)].contains(failure.code)
+        errorMessage = expected ? nil : error.localizedDescription
         guard wasInstalling else { return }
+        model?.analytics.cancelUpdateInstallation()
         // A canceled/failed installation must restore a stopped execution owner.
         Task {
             WorkspaceAssetSession.cancelPreparedRestart()
