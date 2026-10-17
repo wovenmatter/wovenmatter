@@ -8,7 +8,8 @@ on:
 
 permissions:
   issues: write
-  pull-requests: read
+  # Adding/removing labels on a pull request requires PR write access.
+  pull-requests: write
 
 jobs:
   label:
