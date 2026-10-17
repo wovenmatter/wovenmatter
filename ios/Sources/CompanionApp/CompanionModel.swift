@@ -680,9 +680,11 @@ import CompanionInference
           let projection = String(decoding: try JSONEncoder().encode(activity), as: UTF8.self)
           return CompanionActivity(id: value.0, runID: runID, title: "Read file", status: value.1, projectionJSON: projection, sequence: Int64(index + 1))
         }
-        try await store.cache(.init(conversationID: "fixture-chat", messages: [
+        let transcript = CompanionTranscript(conversationID: "fixture-chat", messages: [
           .init(id: "user", conversationID: "fixture-chat", runID: runID, role: "user", content: "Inspect the launch plan.", createdAt: startedAt, sequence: 0)
-        ], activities: activities, activeRunID: runID, runs: [.init(id: runID, status: "running", startedAt: startedAt)]))
+        ], activities: activities, activeRunID: runID, runs: [.init(id: runID, status: "running", startedAt: startedAt)])
+        try await store.journal.append(workspaceID: "fixture-execution", transcript: transcript)
+        try await store.cache(transcript)
         if scenario == "running-tools-expanded" {
           let state = transcriptStates.state(for: "fixture-chat")
           state.setExpanded(ConversationTranscriptState.disclosureKey(runID: runID, itemID: "group:fixture-read"), true)

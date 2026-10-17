@@ -677,7 +677,9 @@ private struct ConversationActivityDetails: View {
             rawBlock("Input", field(\.rawInputJSON))
             rawBlock("Output", field(\.rawOutputJSON))
             rawBlock("Event", field(\.rawPayloadJSON))
-            if loadToken != nil {
+            // A compact record can contain no inline fields. Keep a visible
+            // placeholder so its visibility-driven detail read can start.
+            if loadToken != nil || (activity.detailsAvailable == true && complete == nil && error == nil) {
                 Text("Loading details…")
                     .font(.system(size: 12.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
