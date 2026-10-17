@@ -20,6 +20,8 @@ run_static_checks() {
     bash -n "$file"
   done
   scripts/test-release.sh
+  python3 scripts/test-support/test_update_refresh.py
+  python3 scripts/test-support/test_ci_scopes.py
   bash scripts/test-dev-signing.sh
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
@@ -130,12 +132,15 @@ run_all() {
   run_companion --all-devices
 }
 
-run_macos() {
+run_desktop() {
   run_static_checks
   run_default_agent_tests
   run_package_tests
   run_app_build
-  # CI runs iPhone/iPad UI in independent matrix jobs. --all retains both locally.
+}
+
+run_macos() {
+  run_desktop
   run_companion --simulator
 }
 
@@ -148,12 +153,13 @@ run_remote() {
 mode="${1:-changed}"
 case "$mode" in
   --all) run_all; exit ;;
+  --desktop) run_desktop; exit ;;
   --macos) run_macos; exit ;;
   --companion) run_companion --simulator; exit ;;
   --remote) run_remote; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--macos|--companion|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--desktop|--macos|--companion|--remote]' >&2
     exit 64
     ;;
 esac

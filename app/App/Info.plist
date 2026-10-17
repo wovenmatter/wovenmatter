@@ -8,6 +8,18 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/wovenmatter/wovenmatter/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI=</string>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
     <key>LSMultipleInstancesProhibited</key>
     <true/>
 </dict>

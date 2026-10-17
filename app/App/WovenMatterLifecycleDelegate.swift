@@ -45,6 +45,37 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
             return .terminateLater
         }
+        if DesktopUpdater.shared.isInstalling && model.isBackendFrontend {
+            guard !terminating else { return .terminateLater }
+            terminating = true
+            Task {
+                guard await WorkspaceAssetSession.prepareForRestart() else {
+                    terminating = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                do {
+                    try await model.prepareBackendForUpdate()
+                    let allowed = await prepareBrowserTermination?() ?? true
+                    if !allowed {
+                        WorkspaceAssetSession.cancelPreparedRestart()
+                        try await model.recoverBackendAfterFailedUpdate()
+                        terminating = false
+                    }
+                    sender.reply(toApplicationShouldTerminate: allowed)
+                } catch {
+                    WorkspaceAssetSession.cancelPreparedRestart()
+                    try? await model.recoverBackendAfterFailedUpdate()
+                    terminating = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    let alert = NSAlert()
+                    alert.messageText = "Woven Matter could not prepare to update"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
+            }
+            return .terminateLater
+        }
         guard !terminating else { return .terminateLater }
         terminating = true
         model.suspendNoteEditing()

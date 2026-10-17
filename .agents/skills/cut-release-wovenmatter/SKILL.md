@@ -94,3 +94,15 @@ private. Never bypass this gate with direct GitHub publication commands.
 
 Report the exact commit, validation result, and release URL with its verified
 public state after publication.
+
+
+## Explicitly requested same-version update repair
+
+When Trey explicitly asks for an updater repair PR that refreshes an existing
+release on merge, follow `docs/DESKTOP_UPDATES.md`. Put the existing version in
+`.github/release-refresh.json`; its merge starts the desktop-only signed workflow.
+That request authorizes the asset refresh after private artifact verification;
+it does not authorize editing the approved description or moving its version tag.
+The actual source has a separate immutable update-build tag and provenance asset.
+Keep normal new-version release publication behind the description approval gate.
+Explain the one-time full-install limitation for clients predating the new updater.

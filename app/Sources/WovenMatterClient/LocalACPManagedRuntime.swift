@@ -310,6 +310,16 @@ enum LocalACPBoundedDownloadError: Error, Equatable {
 }
 
 enum LocalACPBoundedHTTPSDownloader {
+    static func sessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        // An idle connection fails promptly; ongoing large transfers can finish.
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
     static func download(
         _ url: URL,
         to destination: URL,
@@ -365,11 +375,7 @@ private final class LocalACPBoundedDownloadDelegate:
             self.continuation = continuation
             lock.unlock()
 
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.timeoutIntervalForRequest = 60
-            configuration.timeoutIntervalForResource = 300
-            configuration.urlCache = nil
-            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            let configuration = LocalACPBoundedHTTPSDownloader.sessionConfiguration()
             let session = URLSession(
                 configuration: configuration,
                 delegate: self,

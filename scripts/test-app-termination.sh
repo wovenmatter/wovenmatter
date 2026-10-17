@@ -27,9 +27,11 @@ xcrun swiftc -parse-as-library -swift-version 6 \
   "$repo_root/app/App/WovenMatterLifecycleDelegate.swift" \
   "$repo_root/scripts/test-support/AppTerminationTests.swift" \
   -o "$app/Contents/MacOS/TerminationProbe"
-open -n -W "$app" --args "$test_root/result"
-if [ "$(cat "$test_root/result")" != PASS ]; then
-  cat "$test_root/result" >&2
-  exit 1
-fi
+for mode in --normal --updater --standalone-update; do
+  open -n -W "$app" --args "$test_root/result" "$mode"
+  if [ "$(cat "$test_root/result")" != PASS ]; then
+    cat "$test_root/result" >&2
+    exit 1
+  fi
+done
 printf '%s\n' 'AppKit quit from updater task: passed (termination deferred, cleanup once, app exited).'

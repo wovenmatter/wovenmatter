@@ -1,15 +1,33 @@
 import AppKit
 import Foundation
 
-// Only the model is substituted: the test compiles the production lifecycle delegate.
+@MainActor final class DesktopUpdater {
+    static let shared = DesktopUpdater()
+    var isInstalling = false
+}
+@MainActor enum WorkspaceAssetSession {
+    static func prepareForRestart() async -> Bool { true }
+    static func cancelPreparedRestart() {}
+}
+
+// Only external application services are substituted: the test compiles the production lifecycle delegate.
 @MainActor
 final class ApplicationModel {
     var isPreparedForExecutionRestart = false
+    var isBackendFrontend = !CommandLine.arguments.contains("--standalone-update")
     var isLibraryClient = false
     var noteEditingSuspended = false
     func suspendNoteEditing() { noteEditingSuspended = true }
     func resumeNoteEditing() { noteEditingSuspended = false }
     var flushCount = 0
+    var updatePreparationCount = 0
+    func prepareBackendForUpdate() async throws {
+        updatePreparationCount += 1
+        guard await flushNotesBeforeBackendClientQuit() else { throw CancellationError() }
+        try await prepareOpenCodeInstancesToQuit()
+        isPreparedForExecutionRestart = true
+    }
+    func recoverBackendAfterFailedUpdate() async throws { isPreparedForExecutionRestart = false }
     var cleanupCount = 0
     var cleanupFinished = false
     var sessionShutdownCount = 0
@@ -40,6 +58,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
 
     init(resultURL: URL) {
         self.resultURL = resultURL
+        DesktopUpdater.shared.isInstalling = (CommandLine.arguments.contains("--updater") || CommandLine.arguments.contains("--standalone-update"))
         super.init()
         delegate.model = model
         delegate.prepareBrowserTermination = { [model] in
@@ -68,6 +87,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         delegate.applicationWillTerminate(notification)
         let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1
             && model.cleanupFinished && model.sessionShutdownCount == 1
+            && model.updatePreparationCount == (DesktopUpdater.shared.isInstalling && model.isBackendFrontend ? 1 : 0)
             && !delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared)
         try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
             .write(to: resultURL, atomically: true, encoding: .utf8)

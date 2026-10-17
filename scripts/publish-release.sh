@@ -72,10 +72,17 @@ test "$is_draft" = "true" \
 
 version="${tag#v}"
 expected_asset="WovenMatter_${version}_arm64.dmg"
-expected_assets="$(printf '%s\n' SHA256SUMS.txt "$expected_asset" latest-mac.json | sort)"
 actual_assets="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
-test "$actual_assets" = "$expected_assets" \
-  || { printf '%s has an unexpected release asset set.\n' "$tag" >&2; exit 65; }
+if grep -qx release-build.json <<<"$actual_assets"; then
+  # The exact signed feed, provenance, and checksum inventory are checked after download.
+  while IFS= read -r asset_name; do
+    [[ "$asset_name" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 65
+  done <<<"$actual_assets"
+else
+  expected_assets="$(printf '%s\n' SHA256SUMS.txt "$expected_asset" latest-mac.json | sort)"
+  test "$actual_assets" = "$expected_assets" \
+    || { printf '%s has an unexpected release asset set.\n' "$tag" >&2; exit 65; }
+fi
 
 release_runs="$(gh run list --repo "$repository" --workflow release.yml \
   --event push --branch "$tag" --limit 20 \
@@ -98,6 +105,11 @@ gh release download "$tag" --repo "$repository" --dir "$temporary"
   cd "$temporary"
   shasum -a 256 -c SHA256SUMS.txt
 )
+
+if [ -f "$temporary/release-build.json" ]; then
+  python3 scripts/release-assets.py verify "$temporary" "$version" "$expected_sha"
+  swift scripts/verify-update-signatures.swift "$temporary"
+fi
 
 dmg="${temporary}/${expected_asset}"
 manifest="${temporary}/latest-mac.json"
