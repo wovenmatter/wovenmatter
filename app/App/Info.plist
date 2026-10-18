@@ -8,6 +8,8 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>WovenMatterSourceRevision</key>
+    <string>$(WOVENMATTER_SOURCE_REVISION)</string>
     <key>SUFeedURL</key>
     <string>https://github.com/wovenmatter/wovenmatter/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>

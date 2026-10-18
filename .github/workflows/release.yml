@@ -58,6 +58,11 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Validate release metadata before compiling
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: python3 scripts/validate-release-metadata.py preflight "$VERSION" "$(git rev-list --count HEAD)" "$GITHUB_SHA"
+
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 

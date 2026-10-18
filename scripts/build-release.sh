@@ -78,15 +78,8 @@ release_status 'Signing nested updater helpers and sealing the app'
 scripts/sign-release-updater.sh "$app" "$signing_identity"
 
 release_status 'Validating bundled resources and code signatures'
-python3 - "$app" "$version" "$build_number" "$revision" <<'PROVENANCE'
-import plistlib, sys
-from pathlib import Path
-info = plistlib.loads((Path(sys.argv[1]) / 'Contents/Info.plist').read_bytes())
-assert info['CFBundleShortVersionString'] == sys.argv[2]
-assert info['CFBundleVersion'] == sys.argv[3]
-assert info['WovenMatterSourceRevision'] == sys.argv[4]
-assert info['SUPublicEDKey'] == 'fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI='
-PROVENANCE
+python3 scripts/validate-release-metadata.py verify "$version" "$build_number" "$revision" \
+  --plist "$app/Contents/Info.plist"
 scripts/validate-native-app.sh "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 python3 scripts/validate-release-code.py "$app"
