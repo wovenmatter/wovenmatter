@@ -22,16 +22,18 @@ async function fixture(t, run) {
   scope.grant = { token: 'scoped-secret', expires: Date.now() + 3600000 };
   return { broker, scope, calls, scopes, directory };
 }
-test('Executor updates have no beta, minor or major ceiling', async () => {
+test('Executor updates follow every V2 release but never select another API major', async () => {
   const metadata = version => ({ version, bin: { executor: 'bin.mjs' } });
   const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest')
     ? metadata(latest) : { versions: Object.fromEntries(versions.map(version => [version, metadata(version)])) }));
   assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19'])), '2.0.0-beta.19');
-  for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '3.0.0']) {
+  for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '2.99.3']) {
     assert.equal(supportsExecutorVersion(version), true);
     assert.equal(await latestExecutorVersion(registry(version, [version])), version);
   }
-  for (const version of ['1.6.10', 'invalid']) assert.equal(supportsExecutorVersion(version), false);
+  // A new upstream major leaves installs on the newest V2 release.
+  assert.equal(await latestExecutorVersion(registry('3.0.0', ['2.4.1', '3.0.0'])), '2.4.1');
+  for (const version of ['1.6.10', '3.0.0', 'invalid']) assert.equal(supportsExecutorVersion(version), false);
 });
 test('inventory reads linked account targets and never creates profiles or exposes the administrator app', async t => {
   const { broker } = await fixture(t, async () => ({}));

@@ -1,8 +1,9 @@
 # On-device Pi Durable
 
 The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, and `chord`
-1.2.0 packages already locked in `default-agent/package-lock.json`. It does not
-ship Node, run a remote agent loop, or download executable SDK code. Rebuild
+packages locked in `default-agent/package-lock.json`, the same release as the
+desktop runtime. It does not ship Node, run a remote agent loop, or download
+executable SDK code, so SDK updates reach iOS only in an App Store build. Rebuild
 with `node scripts/build-ios-pi-runtime.mjs`; use `--check` to verify committed
 resources match the reviewed sources and installed locked dependencies.
 
@@ -88,8 +89,9 @@ Stored transcript messages retain their `content` shape. Nested code-mode
 ownership, replay policy, cancellation, and output visibility retain their
 existing behavior.
 
-`scripts/update-runtime-dependencies.mjs --write` refreshes the shared lockfile
-and regenerates this bundle. Its version, provenance, notice headings, and
+`scripts/update-runtime-dependencies.mjs --write`, run daily by the
+dependency-refresh workflow, refreshes the shared lockfile and regenerates this
+bundle. Its version, provenance, notice headings, and
 provider-catalog version constant derive from the locked SDK rather than
 separate handwritten version strings. esbuild is an explicit build dependency;
 it is omitted from the shipped desktop/server runtime.

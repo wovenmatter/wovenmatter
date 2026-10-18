@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
-# Keep tooling and the embedded framework pinned to the same reviewed version.
+# Tools and the embedded framework come from one Sparkle release record. The
+# updater is security-critical, so the Xcode project requires that release's
+# exact revision; scripts/update-runtime-dependencies.mjs refreshes both.
 set -euo pipefail
-cache="${WOVENMATTER_SPARKLE_TOOLS_DIR:-${TMPDIR:-/tmp}/wovenmatter-sparkle-2.10.0}"
-expected=c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+read -r version revision expected < <(python3 -c '
+import json, re, sys
+record = json.load(open(sys.argv[1]))
+project = open(sys.argv[2]).read()
+required = re.search(r"sparkle-project/Sparkle\";\s*requirement = \{ kind = revision; revision = ([0-9a-f]{40}); \}", project)
+assert re.fullmatch(r"\d+\.\d+\.\d+", record["version"]) and re.fullmatch(r"[0-9a-f]{64}", record["toolsSHA256"])
+if not required or required[1] != record["revision"]:
+    sys.exit("The Xcode Sparkle requirement differs from app/Updater/sparkle-version.json.")
+print(record["version"], record["revision"], record["toolsSHA256"])
+' "$repo_root/app/Updater/sparkle-version.json" "$repo_root/app/WovenMatter.xcodeproj/project.pbxproj")
+: "${revision:?}"
+cache="${WOVENMATTER_SPARKLE_TOOLS_DIR:-${TMPDIR:-/tmp}/wovenmatter-sparkle-$version}"
 if [ ! -f "$cache/.verified-$expected" ]; then
   temporary="$(mktemp -d)"
   trap 'rm -rf "$temporary"' EXIT
   curl --fail --location --retry 3 --silent --show-error \
-    https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz \
+    "https://github.com/sparkle-project/Sparkle/releases/download/$version/Sparkle-$version.tar.xz" \
     -o "$temporary/sparkle.tar.xz"
   test "$(shasum -a 256 "$temporary/sparkle.tar.xz" | awk '{print $1}')" = "$expected"
   mkdir -p "$temporary/tools"

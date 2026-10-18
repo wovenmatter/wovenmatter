@@ -2,7 +2,9 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 agent_root="$repo_root/default-agent"
-version=24.22.0
+# One tested Node LTS record for this bundle, CI, and the managed adapter runtime.
+# scripts/update-runtime-dependencies.mjs refreshes it with the checksums below.
+version="$(tr -d '[:space:]' < "$agent_root/.node-version")"
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi
 case "$arch" in
@@ -39,7 +41,7 @@ fi
 output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
-  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
+  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=/.node-version --exclude=.DS_Store "$agent_root/" "$output/"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"

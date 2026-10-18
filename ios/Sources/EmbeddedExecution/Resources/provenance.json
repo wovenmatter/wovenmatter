@@ -6,17 +6,17 @@
   "npmIntegrity": "sha512-0YvXxEhfEdpLfb/XkM2BFAeMROq0iMUX2bzzH9pOttyMcWkwq+HbE5uyuGD82LN7y2q+SNvi/6V5JEsOlD2R1A==",
   "sources": {
     "worker.js": "cd1c09fd214f1c01061c0ae9617c6926386c053e4e9ed1a4f14b705a08402f29",
-    "commands.py": "63a759349009dde7cbe298a5f15fe08eeb97acb20073ff5860fef18616d5b59d",
-    "package.json": "bfa2a958f34a63d5b0ca56ab33cef0b3df15f5fee179f88e118695375ef0e4af",
-    "package-lock.json": "a6d5467d60531c7efa04931cc4953e69cfe40f94bd251877327695765d6c2014",
+    "commands.py": "66b5b79166a594e2c06014118af56da5abdff49488bafd59862a9ff70d323e11",
+    "package.json": "73a50d54bc522368e6f5acf1670af56863114600670aad10f832062086f6d70d",
+    "package-lock.json": "bc20d5e277b603799fe3f0eddddce31a3603e3d01431bc31e2f2ef99b9dae5a9",
     "licenses.json": "c395c4f43affafb3a13f0bde5b6692e8e126c646b6b0c6e49fa7a6ddeb9703f8"
   },
   "resources": {
-    "worker.js": "5cc771bdc80b873115b99cc278e63b97a2b74433dea4f8999a9b7a632f0c4791",
+    "worker.js": "671943134f87933bb3909931ebcbf960e8e9fd1ff16245c82af7b234a5ca4405",
     "pyodide.asm.wasm": "cc36e3cab04fdfc9a63ff13eb52eae2b911bf46c025cc7b281f394bd3de1d5e6",
     "python_stdlib.zip": "fa1957e5777068fc4f7437f96d860ae2fbe9c19732ba06c84e004ec16dd7dd7a",
     "pyodide-lock.json": "a32a0001399cff875f9b8b84059fc756bcca3d78eb7a718d153aafce2244c626",
-    "commands.py": "63a759349009dde7cbe298a5f15fe08eeb97acb20073ff5860fef18616d5b59d",
+    "commands.py": "66b5b79166a594e2c06014118af56da5abdff49488bafd59862a9ff70d323e11",
     "Pyodide-LICENSE.txt": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
     "Python-LICENSE.txt": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231",
     "Python-third-party-notices.rst": "c695d550b135e53e38807e76496d1db17d22c40e461d1f3f354c86188d3305dd",

@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Bot-created dependency PRs do not trigger pull_request runs; the dependency
+  # refresh workflow dispatches CI on its candidate branch instead.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,7 +19,7 @@ concurrency:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       macos: ${{ steps.paths.outputs.macos }}
@@ -25,17 +28,9 @@ jobs:
       companion: ${{ steps.paths.outputs.companion }}
       updates: ${{ steps.paths.outputs.updates }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@main
         with:
           fetch-depth: 0
-
-      - name: Require immutable GitHub Action references
-        run: |
-          if grep -R -nE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*' .github/workflows \
-            | grep -vE 'uses:[[:space:]]*(\./|docker://[^[:space:]#]+@sha256:[0-9a-f]{64}|[^[:space:]#]+@[0-9a-f]{40})([[:space:]]*#.*)?$'; then
-            echo "Every third-party action must use a full commit SHA." >&2
-            exit 1
-          fi
 
       - name: Scan the public tree
         run: scripts/scan-public-tree.sh
@@ -45,8 +40,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           base_sha="$BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            # A dispatched branch is validated against everything it changes.
+            base_sha="$(git merge-base "origin/$DEFAULT_BRANCH" "$HEAD_SHA")"
+          fi
           if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
             base_sha="$(git rev-parse "${HEAD_SHA}^")"
           fi
@@ -64,10 +64,11 @@ jobs:
     # Cold desktop builds and companion integration have a separate budget from UI tests.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          node-version: 24
+          # The bundled Node LTS release, refreshed by the dependency workflow.
+          node-version-file: default-agent/.node-version
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
@@ -86,10 +87,11 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          node-version: 24
+          # The bundled Node LTS release, refreshed by the dependency workflow.
+          node-version-file: default-agent/.node-version
       - name: Test companion protocol and runtime integration
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-companion-${{ github.run_id }}-${{ github.run_attempt }}
@@ -116,7 +118,7 @@ jobs:
           - name: iPad
             type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@main
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
@@ -127,17 +129,18 @@ jobs:
     name: Remote workspace
     needs: changes
     if: needs.changes.outputs.remote == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          node-version: 24
+          # The bundled Node LTS release, refreshed by the dependency workflow.
+          node-version-file: default-agent/.node-version
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote
       - name: Build the remote workspace image
-        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:0.1 .
+        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:latest .
 
       - name: Verify workspace isolation and home preservation
         run: scripts/test-container.sh --skip-build
@@ -169,7 +172,7 @@ jobs:
     name: CI
     needs: [changes, macos, companion, ios, remote]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require relevant validation

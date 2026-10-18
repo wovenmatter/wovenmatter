@@ -55,7 +55,7 @@ release_status() {
 }
 
 release_status 'Compiling production Release app'
-xcodebuild -quiet \
+xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
   -configuration Release \

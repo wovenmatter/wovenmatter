@@ -63,7 +63,7 @@ if [ -n "$signing_identity" ]; then
       ;;
   esac
 fi
-xcodebuild -quiet \
+xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   -project "${app_root}/WovenMatter.xcodeproj" \
   -scheme WovenMatter \
   -configuration Debug \

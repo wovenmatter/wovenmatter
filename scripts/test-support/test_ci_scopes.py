@@ -9,6 +9,10 @@ updater = module.scopes(['app/App/Services/DesktopUpdater.swift', 'app/App/Views
                         'scripts/stage-update.py', '.github/workflows/release.yml', '.github/workflows/ci.yml',
                         '.github/release-refresh.json', 'scripts/test-changes.sh'])
 assert updater == dict(macos=True, companion=False, ios=False, remote=False, updates=True), updater
+# The security-critical updater record changes both the framework and tools;
+# metadata-only refreshes must run signed delta validation too.
+sparkle_record = module.scopes(['app/Updater/sparkle-version.json'])
+assert sparkle_record == dict(macos=True, companion=False, ios=False, remote=False, updates=True), sparkle_record
 # The updater's downloader and dependency lockfile are package changes, and
 # therefore require integration coverage even though the UI itself is desktop.
 updater_package = module.scopes(['app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift',

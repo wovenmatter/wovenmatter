@@ -1,4 +1,4 @@
-import { latestSupportedPackage } from './package-versions.mjs';
+import { selectPackageRelease } from './package-versions.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -95,42 +95,50 @@ export async function sdkStatus({ directory }) {
     const versions = await Promise.all(definition.packages.map(name => packageVersion(runtime.root, name).catch(() => null)));
     const installedVersion = versions[0];
     const consistent = versions.every(version => version === installedVersion) && stableVersion(installedVersion);
-    const latestVersion = cached?.base === runtime.base ? cached?.versions?.[definition.id] ?? null : null;
-    return { id: definition.id, name: definition.name, installedVersion, latestVersion, consistent,
-      ...(!consistent ? { notice: 'SDK package versions are inconsistent. Reinstall the SDK update.' } : {}),
+    const current = cached?.base === runtime.base;
+    const latestVersion = current ? cached?.versions?.[definition.id] ?? null : null;
+    const blocked = current ? cached?.newer?.[definition.id] ?? null : null;
+    const newerVersion = stableVersion(blocked) && stableVersion(latestVersion) && newer(blocked, latestVersion) ? blocked : null;
+    const notice = !consistent ? 'SDK package versions are inconsistent. Reinstall the SDK update.'
+      : newerVersion ? `${definition.name} ${newerVersion} needs a Woven Matter update. ${latestVersion} is the newest compatible release.` : undefined;
+    return { id: definition.id, name: definition.name, installedVersion, latestVersion, newerVersion, consistent,
+      ...(notice ? { notice } : {}),
       updateAvailable: stableVersion(latestVersion) && stableVersion(installedVersion) && (newer(latestVersion, installedVersion) || !consistent) };
   }));
   return { sdks, generation: runtime.generation, checkedAt: cached?.base === runtime.base ? cached.checkedAt ?? null : null };
 }
-async function registryVersion(name, signal, fetchImplementation = fetch, current) {
-  try {
-    return await latestSupportedPackage(name, { major: Number(current.split('.')[0]),
-      minor: name === '@anthropic-ai/claude-agent-sdk' ? Number(current.split('.')[1]) : undefined,
-      signal, fetchImplementation });
-  } catch { throw fail('The SDK update source did not return a compatible release. Try again later.'); }
+// The bundled package declaration is the single compatibility policy: this app
+// build's code was tested against that range, and the staged checks below only
+// prove imports. A newer line outside it is reported until an app update widens it.
+let declarationsPromise;
+async function compatibleRange(definition) {
+  const { dependencies } = await (declarationsPromise ??= readFile(join(bundledRoot, 'package.json'), 'utf8').then(JSON.parse));
+  const ranges = new Set(definition.packages.map(name => dependencies[name]).filter(Boolean));
+  if (ranges.size !== 1) throw fail(`${definition.name} has no single supported version range. Reinstall Woven Matter.`);
+  return [...ranges][0];
 }
-function compatible(version, installed) {
-  // Pi 1.x updates stay on the reviewed major line and must pass the
-  // provider-free contract check below. Claude also keeps its minor boundary.
-  return stableVersion(version) && stableVersion(installed) && version.split('.')[0] === installed.split('.')[0];
+async function registryRelease(definition, signal, fetchImplementation = fetch) {
+  const range = await compatibleRange(definition);
+  try {
+    // Every Pi package, including Chord, must publish the selected release.
+    return await selectPackageRelease(definition.packages, { range, signal, fetchImplementation });
+  } catch { throw fail('The SDK update source did not return a compatible release. Try again later.'); }
 }
 export async function checkSDKUpdates({ directory, id, signal, fetchImplementation } = {}) {
   aborted(signal);
   const runtime = await resolveSDKRuntime({ directory });
   const previous = await readJSON(paths(directory).latest, null, 16384).catch(() => null);
   const versions = previous?.base === runtime.base ? { ...previous.versions } : {};
+  const newerVersions = previous?.base === runtime.base ? { ...previous.newer } : {};
   if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi Durable SDK or Claude SDK.');
   for (const definition of definitions.filter(value => id === undefined || value.id === id)) {
-    const current = await packageVersion(runtime.root, definition.packages[0]);
-    const latest = await registryVersion(definition.packages[0], signal, fetchImplementation, current);
-    if (!compatible(latest, current) || (definition.id === 'claude' && latest.split('.')[1] !== current.split('.')[1])) {
-      throw fail(`${definition.name} has a new incompatible release. Update Woven Matter before installing it.`);
-    }
-    versions[definition.id] = latest;
+    const { selected, latest } = await registryRelease(definition, signal, fetchImplementation);
+    versions[definition.id] = selected;
+    newerVersions[definition.id] = latest === selected ? null : latest;
   }
   aborted(signal);
   await privateDirectory(paths(directory).root);
-  await atomicJSON(paths(directory).latest, { base: runtime.base, versions, checkedAt: new Date().toISOString() });
+  await atomicJSON(paths(directory).latest, { base: runtime.base, versions, newer: newerVersions, checkedAt: new Date().toISOString() });
   return sdkStatus({ directory });
 }
 async function acquireLock(path, onCompromised) {
@@ -216,6 +224,13 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     await privateDirectory(stage);
     await cp(join(bundledRoot, 'src'), join(stage, 'src'), { recursive: true, dereference: false, errorOnExist: true });
     const manifest = await readJSON(join(before.root, 'package.json'));
+    const installedGraph = await readJSON(join(before.root, 'package-lock.json'));
+    // Preserve unrelated packages during this one SDK installation transaction.
+    // These selections come from the active installation, never source pins.
+    for (const name of Object.keys(manifest.dependencies ?? {})) {
+      const installed = installedGraph?.packages?.[`node_modules/${name}`]?.version;
+      if (installed) manifest.dependencies[name] = installed;
+    }
     for (const pkg of definition.packages) manifest.dependencies[pkg] = selected.latestVersion;
     await writeFile(join(stage, 'package.json'), JSON.stringify(manifest), { mode: 0o600 });
     // Preserve the untouched SDK and every other locked dependency.

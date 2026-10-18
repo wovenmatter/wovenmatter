@@ -15,7 +15,10 @@ let package = Package(
   ],
   dependencies: [
     .package(path: "../shared"), .package(path: "../ios"),
-    .package(url: "https://github.com/openclaw/Peekaboo.git", revision: "1e42f1d9053109d6d19e604504ea80bc229a88e8")
+    // Exact release: Peekaboo runs inside the signed GUI process under its macOS
+    // privacy grants and its automation APIs change between releases. The daily
+    // dependency refresh proposes each new release tag through CI.
+    .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.9.5")
   ],
   targets: [
     .target(

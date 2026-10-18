@@ -32,6 +32,9 @@ public struct LocalACPManagedNodeArtifact: Equatable, Sendable {
         )!
     }
 
+    /// The same tested Node LTS release the app bundles (default-agent/.node-version).
+    /// Installed offline from this record; scripts/update-runtime-dependencies.mjs
+    /// refreshes the version and checksums together.
     public static var current: LocalACPManagedNodeArtifact {
         #if arch(arm64)
         LocalACPManagedNodeArtifact(

@@ -4,8 +4,8 @@
 
 Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,
 through its public API. The local and remote installers use the unmodified
-`executor` npm package at version `2.0.0-beta.7` and retain its upstream license
-and bundled dependency notices. Those dependencies remain subject to their own
+`executor` npm package, selected from its supported V2 release line at installation,
+and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
 licenses.
 
 Source: [UsefulSoftwareCo/executor](https://github.com/UsefulSoftwareCo/executor).
@@ -36,13 +36,13 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.2.0 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.2.0/packages/durable)
+Pi Durable bundles `@earendil-works/pi-durable` 1.3.0 from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.3.0/packages/durable)
 for native execution and persistence. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.2.0/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/v1.3.0/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
-Native store ownership uses `proper-lockfile` 4.1.2 from
+Native store ownership uses `proper-lockfile` from
 [Made With MOXY](https://github.com/moxystudio/node-proper-lockfile).
 It is MIT licensed, with
 `Copyright (c) 2018 Made With MOXY Lda <hello@moxy.studio>`.
@@ -135,15 +135,15 @@ SOFTWARE.
 ## Browser and computer automation
 
 Woven Matter embeds [Peekaboo](https://github.com/openclaw/Peekaboo) Automation Kit
-at `1e42f1d9053109d6d19e604504ea80bc229a88e8`, under MIT, copyright 2025 Peter
+at `260fc35320d6c350af503338b944d68311e2bebb`, under MIT, copyright 2025 Peter
 Steinberger. AXorcist and the Swift support-library licenses are reproduced in
 `app/App/ThirdPartyNotices.txt`, which is included in the application bundle.
 
-Browser automation bundles `playwright-core` 1.64.1 from
+Browser automation bundles `playwright-core` from
 [Microsoft Playwright](https://github.com/microsoft/playwright) under Apache-2.0
-and `ws` 8.22.0 from [websockets/ws](https://github.com/websockets/ws) under MIT.
+and `ws` from [websockets/ws](https://github.com/websockets/ws) under MIT.
 Their upstream licenses remain in the bundled Node dependencies. Playwright
-connects to Woven Matter’s pinned CEF rather than installing another browser.
+connects to Woven Matter’s bundled CEF rather than installing another browser.
 
 ## Sparkle 2.10.0
 

@@ -1,4 +1,6 @@
-FROM node:24.22.0-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315
+# Node LTS line shared with the bundled macOS runtime; --pull selects its newest
+# patch and Debian security updates on every build (docs/DEPENDENCIES.md).
+FROM node:24-trixie-slim
 
 LABEL com.wovenmatter.workspace-uid="10001" \
       com.wovenmatter.workspace-gid="10001"
@@ -10,7 +12,6 @@ RUN export DEBIAN_FRONTEND=noninteractive \
       bash ca-certificates chromium curl git gh jq openssh-client \
       procps python3 python3-venv ripgrep tini util-linux \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global --ignore-scripts --no-audit --no-fund npm@12.2.0 playwright@1.64.1 \
     && userdel --remove node \
     && groupadd --gid 10001 woven \
     && useradd --no-create-home --home-dir /home --shell /bin/bash --uid 10001 --gid 10001 woven \
@@ -25,7 +26,10 @@ ENV HOME=/home \
 
 WORKDIR /opt/wovenmatter
 COPY --chown=woven:woven default-agent/package*.json ./default-agent/
-RUN cd default-agent && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+# The workspace Playwright CLI matches playwright-core in the tested lockfile.
+RUN npm install --global --ignore-scripts --no-audit --no-fund \
+      "playwright@$(node -p 'require("./default-agent/package-lock.json").packages["node_modules/playwright-core"].version')" \
+    && cd default-agent && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY --chown=woven:woven default-agent/src ./default-agent/src
 COPY --chown=woven:woven remote/package.json ./package.json
 COPY --chown=woven:woven remote/src ./src

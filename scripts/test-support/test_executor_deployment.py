@@ -15,7 +15,7 @@ DOCKERFILE = (ROOT / 'remote/Executor.Dockerfile').read_text()
 CURRENT_IMAGE = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(DOCKERFILE.encode()).hexdigest()[:16]
 
 class ExecutorDeploymentTests(unittest.TestCase):
-    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False):
+    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False, refresh=False):
         commands = root / 'commands'
         commands.mkdir()
         log = root / 'commands.log'
@@ -77,7 +77,7 @@ elif sys.argv[1:]==['serve','status','--json']:
         docker.chmod(0o755)
         tailscale.chmod(0o755)
         payload = root / 'setup.json'
-        payload.write_text(json.dumps({'origin': 'https://fixture.tailnet.ts.net:8443', 'apiKey': 'a'*64, 'encryptionKey': 'b'*64, 'version': '2.0.0-beta.12', 'dockerfile': DOCKERFILE}))
+        payload.write_text(json.dumps({'origin': 'https://fixture.tailnet.ts.net:8443', 'apiKey': 'a'*64, 'encryptionKey': 'b'*64, 'version': '2.0.0-beta.12', 'dockerfile': DOCKERFILE, **({'generation':'11111111-1111-4111-8111-111111111111'} if refresh else {})}))
         env = {**os.environ, 'PATH': str(commands)+':/usr/bin:/bin', 'WM_FIXTURE_LOG': str(log), 'WM_FIXTURE_STATE': str(state), 'PYTHONPATH': str(root)}
         for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure)]:
             if value: env[flag] = '1'
@@ -141,6 +141,19 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertTrue(any(call[:2] == ['docker', 'build'] for call in calls))
             self.assertIn(['docker', 'stop', 'wovenmatter-executor'], calls)
             self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': CURRENT_IMAGE})
+
+    def test_explicit_refresh_rebuilds_latest_base_for_the_same_executor_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result, log = self.fixture(root, existing=True, refresh=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            build = next(call for call in calls if call[:2] == ['docker', 'build'])
+            self.assertIn('--pull', build)
+            self.assertIn('--no-cache', build)
+            self.assertIn(['docker', 'stop', 'wovenmatter-executor'], calls)
+            expected = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256((DOCKERFILE+'11111111-1111-4111-8111-111111111111').encode()).hexdigest()[:16]
+            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': expected})
 
     def test_failed_readiness_restores_previous_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:

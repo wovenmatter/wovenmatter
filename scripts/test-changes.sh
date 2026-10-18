@@ -22,6 +22,7 @@ run_static_checks() {
   scripts/test-release.sh
   python3 scripts/test-support/test_update_refresh.py
   python3 scripts/test-support/test_ci_scopes.py
+  python3 "$repo_root/scripts/test-support/test_dependency_refresh_workflow.py"
   bash scripts/test-dev-signing.sh
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
@@ -63,7 +64,7 @@ run_package_tests() {
   local test_command=(env
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
-    swift test --package-path app --scratch-path "$swift_scratch")
+    swift test --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
   # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
@@ -93,7 +94,7 @@ run_remote_tests() {
 }
 
 run_app_build() {
-  xcodebuild -quiet \
+  xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
     -project app/WovenMatter.xcodeproj \
     -scheme WovenMatter \
     -configuration Debug \
