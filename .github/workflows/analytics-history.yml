@@ -1,7 +1,7 @@
 name: Analytics history
 on:
   schedule:
-    - cron: '17 5 * * *'
+    - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       bootstrap_history:
