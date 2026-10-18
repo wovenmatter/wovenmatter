@@ -239,7 +239,7 @@ struct SettingsGeneralView: View {
         return SettingsCard(title: "Software updates") {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Woven Matter v\(currentVersion) (build \(currentBuild))")
+                    Text("Woven Matter v\(currentVersion)")
                         .font(.system(size: 13, weight: .medium))
                     Text(updater.errorMessage ?? "Check for the latest version of Woven Matter.")
                         .font(.system(size: 11))
@@ -252,10 +252,6 @@ struct SettingsGeneralView: View {
                     .disabled(!updater.canCheckForUpdates)
             }
         }
-    }
-
-    private var currentBuild: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 
     private var currentVersion: String {
