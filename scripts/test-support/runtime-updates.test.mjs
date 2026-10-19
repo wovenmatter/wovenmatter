@@ -32,7 +32,10 @@ async function fixture(t) {
     if (name === recordFiles.manifest) swap(`exact: "${live.peekaboo.version}"`, 'exact: "4.9.5"');
     if (name === recordFiles.resolved) {
       const resolved = JSON.parse(content);
-      for (const pin of resolved.pins) if (pin.identity === 'peekaboo') pin.state = { revision: '6'.repeat(40), version: '4.9.5' };
+      for (const pin of resolved.pins) {
+        if (pin.identity === 'peekaboo') pin.state = { revision: '6'.repeat(40), version: '4.9.5' };
+        if (pin.identity === 'sparkle') pin.state = { revision: '7'.repeat(40) };
+      }
       content = JSON.stringify(resolved, null, 2).replace(/": /g, '" : ') + '\n';
     }
     if (name === recordFiles.agent || name === recordFiles.embedded) {
@@ -89,7 +92,7 @@ const component = (plan, prefix) => plan.updates.find(update => update.component
 test('the committed records are coherent: one Node release, Sparkle release, and npm range per component', async () => {
   const records = await readRecords(repo);
   // readRecords rejects drift between the bundled, managed, and Linux Node copies,
-  // the Sparkle record and Xcode revision, and Peekaboo's manifest and SwiftPM pin.
+  // the Sparkle record, Xcode revision and shared lockfile, and Peekaboo's manifest and lockfile.
   assert.match(records.node.version, /^\d+\.\d+\.\d+$/);
   assert.equal(records.sparkle.revision, JSON.parse(records.text.resolved).pins.find(pin => pin.identity === 'sparkle').state.revision);
   const lock = JSON.parse(await readFile(resolve(repo, 'default-agent/package-lock.json'), 'utf8'));
@@ -122,7 +125,7 @@ test('a routine refresh takes the newest LTS patch and compatible releases, repo
   assert.ok(!files.get(recordFiles.project).includes('7'.repeat(40)));
   assert.ok(files.get(recordFiles.updates).includes('Sparkle 2.11.1'));
   assert.equal(component(plan, 'Sparkle').blocked, '3.0.0');
-  // Peekaboo follows release tags; SwiftPM, not this plan, regenerates Package.resolved.
+  // Peekaboo follows release tags; native resolvers, not this plan, regenerate Package.resolved.
   assert.ok(files.get(recordFiles.manifest).includes('exact: "4.10.1"'));
   assert.ok(files.get(recordFiles.notices).includes('1'.repeat(40)) && plan.swiftResolve);
   assert.ok(!files.has(recordFiles.resolved));
@@ -190,6 +193,9 @@ test('drifted copies of one selection are rejected before any upstream request',
   await writeFile(resolve(root, recordFiles.executor), original.get(recordFiles.executor));
   await writeFile(resolve(root, recordFiles.project), original.get(recordFiles.project).replace('7'.repeat(40), '8'.repeat(40)));
   await assert.rejects(runtimeUpdatePlan({ root, fetchImplementation: () => assert.fail('no request') }), /Xcode Sparkle requirement/);
+  await writeFile(resolve(root, recordFiles.project), original.get(recordFiles.project));
+  await writeFile(resolve(root, recordFiles.resolved), original.get(recordFiles.resolved).replace('7'.repeat(40), '8'.repeat(40)));
+  await assert.rejects(runtimeUpdatePlan({ root, fetchImplementation: () => assert.fail('no request') }), /shared Swift lockfile/);
 });
 
 

@@ -76,8 +76,9 @@ export async function readRecords(root = repoRoot) {
   if (match(text.project, /sparkle-project\/Sparkle";\s*requirement = \{ kind = revision; revision = ([a-f0-9]{40}); \}/, 'Sparkle requirement')[1] !== sparkle.revision) {
     throw new Error('The Xcode Sparkle requirement and app/Updater/sparkle-version.json differ.');
   }
-  // SwiftPM alone writes app/Package.resolved; it is only read to check Peekaboo.
+  // Maintenance generates the shared graph with SwiftPM and Xcode; planning only reads it.
   const resolved = JSON.parse(text.resolved);
+  if (pin(resolved, 'sparkle').state.revision !== sparkle.revision) throw new Error('The shared Swift lockfile and Sparkle release record differ.');
   const peekaboo = { version: match(text.manifest, /openclaw\/Peekaboo\.git", exact: "(\d+\.\d+\.\d+)"/, 'Peekaboo release')[1], revision: pin(resolved, 'peekaboo').state.revision };
   if (pin(resolved, 'peekaboo').state.version !== peekaboo.version) throw new Error('Peekaboo requirement and resolved pin differ.');
   const manifests = { agent: JSON.parse(text.agent), embedded: JSON.parse(text.embedded) };
@@ -186,7 +187,7 @@ export async function runtimeUpdatePlan({ root = repoRoot, fetchImplementation =
   if (peekaboo !== peekabooCurrent) {
     const { revision } = tags.find(tag => tag.version === peekaboo);
     edit('manifest', content => replaceOnce(content, `exact: "${peekabooCurrent}"`, `exact: "${peekaboo}"`, 'Peekaboo requirement'));
-    // --write runs SwiftPM, which alone regenerates app/Package.resolved.
+    // --write lets the native resolvers regenerate the shared app/Package.resolved.
     for (const key of ['notices', 'appNotices']) edit(key, content => content.replaceAll(records.peekaboo.revision, revision));
   }
   report('Peekaboo (computer use, in the signed app process)', peekabooCurrent, peekaboo, peekabooNewest);
