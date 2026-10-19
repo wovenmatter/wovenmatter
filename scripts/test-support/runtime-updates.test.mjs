@@ -145,7 +145,7 @@ test('a routine refresh takes the newest LTS patch and compatible releases, repo
   assert.match(report, /Newer major lines not applied in this run/);
 });
 
-test('the daily major refresh proposes newest stable lines, never Node Current, and flags each major for review', async t => {
+test('an owner-run major refresh proposes newest stable lines, never Node Current, and flags each major for review', async t => {
   const { root } = await fixture(t);
   const plan = await runtimeUpdatePlan({ root, fetchImplementation: upstream(), includeMajors: true });
   // Newest LTS (26), not Current (27) or a release candidate; every Node copy moves together.

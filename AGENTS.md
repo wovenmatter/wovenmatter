@@ -29,8 +29,8 @@ Follow [the dependency policy](docs/DEPENDENCIES.md).
   line without a reason.
 - An exact or narrowed selection needs a concrete security or core-function
   reason, documented beside it and in `docs/DEPENDENCIES.md`. It also needs
-  automated refresh (Dependabot or `scripts/update-runtime-dependencies.mjs`)
-  and a stated validation boundary.
+  a maintenance path (`scripts/update-runtime-dependencies.mjs` or an owner-run
+  agent task) and a stated validation boundary.
 - Lockfiles, `app/Package.resolved`, and the Node, CEF, and Sparkle records are
   required. Builds, tests, images, and launch use them (`npm ci`) and never
   resolve newer dependencies. Change them only through maintenance refresh, and
@@ -40,7 +40,10 @@ Follow [the dependency policy](docs/DEPENDENCIES.md).
 - Keep checksums, signatures, updater keys, and provenance. Keep every copy of
   one selection in sync; the refresh script rejects drift.
 - Read-only workflow helpers may track `@main`. Workflows with write tokens or
-  signing material use exact current release SHAs, maintained by Dependabot.
+  signing material use exact current release SHAs, reviewed during maintenance.
+- Do not add Dependabot or GitHub-hosted dependency-proposal jobs. Scheduled
+  dependency upkeep belongs in Codex or on an owned machine, configured
+  separately from repository CI.
 - Installed apps update SDKs and agent CLIs only through explicit Settings
   actions, within the bundled compatibility range. Bundled signed or offline
   components reach users only through app delivery.

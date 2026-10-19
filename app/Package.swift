@@ -16,8 +16,8 @@ let package = Package(
   dependencies: [
     .package(path: "../shared"), .package(path: "../ios"),
     // Exact release: Peekaboo runs inside the signed GUI process under its macOS
-    // privacy grants and its automation APIs change between releases. The daily
-    // dependency refresh proposes each new release tag through CI.
+    // privacy grants and its automation APIs change between releases. Dependency
+    // maintenance proposes new release tags for validation and review.
     .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.9.5")
   ],
   targets: [

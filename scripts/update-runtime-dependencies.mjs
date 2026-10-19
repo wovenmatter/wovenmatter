@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Maintenance-time selection for coordinated runtime records that Dependabot
-// cannot update coherently: Node, CEF, Sparkle, Peekaboo, and the npm packages
-// that generate the offline mobile bundles. Builds and tests only consume the
+// Owner-run maintenance for coordinated runtime records: Node, CEF, Sparkle,
+// Peekaboo, and the npm packages that generate the offline mobile bundles. Builds and tests only consume the
 // committed records and lockfiles. Never deploys, publishes, or starts services.
 import { readFile, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -23,7 +22,7 @@ export const recordFiles = {
 const architectures = [['arm64', 'arm64', 'macosarm64'], ['x64', 'x86_64', 'macosx64']];
 const pi = ['@earendil-works/pi-durable', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'];
 // Generated mobile resources depend on these, so they refresh together here;
-// Dependabot maintains the other npm dependencies.
+// The maintenance agent reviews the other npm dependencies separately.
 const npmGroups = [
   { name: 'Pi SDK family and Chord', declared: pi, select: [...pi, '@earendil-works/chord'], manifests: ['agent'] },
   { name: 'Claude agent SDK', declared: ['@anthropic-ai/claude-agent-sdk'], manifests: ['agent'] },
@@ -224,7 +223,7 @@ export function renderReport(plan) {
     '## Coordinated dependency refresh', '',
     '| Component | Current | Proposed | Newest upstream | Notes |', '| --- | --- | --- | --- | --- |', ...plan.updates.map(row), '',
     ...(blocked.length ? ['### Newer major lines not applied in this run', '',
-      ...blocked.map(update => `- ${update.component}: ${update.newest}. Rerun with \`--include-majors\` (the daily workflow always does) to propose it through CI.`), ''] : []),
+      ...blocked.map(update => `- ${update.component}: ${update.newest}. Rerun with \`--include-majors\` to propose it for validation and review.`), ''] : []),
     ...(plan.notices.length ? ['### Notices', '', ...plan.notices.map(notice => `- ${notice}`), ''] : []),
     'Delivery: the Node runtime, CEF, Sparkle, Peekaboo, and the bundled SDK snapshot reach installed Mac apps only through a signed app or refresh build; iOS resources require an App Store build. Linux images pick these up when rebuilt. In-app SDK and harness updates within the declared ranges do not wait for this PR.', '',
   ].join('\n');

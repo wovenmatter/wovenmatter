@@ -89,9 +89,8 @@ Stored transcript messages retain their `content` shape. Nested code-mode
 ownership, replay policy, cancellation, and output visibility retain their
 existing behavior.
 
-`scripts/update-runtime-dependencies.mjs --write`, run daily by the
-dependency-refresh workflow, refreshes the shared lockfile and regenerates this
-bundle. Its version, provenance, notice headings, and
+Owner-run maintenance uses `scripts/update-runtime-dependencies.mjs --write`
+on macOS with Xcode to refresh the shared lockfile and regenerate this bundle. Its version, provenance, notice headings, and
 provider-catalog version constant derive from the locked SDK rather than
 separate handwritten version strings. esbuild is an explicit build dependency;
 it is omitted from the shipped desktop/server runtime.

@@ -3,9 +3,11 @@
 Woven Matter stays on current upstream releases without forcing app releases
 for every package update. Three separate mechanisms do that:
 
-1. **Source maintenance** proposes current stable releases daily, majors
-   included, as pull requests. CI and review gate acceptance. Nothing merges,
-   releases, publishes, or deploys automatically.
+1. **Source maintenance** is run manually or by a separately configured agent
+   on an owned machine. It proposes current stable releases, majors included,
+   as pull requests. CI and review gate acceptance. Nothing merges, releases,
+   publishes, or deploys automatically. This repository installs no dependency
+   scheduler or GitHub-hosted proposal automation.
 2. **Builds and tests** install the committed npm lockfiles with `npm ci`
    and consume the recorded native selections. Dependency refresh belongs in
    maintenance. Linux base-image security patches remain deliberately floating,
@@ -18,7 +20,7 @@ for every package update. Three separate mechanisms do that:
 
 | Record | Kind | Updated by |
 | --- | --- | --- |
-| `package.json` caret ranges | Declaration. The floor is the current tested release; the range is the compatibility line. | Daily PRs raise floors, across majors when upstream moves |
+| `package.json` caret ranges | Declaration. The floor is the current tested release; the range is the compatibility line. | Maintenance PRs raise floors, across majors when upstream moves |
 | `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Peekaboo, Sparkle, and their transitive packages | One maintenance pipeline refreshes Swift packages and lets Xcode generate the complete graph |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One Node LTS release and its official archive SHA-256 values | Refresh script, all copies together |
@@ -29,7 +31,8 @@ for every package update. Three separate mechanisms do that:
 ## Exact selections and their reasons
 
 These are exact because a wrong or unreviewed version could break security or
-core function. Each is still refreshed daily; exact does not mean frozen.
+core function. Maintenance checks each for newer releases; exact does not mean
+frozen.
 
 - **Node LTS** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
@@ -60,7 +63,7 @@ imports it uses, and activates it atomically. Running sessions keep their
 generation, and unrelated packages stay at their installed versions. A failed
 or cancelled candidate is discarded. A newer release outside the range is
 reported as needing a Woven Matter update rather than hidden. The next app
-build carries the wider range that the daily source PR introduced.
+build carries the wider range that the accepted maintenance PR introduced.
 
 Agent CLIs update the same way from Settings: ACP adapters take the latest
 release at or above their catalog minimum. OpenCode and Executor stay on v2,
@@ -72,26 +75,27 @@ background updater.
 
 ## Source maintenance
 
-- **Dependabot** (`.github/dependabot.yml`) proposes every update type daily:
-  GitHub Actions release SHAs and the ordinary `default-agent` npm
-  dependencies. Majors arrive as separate PRs.
-- **`.github/workflows/dependency-refresh.yml`** runs
-  `scripts/update-runtime-dependencies.mjs --write --include-majors` daily and
-  for manual dispatch by default. It covers what Dependabot cannot update
-  coherently: Node, CEF, Sparkle, Peekaboo, and the Pi/Claude/esbuild/Pyodide
-  packages behind generated resources. It owns the reserved
-  `codex/dependency-refresh` branch and one PR, updated in place. It replaces
-  that branch only with a lease on the commit it observed. It never edits
-  `.github/` files, including `release-refresh.json`.
-  GitHub does not start `pull_request` CI for PRs created with `GITHUB_TOKEN`,
-  so the workflow dispatches `ci.yml` for the candidate commit unless that
-  commit already has a CI run. If repository settings block bot PR creation, the
-  job fails and says so. Dependency preparation has read-only permissions and
-  does not persist checkout credentials. Only the separate publication job has
-  repository write permissions; it applies the proposal as data without running
-  the candidate dependency code.
-- Locally, `node scripts/update-runtime-dependencies.mjs --check` reports
-  without writing; add `--include-majors` to match the daily proposal.
+Maintenance belongs in an owner-run agent task, such as a local Codex scheduled
+task, or a manual session. Do not add Dependabot or GitHub-hosted dependency
+proposal schedules. Configure the cadence outside the repository; removing the
+GitHub jobs does not itself create a replacement scheduled task.
+
+- `node scripts/update-runtime-dependencies.mjs --check --include-majors`
+  reports coordinated updates without writing. This metadata check can run on
+  Linux or macOS.
+- `node scripts/update-runtime-dependencies.mjs --write --include-majors`
+  refreshes Node, CEF, Sparkle, Peekaboo, and coordinated Pi/Claude/esbuild/Pyodide
+  records, lockfiles, and generated mobile resources. It requires macOS and
+  Xcode for the complete native dependency graph. Run it in an isolated
+  worktree and review any partial output if a step fails.
+- The agent also reviews ordinary npm dependencies against current registry
+  releases, updates their declarations and lockfiles, and reviews newer
+  released GitHub Action SHAs in write-token or signing workflows. These are
+  separate from the coordinated refresh script; they no longer have a bot
+  owner.
+- Validate the proposed changes with `scripts/test-changes.sh --all` when they
+  span components. Open or update one focused PR with the changes, compatibility
+  notes, and actual validation results. Never auto-merge, release, or deploy.
 
 The maintenance step is the sole writer of `app/Package.resolved`: it refreshes
 allowed Swift transitives and then asks Xcode to generate the combined graph.
@@ -109,8 +113,8 @@ minors) for review of upstream release notes.
 Read-only CI and analytics helpers follow their upstream default branch
 (`@main`). Workflows holding write tokens or signing material pin the exact
 current release commit, with a comment naming the reason: `release.yml`,
-`refresh-release.yml`, `pr-author.yml`, and `dependency-refresh.yml`.
-Dependabot updates those SHAs daily. There is no blanket SHA requirement.
+`refresh-release.yml`, and `pr-author.yml`. The maintenance agent reviews those
+SHAs against current released versions. There is no blanket SHA requirement.
 Linux jobs use `ubuntu-latest`. macOS jobs use `macos-26`, because the app needs
 that SDK.
 

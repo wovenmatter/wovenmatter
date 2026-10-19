@@ -92,8 +92,8 @@ required; select it with `WOVENMATTER_CMAKE` if needed. Downloads use
 `~/Library/Caches/WovenMatter/CEF` or `WOVENMATTER_CEF_CACHE_DIR`.
 Use the normal `scripts/build_and_run.sh` and `scripts/test-changes.sh --all`.
 
-The daily dependency-refresh workflow proposes the newest stable CEF build
-through a PR, because Chromium security fixes ship only on its current major
+Dependency maintenance proposes the newest stable CEF build through a PR,
+because Chromium security fixes ship only on its current major
 (see [the dependency policy](../DEPENDENCIES.md)). Accepting one requires
 building both architectures and checking lifecycle, profile recovery, and UI
 behavior. Installed apps receive it only in a signed app or refresh build. Chromium does not include

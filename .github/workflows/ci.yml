@@ -5,9 +5,6 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # Bot-created dependency PRs do not trigger pull_request runs; the dependency
-  # refresh workflow dispatches CI on its candidate branch instead.
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,13 +37,8 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           base_sha="$BASE_SHA"
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            # A dispatched branch is validated against everything it changes.
-            base_sha="$(git merge-base "origin/$DEFAULT_BRANCH" "$HEAD_SHA")"
-          fi
           if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
             base_sha="$(git rev-parse "${HEAD_SHA}^")"
           fi
@@ -67,7 +59,7 @@ jobs:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
-          # The bundled Node LTS release, refreshed by the dependency workflow.
+          # The bundled Node LTS release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
@@ -90,7 +82,7 @@ jobs:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
-          # The bundled Node LTS release, refreshed by the dependency workflow.
+          # The bundled Node LTS release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
       - name: Test companion protocol and runtime integration
         env:
@@ -135,7 +127,7 @@ jobs:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
-          # The bundled Node LTS release, refreshed by the dependency workflow.
+          # The bundled Node LTS release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote

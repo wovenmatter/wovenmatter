@@ -74,9 +74,9 @@ several independently named workspaces.
 
 ## Maintaining runtime dependencies
 
-The daily dependency-refresh workflow and Dependabot propose current releases as
-pull requests; see [the dependency policy](../DEPENDENCIES.md). To run the same
-refresh by hand, from a dedicated branch based on current `main`:
+Dependency maintenance runs manually or through an owner-run agent task; see
+[the dependency policy](../DEPENDENCIES.md). Run the coordinated refresh on
+macOS with Xcode, from a dedicated branch based on current `main`:
 
 ```sh
 node scripts/update-runtime-dependencies.mjs --check --include-majors
