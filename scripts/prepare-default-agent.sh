@@ -3,7 +3,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 agent_root="$repo_root/default-agent"
 # One tested Node LTS record for this bundle, CI, and the managed adapter runtime.
-# scripts/update-runtime-dependencies.mjs refreshes it with the checksums below.
+# Dependency maintenance must update it and the checksums below together.
 version="$(tr -d '[:space:]' < "$agent_root/.node-version")"
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi

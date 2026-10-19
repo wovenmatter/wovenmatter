@@ -14,7 +14,7 @@ import { writePrivateJSON } from '../config.mjs';
 
 // The broker implements Executor's V2 managed app API; V1 lacks it and a later
 // major is an unverified API. Newer V2 releases install without an app update;
-// scripts/update-runtime-dependencies.mjs --check reports a new upstream major.
+// Dependency maintenance reviews new upstream majors before changing this API line.
 export const EXECUTOR_API_MAJOR = 2;
 export const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) === EXECUTOR_API_MAJOR;
 export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {

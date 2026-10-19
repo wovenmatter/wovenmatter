@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tools and the embedded framework come from one Sparkle release record. The
 # updater is security-critical, so the Xcode project requires that release's
-# exact revision; scripts/update-runtime-dependencies.mjs refreshes both.
+# exact revision; dependency maintenance must update both records together.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 read -r version revision expected < <(python3 -c '

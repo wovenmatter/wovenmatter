@@ -75,27 +75,17 @@ several independently named workspaces.
 ## Maintaining runtime dependencies
 
 Dependency maintenance runs manually or through an owner-run agent task; see
-[the dependency policy](../DEPENDENCIES.md). Run the coordinated refresh on
-macOS with Xcode, from a dedicated branch based on current `main`:
+[the dependency policy](../DEPENDENCIES.md). The former monolithic refresh
+script has been removed, and the replacement scheduled task is not configured.
 
-```sh
-node scripts/update-runtime-dependencies.mjs --check --include-majors
-node scripts/update-runtime-dependencies.mjs --write --include-majors
-scripts/test-changes.sh --all
-```
-
-`--check` reads official Node, CEF, Sparkle, Peekaboo, and npm metadata without
-changing files. `--write` updates every copy of the Node LTS record and its
-archive checksums, including the Linux base line. It also updates the CEF
-record, the Sparkle record and Xcode revision, the Peekaboo release (followed by
-`swift package resolve`), and the caret floors and lockfiles of the packages
-behind the mobile bundles. It then regenerates those bundles and their
-provenance. Without `--include-majors`, newer major lines are reported but not
-applied. Missing checksums or drift between copies of one record stop the
-refresh before files change. A CEF build not yet published for both
-architectures, or a Pi release not yet published for every Pi package and
-Chord, keeps the previous complete release. The refresh never deploys a host or
-updates a running workspace.
+Prepare updates on a dedicated branch based on current `main`. Review current
+upstream releases, update package declarations and lockfiles through their
+package managers, and keep runtime version records and archive checksums in
+sync. A coordinated Pi update requires every Pi package and Chord to be
+published at the same version. Regenerate affected mobile bundles and
+provenance with their resource-generation scripts. Review integration changes
+and record focused checks and any pending native validation in the PR.
+Dependency maintenance does not deploy a host or update a running workspace.
 
 CI verifies the generated resources and builds both images on Linux. Its
 workspace smoke test verifies authenticated access, per-workspace volumes,
