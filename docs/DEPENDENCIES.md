@@ -97,7 +97,9 @@ The maintenance step is the sole writer of `app/Package.resolved`: it refreshes
 allowed Swift transitives and then asks Xcode to generate the combined graph.
 Normal package tests use `--force-resolved-versions`, and native builds use
 `-onlyUsePackageVersionsFromResolvedFile`, so both consume that one snapshot
-without pruning each other's records or selecting new versions.
+without pruning each other's records or selecting new versions. The companion
+integration package references the same file through a symlink, and its test
+command also freezes resolution; it has no independently selected graph.
 
 Every proposal flags updates outside the current caret line (majors, and 0.x
 minors) for review of upstream release notes.
