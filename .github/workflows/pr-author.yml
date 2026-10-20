@@ -17,7 +17,7 @@ jobs:
       github.repository == 'wovenmatter/wovenmatter' &&
       (github.event_name == 'pull_request_target' ||
        (github.event.issue.pull_request && github.event.comment.body == '/recheck-author'))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     concurrency:
       group: pr-author-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: false
