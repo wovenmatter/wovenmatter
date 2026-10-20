@@ -18,6 +18,7 @@ final class DesktopUpdater: NSObject {
     @ObservationIgnored private var controller: SPUStandardUpdaterController?
     @ObservationIgnored private var observation: NSKeyValueObservation?
     @ObservationIgnored private var pendingInstallHandler: (() -> Void)?
+    @ObservationIgnored private var installationTargetVersion: String?
     #endif
 
     func start(model: ApplicationModel) {
@@ -49,7 +50,7 @@ final class DesktopUpdater: NSObject {
 #if canImport(Sparkle)
 extension DesktopUpdater: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
-        Task { await model?.analytics.record(.updateDownloadClicked, properties: ["target_version": item.displayVersionString]) }
+        Task { await model?.analytics.record(.updateDownloadStarted, properties: ["target_version": item.displayVersionString]) }
     }
 
     func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
@@ -62,18 +63,13 @@ extension DesktopUpdater: SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
         pendingInstallHandler = installHandler
-        Task {
-            if let build = Int(item.versionString) {
-                _ = await model?.analytics.prepareUpdateInstallation(version: item.displayVersionString, build: build)
-            }
-            // Enter installation outside the Swift task/main dispatch queue, so
-            // AppKit's deferred termination can perform main-actor cleanup.
-            RunLoop.main.perform(inModes: [.common]) {
-                MainActor.assumeIsolated {
-                    let handler = self.pendingInstallHandler
-                    self.pendingInstallHandler = nil
-                    handler?()
-                }
+        // Enter installation outside the Swift task/main dispatch queue, so
+        // AppKit's deferred termination can perform main-actor cleanup.
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated {
+                let handler = self.pendingInstallHandler
+                self.pendingInstallHandler = nil
+                handler?()
             }
         }
         return true
@@ -87,11 +83,19 @@ extension DesktopUpdater: SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         isInstalling = true
-        Task { await model?.analytics.record(.updateInstallClicked, properties: ["target_version": item.displayVersionString]) }
+        installationTargetVersion = item.displayVersionString
+        // Sparkle can skip its relaunch callback when installing on ordinary
+        // quit. Persist synchronously at the installation boundary instead.
+        if let build = Int(item.versionString) {
+            _ = model?.analytics.prepareUpdateInstallation(version: item.displayVersionString, build: build)
+        }
+        Task { await model?.analytics.record(.updateInstallStarted, properties: ["target_version": item.displayVersionString]) }
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
         let wasInstalling = isInstalling
+        let targetVersion = installationTargetVersion
+        installationTargetVersion = nil
         pendingInstallHandler = nil
         isInstalling = false
         hasStagedUpdate = false
@@ -106,6 +110,12 @@ extension DesktopUpdater: SPUUpdaterDelegate {
             WorkspaceAssetSession.cancelPreparedRestart()
             do { try await model?.recoverBackendAfterFailedUpdate() }
             catch { errorMessage = error.localizedDescription }
+            // Telemetry must not delay recovery, and its backend may have been
+            // stopped for installation. Report only after the recovery attempt.
+            if !expected {
+                await model?.analytics.record(.updateInstallFailed,
+                    properties: targetVersion.map { ["target_version": $0] } ?? [:])
+            }
         }
     }
 }
