@@ -112,6 +112,7 @@ struct MobileDictationComposer: UIViewRepresentable {
   @Binding var focused: Bool
   var editor: MobileDictationEditor
   var identity: String
+  var prompt: String
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIView(context: Context) -> UITextView {
     let view = UITextView()
@@ -134,6 +135,7 @@ struct MobileDictationComposer: UIViewRepresentable {
     }
     if changedOwner { view.undoManager?.removeAllActions() }
     view.textColor = .label
+    view.accessibilityLabel = prompt
     editor.bind(view, identity: identity)
     if focused && !view.isFirstResponder { view.becomeFirstResponder() }
     if !focused && view.isFirstResponder { view.resignFirstResponder() }

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Observation
 import WovenMatterCompanion
 
@@ -8,7 +8,15 @@ import WovenMatterCompanion
     typealias Phase = DictationSession.Phase
     let session: DictationSession
     weak var activeEditor: DictationEditor?
-    init(session: DictationSession = .shared) { self.session = session }
+    private(set) weak var shortcutEditor: DictationEditor?
+    @ObservationIgnored private let focusedWindow: () -> NSWindow?
+    init(session: DictationSession = .shared, focusedWindow: @escaping () -> NSWindow? = { NSApp.keyWindow }) {
+        self.session = session; self.focusedWindow = focusedWindow
+    }
+    func refreshShortcutEditor() {
+        let focused = DictationEditor.focused(in: focusedWindow())
+        if shortcutEditor !== focused { shortcutEditor = focused }
+    }
     var enabled: Bool { get { session.enabled } set { session.enabled = newValue } }
     var languageIdentifier: String { get { session.languageIdentifier } set { session.languageIdentifier = newValue } }
     var phase: Phase { session.phase }
@@ -29,9 +37,10 @@ import WovenMatterCompanion
         session.start()
     }
     func toggleActiveEditor() {
-        guard let activeEditor else { return }
-        if retainedTranscript != nil { insertRetained(into: activeEditor) }
-        else { toggle(editor: activeEditor) }
+        // Recheck native focus even if SwiftUI has not refreshed the menu yet.
+        guard let editor = DictationEditor.focused(in: focusedWindow()) else { return }
+        if retainedTranscript != nil { insertRetained(into: editor) }
+        else { toggle(editor: editor) }
     }
     func stop(editor: DictationEditor) {
         if phase == .preparing { session.cancel(); return }

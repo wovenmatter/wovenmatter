@@ -8,10 +8,21 @@ import WovenMatterCore
 /// logical identity and its selection when Stop is clicked, not at Start.
 @MainActor @Observable
 final class DictationEditor {
+    private static let editors = NSMapTable<NSTextView, DictationEditor>.weakToWeakObjects()
     @ObservationIgnored weak var textView: NSTextView?
     @ObservationIgnored var identity = ""
     func bind(_ textView: NSTextView, identity: String) {
+        if let previous = self.textView, previous !== textView,
+           Self.editors.object(forKey: previous) === self {
+            Self.editors.removeObject(forKey: previous)
+        }
         self.textView = textView; self.identity = identity
+        Self.editors.setObject(self, forKey: textView)
+    }
+    static func focused(in window: NSWindow?) -> DictationEditor? {
+        guard let textView = window?.firstResponder as? NSTextView,
+              let editor = editors.object(forKey: textView), editor.textView === textView else { return nil }
+        return editor
     }
     func ticket() -> DictationEditorTicket? {
         guard let textView, textView.isEditable, !textView.hasMarkedText() else { return nil }

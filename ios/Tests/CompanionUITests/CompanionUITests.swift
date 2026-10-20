@@ -101,6 +101,7 @@ final class CompanionUITests: XCTestCase {
     chooser.tap()
     let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    XCTAssertEqual(composer.label, "Chat…")
     XCTAssertTrue(app.buttons["dictation-microphone"].exists)
     XCTAssertEqual(app.buttons["dictation-microphone"].label, "Start dictation")
     XCTAssertFalse(app.buttons["Conversation actions"].exists)

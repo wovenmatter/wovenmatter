@@ -182,11 +182,13 @@ struct ChatPane: View {
         HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
       MobileDictationComposer(text: $model.composer, focused: $composerFocused, editor: dictationEditor,
-        identity: "chat:\(model.selectedExecutionWorkspaceID):\(model.selectedConversationID ?? "new")")
+        identity: "chat:\(model.selectedExecutionWorkspaceID):\(model.selectedConversationID ?? "new")",
+        prompt: model.activeRunID == nil ? "Chat…" : "Steer this run…")
         .overlay(alignment: .topLeading) {
           if model.composer.isEmpty {
             Text(model.activeRunID == nil ? "Chat…" : "Steer this run…")
               .foregroundStyle(DashboardPalette.mutedForeground).allowsHitTesting(false)
+              .accessibilityHidden(true)
           }
         }.accessibilityIdentifier("chat-composer")
       HStack(spacing: 8) {
