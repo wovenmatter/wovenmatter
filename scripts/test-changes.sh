@@ -85,6 +85,7 @@ run_default_agent_tests() {
   npm test --prefix default-agent
   node scripts/build-ios-pi-runtime.mjs --check
   node scripts/build-ios-embedded-runtime.mjs --check
+  scripts/test-embedded-runtime-macos.sh
 }
 
 run_remote_tests() {

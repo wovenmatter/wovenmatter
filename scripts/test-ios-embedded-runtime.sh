@@ -16,6 +16,7 @@ xcrun --sdk iphonesimulator swiftc -swift-version 6 -parse-as-library \
   -target "$arch-apple-ios18.0-simulator" -sdk "$sdk" \
   "$root/ios/Sources/EmbeddedExecution/EmbeddedWorkspace.swift" \
   "$root/ios/Sources/EmbeddedExecution/EmbeddedCommandExecutor.swift" \
+  "$root/ios/EmbeddedRuntime/SmokeRunner.swift" \
   "$root/ios/EmbeddedRuntime/SmokeApp.swift" -o "$app/Smoke"
 codesign -s - "$app"
 xcrun simctl install "$simulator" "$app"
