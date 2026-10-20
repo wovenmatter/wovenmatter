@@ -56,6 +56,11 @@ Published tarball integrity and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 
 Copyright (c) 2022 Lucide Contributors
+Copyright (c) 2026 Lucide Icons and Contributors
+
+The complete upstream license, including Feather-derived icons and their MIT
+notice, is preserved in [LUCIDE_LICENSE.txt](docs/assets/LUCIDE_LICENSE.txt) and
+the app’s bundled `ThirdPartyNotices.txt`.
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above

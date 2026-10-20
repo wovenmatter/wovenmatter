@@ -230,5 +230,9 @@
       "upstream": "x.svg",
       "sha256": "b00d2e315d7cf622f944e4c2eb8399c2c8e28f49c23c278e2d1742bbcdfda480"
     }
+  },
+  "license": {
+    "path": "docs/assets/LUCIDE_LICENSE.txt",
+    "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
   }
 }
