@@ -4,8 +4,8 @@
 
 Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,
 through its public API. The local and remote installers use the unmodified
-`executor` npm package at version `2.0.0-beta.7` and retain its upstream license
-and bundled dependency notices. Those dependencies remain subject to their own
+`executor` npm package at the newest supported published release selected for
+each installation, and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
 licenses.
 
 Source: [UsefulSoftwareCo/executor](https://github.com/UsefulSoftwareCo/executor).
