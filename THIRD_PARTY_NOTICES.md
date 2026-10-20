@@ -36,7 +36,7 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.2.0 from
+Pi Durable bundles `@earendil-works/pi-durable` 1.3.0 from
 [Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.2.0/packages/durable)
 for native execution and persistence. Its
 [upstream license](https://github.com/earendil-works/pi/blob/v1.2.0/LICENSE)
@@ -51,7 +51,7 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-react` 0.563.0.
+The dashboard icon assets are derived from `lucide-static` 1.60.0 (published tarball integrity and per-asset hashes in `docs/assets/lucide-provenance.json`).
 
 Copyright (c) 2022 Lucide Contributors
 

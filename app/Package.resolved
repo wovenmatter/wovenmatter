@@ -1,5 +1,5 @@
 {
-  "originHash" : "fe8275643e59c08d924f81eb28880196bc3f2b378a7d517af6d16e1a765f714d",
+  "originHash" : "e1d50b41ade1e6c1ecee3f676be05b7719703eab57804d02d8399e22a7f38111",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -24,15 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/openclaw/Peekaboo.git",
       "state" : {
-        "revision" : "1e42f1d9053109d6d19e604504ea80bc229a88e8"
-      }
-    },
-    {
-      "identity" : "sparkle",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/sparkle-project/Sparkle",
-      "state" : {
-        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100"
+        "revision" : "260fc35320d6c350af503338b944d68311e2bebb",
+        "version" : "4.9.5"
       }
     },
     {

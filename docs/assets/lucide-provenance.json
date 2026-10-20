@@ -1,0 +1,234 @@
+{
+  "package": "lucide-static",
+  "version": "1.60.0",
+  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.60.0.tgz",
+  "integrity": "sha512-Y8/IYjBYST40TuqzknGt1XJOcZp83UH5fLndgXlQCQ4lM97eZO3EQo6cIyDcBrprredIGDVxge8yslRyM4wD0Q==",
+  "source": "https://github.com/lucide-icons/lucide/tree/1.60.0",
+  "transform": "Retain asset names, 24-point view boxes, black template strokes, and existing stroke widths; omit CSS classes.",
+  "assets": {
+    "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-down-s25.imageset/lucide-arrow-down-s25.svg": {
+      "upstream": "arrow-down.svg",
+      "sha256": "a9bde5591a14128dea903414b3501e3859d26e752aa858f250f297842d3f6854"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-left-s175.imageset/lucide-arrow-left-s175.svg": {
+      "upstream": "arrow-left.svg",
+      "sha256": "ebf83526bf3d3eeda9d66746dad2fb40bf788ad3b9272187636970bd01b28f23"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-right-s175.imageset/lucide-arrow-right-s175.svg": {
+      "upstream": "arrow-right.svg",
+      "sha256": "ee4d8a7320dbc5886bb67336c79e6c32fa6d33cf77c27f108597009a9f4b73c1"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-up-s25.imageset/lucide-arrow-up-s25.svg": {
+      "upstream": "arrow-up.svg",
+      "sha256": "fb16bb59a6995b8321e18f2bdacc6fbe5b228a54985cbf022d891972dd57a765"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-bar-chart-3-s15.imageset/lucide-bar-chart-3-s15.svg": {
+      "upstream": "bar-chart-3.svg",
+      "sha256": "3eaa8da417209a737964bcd4af68ebdd2ff6c55257e8c1f073f2b6647da83c35"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-bot-s15.imageset/lucide-bot-s15.svg": {
+      "upstream": "bot.svg",
+      "sha256": "1eb2f7a7b10de274dea81f86b10536a3e261e3324ca24ece8383dfe6aa959347"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-brain-s15.imageset/lucide-brain-s15.svg": {
+      "upstream": "brain.svg",
+      "sha256": "f767b48aa6a08924c8311725abfc8ec57035e10bf56b124af37916b772c9d376"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-briefcase-s15.imageset/lucide-briefcase-s15.svg": {
+      "upstream": "briefcase.svg",
+      "sha256": "3082310071dabca66db6c3fafe57af23c58d7206c792facdb203a5b6eea656e1"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-calendar-clock-s15.imageset/lucide-calendar-clock-s15.svg": {
+      "upstream": "calendar-clock.svg",
+      "sha256": "9f857a32d9ad92a9342f2b797a70cbc24f6a7ffdacbd705ff8f2650c3f98528e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-calendar-clock-s175.imageset/lucide-calendar-clock-s175.svg": {
+      "upstream": "calendar-clock.svg",
+      "sha256": "9994b078f006a37723569ea7cf935fa5e05e3b7253c7fe2763238d6b9738ebeb"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-calendar-days-s15.imageset/lucide-calendar-days-s15.svg": {
+      "upstream": "calendar-days.svg",
+      "sha256": "842f572518751e236818e0408bec7df77b478dfa5f3767bb5350376698c93f30"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-calendar-days-s175.imageset/lucide-calendar-days-s175.svg": {
+      "upstream": "calendar-days.svg",
+      "sha256": "a50670521b289d74fdb7f5df302f052989645c64db9d75f39ab6f6185f8bf6ef"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-check-s15.imageset/lucide-check-s15.svg": {
+      "upstream": "check.svg",
+      "sha256": "d8fdbf21bb3c711c13d450f0055f297f0e1b2c45c190bb6b05eb10dafec118c6"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-chevron-down-s175.imageset/lucide-chevron-down-s175.svg": {
+      "upstream": "chevron-down.svg",
+      "sha256": "87ae603cc482e28c6e3ae5bc939922c2f386b85b8e45f670762d33a24a4a3dd1"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-circle-alert-s20.imageset/lucide-circle-alert-s20.svg": {
+      "upstream": "circle-alert.svg",
+      "sha256": "67002a27723525b0eda695ca43d2803ff9140ca4a9108f7eee6f257a855cf2b9"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-circle-user-s15.imageset/lucide-circle-user-s15.svg": {
+      "upstream": "circle-user.svg",
+      "sha256": "29b1196e58b5d7b992d52a29518ceb4be837e5a989d129fd8d3461198fade45e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-compass-s15.imageset/lucide-compass-s15.svg": {
+      "upstream": "compass.svg",
+      "sha256": "9f4af3d0e618aba6c64a34470ff41653f16fc8bf4ad5579146efc7ad99f16c8e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-container-s15.imageset/lucide-container-s15.svg": {
+      "upstream": "container.svg",
+      "sha256": "8abbf5eedc30d7b2ea850f384a222604ce1d6eeab09b3024d675d5e2a9cb9708"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-cpu-s15.imageset/lucide-cpu-s15.svg": {
+      "upstream": "cpu.svg",
+      "sha256": "54381a0f85d448b3611d6af7e82e9ecd5db2725fc17dd6e5e3efe2e79c0a5603"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-database-s15.imageset/lucide-database-s15.svg": {
+      "upstream": "database.svg",
+      "sha256": "d06a04bc1d7374ec3e04b1a50109865e9ec02dfa25a7e2334d19c440afd252fc"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-file-text-s15.imageset/lucide-file-text-s15.svg": {
+      "upstream": "file-text.svg",
+      "sha256": "b7b7b8b74cd3335257b56ca38ac6675a3657d81d07b2df1b24dc322d01b9fa6a"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-flame-s15.imageset/lucide-flame-s15.svg": {
+      "upstream": "flame.svg",
+      "sha256": "bf3621a3c44707850e5acf381ba9ff2a1f74eca03f6b4945e59ca2238290e6e9"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-folder-open-s15.imageset/lucide-folder-open-s15.svg": {
+      "upstream": "folder-open.svg",
+      "sha256": "b7b202f25a2f1e820fa735fbd0ed54b64efbef4bd10bbfb3ff7fd3e8b53c7e3f"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-folder-s15.imageset/lucide-folder-s15.svg": {
+      "upstream": "folder.svg",
+      "sha256": "49f72dfa929bf45ad4a11ba9955ad792f028d7af30cbb7a792df1edd4be76c1c"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-house-s15.imageset/lucide-house-s15.svg": {
+      "upstream": "house.svg",
+      "sha256": "3da20687be318571eef18b1331483eccd6e22e18eeaeda274854b8bb0be2ee89"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-key-round-s15.imageset/lucide-key-round-s15.svg": {
+      "upstream": "key-round.svg",
+      "sha256": "1ac4d44a64d48ac68ae98b5dd7cf5a05ffd4a04e64a81a0d426f29e9fe27265f"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-library-big-s15.imageset/lucide-library-big-s15.svg": {
+      "upstream": "library-big.svg",
+      "sha256": "c646d572ed8acbfe18c30f7e148d522d67a55d1ad3362525534d014a02eade63"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-library-big-s175.imageset/lucide-library-big-s175.svg": {
+      "upstream": "library-big.svg",
+      "sha256": "2805c0ee308f2dfca54f6c4fd672dd2cc3efbccc58e907e850a3cda466b5681e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-list-filter-s20.imageset/lucide-list-filter-s20.svg": {
+      "upstream": "list-filter.svg",
+      "sha256": "8ecda8e800f98c1879ec8977d7d5126750970ca766bb5dd5aff54c1a0e7b987c"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-message-square-s15.imageset/lucide-message-square-s15.svg": {
+      "upstream": "message-square.svg",
+      "sha256": "59ab399eaa1ae40de32a814676a14d19e118f1267bd51a3afc09e679d5d0a942"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-mic-s15.imageset/lucide-mic-s15.svg": {
+      "upstream": "mic.svg",
+      "sha256": "063539f7a88ca846ce808d5291fa09a912260b53d722fd2ed9722218ebe70ffd"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-monitor-s15.imageset/lucide-monitor-s15.svg": {
+      "upstream": "monitor.svg",
+      "sha256": "86a68ac55f6c777f781893722ed7a52b2952f4419433e9c9aaac37854432deb1"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-panel-left-close-s175.imageset/lucide-panel-left-close-s175.svg": {
+      "upstream": "panel-left-close.svg",
+      "sha256": "d79794455c290940fc8bd4643d5044e36df05a0dc9b3e6e8fdf9e898e28adc41"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-panel-left-open-s175.imageset/lucide-panel-left-open-s175.svg": {
+      "upstream": "panel-left-open.svg",
+      "sha256": "225cc5feb10053b3b164a2afdc01614ed2abcdc3d244f070a2cfc51d0580ef18"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-panel-right-close-s175.imageset/lucide-panel-right-close-s175.svg": {
+      "upstream": "panel-right-close.svg",
+      "sha256": "cc3924adbaed09924947deb28732e3b4f08b100da926163eebd06eef90c94ac1"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-panel-right-open-s175.imageset/lucide-panel-right-open-s175.svg": {
+      "upstream": "panel-right-open.svg",
+      "sha256": "4a4bd2ff87e8c24316999cf6927c315fd4df68dcc1fe6174d2c58b94a591b500"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-panel-top-s15.imageset/lucide-panel-top-s15.svg": {
+      "upstream": "panel-top.svg",
+      "sha256": "8be95972ee45973b24b1bbdc8b700683412e96e42257db58e2ff61d95ee5069e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-panels-top-left-s15.imageset/lucide-panels-top-left-s15.svg": {
+      "upstream": "panels-top-left.svg",
+      "sha256": "505badf01e25c28ba5202df882ab183c419b27809a48d556cd5a03798c9f40ca"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-pin-s15.imageset/lucide-pin-s15.svg": {
+      "upstream": "pin.svg",
+      "sha256": "50abd6ee17630ae146c84aba520ddd448d078db99a125cd863d346f3c7af22e5"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-plug-s15.imageset/lucide-plug-s15.svg": {
+      "upstream": "plug.svg",
+      "sha256": "4a5364ea9d85a9ece9e8b0e7d38c5d9de12a3f1c49ecb40adaa825b3324620b7"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-plus-s15.imageset/lucide-plus-s15.svg": {
+      "upstream": "plus.svg",
+      "sha256": "c3942a5802656f0e4b3709bb1389b0442b11d7a0833b3bf5124b9a792a03447e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-rocket-s15.imageset/lucide-rocket-s15.svg": {
+      "upstream": "rocket.svg",
+      "sha256": "30eb0245932ac58333cb11d12857b542ddb2c84c119cc999b0c49cf71f7c4f02"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-rotate-ccw-s175.imageset/lucide-rotate-ccw-s175.svg": {
+      "upstream": "rotate-ccw.svg",
+      "sha256": "1cb65de22e6984d3c242d149617fbd3026d151184c35f080b8fbf5d5b2165cbf"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-search-s15.imageset/lucide-search-s15.svg": {
+      "upstream": "search.svg",
+      "sha256": "7b22b21eaafa2bf3486a769d6b61cca777fbc56e85a4b8020922e98c530b62e8"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-search-s20.imageset/lucide-search-s20.svg": {
+      "upstream": "search.svg",
+      "sha256": "f930c9a29246b0e4bb3f75fac35374e35cb12d2ab16f0a1bb2bfed2b70b6219a"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-settings-s15.imageset/lucide-settings-s15.svg": {
+      "upstream": "settings.svg",
+      "sha256": "f6ae043c5e85b89ecc163cc584713cc96fcbaef9d8bf7ccd622aa95efd4acac5"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-smartphone-s15.imageset/lucide-smartphone-s15.svg": {
+      "upstream": "smartphone.svg",
+      "sha256": "94a7d77da2d0ed927294df43e90cd273b6196054da20ecf84edaf7786a898a91"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-sparkles-s15.imageset/lucide-sparkles-s15.svg": {
+      "upstream": "sparkles.svg",
+      "sha256": "967aa52d7ea1fb35269482d3313e43f5cec442ab194b52b7ba671a1db816f788"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-square-pen-s15.imageset/lucide-square-pen-s15.svg": {
+      "upstream": "square-pen.svg",
+      "sha256": "2a04f0ef01c86b08e73d75ca16c857cfba522d663639b9be201e8d59c0b8c684"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-tablet-s15.imageset/lucide-tablet-s15.svg": {
+      "upstream": "tablet.svg",
+      "sha256": "e493bcad4334526624e654c23fde4e1bd3d130d7c73bdf628abedf177f46853f"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-terminal-s15.imageset/lucide-terminal-s15.svg": {
+      "upstream": "terminal.svg",
+      "sha256": "07d410927107d6d52df6019f9d423eb2b1c15a8708267e6e845fce5e437910ff"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-trash-2-s15.imageset/lucide-trash-2-s15.svg": {
+      "upstream": "trash-2.svg",
+      "sha256": "87bb20ca479b657bd73e4a2497270611a48fa3dd2c15af57ccc2c438de78ae72"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-triangle-alert-s175.imageset/lucide-triangle-alert-s175.svg": {
+      "upstream": "triangle-alert.svg",
+      "sha256": "68f8255bf21a219e69510d57a7afd12c4751d89d1282e7e1cccbb0d131d72fb6"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-upload-s15.imageset/lucide-upload-s15.svg": {
+      "upstream": "upload.svg",
+      "sha256": "b2d3151c4eead57cb4ab6f936987c7dea1930d06b7bb78f49eec097753adfdfe"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-user-round-s15.imageset/lucide-user-round-s15.svg": {
+      "upstream": "user-round.svg",
+      "sha256": "b49aaecb58512552514a407189c07fdd6c11b3fd4f9a5da2092c83b8c9330508"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-x-s175.imageset/lucide-x-s175.svg": {
+      "upstream": "x.svg",
+      "sha256": "b00d2e315d7cf622f944e4c2eb8399c2c8e28f49c23c278e2d1742bbcdfda480"
+    }
+  }
+}
