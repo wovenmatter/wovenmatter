@@ -39,12 +39,19 @@ if [[ "$mode" != "--package" ]]; then
     fi
     owned_simulator="$(xcrun "${create_arguments[@]}")"
     destination="platform=iOS Simulator,id=$owned_simulator"
+    # Complete first-boot services before XCTest installs or launches its host.
+    # Opening this disposable device gives UIKit a display before UI hit testing.
+    xcrun simctl boot "$owned_simulator"
+    xcrun simctl bootstatus "$owned_simulator" -b
+    open -a Simulator --args -CurrentDeviceUDID "$owned_simulator"
   fi
+  results="$(mktemp -d "$cache/results.XXXXXX")"
   xcode_arguments=(-project "$root/ios/WovenMatterCompanion.xcodeproj" -scheme WovenMatterCompanion
     -configuration Debug -destination "$destination" -derivedDataPath "$cache/xcode"
     -destination-timeout 120 -parallel-testing-enabled NO
+    -resultBundlePath "$results/TestResults.xcresult"
     -collect-test-diagnostics "${WOVENMATTER_IOS_TEST_DIAGNOSTICS:-never}")
   if [[ "$mode" == "--simulator" ]]; then xcode_arguments+=(-only-testing:CompanionAppTests); fi
   if [[ -n "${WOVENMATTER_IOS_TEST_ONLY:-}" ]]; then xcode_arguments+=("-only-testing:$WOVENMATTER_IOS_TEST_ONLY"); fi
-  xcodebuild "${xcode_arguments[@]}" CODE_SIGNING_ALLOWED=NO test
+  xcodebuild "${xcode_arguments[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$results/xcodebuild.log"
 fi

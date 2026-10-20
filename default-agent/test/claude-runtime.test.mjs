@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, chmod, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, chmod, readFile, rename, stat, statfs, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeRuntime, claudeDirectories, claudeEnvironment } from '../src/claude-runtime.mjs';
@@ -59,8 +59,30 @@ test('Mac native storage rejects preexisting plaintext without reading or removi
   assert.equal(await readFile(file, 'utf8'), 'nonsecret fixture');
 });
 
-test('remote native storage rejects disk-backed directories', async () => {
-  await assert.rejects(claudeDirectories('/fixture', { platform: 'linux', memoryRoot: tmpdir() }), /memory-backed/);
+test('remote native storage rejects non-tmpfs filesystems regardless of the host temporary directory', async () => {
+  // /tmp is tmpfs on Ubuntu 26.04 runners. Inject only the filesystem probe;
+  // exercise the real fail-closed guard without creating credential storage.
+  for (const type of [0xef53, 0x794c7630, 0, undefined]) {
+    await assert.rejects(claudeDirectories('/fixture', {
+      platform: 'linux', memoryRoot: '/fixture-memory',
+      filesystemStatus: async path => { assert.equal(path, '/fixture-memory'); return { type }; },
+    }), /memory-backed/);
+  }
+  await assert.rejects(claudeDirectories('/fixture', {
+    platform: 'linux', filesystemStatus: async () => { throw new Error('probe failed'); },
+  }), /probe failed/);
+});
+
+test('remote native storage accepts real tmpfs and preserves private reusable storage', { skip: process.platform !== 'linux' }, async t => {
+  assert.equal((await statfs('/dev/shm')).type, 0x01021994);
+  const memoryRoot = await mkdtemp('/dev/shm/woven-claude-fixture-');
+  t.after(() => rm(memoryRoot, { recursive: true, force: true }));
+  const paths = await claudeDirectories('/fixture', { memoryRoot });
+  assert.equal(paths.config, paths.storage);
+  assert.ok(paths.config.startsWith(memoryRoot + '/'));
+  assert.equal((await stat(paths.config)).mode & 0o777, 0o700);
+  assert.deepEqual(await claudeDirectories('/fixture', { memoryRoot }), paths);
+  assert.notEqual((await claudeDirectories('/other-fixture', { memoryRoot })).config, paths.config);
 });
 
 test('native status exposes only account metadata and never treats a Console key as subscription sign-in', async () => {
