@@ -1,7 +1,7 @@
 # On-device Pi Durable
 
 The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, and `chord`
-1.2.0 packages already locked in `default-agent/package-lock.json`. It does not
+1.3.0 packages already locked in `default-agent/package-lock.json`. It does not
 ship Node, run a remote agent loop, or download executable SDK code. Rebuild
 with `node scripts/build-ios-pi-runtime.mjs`; use `--check` to verify committed
 resources match the reviewed sources and installed locked dependencies.

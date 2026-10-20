@@ -12,7 +12,11 @@
     throw Error('Dynamic require of "' + x2 + '" is not supported');
   });
   var __commonJS = (cb, mod) => function __require2() {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    try {
+      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    } catch (e) {
+      throw mod = 0, e;
+    }
   };
   var __copyProps = (to, from, except, desc) => {
     if (from && typeof from === "object" || typeof from === "function") {
@@ -384,7 +388,7 @@
   async function K() {
     let e = await ge;
     if (e) return e.exports;
-    let t = Symbol("error marker");
+    let t = /* @__PURE__ */ Symbol("error marker");
     return { Jsv_GetError_import: o(() => t, "Jsv_GetError_import"), JsvError_Check: o((n) => n === t, "JsvError_Check") };
   }
   o(K, "getJsvErrorImport");
@@ -21565,7 +21569,7 @@ The thrown value's toString method fails.`;
           }, "trace_pyproxy_dealloc");
         };
         Module.disable_pyproxy_allocation_tracing();
-        var Zt = Symbol("pyproxy.attrs");
+        var Zt = /* @__PURE__ */ Symbol("pyproxy.attrs");
         function Sn(t, e) {
           _check_gil();
           let r = validSuspender.value;
@@ -21733,7 +21737,7 @@ The object was of type "${r}" and `, n ? e += `had repr "${n}"` : e += "an error
         Module.callPyObject = function(t, e) {
           return xe(t, e, {});
         };
-        var tr = Symbol.dispose ?? Symbol("dispose"), S2 = class t {
+        var tr = Symbol.dispose ?? /* @__PURE__ */ Symbol("dispose"), S2 = class t {
           static {
             a(this, "PyProxy");
           }
@@ -23371,7 +23375,7 @@ The object was of type "${r}" and `, n ? e += `had repr "${n}"` : e += "an error
           return new Promise((e) => me3(e, t));
         }
         a(Tr, "sleep");
-        var { get: Po, getOwnPropertyDescriptor: So, ownKeys: vo } = Reflect, wo = a((t) => ({ value: t, enumerable: true, writable: true, configurable: true }), "getPropertyDescriptor"), Mr = Symbol(), Dr = "prototype", xo = { deleteProperty: a((t, e) => t.has(e) ? t.delete(e) : delete t[e], "deleteProperty"), get(t, e, r) {
+        var { get: Po, getOwnPropertyDescriptor: So, ownKeys: vo } = Reflect, wo = a((t) => ({ value: t, enumerable: true, writable: true, configurable: true }), "getPropertyDescriptor"), Mr = /* @__PURE__ */ Symbol(), Dr = "prototype", xo = { deleteProperty: a((t, e) => t.has(e) ? t.delete(e) : delete t[e], "deleteProperty"), get(t, e, r) {
           if (e === Mr) return t;
           let n = t[e];
           return typeof n == "function" && e !== "constructor" && (n = n.bind(t)), n ||= t.get(e), n;
@@ -23420,7 +23424,7 @@ The object was of type "${r}" and `, n ? e += `had repr "${n}"` : e += "an error
         API.getExpectedKeys = function() {
           return [null, API.config.jsglobals, API.public_api, API, me3, API, {}];
         };
-        var Br = Symbol("getAccessorList"), Lr = Symbol("getObject");
+        var Br = /* @__PURE__ */ Symbol("getAccessorList"), Lr = /* @__PURE__ */ Symbol("getObject");
         function Ye(t, e = []) {
           return new Proxy(t, { get(r, n, o2) {
             if (n === Br) return e;

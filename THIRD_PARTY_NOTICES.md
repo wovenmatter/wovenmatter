@@ -36,10 +36,10 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.2.0 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.2.0/packages/durable)
+Pi Durable bundles `@earendil-works/pi-durable` 1.3.0 from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.3.0/packages/durable)
 for native execution and persistence. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.2.0/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/v1.3.0/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
 Native store ownership uses `proper-lockfile` 4.1.2 from
@@ -51,9 +51,16 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-react` 0.563.0.
+The dashboard icon assets are derived from `lucide-static` 1.60.0.
+Published tarball integrity and per-asset hashes are recorded in
+`docs/assets/lucide-provenance.json`.
 
 Copyright (c) 2022 Lucide Contributors
+Copyright (c) 2026 Lucide Icons and Contributors
+
+The complete upstream license, including Feather-derived icons and their MIT
+notice, is preserved in [LUCIDE_LICENSE.txt](docs/assets/LUCIDE_LICENSE.txt) and
+the app’s bundled `ThirdPartyNotices.txt`.
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
@@ -135,7 +142,7 @@ SOFTWARE.
 ## Browser and computer automation
 
 Woven Matter embeds [Peekaboo](https://github.com/openclaw/Peekaboo) Automation Kit
-at `1e42f1d9053109d6d19e604504ea80bc229a88e8`, under MIT, copyright 2025 Peter
+at `260fc35320d6c350af503338b944d68311e2bebb`, under MIT, copyright 2025 Peter
 Steinberger. AXorcist and the Swift support-library licenses are reproduced in
 `app/App/ThirdPartyNotices.txt`, which is included in the application bundle.
 

@@ -1,1 +1,1 @@
-{"name":"wovenmatter-ios-embedded-runtime","private":true,"version":"1.0.0","dependencies":{"pyodide":"314.0.7","esbuild":"0.25.10"}}
+{"name":"wovenmatter-ios-embedded-runtime","private":true,"version":"1.0.0","dependencies":{"esbuild":"~0.28.2","pyodide":"314.0.7"}}
