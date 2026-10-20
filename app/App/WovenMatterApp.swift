@@ -477,6 +477,14 @@ struct WovenMatterApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .textEditing) {
+                Button(DictationModel.shared.isRecording ? "Stop and Insert Dictation" : "Dictate into Current Editor") {
+                    DictationModel.shared.toggleActiveEditor()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!DictationModel.shared.enabled || DictationModel.shared.activeEditor?.ticket() == nil
+                    || DictationModel.shared.phase == .finishing)
+            }
             CommandMenu("Workspace") {
                 Button("Refresh Workspace") {
                     Task { await applicationModel.refreshWorkspace() }

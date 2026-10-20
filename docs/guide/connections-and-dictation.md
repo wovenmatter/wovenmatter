@@ -1,7 +1,7 @@
 # Connections and dictation
 
 Open **Settings → Connections**, immediately below General, to manage shared
-accounts. Account/status links in Usage, Pi Durable, and General lead here.
+accounts. Account/status links in Usage and Pi Durable lead here.
 
 The page groups **Model providers**, **Web search**, and **Local models**.
 Expand a provider, then its subscription or API-key section. OpenAI, Anthropic,
@@ -21,7 +21,7 @@ use encrypted storage; native Claude credentials stay with Claude. A remote
 workspace can also own one independent ChatGPT/Grok sign-in ahead of its shared
 accounts. **Use shared sign-in** removes that independent override.
 
-Workspace overrides apply to Pi Durable. Usage and Dictation use global accounts.
+Workspace overrides apply to Pi Durable. Usage uses global accounts.
 In **Usage → Usage limits**, each provider's **Account** selector chooses whose
 limits to display without changing the preferred inference account or fallback
 order. API keys without a supported limits endpoint show that limitation rather
@@ -38,27 +38,34 @@ permissions and recovery.
 
 ## Dictation
 
-Enable **Dictation** in **Settings → General**, above Conversation titles.
-Connect your Grok subscription in Connections and allow microphone access when
-you first record. The conversation's agent and model do not affect dictation.
+Dictation uses Apple's native on-device speech APIs on macOS and iOS 26 or later.
+No subscription, API key, or provider connection is needed. Grok connections
+continue to work for agents and Usage; dictation does not use them.
 
-Click the microphone in a conversation or note to start. Recording continues
-as you switch conversations, panels, and notes. Click the recording button in
-the destination editor to stop: the **entire transcript** is inserted at that
-editor's caret, replacing its selection. It remains a draft for review. Undo
-reverses the insertion as one edit. Moving again while transcription finishes
-does not redirect the result.
+Click the microphone in a conversation or note to start. Allow microphone access
+on first use. Apple may need an internet connection to prepare a language the
+first time; the app shows preparation progress and lets you cancel. Once language
+support is installed, speech recognition works offline. Audio and live previews
+are not written to files or sent to a workspace, provider, or agent.
 
-Leaving the workspace for Settings, Usage, or another app page stops capture at
-the last active workspace editor. Cancel discards the recording. If an editor
-closes or its text conflicts with the selected insertion point, the final
-transcript is retained for explicit insertion or discard. Audio and transcription
-previews are not saved to files. Dictation runs on the Mac, including while
-viewing remote conversations.
+On Mac, dictation is enabled by default. **Settings → General → Dictation** has an
+optional enable switch and language selector. Automatic follows your preferred
+languages. On iPhone, touch and hold the microphone to choose a language. Language
+changes apply to the next recording. Standard keyboard dictation remains available.
 
-Grok decides account eligibility and available allowance. Sign-in failures,
-subscription restrictions, exhausted usage, and temporary request limits have
-separate messages. Dictation never switches to a separately billed API key.
+Recording continues as you switch conversations and notes. Click the recording
+button in the destination editor to stop: the entire finalized transcript is
+inserted at that editor's caret, replacing its selection. It remains a draft for
+review and is never sent automatically. Native text editing preserves rich-text
+attributes and undo. On Mac, **⇧⌘D** starts or stops dictation in the active editor.
+
+Moving again while transcription finishes does not redirect the result. If an
+editor closes or its content conflicts with the insertion point, the transcript
+is retained for explicit insertion or discard. Cancel discards the recording.
+Leaving the workspace for another app page stops capture; backgrounding the
+iPhone app also stops capture. Interrupted recordings retain completed text where
+possible. Unsupported languages and failed preparation have explicit errors;
+there is no cloud transcription fallback.
 
 ## Local Model Server
 

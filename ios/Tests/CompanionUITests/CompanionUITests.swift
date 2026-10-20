@@ -66,6 +66,7 @@ final class CompanionUITests: XCTestCase {
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
     app.buttons["tab-notes"].tap()
     XCTAssertTrue(app.descendants(matching: .any)["note-title"].firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["dictation-microphone"].exists)
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
@@ -100,6 +101,8 @@ final class CompanionUITests: XCTestCase {
     chooser.tap()
     let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["dictation-microphone"].exists)
+    XCTAssertEqual(app.buttons["dictation-microphone"].label, "Start dictation")
     XCTAssertFalse(app.buttons["Conversation actions"].exists)
     XCTAssertFalse(app.buttons["Add connection"].exists)
     XCTAssertTrue(app.buttons["Choose model"].exists)

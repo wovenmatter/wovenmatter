@@ -1,9 +1,9 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
   name: "WovenMatterMobile",
-  platforms: [.iOS(.v18), .macOS(.v14)],
+  platforms: [.iOS(.v26), .macOS(.v26)],
   products: [
     .library(name: "CompanionClient", targets: ["CompanionClient"]),
     .library(name: "PiDurableRuntime", targets: ["PiDurableRuntime"]),
