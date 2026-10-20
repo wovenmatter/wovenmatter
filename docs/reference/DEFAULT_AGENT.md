@@ -94,28 +94,26 @@ real remote-host disconnect remain separate acceptance checks.
 
 ## Connections, dictation, and custom servers
 
-The app-owned coordinator supplies access-only snapshots to Usage, native Grok
-STT, and the Pi Durable transports. Concurrent refreshes coalesce. An STT or
-Usage HTTP 401 can request one early renewal through the same lock, with a
-compare-and-swap Keychain save so sign-out or a replacement account wins. Global
-connections serve app-wide consumers; workspace overrides serve Pi Durable.
-Usage does not restore persisted quotas belonging to a previous shared account
-or an independently signed-in harness.
+The app-owned coordinator supplies access-only snapshots to Usage and Pi Durable
+transports. Concurrent refreshes coalesce. Usage HTTP 401 responses can request
+one early renewal through the same lock, with a compare-and-swap Keychain save so
+sign-out or a replacement account wins. Global connections serve Usage;
+workspace overrides serve Pi Durable. Usage does not restore persisted quotas
+belonging to a previous shared account or independently signed-in harness.
 
-`DictationModel` owns a single recording across workspace views. Native
-AVAudioEngine capture converts microphone input to PCM16LE mono at 16 kHz;
-`GrokSpeechClient` sends it directly from the Mac to xAI's STT websocket using
-only the shared Grok OAuth access token. It waits for `transcript.created`, sends
-binary audio, finishes with `audio.done`, and inserts only `transcript.done`.
-There is no API-key billing fallback. A bounded audio queue, connection/final
-response deadlines, cancellation, and generation fencing prevent runaway
-recordings or late insertion. Neither audio nor transcript previews are saved.
-Cancellation is checked again after each suspended response, including a final
-transcript arriving after a newer recording starts. Capture/send failures retain
-their specific error instead of being masked by socket cancellation.
+`DictationSession` owns one native recording on the interface device, shared by
+Mac and iPhone. `AppleDictationEngine` uses SpeechAnalyzer with SpeechTranscriber,
+or DictationTranscriber for a supported language/device where appropriate.
+Apple-managed language assets are prepared only on an explicit recording action.
+The microphone stream is converted to the analyzer's negotiated audio format;
+audio is neither stored nor forwarded through workspace RPC. Finalized text
+segments are accumulated by audio range, and volatile revisions are preview-only.
+Stop drains and finalizes the analyzer before insertion. Cancellation fences late
+results and retains resource ownership until native work has settled. Capture
+interruptions retain completed text for explicit insertion where possible.
 
 Each native editor exposes a `DictationEditor` bridge. Stop captures its logical
-identity, current text, and UTF-16 selection. Insertion uses AppKit's native text
+identity, current text, and UTF-16 selection. Insertion uses the platform's native text
 system for rich text and one undo group. Non-overlapping edits can be reconciled;
 a reused/closed editor or conflicting edit retains the final transcript for
 explicit insertion. Leaving the workspace always stops capture. Test fixtures

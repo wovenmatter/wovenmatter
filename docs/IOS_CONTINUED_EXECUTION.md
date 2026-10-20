@@ -43,9 +43,9 @@ The coordinator registers concrete unique identifiers before submission; the
 plist wildcard authorizes those identifiers. No GPU resource or entitlement is
 requested: inference remains external, and this app requests CPU/network work.
 The implementation checks iOS availability and foreground application state.
-On iOS 27, submission uses the asynchronous API away from the main thread. Older
-supported systems use the prior scheduler API; iOS 18–25 retain the short-task
-fallback. SDK 26 builds compile the older path.
+On iOS 27, submission uses the asynchronous API away from the main thread. iOS 26
+uses the prior scheduler API. Both the app and shared packages require iOS/macOS 26 or later.
+SDK 26 builds compile that supported path.
 
 ## Limits and scheduling
 

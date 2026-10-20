@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenMatterCompanion
 
 @main struct WovenMatterCompanionApp: App {
   @State private var model = CompanionModel()
@@ -22,6 +23,7 @@ import SwiftUI
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
           model.sceneChanged(phase)
+          if phase == .background { MobileDictation.shared.stop() }
           if phase == .active { Task { await model.analytics.openInterface() } }
         }
         .onOpenURL { url in
@@ -95,6 +97,10 @@ struct CompanionShell: View {
       }
     }
     .background(MobileKeyboardDismissal())
+    .overlay(alignment: .top) { MobileDictationFeedback() }
+    .onChange(of: model.tab) { _, tab in
+      if tab != .chat && tab != .note { MobileDictation.shared.stop() }
+    }
     .sheet(isPresented: $model.chatChooserPresented, onDismiss: { model.newChatNoteID = nil }) { NewChatChooser(model: model).environment(\.dashboardTheme, theme) }
     .scrollIndicators(.never)
     .foregroundStyle(DashboardPalette.foreground).tint(theme.palette.themeAccent)

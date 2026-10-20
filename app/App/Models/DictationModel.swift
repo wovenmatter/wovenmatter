@@ -1,271 +1,60 @@
-import AVFoundation
-import Foundation
+import AppKit
 import Observation
-import WovenMatterClient
+import WovenMatterCompanion
 
-@MainActor @Observable
-final class DictationModel {
+/// AppKit's caret/undo bridge around the same native session used on iPhone.
+@MainActor @Observable final class DictationModel {
     static let shared = DictationModel()
-    @ObservationIgnored var backendRequest: BackendSpeechTransport.Request?
-    private func activeCredential() async throws -> DefaultAgentCredential {
-        if let backendRequest {
-            let label = try await BackendSpeechTransport.availability(request: backendRequest)
-            var placeholder = DefaultAgentCredential(type: "oauth")
-            placeholder.displayName = label
-            return placeholder
-        }
-        #if !SWIFT_PACKAGE
-        guard LocalExecutionRole.current != .frontend else { throw GrokSpeechError.unavailable }
-        #endif
-        return try await credential()
+    typealias Phase = DictationSession.Phase
+    let session: DictationSession
+    weak var activeEditor: DictationEditor?
+    private(set) weak var shortcutEditor: DictationEditor?
+    @ObservationIgnored private let focusedWindow: () -> NSWindow?
+    init(session: DictationSession = .shared, focusedWindow: @escaping () -> NSWindow? = { NSApp.keyWindow }) {
+        self.session = session; self.focusedWindow = focusedWindow
     }
-    private func activeClient() -> any GrokSpeechTransport {
-        if let backendRequest { return BackendSpeechTransport(request: backendRequest) }
-        return makeClient()
+    func refreshShortcutEditor() {
+        let focused = DictationEditor.focused(in: focusedWindow())
+        if shortcutEditor !== focused { shortcutEditor = focused }
     }
-    enum Phase { case idle, connecting, recording, finishing }
-    var enabled = false {
-        didSet {
-            preferences.set(enabled, forKey: "wovenmatter.dictation.enabled")
-            if !enabled { cancel() }
-        }
-    }
-    private(set) var phase = Phase.idle
-    private(set) var preview = ""
-    private(set) var retainedTranscript: String?
-    private(set) var accountLabel = "Grok subscription"
-    private(set) var availability = "Connect Grok in Connections to use dictation."
-    var error: String?
-    @ObservationIgnored private var generation = UUID()
-    @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private var writer: Task<Void, any Error>?
-    @ObservationIgnored private var finishingTimeout: Task<Void, Never>?
-    @ObservationIgnored private var audio: (any DictationCapturing)?
-    @ObservationIgnored private var client: (any GrokSpeechTransport)?
-    @ObservationIgnored private let permission: () async -> Bool
-    @ObservationIgnored private let credential: () async throws -> DefaultAgentCredential
-    @ObservationIgnored private let renewCredential: (DefaultAgentCredential) async throws -> DefaultAgentCredential?
-    @ObservationIgnored private let makeAudio: () -> any DictationCapturing
-    @ObservationIgnored private let makeClient: () -> any GrokSpeechTransport
-    @ObservationIgnored private let preferences: UserDefaults
-    @ObservationIgnored private var destination: DictationEditorTicket?
-    @ObservationIgnored weak var activeEditor: DictationEditor?
-
-    init(
-        preferences: UserDefaults = .standard,
-        permission: @escaping () async -> Bool = DictationModel.microphonePermission,
-        credential: @escaping () async throws -> DefaultAgentCredential = {
-            try await ProviderAccountCoordinator.shared.grokDictationCredential()
-        },
-        renewCredential: @escaping (DefaultAgentCredential) async throws -> DefaultAgentCredential? = {
-            guard let access = $0.access else { return nil }
-            return try await ProviderAccountCoordinator.shared.renewRejectedAccess(provider: "xai", access: access)
-        },
-        makeAudio: @escaping () -> any DictationCapturing = { DictationAudioCapture() },
-        makeClient: @escaping () -> any GrokSpeechTransport = { GrokSpeechClient() }
-    ) {
-        self.permission = permission
-        self.credential = credential
-        self.renewCredential = renewCredential
-        self.makeAudio = makeAudio
-        self.makeClient = makeClient
-        self.preferences = preferences
-        self.enabled = preferences.bool(forKey: "wovenmatter.dictation.enabled")
-    }
-    static func microphonePermission() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized: true
-        case .notDetermined: await AVCaptureDevice.requestAccess(for: .audio)
-        default: false
-        }
-    }
-
-    var isRecording: Bool { phase == .recording || phase == .connecting }
-    var isBusy: Bool { phase != .idle }
-
-    func refreshAvailability() async {
-        do {
-            let credential = try await activeCredential()
-            accountLabel = credential.accountLabel ?? "Grok subscription"
-            availability = "Connected · Dictation access is checked when you record."
-        } catch {
-            accountLabel = "Grok subscription"
-            availability = error.localizedDescription
-        }
-    }
-
+    var languageIdentifier: String { get { session.languageIdentifier } set { session.languageIdentifier = newValue } }
+    var phase: Phase { session.phase }
+    var preview: String { session.preview }
+    var retainedTranscript: String? { session.retainedTranscript }
+    var availability: String { session.availability }
+    var error: String? { get { session.error } set { session.error = newValue } }
+    var isRecording: Bool { session.isRecording }
+    var isBusy: Bool { session.isBusy }
+    func refreshAvailability() async { await session.loadLanguages() }
     func toggle(editor: DictationEditor) {
         activeEditor = editor
-        if isRecording {
-            stop(editor: editor)
-            return
-        }
-        guard phase == .idle else { return }
-        guard enabled else {
-            error = "Enable dictation in Settings → General."
-            return
-        }
-        guard retainedTranscript == nil else {
-            error = "Insert or discard the previous transcript before starting another recording."
-            return
-        }
-        guard editor.ticket() != nil else {
-            error = "Place the cursor in an editable text input first."
-            return
-        }
-        generation = UUID()
-        let id = generation
-        phase = .connecting
-        error = nil
-        preview = ""
-        destination = nil
-        task = Task {
-            do {
-                let allowed = await permission()
-                guard generation == id, !Task.isCancelled else { return }
-                guard allowed else {
-                    throw DictationError.message(
-                        "Microphone access is disabled. Enable it for Woven Matter in macOS Settings → Privacy & Security → Microphone."
-                    )
-                }
-                let credential = try await activeCredential()
-                guard generation == id, !Task.isCancelled else { return }
-                accountLabel = credential.accountLabel ?? "Grok subscription"
-                var speech = activeClient()
-                client = speech
-                do { try await speech.connect(credential: credential) } catch GrokSpeechError.signInRequired {
-                    await speech.cancel()
-                    guard generation == id, !Task.isCancelled else { return }
-                    guard backendRequest == nil, let renewed = try await renewCredential(credential) else {
-                        throw GrokSpeechError.signInRequired
-                    }
-                    guard generation == id, !Task.isCancelled else { return }
-                    speech = activeClient()
-                    client = speech
-                    try await speech.connect(credential: renewed)
-                }
-                guard generation == id, !Task.isCancelled else {
-                    await speech.cancel()
-                    return
-                }
-                let capture = makeAudio()
-                audio = capture
-                let stream = try capture.start()
-                phase = .recording
-                writer = Task {
-                    do {
-                        for try await chunk in stream {
-                            try Task.checkCancellation()
-                            try await speech.send(chunk)
-                        }
-                        try Task.checkCancellation()
-                        try await speech.finish()
-                    } catch {
-                        // Report capture/send failures directly. Cancelling the
-                        // socket otherwise turns them into a generic read error.
-                        if generation == id, !Task.isCancelled {
-                            self.error = error.localizedDescription
-                            finishSession()
-                        }
-                        await speech.cancel()
-                        throw error
-                    }
-                }
-                while generation == id, !Task.isCancelled {
-                    guard let event = try await speech.next(timeout: .seconds(60)) else { continue }
-                    guard generation == id, !Task.isCancelled else { return }
-                    switch event {
-                    case .ready: break
-                    case .partial(let text): preview = text
-                    case .failure(let error): throw error
-                    case .done(let text, _):
-                        guard phase == .finishing else { throw GrokSpeechError.incomplete }
-                        try await writer?.value
-                        guard generation == id, !Task.isCancelled else { return }
-                        let transcript = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !transcript.isEmpty, destination?.insert(transcript) != true {
-                            retainedTranscript = transcript
-                            error =
-                                "The destination changed or closed. Your transcript is ready to insert when you return to an editor."
-                        }
-                        availability = "Dictation worked with \(accountLabel)."
-                        finishSession()
-                        return
-                    }
-                }
-            } catch {
-                guard generation == id, !Task.isCancelled else { return }
-                self.error = error.localizedDescription
-                if let speechError = error as? GrokSpeechError { availability = speechError.localizedDescription }
-                finishSession()
-            }
-        }
+        if isRecording { stop(editor: editor); return }
+        guard !isBusy else { return }
+        guard retainedTranscript == nil else { error = "Insert or discard the previous transcript first."; return }
+        guard editor.ticket() != nil else { error = "Place the cursor in an editable text input first."; return }
+        session.start()
     }
-
+    func toggleActiveEditor() {
+        // Recheck native focus even if SwiftUI has not refreshed the menu yet.
+        guard let editor = DictationEditor.focused(in: focusedWindow()) else { return }
+        if retainedTranscript != nil { insertRetained(into: editor) }
+        else { toggle(editor: editor) }
+    }
     func stop(editor: DictationEditor) {
-        if phase == .connecting {
-            cancel()
-            return
-        }
-        guard phase == .recording else { return }
+        if phase == .preparing { session.cancel(); return }
         guard let ticket = editor.ticket() else {
-            error = "Place the cursor in the destination text input, then stop recording."
-            return
+            error = "Place the cursor in the destination text input, then stop recording."; return
         }
-        destination = ticket
-        phase = .finishing
-        audio?.stop()
-        let id = generation
-        finishingTimeout = Task {
-            try? await Task.sleep(for: .seconds(20))
-            guard !Task.isCancelled, generation == id, phase == .finishing else { return }
-            error = GrokSpeechError.incomplete.localizedDescription
-            finishSession()
-        }
+        session.stop { ticket.insert($0) }
     }
     func leaveWorkspace() {
+        let target = activeEditor
+        activeEditor = nil
         guard isRecording else { return }
-        if let editor = activeEditor { stop(editor: editor) } else { cancel() }
-        // An editor may have closed or started IME composition while navigating.
-        // Leaving the workspace must always stop microphone capture.
-        if isRecording { cancel() }
+        if let target { stop(editor: target) }
+        if isRecording { session.stop { _ in false } }
+        if phase == .preparing { session.cancel() }
     }
-    func insertRetained(into editor: DictationEditor) {
-        guard let transcript = retainedTranscript, editor.ticket()?.insert(transcript) == true else {
-            error = "Place the cursor in an editable text input first."
-            return
-        }
-        retainedTranscript = nil
-        error = nil
-    }
-    func cancel() {
-        retainedTranscript = nil
-        error = nil
-        finishSession()
-    }
-    private func finishSession() {
-        generation = UUID()
-        audio?.stop()
-        audio = nil
-        writer?.cancel()
-        writer = nil
-        finishingTimeout?.cancel()
-        finishingTimeout = nil
-        task?.cancel()
-        task = nil
-        if let client { Task { await client.cancel() } }
-        client = nil
-        destination = nil
-        phase = .idle
-        preview = ""
-    }
-}
-
-private enum DictationError: LocalizedError {
-    case message(String)
-    var errorDescription: String? {
-        switch self {
-        case .message(let text): text
-        }
-    }
+    func insertRetained(into editor: DictationEditor) { session.insertRetained { editor.ticket()?.insert($0) == true } }
+    func cancel() { session.cancel() }
 }

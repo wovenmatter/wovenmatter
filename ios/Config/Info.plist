@@ -16,6 +16,7 @@
   <key>UILaunchScreen</key><dict/>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>NSMicrophoneUsageDescription</key><string>Woven Matter uses your microphone for on-device dictation in conversations and notes. Audio stays on your device.</string>
   <key>NSCameraUsageDescription</key><string>Scan the pairing code displayed by Woven Matter on your Mac.</string>
   <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.wovenmatter.pair</string><key>CFBundleURLSchemes</key><array><string>wovenmatter</string></array></dict></array>
 </dict></plist>
