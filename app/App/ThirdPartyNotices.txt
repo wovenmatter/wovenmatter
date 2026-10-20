@@ -27,7 +27,7 @@ SOFTWARE.
 
 Peekaboo Automation Kit
 https://github.com/openclaw/Peekaboo
-Reference: 1e42f1d9053109d6d19e604504ea80bc229a88e8
+Reference: 260fc35320d6c350af503338b944d68311e2bebb
 
 MIT License
 
