@@ -17,7 +17,6 @@ import WovenMatterCompanion
         let focused = DictationEditor.focused(in: focusedWindow())
         if shortcutEditor !== focused { shortcutEditor = focused }
     }
-    var enabled: Bool { get { session.enabled } set { session.enabled = newValue } }
     var languageIdentifier: String { get { session.languageIdentifier } set { session.languageIdentifier = newValue } }
     var phase: Phase { session.phase }
     var preview: String { session.preview }
@@ -31,7 +30,6 @@ import WovenMatterCompanion
         activeEditor = editor
         if isRecording { stop(editor: editor); return }
         guard !isBusy else { return }
-        guard enabled else { error = "Enable dictation in Settings → General."; return }
         guard retainedTranscript == nil else { error = "Insert or discard the previous transcript first."; return }
         guard editor.ticket() != nil else { error = "Place the cursor in an editable text input first."; return }
         session.start()

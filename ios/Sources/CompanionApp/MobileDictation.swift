@@ -62,7 +62,7 @@ struct MobileDictationMicrophone: View {
         .foregroundStyle(session.isRecording ? DashboardPalette.danger : DashboardPalette.foreground)
     }
     .buttonStyle(DashboardIconButtonStyle())
-    .disabled(session.phase == .finishing || !session.enabled)
+    .disabled(session.phase == .finishing)
     .accessibilityLabel(session.retainedTranscript != nil ? "Insert retained dictation here" : session.isRecording ? "Stop recording and insert here" : "Start dictation")
     .accessibilityIdentifier("dictation-microphone")
     .contextMenu {

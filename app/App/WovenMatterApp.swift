@@ -487,7 +487,7 @@ struct WovenMatterApp: App {
                     DictationModel.shared.toggleActiveEditor()
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(!DictationModel.shared.enabled || DictationModel.shared.shortcutEditor?.ticket() == nil
+                .disabled(DictationModel.shared.shortcutEditor?.ticket() == nil
                     || DictationModel.shared.phase == .finishing)
             }
             CommandMenu("Workspace") {

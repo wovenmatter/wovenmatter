@@ -67,7 +67,6 @@ import Testing
   @Test func defaultIsReadyWithoutProviderAndLanguageIsCapturedPerRecording() async throws {
     let engine = NativeEngineFixture()
     let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine })
-    #expect(session.enabled)
     session.languageIdentifier = "de-DE"
     session.start()
     try await settle { session.phase == .recording }
@@ -164,14 +163,14 @@ import Testing
     #expect(inserted == "Current")
   }
 
-  @Test func disablingStopsCaptureAndPreservesThePreference() async throws {
+  @Test func legacyDisabledPreferenceDoesNotBlockDictation() async throws {
     let defaults = preferences(), engine = NativeEngineFixture()
+    defaults.set(false, forKey: "wovenmatter.dictation.enabled")
     let session = DictationSession(preferences: defaults, permission: { true }, makeEngine: { engine })
     session.start()
     try await settle { session.phase == .recording }
-    session.enabled = false
+    session.cancel()
     #expect(engine.captureStopped)
-    #expect(!DictationSession(preferences: defaults).enabled)
     #expect(session.phase == .idle)
   }
 

@@ -24,9 +24,6 @@ import Observation
   public private(set) var downloadProgress: Double?
   public private(set) var availableLanguages: [String] = []
   public var error: String?
-  public var enabled: Bool {
-    didSet { preferences.set(enabled, forKey: "wovenmatter.dictation.enabled"); if !enabled { cancel() } }
-  }
   public var languageIdentifier: String {
     didSet { preferences.set(languageIdentifier, forKey: "wovenmatter.dictation.language") }
   }
@@ -52,7 +49,6 @@ import Observation
               finishingTimeout: Duration = .seconds(20)) {
     self.preferences = preferences; self.permission = permission; self.makeEngine = makeEngine
     self.finishingTimeout = finishingTimeout
-    enabled = preferences.object(forKey: "wovenmatter.dictation.enabled") as? Bool ?? true
     languageIdentifier = preferences.string(forKey: "wovenmatter.dictation.language") ?? ""
   }
 
@@ -69,7 +65,7 @@ import Observation
   }
 
   public func start() {
-    guard enabled, phase == .idle, retainedTranscript == nil else { return }
+    guard phase == .idle, retainedTranscript == nil else { return }
     generation = UUID()
     let id = generation
     let languages = languageIdentifier.isEmpty ? Locale.preferredLanguages.map { Locale(identifier: $0) } : [Locale(identifier: languageIdentifier)]

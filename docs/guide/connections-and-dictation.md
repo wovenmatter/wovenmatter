@@ -48,8 +48,8 @@ first time; the app shows preparation progress and lets you cancel. Once languag
 support is installed, speech recognition works offline. Audio and live previews
 are not written to files or sent to a workspace, provider, or agent.
 
-On Mac, dictation is enabled by default. **Settings → General → Dictation** has an
-optional enable switch and language selector. Automatic follows your preferred
+Dictation is always available. **Settings → General → Dictation** on Mac has a
+language selector. Automatic follows your preferred
 languages. On iPhone, touch and hold the microphone to choose a language. Language
 changes apply to the next recording. Standard keyboard dictation remains available.
 

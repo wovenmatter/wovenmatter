@@ -220,7 +220,6 @@ struct SettingsGeneralView: View {
     private var dictationCard: some View {
         @Bindable var dictation = DictationModel.shared
         return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes with Apple on-device speech.") {
-            Toggle("Enable dictation", isOn: $dictation.enabled)
             Picker("Language", selection: $dictation.languageIdentifier) {
                 Text("Automatic").tag("")
                 ForEach(dictation.session.availableLanguages, id: \.self) { identifier in
