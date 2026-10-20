@@ -23,8 +23,9 @@ import WovenMatterCompanion
     guard editor.identity == identity, let view = editor.textView, view.isEditable, view.markedTextRange == nil,
           let range = insertion.range(in: view.text ?? "") else { return false }
     let expected = ((view.text ?? "") as NSString).replacingCharacters(in: range, with: text)
-    // Use the keyboard's insertion path so UIKit owns note edit admission,
-    // delegate callbacks, typing attributes and undo without duplicate edits.
+    // Programmatic insertText preserves native undo and change notifications,
+    // but does not invoke shouldChangeTextIn. Admit the note edit exactly once.
+    guard view.delegate?.textView?(view, shouldChangeTextIn: range, replacementText: text) != false else { return false }
     view.selectedRange = range
     view.undoManager?.beginUndoGrouping()
     view.insertText(text)
