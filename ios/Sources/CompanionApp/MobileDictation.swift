@@ -21,19 +21,16 @@ import WovenMatterCompanion
   let insertion: DictationInsertion
   func insert(_ text: String) -> Bool {
     guard editor.identity == identity, let view = editor.textView, view.isEditable, view.markedTextRange == nil,
-          let range = insertion.range(in: view.text ?? ""),
-          let start = view.position(from: view.beginningOfDocument, offset: range.location),
-          let end = view.position(from: start, offset: range.length),
-          let target = view.textRange(from: start, to: end) else { return false }
-    // UIKit owns replacement, typing attributes, delegate callbacks and undo.
-    // Honor the existing rich-note edit admission hook before making the edit.
-    guard view.delegate?.textView?(view, shouldChangeTextIn: range, replacementText: text) != false else { return false }
+          let range = insertion.range(in: view.text ?? "") else { return false }
+    let expected = ((view.text ?? "") as NSString).replacingCharacters(in: range, with: text)
+    // Use the keyboard's insertion path so UIKit owns note edit admission,
+    // delegate callbacks, typing attributes and undo without duplicate edits.
+    view.selectedRange = range
     view.undoManager?.beginUndoGrouping()
-    view.replace(target, withText: text)
+    view.insertText(text)
     view.undoManager?.setActionName("Dictation")
     view.undoManager?.endUndoGrouping()
-    view.delegate?.textViewDidChange?(view)
-    return true
+    return view.text == expected
   }
 }
 

@@ -17,10 +17,21 @@ import WovenMatterCompanion
 
   func testNativeCaretReplacementPreservesAttributesAndNotifiesEditing() throws {
     let view = UITextView()
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previousWindow = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = UIViewController()
+    window.rootViewController?.view.addSubview(view)
+    view.frame = CGRect(x: 0, y: 0, width: 300, height: 200)
+    window.makeKeyAndVisible()
+    view.becomeFirstResponder()
+    defer { window.isHidden = true; previousWindow?.makeKeyAndVisible() }
     let delegate = Delegate(); view.delegate = delegate
     view.attributedText = NSAttributedString(string: "Before old after", attributes: [.font: UIFont.systemFont(ofSize: 22), .foregroundColor: UIColor.red])
     view.selectedRange = NSRange(location: 7, length: 3)
     view.typingAttributes = [.font: UIFont.systemFont(ofSize: 22), .foregroundColor: UIColor.red]
+    let history = try XCTUnwrap(view.undoManager)
+    history.removeAllActions()
     let editor = MobileDictationEditor(); editor.bind(view, identity: "note:A:block:B")
     let ticket = try XCTUnwrap(editor.ticket())
     XCTAssertTrue(ticket.insert("new words"))
@@ -28,6 +39,8 @@ import WovenMatterCompanion
     XCTAssertEqual((view.attributedText.attribute(.font, at: 8, effectiveRange: nil) as? UIFont)?.pointSize, 22)
     XCTAssertEqual(delegate.edits, 1, "Note edit admission must run once")
     XCTAssertGreaterThanOrEqual(delegate.changes, 1, "Bindings and note persistence must be notified")
+    history.undo()
+    XCTAssertEqual(view.text, "Before old after", "Dictation is one native undoable edit")
   }
 
   func testChangedOwnerOrOverlappingEditRejectsLateResult() throws {
