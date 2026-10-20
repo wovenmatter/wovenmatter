@@ -72,6 +72,7 @@ jobs:
         run: command -v cmake >/dev/null || brew install cmake
 
       - name: Test desktop
+        shell: bash
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |

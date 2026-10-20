@@ -21,10 +21,16 @@ swift test --package-path "$root/ios" --scratch-path "$cache/package" --disable-
 if [[ "$mode" != "--package" ]]; then
   destination="${WOVENMATTER_IOS_SIMULATOR_DESTINATION:-}"
   owned_simulator=""
+  simulator_pid=""
+  results="$(mktemp -d "$cache/results.XXXXXX")"
   cleanup_simulator() {
     if [[ -n "$owned_simulator" ]]; then
       xcrun simctl shutdown "$owned_simulator" >/dev/null 2>&1 || true
       xcrun simctl delete "$owned_simulator" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$simulator_pid" ]]; then
+      kill "$simulator_pid" >/dev/null 2>&1 || true
+      wait "$simulator_pid" 2>/dev/null || true
     fi
   }
   trap cleanup_simulator EXIT
@@ -43,9 +49,19 @@ if [[ "$mode" != "--package" ]]; then
     # Opening this disposable device gives UIKit a display before UI hit testing.
     xcrun simctl boot "$owned_simulator"
     xcrun simctl bootstatus "$owned_simulator" -b
-    open -a Simulator --args -CurrentDeviceUDID "$owned_simulator"
+    # Launch an owned process from the selected Xcode. `open --args` would
+    # silently ignore the UDID when the user's Simulator is already running.
+    simctl_path="$(xcrun --find simctl)"
+    simulator_executable="${simctl_path%/usr/bin/simctl}/Applications/Simulator.app/Contents/MacOS/Simulator"
+    if [[ -x "$simulator_executable" ]]; then
+      "$simulator_executable" -CurrentDeviceUDID "$owned_simulator" >"$results/simulator.log" 2>&1 &
+      simulator_pid=$!
+    else
+      # Xcode 27 replaces standalone Simulator with Device Hub. Let XCTest
+      # manage its display on that toolchain; do not pass it unsupported args.
+      printf 'No standalone Simulator in selected Xcode; testing the booted device through XCTest.\n'
+    fi
   fi
-  results="$(mktemp -d "$cache/results.XXXXXX")"
   xcode_arguments=(-project "$root/ios/WovenMatterCompanion.xcodeproj" -scheme WovenMatterCompanion
     -configuration Debug -destination "$destination" -derivedDataPath "$cache/xcode"
     -destination-timeout 120 -parallel-testing-enabled NO
