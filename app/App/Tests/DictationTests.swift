@@ -97,6 +97,7 @@ import WovenMatterCompanion
         #expect(view.string == "Draft")
     }
     @Test func shortcutUsesTheCurrentWindowResponderAndIgnoresStaleEditors() async throws {
+        _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
             styleMask: .borderless, backing: .buffered, defer: false)
         let secondWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
