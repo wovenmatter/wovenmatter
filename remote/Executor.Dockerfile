@@ -6,7 +6,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends ca-certificates git libatomic1 \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install --global --ignore-scripts --no-audit --no-fund npm@12.2.0
+RUN npm install --global --ignore-scripts --no-audit --no-fund npm@12.2.1
 ARG EXECUTOR_VERSION
 RUN test -n "$EXECUTOR_VERSION" && npm install --prefix /opt/executor --ignore-scripts --no-audit --no-fund --save-exact "executor@$EXECUTOR_VERSION"
 ENV NODE_ENV=production

@@ -15,7 +15,7 @@ let package = Package(
   ],
   dependencies: [
     .package(path: "../shared"), .package(path: "../ios"),
-    .package(url: "https://github.com/openclaw/Peekaboo.git", from: "4.9.5")
+    .package(url: "https://github.com/openclaw/Peekaboo.git", from: "4.9.6")
   ],
   targets: [
     .target(
