@@ -56,11 +56,18 @@ Debug central builds never transmit to production PostHog.
 
 ## Updates
 
-Updater metrics remain separate: check/download/install clicks, verified fresh
-DMG downloads, failures, and replacement-app launches. Cache reuse does not count
-as a download. A local install receipt verifies the matching replacement version
-and build after restart; it is consumed on its first reporting attempt, including
-failure. It is not an analytics delivery backlog. Opt-out invalidates it.
+Updater metrics remain separate: manual check clicks, download/install starts,
+completed downloads, installation failures, and verified replacement-app launches.
+Lifecycle callbacks are starts, not button clicks. Older clients' `update_download_clicked`
+and `update_install_clicked` events remain decodable and are grouped with the
+corresponding started stages in the report. Expected installation cancellation is
+not a failure, and telemetry never delays backend recovery.
+
+A local install receipt is saved before installation can terminate the app,
+including install-on-quit without Sparkle's optional relaunch callback. It verifies
+the matching replacement version and build after restart; it is consumed on its
+first reporting attempt, including failure. The library preference is rechecked
+before delivery. It is not an analytics delivery backlog. Opt-out invalidates it.
 Update stages never qualify for DAU/WAU/MAU and are never added to GitHub downloads.
 
 ## GitHub
@@ -78,7 +85,9 @@ GitHub's short API window and last-known counters for deleted/replaced installer
 The repository publisher retains deterministic snapshot IDs and acknowledgement
 checkpoints to avoid double-counting revisions. This aggregate history is separate
 from app telemetry and is intentionally preserved. Saved chart definitions live
-in `product-dashboard-insights.json` and `github-dashboard-insights.json`.
+in `product-dashboard-insights.json` (nine product/website insights) and
+`github-dashboard-insights.json` (six GitHub insights). `dashboard-text.md` contains
+the matching measurement notes. All insights include their live short IDs.
 
 The daily workflow restores the complete previous main-branch workflow artifact
 and archives a complete successor. It never silently starts over. First setup or
@@ -87,6 +96,30 @@ Keep durable backups: Actions artifact retention is 90 days. Collection failure
 must not renew stale history. Publication failure still preserves the new archive.
 `ANALYTICS_GITHUB_TOKEN` requires repository Administration read permission for
 traffic. The embedded PostHog token grants ingestion only, not administration.
+
+## Daily email report
+
+Use PostHog's native dashboard email subscription for the product-and-acquisition
+dashboard (project `659360`, dashboard `2198735`). Configure one enabled report
+for the account's chosen email recipient, every day at **12:00 UTC**, including
+all 15 saved insights. Keep the timezone UTC so daylight saving does not shift
+the reporting time. An AI summary is optional and is not required for statistics.
+This is a scheduled report, independent of the account's billing plan.
+
+The GitHub collector is scheduled at **03:17 UTC** to leave time before the noon
+report. GitHub Actions may delay or skip scheduled runs; the email uses the latest
+successfully published snapshot and includes the collection-time insight so its
+freshness is visible. App and website events arrive independently. The email is
+a statistics report, not a claim that a particular collection job succeeded.
+Saving a dashboard definition or merging this repository does not create a
+PostHog email subscription; configure and verify that separately in PostHog.
+
+After editing live charts, read back every insight's name, description and full
+query and synchronize these JSON files and measurement notes. Execute each saved
+query to verify results; do not infer success from saving metadata. Check that the
+report still includes all 15 insights after adding a tile. Before calling email
+setup complete, verify its enabled state, recipient, daily UTC schedule, and a
+test delivery record. A successful send record does not prove inbox receipt.
 
 ## Testing and rollout
 

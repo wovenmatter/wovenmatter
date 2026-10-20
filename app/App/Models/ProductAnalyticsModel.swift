@@ -161,11 +161,9 @@ final class ProductAnalyticsModel {
       defaults.set(next.addingTimeInterval(-ProductAnalyticsEvent.signalInterval), forKey: key)
     }
   }
-  func prepareUpdateInstallation(_ manifest: WovenMatterReleaseManifest) async -> UUID {
-    await prepareUpdateInstallation(version: manifest.version, build: manifest.build)
-  }
-  func prepareUpdateInstallation(version: String, build: Int) async -> UUID {
-    await refresh()
+  /// Persist before the updater may terminate us, including install-on-quit.
+  /// Delivery refreshes and checks the library preference again after launch.
+  func prepareUpdateInstallation(version: String, build: Int) -> UUID {
     let installationID = UUID()
     defaults.removeObject(forKey: Self.updateReceiptKey)
     guard !locallyDisabled, let preference,
