@@ -25,6 +25,33 @@ import Testing
 }
 
 #if os(macOS) || os(iOS)
+import AVFoundation
+import Speech
+
+@Suite struct DictationAudioTapTests {
+  @MainActor @Test func microphoneCallbackRunsOnAnAudioQueue() async throws {
+    let source = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+    let target = try #require(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true))
+    let converter = try #require(AVAudioConverter(from: source, to: target))
+    let (inputs, input) = AsyncThrowingStream<AnalyzerInput, any Error>.makeStream()
+    let (_, output) = AsyncThrowingStream<DictationSegment, any Error>.makeStream()
+    // Construct on MainActor, just as start() does, then invoke off MainActor.
+    // The original inherited isolation traps here before converting any audio.
+    let callback = DictationAudioTap.make(converter: converter, format: target, input: input, output: output)
+    try await Task.detached {
+      dispatchPrecondition(condition: .notOnQueue(.main))
+      let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+      let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2_048))
+      buffer.frameLength = 2_048
+      buffer.floatChannelData?[0].update(repeating: 0.25, count: 2_048)
+      callback(buffer, AVAudioTime(sampleTime: 0, atRate: 48_000))
+    }.value
+    input.finish(); output.finish()
+    var iterator = inputs.makeAsyncIterator()
+    #expect(try await iterator.next() != nil, "The audio callback must deliver a converted buffer without an actor-isolation trap")
+  }
+}
+
 @MainActor private final class NativeEngineFixture: DictationEngine {
   let stream: AsyncThrowingStream<DictationSegment, any Error>
   let continuation: AsyncThrowingStream<DictationSegment, any Error>.Continuation

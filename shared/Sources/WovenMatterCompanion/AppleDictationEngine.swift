@@ -119,17 +119,8 @@ import Speech
     let source = node.outputFormat(forBus: 0)
     guard source.sampleRate > 0, source.channelCount > 0,
           let converter = AVAudioConverter(from: source, to: format) else { throw DictationError.unavailable }
-    let conversion = DictationAudioConversion(converter: converter, format: format)
-    node.installTap(onBus: 0, bufferSize: 2048, format: source) { buffer, _ in
-      do {
-        if let converted = try conversion.convert(buffer) {
-          if case .dropped = input.yield(AnalyzerInput(buffer: converted)) {
-            input.finish(throwing: DictationError.audioBacklog)
-            output.finish(throwing: DictationError.audioBacklog)
-          }
-        }
-      } catch { input.finish(throwing: error); output.finish(throwing: error) }
-    }
+    node.installTap(onBus: 0, bufferSize: 2048, format: source,
+                    block: DictationAudioTap.make(converter: converter, format: format, input: input, output: output))
     tapInstalled = true
     let center = NotificationCenter.default
     observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: audio, queue: .main) { _ in
@@ -177,6 +168,28 @@ import Speech
     analyzer = nil; transcriber = nil; dictation = nil
     if ownsReservation, let locale = reservedLocale { await AssetInventory.release(reservedLocale: locale) }
     reservedLocale = nil; ownsReservation = false
+  }
+}
+
+/// AVAudioEngine invokes taps on its audio queue. Build this callback outside
+/// the main-actor engine so Swift cannot inherit main-actor isolation for it.
+enum DictationAudioTap {
+  nonisolated static func make(
+    converter: AVAudioConverter, format: AVAudioFormat,
+    input: AsyncThrowingStream<AnalyzerInput, any Error>.Continuation,
+    output: AsyncThrowingStream<DictationSegment, any Error>.Continuation
+  ) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+    let conversion = DictationAudioConversion(converter: converter, format: format)
+    return { buffer, _ in
+      do {
+        if let converted = try conversion.convert(buffer) {
+          if case .dropped = input.yield(AnalyzerInput(buffer: converted)) {
+            input.finish(throwing: DictationError.audioBacklog)
+            output.finish(throwing: DictationError.audioBacklog)
+          }
+        }
+      } catch { input.finish(throwing: error); output.finish(throwing: error) }
+    }
   }
 }
 
