@@ -18,6 +18,13 @@ import WovenMatterCompanion
     let history = UndoManager()
     override var undoManager: UndoManager? { history }
 }
+@MainActor private final class RejectingDictationDelegate: NSObject, NSTextViewDelegate {
+    var admissions = 0
+    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        admissions += 1
+        return false
+    }
+}
 @MainActor @Suite(.serialized) struct DictationTests {
     private func settle(_ condition: () -> Bool) async throws {
         for _ in 0..<500 {
@@ -71,6 +78,22 @@ import WovenMatterCompanion
         view.setSelectedRange(NSRange(location: 6, length: 0))
         model.insertRetained(into: target)
         #expect(view.string == "Other retained")
+        model.cancel()
+    }
+    @Test func rejectedNativeEditRetainsTheTranscript() async throws {
+        let (model, speech) = fixture()
+        let (target, view) = editor("Preserve", id: "A", selection: NSRange(location: 0, length: 0))
+        let admission = RejectingDictationDelegate()
+        view.delegate = admission
+        model.toggle(editor: target)
+        try await settle { model.phase == .recording }
+        speech.continuation.yield(.init(start: 0, end: 1, text: "Keep these words", isFinal: true))
+        try await settle { model.preview == "Keep these words" }
+        model.stop(editor: target)
+        try await settle { model.phase == .idle }
+        #expect(admission.admissions == 1)
+        #expect(view.string == "Preserve")
+        #expect(model.retainedTranscript == "Keep these words")
         model.cancel()
     }
     @Test func leavingWorkspaceStopsAndRetainsResultWhenEditorClosed() async throws {

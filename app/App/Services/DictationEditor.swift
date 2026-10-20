@@ -40,6 +40,7 @@ struct DictationEditorTicket {
         guard editor.identity == identity, let view = editor.textView,
               view.isEditable, !view.hasMarkedText(),
               let range = insertion.range(in: view.string) else { return false }
+        let expected = (view.string as NSString).replacingCharacters(in: range, with: text)
         // insertText uses the native text system, preserving rich-text typing
         // attributes and emitting the existing delegate/binding callbacks.
         view.breakUndoCoalescing()
@@ -48,6 +49,6 @@ struct DictationEditorTicket {
         view.undoManager?.setActionName("Dictation")
         view.undoManager?.endUndoGrouping()
         view.breakUndoCoalescing()
-        return true
+        return view.string == expected
     }
 }
