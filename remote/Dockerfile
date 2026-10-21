@@ -1,6 +1,6 @@
-# Node LTS line shared with the bundled macOS runtime; --pull selects its newest
+# Node stable major shared with the bundled macOS runtime; --pull selects its newest
 # patch and Debian security updates on every build (docs/DEPENDENCIES.md).
-FROM node:24-trixie-slim
+FROM node:26-trixie-slim
 
 LABEL com.wovenmatter.workspace-uid="10001" \
       com.wovenmatter.workspace-gid="10001"

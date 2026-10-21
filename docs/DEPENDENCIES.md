@@ -12,18 +12,19 @@ for every package update. Three separate mechanisms do that:
    and consume the recorded native selections. Dependency refresh belongs in
    maintenance. Linux base-image security patches remain deliberately floating,
    as described below.
-3. **Installed apps** update SDKs and agent CLIs independently of app releases
-   through explicit Settings actions, within the compatibility the installed app
-   was tested against.
+3. **Installed apps** update SDKs independently of app releases through explicit
+   Settings actions, accepting stable releases at or above the bundled minimum,
+   including new majors, after staged API verification. Agent CLIs follow the
+   documented API requirements below.
 
 ## What each record means
 
 | Record | Kind | Updated by |
 | --- | --- | --- |
-| `package.json` caret ranges | Declaration. The floor is the current tested release; the range is the compatibility line. | Maintenance PRs raise floors, across majors when upstream moves |
+| `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
 | `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Peekaboo, Sparkle, and their transitive packages | Native package-manager tooling during maintenance |
-| `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One Node LTS release and its official archive SHA-256 values | Maintenance PR, all copies together |
+| `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
@@ -31,15 +32,16 @@ for every package update. Three separate mechanisms do that:
 ## Build selections and compatibility boundaries
 
 Security-critical runtimes retain verified exact selections. Ordinary libraries
-use compatibility ranges with their resolved versions recorded in lockfiles.
+use minimum-only ranges with their resolved versions recorded in lockfiles.
 Maintenance checks both for newer releases; recorded does not mean frozen.
 
-- **Node LTS** runs the signed Built-in agent and managed adapter tools.
+- **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
-  first installation may download its checksummed archive. Only LTS lines are
-  selected, never Current. CI and release builds use the same release
+  first installation may download its checksummed archive. Select the newest
+  stable release, including Current; do not restrict selection to LTS. Exclude
+  nightlies and prereleases. CI and release builds use the same release
   (`node-version-file: default-agent/.node-version`). Linux images follow the
-  same LTS line (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
+  same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
@@ -55,16 +57,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
-## Compatibility ranges on installed apps
+## Minimum versions on installed apps
 
 The Settings SDK updater (`default-agent/src/sdk-management.mjs`) reads the
-**bundled** `package.json` range as its only compatibility policy. It installs
-the newest stable release inside that range into a new generation, verifies the
-imports it uses, and activates it atomically. Running sessions keep their
-generation, and unrelated packages stay at their installed versions. A failed
-or cancelled candidate is discarded. A newer release outside the range is
-reported as needing a Woven Matter update rather than hidden. The next app
-build carries the wider range that the accepted maintenance PR introduced.
+**bundled** `package.json` minimum (`>=version`). This means that version or any
+newer stable release, including a new major. It selects the newest nondeprecated
+publication; an older npm `latest` tag does not hide a newer stable release.
+It installs into a new generation, verifies the APIs it uses, and activates it
+atomically. Running sessions keep their generation, and unrelated packages stay
+at their installed versions. A failed or cancelled candidate is discarded.
+These checks catch missing APIs, but cannot guarantee that every future upstream
+behavior remains compatible; integration fixes and release validation remain
+part of maintenance.
+
+Every app release carries the refreshed SDK snapshot. When the bundled source
+or dependency graph changes, its fingerprint supersedes SDK generations from
+the previous app, so new launches use the release's bundled SDKs without
+requiring a separate Settings update.
 
 Agent CLIs update the same way from Settings: ACP adapters take the latest
 release at or above their catalog minimum. OpenCode and Executor stay on v2,
@@ -108,8 +117,8 @@ without pruning each other's records or selecting new versions. The companion
 integration package references the same file through a symlink, and its test
 command also freezes resolution; it has no independently selected graph.
 
-Every proposal flags updates outside the current caret line (majors, and 0.x
-minors) for review of upstream release notes.
+Every proposal reviews breaking changes, including majors and 0.x minors, and
+updates affected integration code before acceptance.
 
 ## GitHub Actions
 
@@ -120,6 +129,23 @@ current release commit, with a comment naming the reason: `release.yml`,
 SHAs against current released versions. There is no blanket SHA requirement.
 Linux jobs use `ubuntu-latest`. macOS jobs use `macos-26`, because the app needs
 that SDK.
+
+## Before every new release
+
+Refresh dependencies in development before selecting the release commit, even
+when separately scheduled maintenance normally keeps them current. Compare
+upstream stable releases with the declared packages and Node/native runtime
+records; update stale selections, lockfiles, checksums, notices, and generated
+resources together. Validate the changes in development CI and merge them before
+tagging. Document any concrete upstream blocker instead of silently retaining
+an older selection.
+
+The lockfile is the exact snapshot selected for that release. For example,
+`>=1.3.0` permits 2.0.0; after maintenance selects and validates 2.0.0, the updated
+lockfile makes both CI and the release build install 2.0.0. `npm ci` does not
+contact the registry to select newer versions during packaging. This keeps the
+shipped graph identical to the tested graph. Reusing an old lockfile without
+refreshing it before releases would fail the currency policy.
 
 ## Delivery
 

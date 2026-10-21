@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
-          # The bundled Node LTS release, refreshed during dependency maintenance.
+          # The bundled Node stable release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
-          # The bundled Node LTS release, refreshed during dependency maintenance.
+          # The bundled Node stable release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
       - name: Test companion protocol and runtime integration
         env:
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
-          # The bundled Node LTS release, refreshed during dependency maintenance.
+          # The bundled Node stable release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote

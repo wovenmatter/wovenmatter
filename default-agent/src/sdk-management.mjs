@@ -107,9 +107,9 @@ export async function sdkStatus({ directory }) {
   }));
   return { sdks, generation: runtime.generation, checkedAt: cached?.base === runtime.base ? cached.checkedAt ?? null : null };
 }
-// The bundled package declaration is the single compatibility policy: this app
-// build's code was tested against that range, and the staged checks below only
-// prove imports. A newer line outside it is reported until an app update widens it.
+// The bundled declaration supplies the minimum version, with no upper cap.
+// New majors are eligible; staging verifies required APIs before activation.
+// Those checks do not guarantee every future upstream behavior is compatible.
 let declarationsPromise;
 async function compatibleRange(definition) {
   const { dependencies } = await (declarationsPromise ??= readFile(join(bundledRoot, 'package.json'), 'utf8').then(JSON.parse));

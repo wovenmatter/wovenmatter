@@ -20,17 +20,18 @@ export function compareVersions(a, b) {
 // The dependency declarations are the compatibility policy. Only the forms used
 // by this repository are accepted, so an unexpected range fails closed.
 export function satisfiesRange(version, range) {
-  const match = /^([~^]?)(\d+)\.(\d+)\.(\d+)$/.exec(range ?? '');
+  const match = /^(>=|[~^]?)(\d+)\.(\d+)\.(\d+)$/.exec(range ?? '');
   if (!match || !releaseVersion(version) || version.includes('-')) return false;
   const [, operator, major, minor] = match, floor = range.slice(operator.length);
   const [vMajor, vMinor] = version.split('.').map(Number);
   if (compareVersions(version, floor) < 0) return false;
+  if (operator === '>=') return true;
   // npm caret semantics: the first nonzero component is the compatibility line.
   if (!operator || (operator === '^' && Number(major) === 0 && Number(minor) === 0)) return version === floor;
   if (operator === '~' || Number(major) === 0) return vMajor === Number(major) && vMinor === Number(minor);
   return vMajor === Number(major);
 }
-export const rangeFloor = range => /^[~^]?(\d+\.\d+\.\d+)$/.exec(range ?? '')?.[1] ?? null;
+export const rangeFloor = range => /^(?:>=|[~^]?)(\d+\.\d+\.\d+)$/.exec(range ?? '')?.[1] ?? null;
 
 async function registry(name, suffix, { signal, fetchImplementation = fetch }) {
   const response = await fetchImplementation(`https://registry.npmjs.org/${encodeURIComponent(name)}${suffix}`, {
@@ -60,11 +61,8 @@ export async function selectPackageRelease(names, { range, major, minor, minimum
     && (major === undefined || Number(version.split('.')[0]) === major)
     && (minor === undefined || Number(version.split('.')[1]) === minor)
     && (minimum === undefined || compareVersions(version, minimum) >= 0);
-  if (names.length === 1) {
-    const latestMetadata = await registry(names[0], '/latest', { signal, fetchImplementation });
-    const latest = latestMetadata.version;
-    if (supported(latest) && !latest.includes('-') && usable(latestMetadata, executable)) return { selected: latest, latest };
-  }
+  // A dist-tag can lag a newer stable publication. Select from version metadata
+  // so "latest" means the newest eligible nondeprecated release.
   let common;
   for (const name of names) {
     const metadata = await registry(name, '', { signal, fetchImplementation });

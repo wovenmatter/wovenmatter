@@ -60,7 +60,7 @@ test('no compatible release or a cancelled update leaves the active generation u
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8');
   await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude',
-    fetchImplementation: registry({ '@anthropic-ai/claude-agent-sdk': [bump(claudeFloor, 0)] }) }), /compatible release/);
+    fetchImplementation: registry({ '@anthropic-ai/claude-agent-sdk': ['0.0.0'] }) }), /compatible release/);
   await assert.rejects(updateSDK({ directory: f.directory, id: 'claude', signal: AbortSignal.abort() }), /cancelled/);
   assert.equal(await readFile(f.active, 'utf8'), before);
 });
@@ -170,22 +170,23 @@ test('oversized activation and latest metadata do not block bundled fallback', a
   assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
 });
 
-test('checks select the newest release in the bundled range and report a newer blocked line', async t => {
+test('minimum declarations offer newer Pi majors and Claude 0.x minors without an app update', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  // Claude 0.x minors are breaking lines; Pi uses its major line.
-  const claudePatch = bump(claudeFloor, 2, 3), claudeNext = bump(claudeFloor, 1), piMinor = bump(piFloor, 1), piNext = bump(piFloor, 0);
-  const releases = { ...piReleases([piFloor, piMinor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudePatch, claudeNext] };
+  const claudeNext = bump(claudeFloor, 1), piNext = bump(piFloor, 0);
+  const releases = { ...piReleases([piFloor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudeNext] };
   const checked = await checkSDKUpdates({ directory: f.directory, fetchImplementation: registry(releases) });
   const claude = checked.sdks.find(sdk => sdk.id === 'claude'), pi = checked.sdks.find(sdk => sdk.id === 'pi');
-  assert.deepEqual([claude.latestVersion, claude.newerVersion, claude.updateAvailable], [claudePatch, claudeNext, true]);
-  assert.equal(claude.notice, `Claude SDK ${claudeNext} needs a Woven Matter update. ${claudePatch} is the newest compatible release.`);
-  assert.deepEqual([pi.latestVersion, pi.newerVersion, pi.updateAvailable], [piMinor, piNext, true]);
-  // The blocked line survives later status reads, so it cannot silently disappear.
-  assert.equal((await sdkStatus({ directory: f.directory })).sdks.find(sdk => sdk.id === 'pi').newerVersion, piNext);
-  // It clears once nothing newer exists outside the range.
-  const current = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: registry(piReleases([piFloor, piMinor])) });
-  assert.equal(current.sdks.find(sdk => sdk.id === 'pi').newerVersion, null);
-  assert.equal(current.sdks.find(sdk => sdk.id === 'claude').newerVersion, claudeNext);
+  assert.deepEqual([claude.latestVersion, claude.newerVersion, claude.updateAvailable], [claudeNext, null, true]);
+  assert.equal(claude.notice, undefined);
+  assert.deepEqual([pi.latestVersion, pi.newerVersion, pi.updateAvailable], [piNext, null, true]);
+  const updated = await updateSDK({ directory: f.directory, id: 'pi', version: piNext }, mockInstaller(piNext, materializeManifest));
+  assert.equal(updated.sdks.find(sdk => sdk.id === 'pi').installedVersion, piNext);
+});
+
+test('an app release ignores an SDK generation from the previous bundled snapshot', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  await writeFile(f.active, JSON.stringify({ base: 'previous-app-release', generation: installed.id }));
+  assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
 });
 
 test('Pi selects only a release every family package, including Chord, has published', async t => {
@@ -198,13 +199,13 @@ test('Pi selects only a release every family package, including Chord, has publi
 
 test('a candidate failing its staged API verification is discarded and the active generation remains', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  const before = await readFile(f.active, 'utf8'), options = mockInstaller(bump(piFloor), materializeManifest);
+  const before = await readFile(f.active, 'utf8'), options = mockInstaller(bump(piFloor, 0), materializeManifest);
   const install = options.run;
   options.run = async (executable, args, runOptions) => {
     if (args.includes('--eval')) throw Error('fixture Pi API unavailable');
     return install(executable, args, runOptions);
   };
-  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor) }, options), /previous SDKs were kept/);
+  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor, 0) }, options), /previous SDKs were kept/);
   assert.equal(await readFile(f.active, 'utf8'), before);
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, installed.root);

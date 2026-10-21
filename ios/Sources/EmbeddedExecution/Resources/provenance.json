@@ -7,8 +7,8 @@
   "sources": {
     "worker.js": "cd1c09fd214f1c01061c0ae9617c6926386c053e4e9ed1a4f14b705a08402f29",
     "commands.py": "66b5b79166a594e2c06014118af56da5abdff49488bafd59862a9ff70d323e11",
-    "package.json": "73a50d54bc522368e6f5acf1670af56863114600670aad10f832062086f6d70d",
-    "package-lock.json": "bc20d5e277b603799fe3f0eddddce31a3603e3d01431bc31e2f2ef99b9dae5a9",
+    "package.json": "5b574a77c6d409668f70365dda1778c3ba0e20904cbbb47bb2ed181bc5643dd9",
+    "package-lock.json": "94587c3759157933719a218e9c6d759975fe82eb6086c51533cb71de93ab7ac0",
     "licenses.json": "c395c4f43affafb3a13f0bde5b6692e8e126c646b6b0c6e49fa7a6ddeb9703f8"
   },
   "resources": {

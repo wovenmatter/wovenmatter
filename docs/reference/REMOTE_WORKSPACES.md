@@ -23,7 +23,7 @@ dropped capabilities, bounded temporary filesystems, and a dedicated persistent
 Docker named volume mounted at `/home`. The container user's home is `/home`,
 and the Woven Matter workspace is `/home/.woven-matter`; installed harnesses,
 configuration, credentials, and caches also persist under `/home`. Its base image
-follows the official Node slim image for the app's bundled Node LTS line, and its
+follows the official Node slim image for the app's bundled Node stable major, and its
 local log driver rotates bounded files. Container updates use a rollback
 container and preserve the prior running state if the replacement does not
 become healthy.
