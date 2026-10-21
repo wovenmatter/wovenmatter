@@ -189,7 +189,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
 }
 
 public enum MobileCredentialVault {
-  private static let service = "com.wovenmatter.companion.dev.pairing"
+  private static var service: String { ClientCredentialNamespace.service("com.wovenmatter.companion.dev.pairing") }
   public static func load() throws -> MobileCredential? {
     #if canImport(Security)
     var result: CFTypeRef?
@@ -225,5 +225,14 @@ public enum MobileCredentialVault {
     #else
     throw MobileConnectionError.insecureEndpoint
     #endif
+  }
+}
+
+/// Multiple desktop instances share a Keychain but must never share a device's
+/// library bearer. Preserve the established service for ordinary installations.
+public enum ClientCredentialNamespace {
+  public static func service(_ base: String, bundleID: String? = Bundle.main.bundleIdentifier) -> String {
+    guard let bundleID, bundleID.hasPrefix("wovenmatter.desktop.dev.") else { return base }
+    return base + "." + bundleID
   }
 }

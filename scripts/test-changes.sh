@@ -24,6 +24,7 @@ run_static_checks() {
   python3 scripts/test-support/test_ci_scopes.py
   python3 scripts/test-support/test_ios_runner.py
   bash scripts/test-dev-signing.sh
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_dev_build.py
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh

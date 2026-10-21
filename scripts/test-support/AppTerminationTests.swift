@@ -1,6 +1,14 @@
 import AppKit
 import Foundation
 
+enum DevelopmentLaunch {
+    enum Mode { case client, snapshot, live }
+    static let mode: Mode? = nil
+    static let isClient = false
+    static let isLiveHost = false
+    static let isSnapshot = false
+}
+
 @MainActor final class DesktopUpdater {
     static let shared = DesktopUpdater()
     var isInstalling = false
@@ -74,6 +82,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
     }
 
     @objc private func start(_ notification: Notification) {
+        if CommandLine.arguments.contains("--wait-for-stop") { return }
         Task { @MainActor in
             try! await AppTerminationTests.verifyTransitionRecovery()
             try! await AppTerminationTests.verifyExecutionLeaseWait()
@@ -290,7 +299,7 @@ private struct AppTerminationTests {
         precondition(job["ThrottleInterval"] as? Int == 5)
         let resultURL = URL(fileURLWithPath: CommandLine.arguments[1])
         // A separate queue catches the original main-actor deadlock too.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + (CommandLine.arguments.contains("--wait-for-stop") ? 30 : 5)) {
             try? "FAIL: shutdown timed out\n".write(to: resultURL, atomically: true, encoding: .utf8)
             _exit(70)
         }

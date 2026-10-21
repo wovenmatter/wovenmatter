@@ -670,13 +670,14 @@ public actor DashboardStore {
     workspace: LocalACPWorkspaceLaunchConfiguration,
     systemPrompt: String?
   ) {
-    guard let directLaunch, directWorkspace != nil else {
+    guard let directLaunch, let directWorkspace else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     guard let location = try await database.sessionExecutionRoot(id: conversationID) else {
       throw WorkspaceToolError.invalid("This archived chat cannot be resumed. Start a new chat.")
     }
-    return (directLaunch, .init(rootURL: URL(fileURLWithPath: location.rootPath)), nil)
+    return (directLaunch, .init(rootURL: URL(fileURLWithPath: location.rootPath),
+        databasesURL: directWorkspace.databasesURL), nil)
   }
 
   public func cancelLocalACPPrompt(conversationID: String) async {

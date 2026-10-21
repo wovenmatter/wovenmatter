@@ -34,4 +34,18 @@ for mode in --normal --updater --standalone-update --staged-update; do
     exit 1
   fi
 done
+second="$test_root/OtherProbe.app"
+cp -R "$app" "$second"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier wovenmatter.tests.termination.other' "$second/Contents/Info.plist"
+open -n "$app" --args "$test_root/first-result" --wait-for-stop
+open -n "$second" --args "$test_root/second-result" --wait-for-stop
+swift "$repo_root/scripts/stop-development.swift" "$app/Contents/MacOS/TerminationProbe" --check
+swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe" --check
+logical_app="$(python3 -c 'import sys; print(sys.argv[1].replace("/private/tmp/", "/tmp/", 1))' "$app")"
+swift "$repo_root/scripts/stop-development.swift" "$logical_app/Contents/MacOS/TerminationProbe"
+test "$(cat "$test_root/first-result")" = PASS
+swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe" --check
+swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe"
+test "$(cat "$test_root/second-result")" = PASS
 printf '%s\n' 'AppKit quit: passed (ordinary, immediate update, standalone update, staged update; deferred cleanup once, app exited).'
+printf '%s\n' 'Development rebuild quit: exact executable only; neighboring instance remains running.'
