@@ -91,12 +91,30 @@ def disconnect_snapshot(file):
                      "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts",
                      "folder_execution_roots", "session_execution_roots", "session_scratch_directories",
                      "execution_workspace_defaults"}
-        retained_content = {"companion_versions", "companion_changes", "companion_execution_journal",
+        retained_content = {"companion_versions", "companion_changes", "companion_execution_workspaces",
                             "companion_execution_conversations", "companion_execution_runs", "companion_native_history",
                             "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks"}
         for name in tables:
             if name in transient or (name.startswith("companion_") and name not in retained_content):
                 db.execute("DELETE FROM " + quote(name))
+        # A snapshot is a new library. Keep materialized foreign history, but
+        # discard the old synchronization stream and all routes to its owners.
+        library_id = str(uuid.uuid4())
+        if "companion_workspace" in tables:
+            db.execute("INSERT INTO companion_workspace(singleton,workspace_id) VALUES(1,?)", (library_id,))
+        for table, column in (("companion_execution_workspaces", "payload"),
+                              ("companion_execution_conversations", "conversation")):
+            if table not in tables:
+                continue
+            for identifier, raw in db.execute("SELECT id," + column + " FROM " + table).fetchall():
+                value = json.loads(raw)
+                value["libraryID"] = library_id
+                if table == "companion_execution_workspaces":
+                    value.pop("endpoint", None)
+                else:
+                    value.pop("activeRunID", None)
+                db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",
+                           (json.dumps(value).encode(), identifier))
         if "dashboard_runs" in tables:
             db.execute("UPDATE dashboard_runs SET status='interrupted' WHERE status IN ('running','queued','pending','accepted','cancelling','uncertain')")
         for name in ("workspace_session_deliveries", "workspace_calendar_runs"):

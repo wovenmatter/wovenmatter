@@ -41,7 +41,8 @@ open -n "$app" --args "$test_root/first-result" --wait-for-stop
 open -n "$second" --args "$test_root/second-result" --wait-for-stop
 swift "$repo_root/scripts/stop-development.swift" "$app/Contents/MacOS/TerminationProbe" --check
 swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe" --check
-swift "$repo_root/scripts/stop-development.swift" "$app/Contents/MacOS/TerminationProbe"
+logical_app="$(python3 -c 'import sys; print(sys.argv[1].replace("/private/tmp/", "/tmp/", 1))' "$app")"
+swift "$repo_root/scripts/stop-development.swift" "$logical_app/Contents/MacOS/TerminationProbe"
 test "$(cat "$test_root/first-result")" = PASS
 swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe" --check
 swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe"

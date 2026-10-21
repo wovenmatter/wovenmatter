@@ -3,8 +3,10 @@ import Foundation
 
 // Use AppKit's normal quit request so pending writes and active execution can
 // refuse a rebuild. Never force-terminate, and never identify an app by name.
-let target = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
-let applications = NSWorkspace.shared.runningApplications.filter { $0.executableURL?.standardizedFileURL == target }
+let target = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL.resolvingSymlinksInPath()
+let applications = NSWorkspace.shared.runningApplications.filter {
+    $0.executableURL?.standardizedFileURL.resolvingSymlinksInPath() == target
+}
 if CommandLine.arguments.contains("--check") { exit(applications.isEmpty ? 1 : 0) }
 for application in applications {
     guard application.terminate() else {

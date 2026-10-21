@@ -94,7 +94,7 @@ final class CompanionHostController {
     /// The central database is available while the app and Tailscale are running.
     /// Listening does not create a pairing offer or authorize any device.
     func startForCentralDatabase() async {
-        guard DevelopmentLaunch.mode == nil else { return }
+        guard !DevelopmentLaunch.isLive else { return }
         guard model?.isLibraryClient == false else { return }
         if model?.isBackendFrontend == true { await forward(.status); return }
         guard availabilityTask == nil else { return }
@@ -109,7 +109,7 @@ final class CompanionHostController {
     }
 
     func start() async {
-        guard DevelopmentLaunch.mode == nil else { return }
+        guard !DevelopmentLaunch.isLive else { return }
         if model?.isBackendFrontend == true { await forward(.start); return }
         guard model?.isLibraryClient == false, !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Connecting…"
@@ -131,7 +131,8 @@ final class CompanionHostController {
             }
             let centralIdentity = try await database.companionLibraryIdentity()
             discoveryIdentity = .init(deviceID: centralIdentity.hostDeviceID,
-                deviceName: Host.current().localizedName ?? "Central Mac", metadata: CompanionMacPairingController.metadata)
+                deviceName: DevelopmentLaunch.isSnapshot ? DevelopmentLaunch.displayName + " snapshot" : Host.current().localizedName ?? "Central Mac",
+                metadata: CompanionMacPairingController.metadata)
             let api = CompanionWorkspaceAPI(database: database, authentication: authentication,
                 commands: model.companionCommands,
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },

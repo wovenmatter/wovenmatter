@@ -58,7 +58,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             with sqlite3.connect(target / "workspace.sqlite") as copy:
                 self.assertEqual(copy.execute("SELECT content FROM notes").fetchone()[0], "shared content")
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM desktop_local_acp_sessions").fetchone()[0], 0)
-                self.assertEqual(copy.execute("SELECT COUNT(*) FROM companion_workspace").fetchone()[0], 0)
+                self.assertNotEqual(copy.execute("SELECT workspace_id FROM companion_workspace").fetchone()[0], "production-identity")
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM companion_calendar_owners").fetchone()[0], 1)
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM dashboard_calendar_items").fetchone()[0])
                 self.assertEqual(copy.execute("SELECT status FROM dashboard_runs").fetchone()[0], "interrupted")

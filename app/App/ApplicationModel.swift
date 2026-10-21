@@ -399,7 +399,8 @@ final class ApplicationModel {
         self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults, localUsageService: localUsageService ?? LocalUsageService(
             homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
                 ?? FileManager.default.homeDirectoryForCurrentUser,
-            usageDatabaseURL: CompanionTestWorkspace.supportDirectory?.appending(path: "workspace.sqlite")))
+            usageDatabaseURL: (CompanionTestWorkspace.supportDirectory ?? DevelopmentLaunch.supportDirectory)?
+                .appending(path: "workspace.sqlite")))
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
         self.localACPRuntimePreferences = LocalACPRuntimePreferences(
             defaults: applicationDefaults

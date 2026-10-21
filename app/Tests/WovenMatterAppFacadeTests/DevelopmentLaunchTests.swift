@@ -7,6 +7,13 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct DevelopmentLaunchTests {
+    @Test func linkedAssetsKeepTheirHostPreviewWhileOrdinaryNotesUseTheDesktopEditor() throws {
+        let link = DatabaseArtifactLink(sourceID: "host", databaseID: "data", relativePath: "data.sqlite", sqliteQuery: "SELECT 1")
+        let linked = try NoteDocument(kind: .html, html: "<p>Preview</p>", databaseLink: link).encoded()
+        #expect(DevelopmentLibraryProjection.usesCentralPreview(.init(id: "linked", title: "Linked", content: linked, revision: 1)))
+        #expect(!DevelopmentLibraryProjection.usesCentralPreview(.init(id: "ordinary", title: "Note", content: "Text", revision: 1)))
+    }
+
     @Test func duplicateLaunchCanOnlyActivateItsOwnInstance() {
         let production = WorkspaceProcessLeaseOwner(processIdentifier: 1, bundleIdentifier: "wovenmatter.desktop", bundlePath: "/production")
         let own = WorkspaceProcessLeaseOwner(processIdentifier: 2, bundleIdentifier: "wovenmatter.desktop.dev.a.live", bundlePath: "/own")
@@ -40,6 +47,8 @@ struct DevelopmentLaunchTests {
         #expect(ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop") == "pairing")
         #expect(ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop.dev.a.live")
             != ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop.dev.b.live"))
+        #expect(WovenMatterKeychainService.name(forBundleIdentifier: "wovenmatter.desktop.dev.a.live")
+            != WovenMatterKeychainService.name(forBundleIdentifier: "wovenmatter.desktop"))
     }
 
     @Test func localEnrollmentIsIndependentDurableAndRevocable() async throws {
@@ -72,6 +81,20 @@ struct DevelopmentLaunchTests {
         let event = try await fixture.database.saveCalendarEvent(draft: .init(title: "Copied schedule",
             startsAt: now, timeZoneID: "UTC", task: task), creating: true, now: now)
         let originalIdentity = try await fixture.database.companionWorkspaceID()
+        let identity = try await fixture.database.companionLibraryIdentity()
+        let foreignOwner = UUID().uuidString.lowercased(), foreignID = UUID().uuidString.lowercased()
+        let owner = CompanionExecutionWorkspace(id: foreignOwner, libraryID: originalIdentity,
+            ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Foreign",
+            endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter"))
+        _ = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: owner), deviceID: identity.hostDeviceID)
+        let foreignHistory = CompanionTranscript(conversationID: foreignID,
+            messages: [.init(id: "saved", conversationID: foreignID, role: "assistant", content: "Retained foreign history")])
+        _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: originalIdentity, entries: [
+            .init(workspaceID: foreignOwner, originSequence: 1, conversationID: foreignID,
+                  kind: .conversation, conversation: .init(id: foreignID, title: "Foreign")),
+            .init(workspaceID: foreignOwner, originSequence: 2, conversationID: foreignID,
+                  kind: .transcript, transcript: foreignHistory)
+        ]), deviceID: identity.hostDeviceID)
         let destination = fixture.directory.deletingLastPathComponent().appending(path: "snapshot-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: destination) }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -84,6 +107,10 @@ struct DevelopmentLaunchTests {
         #expect(process.terminationStatus == 0)
         let snapshot = try await WorkspaceDatabase(url: destination.appending(path: "workspace.sqlite"))
         #expect(try await snapshot.companionWorkspaceID() != originalIdentity)
+        let snapshotOwner = try #require(try await snapshot.companionExecutionWorkspaces().first)
+        #expect(snapshotOwner.endpoint == nil)
+        #expect(snapshotOwner.libraryID == (try await snapshot.companionWorkspaceID()))
+        #expect(try await snapshot.companionFederatedTranscript(conversationID: foreignID)?.messages == foreignHistory.messages)
         let archived = try #require(try await snapshot.workspaceOverview().conversations.first { $0.id == id })
         #expect(archived.isArchived)
         await #expect(throws: (any Error).self) { try await snapshot.localACPSession(conversationID: id) }
