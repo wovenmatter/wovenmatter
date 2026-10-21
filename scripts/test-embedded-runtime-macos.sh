@@ -6,7 +6,13 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cache="${WOVENMATTER_TEST_CACHE_DIR:-/private/tmp/wovenmatter-validation}"
 mkdir -p "$cache/ModuleCache"
 fixture="$(mktemp -d "$cache/EmbeddedRuntimeSmoke.XXXXXX")"
-trap 'rm -rf "$fixture"' EXIT
+cleanup() {
+  if [ -f "$fixture/report.json" ]; then
+    cp "$fixture/report.json" "$cache/embedded-runtime-report.json"
+  fi
+  rm -rf "$fixture"
+}
+trap cleanup EXIT
 xcrun swiftc -swift-version 6 -parse-as-library -module-cache-path "$cache/ModuleCache" \
   "$root/ios/Sources/EmbeddedExecution/EmbeddedWorkspace.swift" \
   "$root/ios/Sources/EmbeddedExecution/EmbeddedCommandExecutor.swift" \

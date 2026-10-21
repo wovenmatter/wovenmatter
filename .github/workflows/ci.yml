@@ -72,9 +72,22 @@ jobs:
         run: command -v cmake >/dev/null || brew install cmake
 
       - name: Test desktop
+        shell: bash
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
-        run: scripts/test-changes.sh --desktop
+        run: |
+          mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
+          scripts/test-changes.sh --desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
+      - name: Preserve desktop failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-results-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}/*.log
+            ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}/embedded-runtime-report.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Verify signed delta round trip
         if: needs.changes.outputs.updates == 'true'
         run: python3 scripts/test-delta-updates.py
@@ -122,6 +135,14 @@ jobs:
           WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
           WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device.type }}
         run: scripts/test-ios.sh --ui
+      - name: Preserve mobile test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-results-${{ matrix.device.name }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}/results.*
+          if-no-files-found: warn
+          retention-days: 7
 
   remote:
     name: Remote workspace

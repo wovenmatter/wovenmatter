@@ -165,6 +165,10 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
         self.continuation = continuation
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        // This executor intentionally has no visible view. WebKit may suspend
+        // detached views after navigation, before the Python worker is ready.
+        // Keep it scheduled until finish() tears down the worker and web view.
+        config.preferences.inactiveSchedulingPolicy = .none
         config.userContentController.add(self, name: "wovenEmbedded")
         let view = WKWebView(frame: .zero, configuration: config)
         browser = view; view.navigationDelegate = self

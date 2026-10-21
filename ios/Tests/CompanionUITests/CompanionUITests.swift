@@ -161,6 +161,10 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(field.waitForExistence(timeout: 5))
     field.tap()
     field.typeText(name)
+    // The remote iPad keyboard can finish delivering text after typeText
+    // returns. Observe the complete value before reading or submitting it.
+    let enteredName = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", name), object: field)
+    XCTAssertEqual(XCTWaiter.wait(for: [enteredName], timeout: 5), .completed)
     XCTAssertEqual(field.value as? String, name)
     // One tap must submit while the keyboard is open, without a second tap to
     // compensate for the app's outside-tap keyboard dismissal gesture.

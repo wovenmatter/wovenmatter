@@ -7,8 +7,28 @@ build. Use `--macos` or `--remote` for focused validation.
 Container lifecycle changes also use `scripts/test-container.sh` when Docker is
 available. Tests use temporary data and must not consume provider services.
 
-CI selects macOS and remote jobs by changed paths. Documentation-only changes
-run the public-tree scan and stable CI gate. Remote image builds run on Linux.
+CI selects desktop, companion integration, iPhone/iPad UI, and remote jobs by
+changed paths. Changes to the CI orchestrator or its scope/runner tests exercise
+every lane. Documentation-only changes run the public-tree scan and stable CI
+gate. Remote image builds run on Linux.
+
+The embedded Python smoke uses the production WebKit executor with no visible
+web view. Its inactive scheduling policy must keep the worker running until
+teardown; a detached view can otherwise suspend before initialization and hit
+the 90-second watchdog. Linux credential-storage tests inject filesystem probes
+for rejection cases, then exercise real tmpfs storage separately. Never assume
+`/tmp` is disk-backed; Ubuntu runners may mount it as tmpfs.
+
+`scripts/test-ios.sh` creates and boots disposable simulators and waits for first
+boot before XCTest runs. When the selected Xcode includes standalone Simulator,
+it launches an owned display process and terminates it after testing. Xcode 27's
+Device Hub toolchain leaves display management to XCTest. Cleanup deletes only
+devices created by the runner; existing Simulator instances remain untouched. An explicit
+`WOVENMATTER_IOS_SIMULATOR_DESTINATION` remains caller-owned. Each invocation
+writes a unique `results.*/TestResults.xcresult` and `xcodebuild.log` under
+`WOVENMATTER_IOS_TEST_CACHE_DIR`. CI retains these results for seven days, plus
+desktop logs and the embedded-runtime report on desktop failure. Log pipelines
+must preserve failure status (`shell: bash` in Actions or `set -o pipefail`).
 Validation uses disposable GitHub-hosted runners without provider, signing, or
 deployment credentials. The `pull_request_target` author workflow inspects only
 GitHub metadata; it does not check out or execute contributor code.
