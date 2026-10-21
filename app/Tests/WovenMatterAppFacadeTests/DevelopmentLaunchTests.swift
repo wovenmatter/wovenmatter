@@ -75,6 +75,10 @@ struct DevelopmentLaunchTests {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let id = try await fixture.createConversation()
         let now = Date()
+        try await fixture.database.setSessionTools(.init(enabled: [.timers]), sessionID: id)
+        let timer = WorkspaceSessionTimer(sessionID: id, instruction: "Copied timer", nextFireAt: now)
+        try await fixture.database.saveSessionTimer(timer, callerID: id)
+        let pending = try #require(try await fixture.database.dueSessionTimers(now: now).first?.pendingDeliveryID)
         let task = WorkspaceCalendarTask(prompt: "Fixture only", configuration: .init(runtimeKind: .codex,
             title: "Fixture", model: "fixture", thinking: "high", permission: "read-only",
             nativeWorkingDirectory: fixture.directory.path, tools: .init(enabled: [.notes])))
@@ -114,6 +118,10 @@ struct DevelopmentLaunchTests {
         let archived = try #require(try await snapshot.workspaceOverview().conversations.first { $0.id == id })
         #expect(archived.isArchived)
         await #expect(throws: (any Error).self) { try await snapshot.localACPSession(conversationID: id) }
+        let copiedTimer = try #require(try await snapshot.sessionTimers(sessionID: id).first)
+        #expect(copiedTimer.id == timer.id && copiedTimer.isPaused)
+        #expect(copiedTimer.pendingDeliveryID == nil)
+        #expect(try await snapshot.dueSessionTimers(now: now.addingTimeInterval(1)).isEmpty)
         #expect(try await snapshot.calendarItems().contains { $0.id == event })
         #expect(try await snapshot.dueCalendarRuns(now: now.addingTimeInterval(1)).isEmpty)
         let new = try await snapshot.saveCalendarEvent(draft: .init(title: "New snapshot schedule",
@@ -121,5 +129,6 @@ struct DevelopmentLaunchTests {
         #expect(try await snapshot.dueCalendarRuns(now: now.addingTimeInterval(1)).map(\.eventID) == [new])
         #expect(try await fixture.database.companionWorkspaceID() == originalIdentity)
         #expect(try await fixture.database.calendarItems().count == 1)
+        #expect(try await fixture.database.dueSessionTimers(now: now).first?.pendingDeliveryID == pending)
     }
 }

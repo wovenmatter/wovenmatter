@@ -79,7 +79,7 @@ repositories and external working directories are not cloned or reused.
 The copy preserves content and history while removing connection grants, host
 identity, native session bindings, and pending execution. Existing task definitions
 remain visible but have a detached owner; create a new schedule in the snapshot
-to test execution. Active goals are paused. Old chats are history; create a new
+to test execution. Active goals and session timers are paused. Old chats are history; create a new
 session to test the branch's runtime. The snapshot is its own library host with
 a fresh identity and no production connections or copied grants. Its separate
 Device Connections endpoint can be paired explicitly to test host/API changes;

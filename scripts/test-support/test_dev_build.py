@@ -71,12 +71,14 @@ class DevelopmentBuildTests(unittest.TestCase):
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
               CREATE TABLE workspace_session_goals(session_id TEXT,value TEXT);
+              CREATE TABLE workspace_session_timers(id TEXT,is_paused INTEGER,pending_delivery_id TEXT);
               INSERT INTO notes VALUES('note','shared content');
               INSERT INTO desktop_local_acp_sessions VALUES('production-session');
               INSERT INTO companion_workspace VALUES(1,'production-identity');
               INSERT INTO dashboard_calendar_items VALUES('job','{"task":{"prompt":"retain me"}}');
               INSERT INTO dashboard_runs VALUES('run','running');
               INSERT INTO workspace_session_goals VALUES('session','{"status":"active"}');
+              INSERT INTO workspace_session_timers VALUES('timer',0,'pending');
             """)
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
             target = root / "dev"; dev.snapshot(source, target)
@@ -88,9 +90,11 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM dashboard_calendar_items").fetchone()[0])
                 self.assertEqual(copy.execute("SELECT status FROM dashboard_runs").fetchone()[0], "interrupted")
                 self.assertEqual(json.loads(copy.execute("SELECT value FROM workspace_session_goals").fetchone()[0])["status"], "paused")
+                self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (1, None))
                 copy.execute("UPDATE notes SET content='private'"); copy.commit()
             self.assertEqual(writer.execute("SELECT content FROM notes").fetchone()[0], "shared content")
             self.assertEqual(writer.execute("SELECT status FROM dashboard_runs").fetchone()[0], "running")
+            self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
             with self.assertRaises(ValueError): dev.snapshot(source, target)
 

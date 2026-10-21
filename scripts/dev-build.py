@@ -120,6 +120,8 @@ def disconnect_snapshot(file):
         for name in ("workspace_session_deliveries", "workspace_calendar_runs"):
             if name in tables:
                 db.execute("UPDATE " + quote(name) + " SET status='cancelled' WHERE status IN ('queued','pending','sending','running','accepted')")
+        if "workspace_session_timers" in tables:
+            db.execute("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL")
         # Retain task definitions with an unreachable owner. New schedules use
         # this instance; copied occurrences cannot be admitted by its scheduler.
         if "dashboard_calendar_items" in tables:
