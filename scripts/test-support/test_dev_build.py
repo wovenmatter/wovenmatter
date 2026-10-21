@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import plistlib
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -12,6 +14,29 @@ spec.loader.exec_module(dev)
 
 
 class DevelopmentBuildTests(unittest.TestCase):
+    def test_power_helper_accepts_profiles_with_an_exact_client_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binaries = root / "bin"; binaries.mkdir()
+            compiler = binaries / "xcrun"
+            compiler.write_text("#!/bin/sh\nexit 77\n"); compiler.chmod(0o755)
+            for suffix in ("a.live", "b.snapshot", "a.unrecognized.extra"):
+                identifier = "wovenmatter.desktop.dev." + suffix
+                scratch = root / suffix
+                environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"],
+                                   PRODUCT_BUNDLE_IDENTIFIER=identifier, DERIVED_FILE_DIR=str(scratch))
+                result = subprocess.run(["bash", str(Path(__file__).resolve().parents[1] / "build-power-helper.sh"),
+                                         str(root / (suffix + ".app"))], env=environment, capture_output=True, text=True)
+                if suffix.endswith("extra"):
+                    self.assertNotEqual(result.returncode, 77)
+                    self.assertIn("Unsupported power helper", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 77)  # Stopped before compilation or signing.
+                    with (scratch / "power-helper/Info.plist").open("rb") as stream:
+                        info = plistlib.load(stream)
+                    self.assertEqual(set(info["WMAllowedClients"]),
+                                     {"wovenmatter.desktop", "wovenmatter.desktop.dev", identifier})
+
     def test_profile_identity_and_modes_are_independent(self):
         a = dev.profile(Path("/tmp/work-a/repo"), None, "live")
         b = dev.profile(Path("/tmp/work-b/repo"), None, "live")
