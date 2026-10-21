@@ -82,6 +82,29 @@ struct CompanionHostLifecycleTests {
         #expect(fixture.host.endpoint == nil)
     }
 
+    @Test func foregroundHostServesDevelopmentEnrollmentAndRepeatedStartupKeepsTheEndpoint() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        try await fixture.model.configureCompanionFixture(directory: fixture.directory)
+        fixture.model.companionHost = fixture.host
+        await fixture.host.start()
+        let socket = LocalExecutionRole.backendSocketURL(workspaceDirectory: fixture.directory)
+        defer { try? FileManager.default.removeItem(at: socket.deletingLastPathComponent()) }
+        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
+        let server = try #require(fixture.model.backendRPCServer)
+        defer { server.stop() }
+        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
+        #expect(fixture.model.backendRPCServer === server)
+        let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · fixture")
+        let data = try await BackendRPCClient(socketURL: socket).call(method: "development.connect",
+            payload: JSONEncoder().encode(request))
+        let response = try JSONDecoder().decode(DevelopmentClientConnection.self, from: data)
+        #expect(response.endpoint == fixture.host.endpoint)
+        #expect(!response.pairing.credential.isEmpty)
+        await #expect(throws: BackendRPCError.self) {
+            try await BackendRPCClient(socketURL: socket).call(method: "application.command")
+        }
+    }
+
 
     @Test func stalePairingPrincipalCannotRotateReenrolledDevicesExecutionGrant() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }

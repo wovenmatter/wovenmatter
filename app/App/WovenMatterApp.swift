@@ -5,12 +5,12 @@ import SwiftUI
 import WovenMatterDashboardStore
 import WovenMatterClient
 
-/// Optional development variants have their own database and process lease.
+/// Client/snapshot variants are isolated; an explicit live host uses production's lease.
 /// Release builds always use the established workspace directory.
 enum WovenMatterWorkspacePaths {
     static var folderName: String {
         if let mode = DevelopmentLaunch.mode, let instance = DevelopmentLaunch.instance {
-            return "Woven Matter Dev/\(instance)/\(mode.rawValue)"
+            return mode.workspaceFolder(instance: instance)
         }
         #if DEBUG
         let prefix = "wovenmatter.desktop.dev."
@@ -409,7 +409,7 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
-        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
+        if !isRunningUnitTests && (LocalExecutionRole.current == .backend || DevelopmentLaunch.isLiveHost) {
             do {
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                     LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -418,6 +418,8 @@ struct WovenMatterApp: App {
                 NSLog("Woven Matter backend endpoint recovery failed: %@", error.localizedDescription)
                 Darwin.exit(EXIT_FAILURE)
             }
+        }
+        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
             let backendModel = ApplicationModel()
             let backendDelegate = WovenMatterLifecycleDelegate()
             backendDelegate.model = backendModel
@@ -528,7 +530,7 @@ struct WovenMatterApp: App {
 
         Settings {
             Group {
-                if DevelopmentLaunch.isLive, let execution = applicationModel.libraryClient.localExecution {
+                if DevelopmentLaunch.isClient, let execution = applicationModel.libraryClient.localExecution {
                     SettingsView(model: execution.model)
                 }
                 else if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }

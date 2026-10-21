@@ -20,7 +20,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             binaries = root / "bin"; binaries.mkdir()
             compiler = binaries / "xcrun"
             compiler.write_text("#!/bin/sh\nexit 77\n"); compiler.chmod(0o755)
-            for suffix in ("a.live", "b.snapshot", "a.unrecognized.extra"):
+            for suffix in ("a.client", "c.live", "b.snapshot", "a.unrecognized.extra"):
                 identifier = "wovenmatter.desktop.dev." + suffix
                 scratch = root / suffix
                 environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"],
@@ -38,25 +38,42 @@ class DevelopmentBuildTests(unittest.TestCase):
                                      {"wovenmatter.desktop", "wovenmatter.desktop.dev", identifier})
 
     def test_profile_identity_and_modes_are_independent(self):
-        a = dev.profile(Path("/tmp/work-a/repo"), None, "live")
-        b = dev.profile(Path("/tmp/work-b/repo"), None, "live")
+        a = dev.profile(Path("/tmp/work-a/repo"), None, "client")
+        b = dev.profile(Path("/tmp/work-b/repo"), None, "client")
         self.assertNotEqual(a["bundle"], b["bundle"])
         self.assertNotEqual(a["support"], dev.profile(Path("/tmp/work-a/repo"), None, "snapshot")["support"])
-        self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "live"))
-        with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "live")
+        self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "client"))
+        with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "client")
 
-    def test_auto_selects_host_changes_but_live_for_harness_and_ui(self):
+    def test_auto_selects_host_changes_but_client_for_harness_and_ui(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             def git(*args): subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True)
             git("init"); git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base")
             git("update-ref", "refs/remotes/origin/main", "HEAD")
             path = root / "app/App/Views/Fixture.swift"; path.parent.mkdir(parents=True); path.write_text("UI")
-            self.assertEqual(dev.choose_mode(root), "live")
+            self.assertEqual(dev.choose_mode(root), "client")
             path = root / "app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+Schema.swift"
             path.parent.mkdir(parents=True); path.write_text("schema")
             self.assertEqual(dev.choose_mode(root), "snapshot")
-            self.assertEqual(dev.profile(root, "fixture", "live")["mode"], "live")
+            self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
+
+    def test_live_host_is_explicit_and_shares_only_the_production_data_path(self):
+        root = Path(__file__).resolve().parents[2]
+        profiles = {}
+        for mode in ("client", "snapshot", "live"):
+            result = subprocess.run(["bash", str(root / "scripts/build_and_run.sh"), "--plan",
+                                     "--mode", mode, "--instance", "fixture"], check=True, capture_output=True, text=True)
+            profiles[mode] = json.loads(result.stdout)
+            self.assertEqual(profiles[mode]["mode"], mode)
+            self.assertEqual(profiles[mode]["bundle"], "wovenmatter.desktop.dev.fixture." + mode)
+        production = str(Path.home() / "Library/Application Support/Woven Matter")
+        self.assertEqual(profiles["live"]["support"], production)
+        for mode in ("client", "snapshot"):
+            self.assertNotEqual(profiles[mode]["support"], production)
+        other = dev.profile(root, "other", "live")
+        self.assertEqual(other["support"], production)
+        self.assertNotEqual(other["bundle"], profiles["live"]["bundle"])
 
     def test_snapshot_includes_wal_and_assets_without_changing_source(self):
         with tempfile.TemporaryDirectory() as tmp:

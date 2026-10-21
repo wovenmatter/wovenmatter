@@ -12,7 +12,7 @@ client_id="${PRODUCT_BUNDLE_IDENTIFIER:-wovenmatter.desktop.dev}"
 python3 - "$scratch/Info.plist" "$daemon_dir/$helper_id.plist" "$client_id" <<'PY'
 import plistlib, re, sys
 info_path, daemon_path, client_id = sys.argv[1:]
-if not re.fullmatch(r'wovenmatter\.desktop(?:\.dev(?:\.[a-z0-9-]+(?:\.(?:live|snapshot))?)?)?', client_id):
+if not re.fullmatch(r'wovenmatter\.desktop(?:\.dev(?:\.[a-z0-9-]+(?:\.(?:client|snapshot|live))?)?)?', client_id):
     raise SystemExit('Unsupported power helper client identifier')
 service = 'wovenmatter.desktop.power-helper'
 with open(info_path, 'wb') as output:

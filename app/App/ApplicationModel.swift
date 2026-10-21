@@ -388,7 +388,7 @@ final class ApplicationModel {
         self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
         self.isLibraryClient = dashboardStore == nil && LocalExecutionRole.current != .backend
-            && (DevelopmentLaunch.isLive || (!DevelopmentLaunch.isSnapshot && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)))
+            && (DevelopmentLaunch.isClient || (DevelopmentLaunch.mode == nil && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)))
         let closedLidProtection = ClosedLidWorkProtection(
             ownsExecution: ownsExecutionOverride ?? LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
         self.closedLidProtection = closedLidProtection
@@ -704,6 +704,7 @@ final class ApplicationModel {
             startAgentToolRuntime()
             startDashboardStoreIfReady()
             await companionHost.startForCentralDatabase()
+            if DevelopmentLaunch.isLiveHost { try startDevelopmentConnectionService() }
             Task { [weak self] in
                 await self?.refreshDatabases()
             }
@@ -4343,6 +4344,21 @@ extension ApplicationModel {
             from: await callBackend(method: "application.command", payload: JSONEncoder().encode(command)))
     }
 
+    /// A foreground live host needs local client enrollment, without exposing
+    /// the background service's control commands or starting another owner.
+    func startDevelopmentConnectionService(socketURL: URL? = nil) throws {
+        guard backendRPCServer == nil else { return }
+        let server = BackendRPCServer(socketURL: try socketURL ?? LocalExecutionRole.backendSocketURL(workspaceDirectory: Self.dashboardSupportDirectory()))
+        try server.start { [weak self] request in
+            guard request.method == "development.connect" else {
+                return BackendRPCResponse(id: request.id, error: "This foreground host only accepts development connections.")
+            }
+            guard let self else { return BackendRPCResponse(id: request.id, error: "The development host stopped.") }
+            return await self.handleBackendRequest(request)
+        }
+        backendRPCServer = server
+    }
+
     func startBackendService() async {
         do {
             let service = BackendApplicationService(model: self)
@@ -4741,7 +4757,7 @@ extension ApplicationModel {
     /// A library role changes only across a validated restart. The old central
     /// store stays on disk, and a client never opens it as its own authority.
     private func changeLibraryClientMode(enabled: Bool) async throws {
-        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Choose live or snapshot with the development launcher.") }
+        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Choose client, snapshot, or live with the development launcher.") }
         guard LocalExecutionRole.current != .backend, state == .ready,
               !DictationModel.shared.isBusy, !executionHasPendingOperations,
               localRunningConversationIDs.isEmpty, runningToolSessionIDs.isEmpty,

@@ -2,8 +2,10 @@ import AppKit
 import Foundation
 
 enum DevelopmentLaunch {
-    static let mode: String? = nil
-    static let isLive = false
+    enum Mode { case client, snapshot, live }
+    static let mode: Mode? = nil
+    static let isClient = false
+    static let isLiveHost = false
     static let isSnapshot = false
 }
 

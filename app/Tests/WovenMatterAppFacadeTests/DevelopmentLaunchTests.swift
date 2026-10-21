@@ -7,6 +7,45 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct DevelopmentLaunchTests {
+    @Test func modesChooseDistinctRolesAndTheCorrectLibrary() {
+        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+            let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], backgroundEnabled: true,
+                libraryClientEnabled: true, developmentMode: mode)
+            #expect(role == (mode == .client ? .libraryClient : .standalone))
+        }
+        #expect(DevelopmentLaunch.Mode.client.workspaceFolder(instance: "a") == "Woven Matter Dev/a/client")
+        #expect(DevelopmentLaunch.Mode.snapshot.workspaceFolder(instance: "a") == "Woven Matter Dev/a/snapshot")
+        #expect(DevelopmentLaunch.Mode.live.workspaceFolder(instance: "a") == "Woven Matter")
+        #expect(DevelopmentLaunch.Mode.live.workspaceFolder(instance: "b") == "Woven Matter")
+    }
+
+    @Test func liveHostUsesTheSameExclusiveLeaseAsProduction() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let role = LocalExecutionRole.resolve(arguments: ["app"], backgroundEnabled: true, developmentMode: .live)
+        let file = directory.appending(path: DevelopmentLaunch.Mode.live.workspaceFolder(instance: "fixture"))
+            .appending(path: role.leaseFileName)
+        let productionFile = directory.appending(path: "Woven Matter/workspace-owner.lock")
+        #expect(file == productionFile)
+        var lease: WorkspaceProcessLease? = try WorkspaceProcessLease(fileURL: file)
+        func otherHostStatus() throws -> Int32 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = ["-c", """
+            import fcntl, sys
+            with open(sys.argv[1], 'r+') as file:
+                try: fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError: sys.exit(73)
+            """, productionFile.path]
+            try process.run(); process.waitUntilExit()
+            return process.terminationStatus
+        }
+        let occupiedStatus = try withExtendedLifetime(lease) { try otherHostStatus() }
+        #expect(occupiedStatus == 73)
+        lease = nil
+        #expect(try otherHostStatus() == 0)
+    }
+
     @Test func linkedAssetsKeepTheirHostPreviewWhileOrdinaryNotesUseTheDesktopEditor() throws {
         let link = DatabaseArtifactLink(sourceID: "host", databaseID: "data", relativePath: "data.sqlite", sqliteQuery: "SELECT 1")
         let linked = try NoteDocument(kind: .html, html: "<p>Preview</p>", databaseLink: link).encoded()
@@ -16,7 +55,7 @@ struct DevelopmentLaunchTests {
 
     @Test func duplicateLaunchCanOnlyActivateItsOwnInstance() {
         let production = WorkspaceProcessLeaseOwner(processIdentifier: 1, bundleIdentifier: "wovenmatter.desktop", bundlePath: "/production")
-        let own = WorkspaceProcessLeaseOwner(processIdentifier: 2, bundleIdentifier: "wovenmatter.desktop.dev.a.live", bundlePath: "/own")
+        let own = WorkspaceProcessLeaseOwner(processIdentifier: 2, bundleIdentifier: "wovenmatter.desktop.dev.a.client", bundlePath: "/own")
         var activated: [Int32] = []
         func candidate(_ owner: WorkspaceProcessLeaseOwner) -> WorkspaceProcessLeaseActivationCandidate {
             .init(owner: owner, isTerminated: { false }, activate: { activated.append(owner.processIdentifier); return true })
@@ -45,9 +84,9 @@ struct DevelopmentLaunchTests {
         #expect(first.deviceID != second.deviceID)
         #expect(first.notes == second.notes)
         #expect(ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop") == "pairing")
-        #expect(ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop.dev.a.live")
-            != ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop.dev.b.live"))
-        #expect(WovenMatterKeychainService.name(forBundleIdentifier: "wovenmatter.desktop.dev.a.live")
+        #expect(ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop.dev.a.client")
+            != ClientCredentialNamespace.service("pairing", bundleID: "wovenmatter.desktop.dev.b.client"))
+        #expect(WovenMatterKeychainService.name(forBundleIdentifier: "wovenmatter.desktop.dev.a.client")
             != WovenMatterKeychainService.name(forBundleIdentifier: "wovenmatter.desktop"))
     }
 

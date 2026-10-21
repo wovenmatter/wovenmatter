@@ -49,7 +49,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
                                      ownsExecutionOverride: true, workspaceAssets: assets)
         try await model.configureClientExecutionWorkspace(directory: directory)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
-            kind: .mac, name: DevelopmentLaunch.isLive ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
+            kind: .mac, name: DevelopmentLaunch.isClient ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
             capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])
         return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
     }

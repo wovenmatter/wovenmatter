@@ -206,7 +206,7 @@ final class CentralLibraryClientModel {
         guard engine == nil else { return }
         do {
             credential = try MobileCredentialVault.load()
-            if credential == nil, DevelopmentLaunch.isLive {
+            if credential == nil, DevelopmentLaunch.isClient {
                 do {
                     let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
                     try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
@@ -307,7 +307,7 @@ final class CentralLibraryClientModel {
             else { value = await MobileSyncEngine.localSynchronizationStatus(store: store) }
             if generation == connectionGeneration { synchronization = value }
         }
-        if DevelopmentLaunch.isLive, let model = localExecution?.model {
+        if DevelopmentLaunch.isClient, let model = localExecution?.model {
             model.liveLibraryClient = self
             await model.refreshWorkspace()
         }

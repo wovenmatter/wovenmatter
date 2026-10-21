@@ -25,7 +25,8 @@ def choose_mode(root):
             "app/Sources/WovenMatterDashboardStore/CompanionWorkspace", "app/Sources/WovenMatterDashboardStore/CompanionFederation",
             "app/Sources/WovenMatterDashboardStore/CompanionAuthentication", "shared/", "ios/Sources/CompanionClient/",
             "app/App/Services/CompanionHost", "app/App/Models/Backend", "scripts/dev-build.py")
-    return "snapshot" if any(p.startswith(host) for p in paths) else "live"
+    # Hosting production is always an explicit choice, never an automatic fallback.
+    return "snapshot" if any(p.startswith(host) for p in paths) else "client"
 
 
 def profile(root, instance, mode):
@@ -34,8 +35,10 @@ def profile(root, instance, mode):
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", instance):
         raise ValueError("Use a lowercase instance name of up to 64 letters, digits, and hyphens.")
     selected = choose_mode(root) if mode == "auto" else mode
+    support = Path.home() / "Library/Application Support"
+    support = support / "Woven Matter" if selected == "live" else support / "Woven Matter Dev" / instance / selected
     return dict(instance=instance, mode=selected,
-                support=str(Path.home() / "Library/Application Support/Woven Matter Dev" / instance / selected),
+                support=str(support),
                 product=f"Woven Matter {instance} {selected} Dev",
                 bundle=f"wovenmatter.desktop.dev.{instance}.{selected}")
 
@@ -180,7 +183,7 @@ def main():
     plan = sub.add_parser("profile")
     plan.add_argument("--root", type=Path, required=True)
     plan.add_argument("--instance")
-    plan.add_argument("--mode", choices=("auto", "live", "snapshot"), default="auto")
+    plan.add_argument("--mode", choices=("auto", "client", "snapshot", "live"), default="auto")
     snap = sub.add_parser("snapshot")
     snap.add_argument("--source", type=Path, required=True)
     snap.add_argument("--destination", type=Path, required=True)

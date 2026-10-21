@@ -15,7 +15,7 @@ while [ "$#" -gt 0 ]; do
       shift 2 ;;
     --plan) plan_only=true; shift ;;
     --help|-h)
-      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|live|snapshot] [--instance name] [--source directory] [--plan]'
+      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|client|snapshot|live] [--instance name] [--source directory] [--plan]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
@@ -46,6 +46,9 @@ build_overrides=(CODE_SIGNING_ALLOWED=NO "WOVENMATTER_DEV_PRODUCT_NAME=$product_
 app="${derived_data}/Build/Products/Debug/${product_name}.app"
 executable="${app}/Contents/MacOS/${product_name}"
 printf 'Development instance: %s\nData mode: %s\nLocal storage: %s\n' "$instance" "$data_mode" "$support_directory"
+if [ "$data_mode" = live ]; then
+  printf '%s\n' 'Live host: uses production data directly. Stop the current host (including background execution) before launching; the app enforces exclusive ownership.'
+fi
 mkdir -p "$derived_data" "$package_cache"
 # Serialize both snapshot creation and builds of this exact profile.
 build_lock="$cache_root/build.lock"
