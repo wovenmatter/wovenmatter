@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>WovenMatterDevelopmentMode</key>
+    <string>$(WOVENMATTER_DEV_MODE)</string>
+    <key>WovenMatterDevelopmentInstance</key>
+    <string>$(WOVENMATTER_DEV_INSTANCE)</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Woven Matter uses your microphone to transcribe dictation on your Mac. Audio stays on this device.</string>
     <key>CFBundleShortVersionString</key>

@@ -29,14 +29,15 @@ if name == 'security':
 elif name == 'xcodebuild':
     if os.environ.get('DEV_SIGNING_BUILD_FAIL') == '1': sys.exit(65)
     derived = Path(args[args.index('-derivedDataPath') + 1])
-    executable = derived / 'Build/Products/Debug/Woven Matter Dev.app/Contents/MacOS/Woven Matter Dev'
+    product = next(v.split('=', 1)[1] for v in args if v.startswith('WOVENMATTER_DEV_PRODUCT_NAME='))
+    executable = derived / ('Build/Products/Debug/' + product + '.app/Contents/MacOS/' + product)
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_text('fixture')
     executable.chmod(0o755)
 elif name == 'pgrep':
     sys.exit(1)
 '''
-    for name in ('security', 'xcodebuild', 'codesign', 'pkill', 'pgrep', 'lldb'):
+    for name in ('security', 'xcodebuild', 'codesign', 'pkill', 'pgrep', 'lldb', 'swift'):
         path = binaries / name
         path.write_text(stub)
         path.chmod(0o755)
@@ -50,7 +51,7 @@ elif name == 'pgrep':
         env.pop('WOVENMATTER_DEV_VARIANT', None)
         if identity is not None:
             env['WOVENMATTER_DEV_SIGNING_IDENTITY'] = identity
-        result = subprocess.run(['bash', str(root / 'scripts/build_and_run.sh'), 'debug'],
+        result = subprocess.run(['bash', str(root / 'scripts/build_and_run.sh'), 'debug', '--mode', 'live', '--instance', 'signing-test'],
                                 env=env, capture_output=True, text=True)
         recorded = [json.loads(line) for line in calls.read_text().splitlines()]
         return result, recorded
@@ -61,7 +62,7 @@ elif name == 'pgrep':
     args = next(args for name, args in recorded if name == 'xcodebuild')
     assert 'CODE_SIGNING_ALLOWED=YES' in args and 'CODE_SIGNING_ALLOWED=NO' not in args
     assert 'CODE_SIGN_IDENTITY=' + '1' * 40 in args
-    assert (cache / 'signing-identity').read_text().strip() == '1' * 40
+    assert (cache / 'signing-test/live/signing-identity').read_text().strip() == '1' * 40
 
     # Keychain unavailability must not silently change the identity on a rebuild.
     result, recorded = run(cache, 0, fail=True)

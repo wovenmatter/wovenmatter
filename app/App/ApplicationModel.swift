@@ -51,6 +51,9 @@ struct DashboardWorkspaceOverview: Equatable, Sendable {
         conversations = workspace.conversations
         notes = workspace.notes
     }
+    init(folders: [WorkspaceFolderRecord], conversations: [WorkspaceConversationRecord], notes: [WorkspaceNoteRecord]) {
+        self.folders = folders; self.conversations = conversations; self.notes = notes
+    }
 }
 
 @MainActor
@@ -70,6 +73,7 @@ final class ApplicationModel {
     private(set) var state: State = .starting
     let isLibraryClient: Bool
     @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel(assets: workspaceAssets)
+    @ObservationIgnored weak var liveLibraryClient: CentralLibraryClientModel?
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
@@ -383,8 +387,8 @@ final class ApplicationModel {
     ) {
         self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
-        self.isLibraryClient = LocalExecutionRole.current != .backend
-            && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
+        self.isLibraryClient = dashboardStore == nil && LocalExecutionRole.current != .backend
+            && (DevelopmentLaunch.isLive || (!DevelopmentLaunch.isSnapshot && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)))
         let closedLidProtection = ClosedLidWorkProtection(
             ownsExecution: ownsExecutionOverride ?? LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
         self.closedLidProtection = closedLidProtection
@@ -403,6 +407,7 @@ final class ApplicationModel {
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
         self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
             homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
+                ?? DevelopmentLaunch.executionHome
                 ?? FileManager.default.homeDirectoryForCurrentUser,
             databasesDirectory: try? Self.dashboardSupportDirectory().appendingPathComponent("ManagedDatabases", isDirectory: true))
         self.dashboardStore = dashboardStore
@@ -1199,6 +1204,11 @@ final class ApplicationModel {
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             federatedExecutionOwners = try await dashboardStore.database.companionExecutionOwners()
+            if let client = liveLibraryClient {
+                for conversation in client.conversations where client.isForeignConversation(conversation.id) {
+                    federatedExecutionOwners[conversation.id] = client.executionOwner(for: conversation.id) ?? "central"
+                }
+            }
             let nativeDirectories = try await dashboardStore.sessionNativeWorkingDirectories(
                 ids: (workspaceOverview?.conversations ?? []).map(\.id))
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
@@ -1245,6 +1255,7 @@ final class ApplicationModel {
     }
 
     func refreshConversation(id: String) async {
+        if liveLibraryClient?.isForeignConversation(id) == true { return }
         // Presentation work belongs to the UI; execution and terminal bookkeeping stay in the backend.
         guard LocalExecutionRole.current != .backend else { return }
         let state = ensureConversationState(id: id)
@@ -1714,6 +1725,9 @@ final class ApplicationModel {
     }
 
     func moveConversation(id: String, toFolderID folderID: String?) async -> Bool {
+        if let client = liveLibraryClient, client.isForeignConversation(id) {
+            return await client.perform(.conversation(id: id, action: "move", title: nil, folderID: folderID))
+        }
         folderMutationError = nil
         do {
             if isBackendFrontend {
@@ -2351,6 +2365,15 @@ final class ApplicationModel {
     ) async -> Bool {
         let state = ensureConversationState(id: conversation.id)
         do {
+            if let client = liveLibraryClient, client.isForeignConversation(conversation.id) {
+                guard input.files.isEmpty else { throw WorkspaceToolError.invalid("Attach files through the owning workspace.") }
+                var text = input.text
+                for reference in input.references { text += "\n\n" + reference.titleSnapshot + "\n" + reference.contentSnapshot }
+                if let note { text += "\n\n" + note.title + "\n" + note.content }
+                try await client.desktopSend(id: conversation.id, text: text)
+                state.setError(nil)
+                return true
+            }
             guard try await dispatchAgentMessage(conversation: conversation, input: input, note: note) else {
                 activeSessionLimitPresented = true
                 return false
@@ -4218,14 +4241,22 @@ final class ApplicationModel {
             calendarItems = snapshot.calendarItems
         }
         if calendarRuns != snapshot.calendarRuns { calendarRuns = snapshot.calendarRuns }
-        let nextOverview = DashboardWorkspaceOverview(snapshot.workspace)
+        var nextOverview = DashboardWorkspaceOverview(snapshot.workspace)
+        if let client = liveLibraryClient {
+            let foreign = client.conversations.filter { client.isForeignConversation($0.id) }
+                .compactMap { try? DevelopmentLibraryProjection.conversation($0) }
+            let foreignIDs = Set(foreign.map(\.id))
+            nextOverview = .init(folders: nextOverview.folders,
+                conversations: nextOverview.conversations.filter { !foreignIDs.contains($0.id) } + foreign,
+                notes: nextOverview.notes)
+        }
         if workspaceOverview?.folders != nextOverview.folders
             || workspaceOverview?.conversations != nextOverview.conversations
             || workspaceOverview?.notes != nextOverview.notes {
             workspaceListRevision &+= 1
         }
         if workspaceOverview != nextOverview { workspaceOverview = nextOverview }
-        let retainedConversationIDs = Set(snapshot.workspace.conversations.map(\.id))
+        let retainedConversationIDs = Set(nextOverview.conversations.map(\.id))
         let removedConversationIDs = conversationStatesByID.keys.filter {
             !retainedConversationIDs.contains($0)
         }
@@ -4341,6 +4372,11 @@ extension ApplicationModel {
         if isCommand { backendCommandsInFlight += 1 }
         defer { if isCommand { backendCommandsInFlight -= 1 } }
         do {
+            if request.method == "development.connect" {
+                let value = try JSONDecoder().decode(DevelopmentClientRequest.self, from: request.payload)
+                let connection = try await companionHost.connectLocalDevelopment(value)
+                return .init(id: request.id, result: try JSONEncoder().encode(connection))
+            }
             if request.method == "analytics.preference" {
                 await analytics.refresh()
                 return .init(id: request.id, result: try JSONEncoder().encode(analytics.preference))
@@ -4704,6 +4740,7 @@ extension ApplicationModel {
     /// A library role changes only across a validated restart. The old central
     /// store stays on disk, and a client never opens it as its own authority.
     private func changeLibraryClientMode(enabled: Bool) async throws {
+        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Choose live or snapshot with the development launcher.") }
         guard LocalExecutionRole.current != .backend, state == .ready,
               !DictationModel.shared.isBusy, !executionHasPendingOperations,
               localRunningConversationIDs.isEmpty, runningToolSessionIDs.isEmpty,
@@ -4755,6 +4792,7 @@ extension ApplicationModel {
     }
 
     func changeLocalBackgroundExecution(enabled: Bool) async throws {
+        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Development instances keep execution within their own app process.") }
         guard !DictationModel.shared.isBusy else { throw BackendRPCError.remote("Finish dictation before switching execution modes.") }
         guard !executionHasPendingOperations, localRunningConversationIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
               pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
@@ -5165,6 +5203,9 @@ extension ApplicationModel {
                 throw WorkspaceToolError.invalid("This folder is no longer available.")
             }
             if folder.executionWorkspaceID == nil {
+                guard clientExecutionDirectory == nil else {
+                    throw WorkspaceToolError.invalid("This shared folder has no execution root on this instance. Create a folder here or use All Workspaces.")
+                }
                 guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
                 let path: String
                 if let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) {

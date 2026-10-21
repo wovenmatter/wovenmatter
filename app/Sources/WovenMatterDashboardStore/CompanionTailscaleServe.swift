@@ -85,7 +85,11 @@ public final class CompanionTailscaleServe {
     let before = try await probe(executable, ["serve", "status", "--json"])
     guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
     let used = try Self.occupiedPorts(in: before)
-    let candidates = preferredHTTPSPort.map { [$0] } ?? [8443, 10_000, 8444, 8445]
+    // Each local executor has an ephemeral loopback port. Spread additional
+    // profiles across a larger range instead of imposing a four-client limit.
+    let offset = Int(loopbackPort) % 1_000
+    let additional = (0..<1_000).map { 11_000 + (offset + $0) % 1_000 }
+    let candidates = preferredHTTPSPort.map { [$0] } ?? ([8443, 10_000, 8444, 8445] + additional)
     guard let httpsPort = candidates.first(where: { (1...65535).contains($0) && !used.contains($0) }) else {
       throw failure("Another service is using this device connection address.")
     }

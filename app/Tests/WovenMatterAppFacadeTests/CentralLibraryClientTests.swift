@@ -6,6 +6,33 @@ import WovenMatterCompanion
 
 @MainActor @Suite(.serialized)
 struct CentralLibraryClientTests {
+    @Test func desktopProjectionRoutesForeignExecutionWithoutImportingItsSession() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let store = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let central = MacClientFakeCentral()
+        let client = CentralLibraryClientModel(store: store, transport: central)
+        await client.initialize(); await client.refresh()
+        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(),
+            libraryID: "00000000-0000-4000-8000-000000000001", ownerDeviceID: UUID().uuidString.lowercased(),
+            kind: .mac, name: "Other development build")
+        let direct = MacClientFakeExecution(workspace: workspace)
+        try await client.attachExecutionWorkspace(workspace, transport: direct)
+        await client.selectExecutionWorkspace(workspace.id)
+        client.composer = "Fixture first message"; await client.send()
+        let id = try #require(client.selectedConversationID)
+        fixture.model.liveLibraryClient = client
+        await fixture.model.refreshWorkspace()
+        #expect(fixture.model.workspaceOverview?.conversations.contains { $0.id == id } == true)
+        #expect(fixture.model.federatedExecutionOwners[id] == workspace.id)
+        #expect(try await fixture.database.companionSnapshot().conversations.isEmpty)
+        let revision = fixture.model.workspaceListRevision
+        await fixture.model.refreshWorkspace()
+        #expect(fixture.model.workspaceListRevision == revision)
+        try await client.desktopSend(id: id, text: "Fixture second message")
+        #expect(await direct.sendCount == 2)
+        #expect(await central.sendCount == 0)
+        #expect(try await client.desktopExecution(.refresh(conversationID: id)).workspace.id == workspace.id)
+    }
 
     @Test func directExecutionWorksWhileCentralIsUnavailable() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)

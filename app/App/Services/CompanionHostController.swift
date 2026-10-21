@@ -94,6 +94,7 @@ final class CompanionHostController {
     /// The central database is available while the app and Tailscale are running.
     /// Listening does not create a pairing offer or authorize any device.
     func startForCentralDatabase() async {
+        guard DevelopmentLaunch.mode == nil else { return }
         guard model?.isLibraryClient == false else { return }
         if model?.isBackendFrontend == true { await forward(.status); return }
         guard availabilityTask == nil else { return }
@@ -108,6 +109,7 @@ final class CompanionHostController {
     }
 
     func start() async {
+        guard DevelopmentLaunch.mode == nil else { return }
         if model?.isBackendFrontend == true { await forward(.start); return }
         guard model?.isLibraryClient == false, !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Connecting…"
@@ -677,6 +679,17 @@ final class CompanionHostController {
     private func didPair() async {
         pairedDevices = await authentication?.devices() ?? []
         pairingPayload = nil; pairingExpiresAt = nil
+    }
+
+    func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {
+        guard DevelopmentLaunch.mode == nil, model?.isLibraryClient == false,
+              let database = model?.dashboardStore?.database, let endpoint, let authentication else {
+            throw CompanionAPIError(code: "unavailable", message: "Enable production background execution and wait for its central library to connect.")
+        }
+        let response = try await authentication.enrollLocalDevelopment(deviceID: request.deviceID,
+            name: request.name, workspaceID: database.companionWorkspaceID())
+        await didPair()
+        return .init(endpoint: endpoint, pairing: response)
     }
 }
 

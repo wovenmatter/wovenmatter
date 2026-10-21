@@ -9,6 +9,9 @@ import WovenMatterClient
 /// Release builds always use the established workspace directory.
 enum WovenMatterWorkspacePaths {
     static var folderName: String {
+        if let mode = DevelopmentLaunch.mode, let instance = DevelopmentLaunch.instance {
+            return "Woven Matter Dev/\(instance)/\(mode.rawValue)"
+        }
         #if DEBUG
         let prefix = "wovenmatter.desktop.dev."
         if let identifier = Bundle.main.bundleIdentifier, identifier.hasPrefix(prefix) {
@@ -269,11 +272,16 @@ final class WorkspaceProcessLease {
     static func verifyIncumbentHandoff(
         _ owner: WorkspaceProcessLeaseOwner?,
         currentProcessIdentifier: Int32,
+        currentBundleIdentifier: String? = Bundle.main.bundleIdentifier,
         candidateForProcessIdentifier: (Int32) -> WorkspaceProcessLeaseActivationCandidate?,
         candidatesForBundleIdentifier: (String) -> [WorkspaceProcessLeaseActivationCandidate]
     ) -> WorkspaceProcessLeaseHandoffResult {
+        let identifiers: [String]
+        if let currentBundleIdentifier, currentBundleIdentifier.hasPrefix("wovenmatter.desktop.dev.") {
+            identifiers = [currentBundleIdentifier]
+        } else { identifiers = appBundleIdentifiers }
         if let owner,
-           appBundleIdentifiers.contains(owner.bundleIdentifier),
+           identifiers.contains(owner.bundleIdentifier),
            owner.processIdentifier != currentProcessIdentifier,
            let candidate = candidateForProcessIdentifier(owner.processIdentifier),
            candidate.owner == owner,
@@ -282,7 +290,7 @@ final class WorkspaceProcessLease {
            !candidate.isTerminated() {
             return .activated(owner)
         }
-        for bundleIdentifier in appBundleIdentifiers {
+        for bundleIdentifier in identifiers {
             for candidate in candidatesForBundleIdentifier(bundleIdentifier) {
                 guard candidate.owner.bundleIdentifier == bundleIdentifier,
                       candidate.owner.processIdentifier != currentProcessIdentifier,
@@ -384,6 +392,13 @@ struct WovenMatterApp: App {
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil
             || environment.keys.contains("XCTestConfigurationFilePath")
+        if !isRunningUnitTests, CompanionTestWorkspace.supportDirectory == nil {
+            do { try DevelopmentLaunch.validate() }
+            catch {
+                NSLog("Development launch refused: %@", error.localizedDescription)
+                Darwin.exit(EXIT_FAILURE)
+            }
+        }
         // A leftover login job must not reopen an old central library after
         // this Mac has explicitly switched to a different library's client.
         if !isRunningUnitTests, LocalExecutionRole.current == .backend,
@@ -513,7 +528,10 @@ struct WovenMatterApp: App {
 
         Settings {
             Group {
-                if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
+                if DevelopmentLaunch.isLive, let execution = applicationModel.libraryClient.localExecution {
+                    SettingsView(model: execution.model)
+                }
+                else if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
                 else { SettingsView(model: applicationModel) }
             }.scrollIndicators(.never)
         }

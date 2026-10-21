@@ -149,7 +149,7 @@ final class TailnetJSONClient: @unchecked Sendable {
 }
 
 public enum WorkspaceCredentialVault {
-  private static let service = "com.wovenmatter.execution.pairing"
+  private static var service: String { ClientCredentialNamespace.service("com.wovenmatter.execution.pairing") }
   public static func load(workspaceID: String) throws -> DirectWorkspaceCredential? {
     #if canImport(Security)
     var value: CFTypeRef?
