@@ -22,6 +22,7 @@ run_static_checks() {
   scripts/test-release.sh
   python3 scripts/test-support/test_update_refresh.py
   python3 scripts/test-support/test_ci_scopes.py
+  python3 scripts/test-support/test_ios_runner.py
   bash scripts/test-dev-signing.sh
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
