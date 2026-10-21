@@ -113,7 +113,9 @@ struct DevelopmentLaunchTests {
     @Test func snapshotOfRealSchemaPreservesHistoryWithoutSchedulingCopiedTasks() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let id = try await fixture.createConversation()
-        let now = Date()
+        // Keep the due-time boundary exact across Date/SQLite serialization;
+        // this fixture checks snapshot isolation, not subsecond timer precision.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
         try await fixture.database.setSessionTools(.init(enabled: [.timers]), sessionID: id)
         let timer = WorkspaceSessionTimer(sessionID: id, instruction: "Copied timer", nextFireAt: now)
         try await fixture.database.saveSessionTimer(timer, callerID: id)
