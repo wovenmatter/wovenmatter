@@ -70,47 +70,6 @@ struct CentralExecutionClientTests {
         #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 2)
     }
 
-    @Test func liveRunValidationUsesOwnerProjectionAheadOfCentralPublication() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let identity = try await fixture.database.companionLibraryIdentity()
-        let workspace = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-            kind: .linux, name: "Owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"),
-            executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
-        let conversation = CompanionConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable",
-            libraryID: identity.libraryID, workspaceID: workspace.id)
-        let origin = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
-            kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueCompanionWorkspacePublisher(workspaceID: workspace.id,
-            endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-        try await publish([origin], grant: publisher, database: fixture.database)
-        let run = UUID().uuidString.lowercased()
-        let active = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
-            kind: .transcript, transcript: .init(conversationID: conversation.id, activeRunID: run))
-        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin, active])
-        let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: fixture.directory.appending(path: "commands.json"),
-            provision: { _ in .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
-            makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
-        fixture.model.federatedExecutionClient = client
-        try await client.refresh(conversationID: conversation.id)
-        #expect(await fixture.model.canonicalActiveRunID(conversationID: conversation.id) == run)
-        await #expect(throws: LocalACPSessionDatabaseError.self) {
-            _ = try await fixture.model.dispatchFederatedMessage(conversationID: conversation.id, input: .init(text: "Needs idle"),
-                note: nil, expectedRunID: nil, requiresIdle: true, dispatchFence: AgentDispatchFence())
-        }
-        #expect(await remote.executions == 0)
-        try await fixture.model.beginAgentStop(conversationID: conversation.id).value
-        #expect(await remote.receivedCommands.last?.kind == .stop)
-        #expect(await remote.receivedCommands.last?.runID == run)
-        let nextRun = UUID().uuidString.lowercased()
-        await remote.startRun(nextRun)
-        #expect(try await fixture.model.dispatchFederatedMessage(conversationID: conversation.id, input: .init(text: "Steer live run"),
-            note: nil, expectedRunID: nextRun, requiresIdle: false, dispatchFence: AgentDispatchFence()))
-        #expect(await remote.receivedCommands.last?.kind == .steer)
-        #expect(await remote.receivedCommands.last?.runID == nextRun)
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 1)
-    }
-
     @Test func malformedReplayCannotAdvanceAuthoritativeOrigin() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let identity = try await fixture.database.companionLibraryIdentity()

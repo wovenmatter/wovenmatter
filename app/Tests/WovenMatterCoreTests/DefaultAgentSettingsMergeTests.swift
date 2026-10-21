@@ -3,6 +3,7 @@ import WovenMatterCore
 
 @Suite("Concurrent Built-in settings edits")
 struct DefaultAgentSettingsMergeTests {
+
     @Test func settingsEditPreservesConcurrentServerAdditionAndItsModel() {
         var base = DefaultAgentSettings()
         base.models = ["openai/one"]
@@ -19,6 +20,7 @@ struct DefaultAgentSettingsMergeTests {
         #expect(merged.models == ["openai/one", "openai/two", "local-new/model"])
         #expect(merged.defaultModel == "openai/two")
     }
+
     @Test func settingsEditDoesNotRestoreRemovedServerOrItsModelChoices() {
         var base = DefaultAgentSettings()
         base.providers.append("local-old")
@@ -41,6 +43,7 @@ struct DefaultAgentSettingsMergeTests {
         #expect(merged.fallbackModels == ["openai/two", "openai/one"])
         #expect(merged.defaultModel == nil)
     }
+
     @Test func staleSettingsEditPreservesOtherFieldsAndExplicitRemoval() {
         var base = DefaultAgentSettings()
         base.models = ["openai/one", "openai/two"]

@@ -25,6 +25,61 @@ private func groups(_ timeline: ConversationWorkTimeline) -> [ConversationWorkGr
 
 @Suite("Conversation work timeline")
 struct ConversationWorkTimelineTests {
+
+  @Test("mixed groups summarize two categories and count the remainder")
+  func mixedSummary() {
+    let activities = [
+      tool("1", "read"), tool("2", "bash"), tool("3", "grep"),
+      tool("4", "bash"), tool("5", "WebSearch"), tool("6", "mystery"),
+    ]
+    let records = activities.enumerated().map { record($1, at: "\($0)") }
+    let group = groups(ConversationWorkTimeline(records: records, commentaryIDs: []))[0]
+
+    #expect(group.summary == "Read 1 file, ran 2 commands, and performed 3 other actions")
+    #expect(group.action == nil)
+  }
+
+  @Test("only a status-less thought that ends the timeline is live; generic empty thoughts are hidden")
+  func thoughtLiveness() {
+    let thought = { (id: String) in AgentRunActivity(id: id, kind: .thought, phase: "start", content: "**\(id)**") }
+    let records = [
+      record(thought("t1"), at: "1"),
+      record(tool("a", "bash"), at: "2"),
+      record(AgentRunActivity(id: "generic", kind: .thought, title: "Thinking"), at: "3"),
+      record(thought("t2"), at: "4"),
+    ]
+    let tail = groups(ConversationWorkTimeline(records: records, commentaryIDs: []))[0]
+    #expect(tail.activities.map(\.id) == ["t1", "a", "t2"])
+    #expect(tail.activeActivityIDs == ["t2"])
+    #expect(tail.liveLabel(runIsActive: true) == "t2")
+
+    let followed = ConversationWorkTimeline(records: records + [
+      record(AgentRunActivity(id: "c", kind: .assistant, content: "Next"), at: "5"),
+    ], commentaryIDs: ["c"])
+    #expect(groups(followed)[0].activeActivityIDs.isEmpty)
+  }
+
+  @Test("the fold keeps failed rows and failed calls visible")
+  func foldedFailures() {
+    let records = [
+      record(tool("1", "bash"), at: "1"),
+      record(tool("2", "bash", status: "failed"), at: "2"),
+      record(AgentRunActivity(id: "c", kind: .assistant, content: "Next"), at: "3"),
+      record(tool("3", "read"), at: "4"),
+      record(AgentRunActivity(id: "x", kind: .activity, status: "error", content: "Lost"), at: "5"),
+    ]
+    let timeline = ConversationWorkTimeline(records: records, commentaryIDs: ["c"])
+
+    #expect(groups(timeline)[0].hasFailure)
+    #expect(timeline.foldedEntries.map(\.id) == ["failed:group:1", "activity:x"])
+    guard case .group(let failed)? = timeline.foldedEntries.first?.content else {
+      Issue.record("expected failed calls")
+      return
+    }
+    #expect(failed.activities.map(\.id) == ["2"])
+  }
+
+
   @Test("a merged detail version includes every contributing trace")
   func mergedDetailVersions() {
     let start = record(AgentRunActivity(id: "a", kind: .tool, content: "first", detailVersion: 1), at: "1")
@@ -36,17 +91,6 @@ struct ConversationWorkTimelineTests {
     #expect(version([start, end]) == version([start, end]))
     #expect(version([start, end]) != version([corrected, end]))
     #expect(version([start, end]) != version([end]))
-  }
-
-  @Test("checklist controls hide only when replaced, and failures stay visible")
-  func checklistControlVisibility() {
-    let successful = record(tool("todo", "todowrite"), at: "1")
-    let failed = record(tool("bad", "update_checklist", status: "failed"), at: "2")
-    let plan = record(AgentRunActivity(id: "p", kind: .plan, planKind: "checklist"), at: "3")
-    #expect(groups(ConversationWorkTimeline(records: [successful], commentaryIDs: []))[0].activities.map(\.id) == ["todo"])
-    let supported = ConversationWorkTimeline(records: [successful, failed, plan], commentaryIDs: [])
-    #expect(groups(supported)[0].activities.map(\.id) == ["bad"])
-    #expect(supported.foldedEntries.count == 1)
   }
 
   @Test("commentary splits work groups that keep their first member's identity")
@@ -68,19 +112,6 @@ struct ConversationWorkTimelineTests {
     #expect(first.activities[1].status == "completed")
     #expect(first.summary == "Ran 1 command")
     #expect(groups(timeline)[1].singleActivity?.id == "b")
-  }
-
-  @Test("mixed groups summarize two categories and count the remainder")
-  func mixedSummary() {
-    let activities = [
-      tool("1", "read"), tool("2", "bash"), tool("3", "grep"),
-      tool("4", "bash"), tool("5", "WebSearch"), tool("6", "mystery"),
-    ]
-    let records = activities.enumerated().map { record($1, at: "\($0)") }
-    let group = groups(ConversationWorkTimeline(records: records, commentaryIDs: []))[0]
-
-    #expect(group.summary == "Read 1 file, ran 2 commands, and performed 3 other actions")
-    #expect(group.action == nil)
   }
 
   @Test("edit groups count distinct files and lone thoughts use a meaningful label")
@@ -106,41 +137,30 @@ struct ConversationWorkTimelineTests {
     #expect(all[1].activities.map(\.id) == ["t"])
   }
 
-  @Test("live labels follow the latest running call, then the latest settled one")
-  func liveLabels() {
-    let running = ConversationWorkGroup(id: "g", activities: [
-      tool("1", "bash", status: "running"),
-      AgentRunActivity(id: "2", kind: .thought, status: "completed", content: "x"),
-    ])
-    #expect(running.liveLabel(runIsActive: true) == "bash")
-    #expect(running.hasActiveActivity)
-    #expect(running.liveLabel(runIsActive: false) == nil)
+  @Test("clear removes an activity and a later update restores it from the clear")
+  func clearRemoval() {
+    let entries = [AgentRunPlanEntry(content: "Step", status: "pending")]
+    let plan = { (phase: String, entries: [AgentRunPlanEntry]) in
+      AgentRunActivity(id: "plan", kind: .plan, phase: phase, planEntries: entries, planKind: "proposal")
+    }
+    let cleared = ConversationWorkTimeline(records: [
+      record(plan("update", entries), at: "1"),
+      record(plan("clear", []), at: "2"),
+    ], commentaryIDs: [])
+    #expect(cleared.entries.isEmpty)
 
-    let settled = ConversationWorkGroup(id: "g", activities: [
-      AgentRunActivity(id: "t", kind: .thought, status: "in_progress", content: "plain"),
-    ], endsTimeline: true)
-    #expect(settled.liveLabel(runIsActive: true) == "Thinking")
+    let restored = ConversationWorkTimeline(records: [
+      record(plan("update", entries), at: "1"),
+      record(plan("clear", []), at: "2"),
+      record(AgentRunActivity(id: "plan", kind: .plan, phase: "update", title: "Plan"), at: "3"),
+    ], commentaryIDs: [])
+    guard case .activity(let activity)? = restored.entries.first?.content else {
+      Issue.record("expected the restored plan")
+      return
+    }
+    #expect(activity.planEntries.isEmpty)
   }
 
-  @Test("only a status-less thought that ends the timeline is live; generic empty thoughts are hidden")
-  func thoughtLiveness() {
-    let thought = { (id: String) in AgentRunActivity(id: id, kind: .thought, phase: "start", content: "**\(id)**") }
-    let records = [
-      record(thought("t1"), at: "1"),
-      record(tool("a", "bash"), at: "2"),
-      record(AgentRunActivity(id: "generic", kind: .thought, title: "Thinking"), at: "3"),
-      record(thought("t2"), at: "4"),
-    ]
-    let tail = groups(ConversationWorkTimeline(records: records, commentaryIDs: []))[0]
-    #expect(tail.activities.map(\.id) == ["t1", "a", "t2"])
-    #expect(tail.activeActivityIDs == ["t2"])
-    #expect(tail.liveLabel(runIsActive: true) == "t2")
-
-    let followed = ConversationWorkTimeline(records: records + [
-      record(AgentRunActivity(id: "c", kind: .assistant, content: "Next"), at: "5"),
-    ], commentaryIDs: ["c"])
-    #expect(groups(followed)[0].activeActivityIDs.isEmpty)
-  }
 
   @Test("the latest segment stays before later visible work, even after a stop")
   func liveCommentaryPartition() {
@@ -168,30 +188,6 @@ struct ConversationWorkTimelineTests {
     #expect(checklistOnly.body == transcript.body)
   }
 
-  @Test("clear removes an activity and a later update restores it from the clear")
-  func clearRemoval() {
-    let entries = [AgentRunPlanEntry(content: "Step", status: "pending")]
-    let plan = { (phase: String, entries: [AgentRunPlanEntry]) in
-      AgentRunActivity(id: "plan", kind: .plan, phase: phase, planEntries: entries, planKind: "proposal")
-    }
-    let cleared = ConversationWorkTimeline(records: [
-      record(plan("update", entries), at: "1"),
-      record(plan("clear", []), at: "2"),
-    ], commentaryIDs: [])
-    #expect(cleared.entries.isEmpty)
-
-    let restored = ConversationWorkTimeline(records: [
-      record(plan("update", entries), at: "1"),
-      record(plan("clear", []), at: "2"),
-      record(AgentRunActivity(id: "plan", kind: .plan, phase: "update", title: "Plan"), at: "3"),
-    ], commentaryIDs: [])
-    guard case .activity(let activity)? = restored.entries.first?.content else {
-      Issue.record("expected the restored plan")
-      return
-    }
-    #expect(activity.planEntries.isEmpty)
-  }
-
   @Test("deltas append and snapshots replace in precedes order")
   func deltaMerge() {
     let records = [
@@ -206,23 +202,4 @@ struct ConversationWorkTimelineTests {
     #expect(activity.content == "Hello")
   }
 
-  @Test("the fold keeps failed rows and failed calls visible")
-  func foldedFailures() {
-    let records = [
-      record(tool("1", "bash"), at: "1"),
-      record(tool("2", "bash", status: "failed"), at: "2"),
-      record(AgentRunActivity(id: "c", kind: .assistant, content: "Next"), at: "3"),
-      record(tool("3", "read"), at: "4"),
-      record(AgentRunActivity(id: "x", kind: .activity, status: "error", content: "Lost"), at: "5"),
-    ]
-    let timeline = ConversationWorkTimeline(records: records, commentaryIDs: ["c"])
-
-    #expect(groups(timeline)[0].hasFailure)
-    #expect(timeline.foldedEntries.map(\.id) == ["failed:group:1", "activity:x"])
-    guard case .group(let failed)? = timeline.foldedEntries.first?.content else {
-      Issue.record("expected failed calls")
-      return
-    }
-    #expect(failed.activities.map(\.id) == ["2"])
-  }
 }

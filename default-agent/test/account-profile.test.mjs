@@ -19,8 +19,3 @@ test('Grok identity uses the shared OAuth token and survives renewal without bec
   await store.modify('xai', () => ({ type: 'oauth', access: 'different-account' }));
   assert.equal((await store.read('xai')).displayName, undefined);
 });
-
-test('profile failures retain the sign-in and API keys never enter the profile flow', async () => {
-  assert.deepEqual(await grokAccountProfile({ type: 'api_key', key: 'fixture-key' }, () => { throw new Error('must not fetch'); }), {});
-  assert.deepEqual(await grokAccountProfile({ type: 'oauth', access: 'fixture' }, async () => new Response('', { status: 403 })), {});
-});

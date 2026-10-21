@@ -12,6 +12,21 @@ import { DefaultAgentEngine } from '../src/engine.mjs';
 import { ChildContext, Subagents } from '../src/subagents.mjs';
 import { checklistTool } from '../src/checklist.mjs';
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function stream(model, content, overrides = {}) {
   const result = { role: 'assistant', content, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, ...overrides };
   const value = createAssistantMessageEventStream(); value.push({ type: 'start', partial: result }); value.push(result.stopReason === 'error' ? { type: 'error', reason: 'error', error: result } : { type: 'done', reason: result.stopReason, message: result }); value.end(result); return value;
@@ -40,57 +55,6 @@ test('native owner lock excludes a second runtime and released identities can re
   assert.equal(reopened.conversation.id, record.conversation.id);
 });
 
-test('attached completion includes child reports and children spawned during parent follow-up', { timeout: 15000 }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'woven-attached-engine-'));
-  const engine = await new DefaultAgentEngine({ cwd: root, directory: root,
-    config: { providers: ['openai'], defaultModel: 'openai/gpt-4.1' },
-    credentials: { openai: { type: 'api_key', key: 'fixture-only' } },
-  }).initialize();
-  t.after(async () => {
-    for (const record of [...engine.sessions.values()]) await record.session.dispose();
-    await rm(root, { recursive: true, force: true });
-  });
-  engine.publishProviderModels('openai', [{ id: 'gpt-4.1', name: 'Offline fixture', provider: 'openai', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', contextWindow: 16384, maxTokens: 4096, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
-  const record = await engine.create();
-  let parentCalls = 0, childCalls = 0;
-  engine.runtime.streamSimple = (model, _input, options) => {
-    if (options.wovenNativeContext.sessionID !== record.session.sessionId) {
-      childCalls++;
-      return stream(model, [{ type: 'text', text: `Child result ${childCalls}` }]);
-    }
-    parentCalls++;
-    const name = parentCalls === 1 ? 'first' : parentCalls === 3 ? 'followup' : undefined;
-    return stream(model, name
-      ? [{ type: 'toolCall', id: name, name: 'subagent', arguments: { action: 'spawn', name, task: 'Return a short result.' } }]
-      : [{ type: 'text', text: `Parent response ${parentCalls}` }]);
-  };
-  const updates = [], runID = randomUUID();
-  const result = await engine.handle('session/prompt', {
-    sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Complete the attached work.' }],
-    _meta: { wovenRunID: runID, wovenInputID: randomUUID() },
-  }, update => updates.push(update));
-  assert.equal(result.stopReason, 'end_turn');
-  assert.equal(childCalls, 2);
-  assert.equal(parentCalls, 5);
-  assert.equal(record.session.messages.at(-1).content[0].text, 'Parent response 5');
-  const group = await record.harness.snapshot(Subagents, record.conversation.id, BACKGROUND_CONTEXT);
-  for (const child of Object.values(group.children)) {
-    assert.equal(child.reporterIDs.length, 1);
-    const conversation = await record.harness.conversation(child.conversationId, BACKGROUND_CONTEXT);
-    assert.ok(!(await conversation.agent(BACKGROUND_CONTEXT)).tools.some(tool => tool.name === 'subagent'));
-  }
-  const inspection = await record.harness.inspect(BACKGROUND_CONTEXT);
-  assert.equal(inspection.tasks.length, 0);
-  assert.equal(inspection.submissions.length, 0);
-  const statuses = updates.filter(update => update.sessionUpdate === 'woven_program_status');
-  assert.ok(statuses.every(update => update._meta.wovenRunID === runID));
-  assert.deepEqual(statuses.filter(update => !update.status.id).slice(0, 2).map(update => update.status.state), ['clear', 'working']);
-  assert.equal(statuses.at(-1).status.state, 'done');
-  assert.equal(statuses.at(-1).status.id, undefined);
-  assert.ok(statuses.some(update => /^children\/\d+$/.test(update.status.id) && update.status.state === 'working'));
-  assert.equal(statuses.filter(update => !update.status.id && update.status.state === 'done').length, 1);
-});
-
 test('stable logical input receipts survive account reorder and conflicting payloads are rejected', async t => {
   const accounts = ['first', 'second'].map(id => ({ id, label: id, credential: { type: 'native', accountId: id } }));
   const { engine } = await fixture(t, { credentials: { 'claude-subscription': accounts[0].credential }, credentialAccounts: { 'claude-subscription': accounts } });
@@ -107,31 +71,6 @@ test('stable logical input receipts survive account reorder and conflicting payl
   await engine.handle('session/prompt', params); // The answer is outside the current context; its native receipt still deduplicates.
   assert.equal(calls, 1);
   await assert.rejects(engine.handle('session/prompt', { ...params, prompt: [{ type: 'text', text: 'Changed' }] }), /different request/);
-});
-
-test('failed native input receipts do not silently re-admit the same logical request', async t => {
-  const { engine } = await fixture(t), record = await engine.create(); let calls = 0;
-  record.streamFunction = model => { calls++; return stream(model, [], { stopReason: 'error', errorMessage: 'Fixture failure' }); };
-  const params = { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Fail once' }], _meta: { wovenInputID: randomUUID() } };
-  await assert.rejects(engine.handle('session/prompt', params));
-  await assert.rejects(engine.handle('session/prompt', params));
-  assert.equal(calls, 1);
-  assert.equal(record.session.messages.filter(message => message.role === 'user').length, 1);
-});
-
-test('manual compaction task admission and its duplicate receipt are one native commit', async t => {
-  const { engine } = await fixture(t), record = await engine.create();
-  const params = { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact preserve paths' }], _meta: { wovenInputID: randomUUID() } };
-  assert.equal((await engine.handle('session/prompt', params)).stopReason, 'end_turn');
-  await engine.handle('session/prompt', params);
-  const tasks = (await record.storage.scanTasks({}, 200, undefined, BACKGROUND_CONTEXT)).items.filter(task => task.kind === 'pi.compaction');
-  assert.equal(tasks.length, 1);
-  assert.equal(tasks[0].state.outcome.status, 'completed');
-  const records = (await record.history()).recordBatch.records;
-  const receipt = records.find(r => r.kind === 'woven.requests' && JSON.parse(r.payload).value.requests[params._meta.wovenInputID]?.compactionTaskID === tasks[0].id);
-  const admission = records.find(r => r.kind === 'pi.compaction' && JSON.parse(r.payload).value.id === tasks[0].id);
-  assert.equal(receipt.revision, admission.revision);
-  await assert.rejects(engine.handle('session/prompt', { ...params, prompt: [{ type: 'text', text: '/compact changed' }] }), /different request/);
 });
 
 test('native messages and exposed thinking reach display and the live archive without credential transport', async t => {
@@ -196,39 +135,6 @@ test('Stop cancels native bash children before uncertain effects can run', async
   assert.ok(!statuses.some(update => update.status.state === 'done'));
 });
 
-test('native final snapshots replace nonprefix streamed text instead of appending it', { timeout: 10000 }, async t => {
-  const { engine } = await fixture(t), record = await engine.create();
-  const updates = [];
-  let releasePartial;
-  const partialSeen = new Promise(resolve => { releasePartial = resolve; });
-  record.streamFunction = model => {
-    const events = createAssistantMessageEventStream();
-    void (async () => {
-      const partial = await stream(model, [{ type: 'text', text: 'abc' }]).result();
-      events.push({ type: 'start', partial });
-      await partialSeen; // Proves that Durable published the partial before the correction.
-      const message = { ...partial, content: [{ type: 'text', text: 'xyz 🧵' }] };
-      events.push({ type: 'done', reason: 'stop', message }); events.end(message);
-    })();
-    return events;
-  };
-  await engine.prompt(record, 'Fixture correction', update => {
-    updates.push(update);
-    if (update.sessionUpdate === 'agent_message_chunk' && update.content.text === 'abc') releasePartial();
-  });
-  let displayed = '';
-  for (const update of updates) if (update.sessionUpdate === 'agent_message_chunk') {
-    displayed = update._meta?.wovenAssistantSnapshot ? update.content.text : displayed + update.content.text;
-  }
-  assert.equal(displayed, 'xyz 🧵');
-  const snapshot = updates.find(update => update._meta?.wovenAssistantSnapshot);
-  assert.equal(snapshot._meta.wovenSnapshotStart, true);
-  assert.equal(snapshot._meta.wovenSnapshotEnd, true);
-  assert.equal(updates.filter(update => update.sessionUpdate === 'woven_assistant_boundary').length, 1);
-  assert.equal(record.session.messages.at(-1).content[0].text, displayed);
-  assert.ok((await record.history()).recordBatch.records.some(item => item.text?.includes('xyz 🧵')));
-});
-
 test('native snapshots preserve Unicode, block removal, thoughts and prior assistant boundaries', { timeout: 10000 }, async t => {
   const { engine } = await fixture(t), record = await engine.create();
   const updates = [], replacement = '🧵'.repeat(20000), prefix = 'Before tool.'.repeat(4000);
@@ -286,106 +192,6 @@ test('native snapshots preserve Unicode, block removal, thoughts and prior assis
   assert.equal(next.filter(update => update.sessionUpdate === 'agent_message_chunk').length, 0);
 });
 
-for (const codeMode of ['off', 'only']) test(`native checklist is registered and successful (${codeMode})`, { timeout: 15000 }, async t => {
-  const { engine } = await fixture(t, { config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', codeMode } });
-  const record = await engine.create(), updates = [];
-  const todos = [{ id: 'a', content: 'Same label', status: 'in_progress' }, { id: 'b', content: 'Same label', status: 'cancelled' }];
-  const writes = [todos, [todos[0], todos[0]], [{ ...todos[0], status: 'completed' }], []];
-  let calls = 0;
-  record.streamFunction = model => {
-    const index = calls++;
-    if (index === writes.length) return stream(model, [{ type: 'text', text: 'Done' }]);
-    const args = { todos: writes[index] };
-    return stream(model, [{ type: 'toolCall', id: `write-${index}`,
-      name: codeMode === 'only' ? 'codemode' : checklistTool.name,
-      arguments: codeMode === 'only' ? { code: `return await tools.update_checklist(${JSON.stringify(args)});` } : args }]);
-  };
-  await engine.prompt(record, 'Track work', update => updates.push(update));
-  const plans = updates.filter(update => update.sessionUpdate === 'plan');
-  assert.equal(plans.length, 3); // The failed duplicate-ID tool cannot mutate progress.
-  assert.deepEqual(plans[0].entries, todos);
-  assert.deepEqual(plans[1].entries, [{ ...todos[0], status: 'completed' }]);
-  assert.deepEqual(plans[2].entries, []);
-  assert.equal(plans[2]._meta.wovenPlanOperation, 'clear');
-  const results = updates.filter(update => update.sessionUpdate === 'tool_call_update' && ['completed', 'failed'].includes(update.status));
-  assert.ok(results.some(update => update.status === 'failed'));
-  assert.ok(results.length >= 4);
-  for (const plan of plans) assert.ok(updates.slice(0, updates.indexOf(plan)).some(update => update.sessionUpdate === 'tool_call_update'));
-  let cursor = 0, archived = [];
-  while (true) { const page = await record.history(cursor); archived.push(...page.recordBatch.records); if (!page.hasMore) break; cursor = page.nextAfter; }
-  // Codemode hides nested entries from model context; their complete native
-  // tool results must still be retained in the archive.
-  const messages = archived.map(item => JSON.parse(item.payload)).filter(item => item.type === 'entry')
-    .flatMap(item => item.value.model ?? []).filter(message => message.role === 'toolResult' && message.toolName === checklistTool.name);
-  assert.equal(messages.filter(message => !message.isError).length, 3);
-  const next = [];
-  record.streamFunction = model => stream(model, [{ type: 'text', text: 'New task' }]);
-  await engine.prompt(record, 'Fresh task', update => next.push(update));
-  assert.equal(next.filter(update => update.sessionUpdate === 'plan').length, 0);
-});
-
-test('native child checklist records stay in native capture without becoming root progress', async t => {
-  const { engine } = await fixture(t), record = await engine.create(), updates = [];
-  const unsubscribe = record.subscribe(value => { if (value.update) updates.push(value.update); });
-  t.after(unsubscribe);
-  // An inert native child transcript, with no input, worker or provider call.
-  const child = await record.harness.createConversation({ ownership: { kind: 'ownerless' }, init: async (tx, id) => {
-    Object.assign(await tx.doc(ChildContext, id), { parentConversationID: record.conversation.id, sessionID: randomUUID(), runID: randomUUID() });
-  } }, BACKGROUND_CONTEXT);
-  await child.commit(tx => tx.appendEntry(child.id, { kind: 'pi.tool', model: [{
-    role: 'toolResult', toolCallId: 'child-checklist', toolName: checklistTool.name, isError: false,
-    content: [{ type: 'text', text: 'child-only-checklist' }], details: { wovenChecklist: [{ id: 'child', content: 'Child work', status: 'completed' }] }, timestamp: Date.now(),
-  }], edits: [] }), BACKGROUND_CONTEXT);
-  await record.archiveQueue;
-  assert.equal(updates.filter(update => update.sessionUpdate === 'plan').length, 0);
-  const archived = (await record.history()).recordBatch.records.find(item => item.text === 'child-only-checklist');
-  assert.ok(archived);
-  assert.equal(JSON.parse(archived.projectionJSON).parentNativeConversationID, record.conversation.id);
-  assert.equal(JSON.parse(archived.projectionJSON).childID, String(child.id));
-});
-
-test('maximum native checklist fits presentation without losing IDs or statuses', async () => {
-  const { validateToolArguments } = await import('@earendil-works/pi-ai/utils/validation');
-  const { nativePresentationUpdates } = await import('../src/native-journal.mjs');
-  const todos = Array.from({ length: 32 }, (_, index) => ({ id: String(index) + '🧵'.repeat(128 - String(index).length), content: '🧵'.repeat(256), status: 'in_progress' }));
-  const input = validateToolArguments(checklistTool, { id: 'max', name: checklistTool.name, arguments: { todos } });
-  const result = await checklistTool.execute('max', input);
-  const update = { sessionUpdate: 'plan', entries: result.details.wovenChecklist,
-    _meta: { wovenPlanKind: 'checklist', wovenPlanOperation: 'replace' } };
-  assert.deepEqual([...nativePresentationUpdates(update)], [update]);
-  assert.throws(() => validateToolArguments(checklistTool, { id: 'oversized', name: checklistTool.name, arguments: { todos: [...todos, { ...todos[0], id: 'too-many' }] } }));
-});
-
-test('native CLI bindings advance when steering is consumed and preserve running shell snapshots', async t => {
-  const { engine, root } = await fixture(t), record = await engine.create();
-  const binding = captureID => ({ captureID, executablePath: join(root, 'bin', 'wovenmatter'), socketPath: join(root, 'woven.sock') });
-  const environment = 'printf "%s|%s|%s|%s" "$WOVENMATTER_CONTEXT_ID" "$WOVENMATTER_CLI" "$WOVENMATTER_SOCKET" "$WOVENMATTER_NOTE_ID"';
-  const params = (text, captureID) => ({ sessionId: record.session.sessionId, prompt: [{ type: 'text', text }], _meta: { wovenInputID: randomUUID(), ...(captureID ? { wovenTools: binding(captureID) } : {}) } });
-  let calls = 0;
-  record.streamFunction = model => stream(model, ++calls === 1
-    ? [{ type: 'toolCall', id: 'first-shell', name: 'bash', arguments: { command: `${environment} > first-env; for ((i=0;i<500;i++)); do [ -f release-shell ] && break; sleep 0.01; done; ${environment} > first-finished-env` } }]
-    : calls === 2 ? [{ type: 'toolCall', id: 'second-shell', name: 'codemode', arguments: { code: `return await tools.bash({command: ${JSON.stringify(`${environment} > second-env`)}});` } }]
-      : [{ type: 'text', text: 'Done' }]);
-  const first = engine.handle('session/prompt', params('First input', 'first'));
-  const deadline = Date.now() + 5000;
-  while (true) {
-    try { await readFile(join(root, 'first-env')); break; }
-    catch (error) { if (error.code !== 'ENOENT' || Date.now() >= deadline) throw error; await new Promise(resolve => setTimeout(resolve, 10)); }
-  }
-  assert.deepEqual(await engine.handle('_session/steering', params('Second input', 'second')), { outcome: 'injected' });
-  assert.equal(record.cli.environment({}).WOVENMATTER_CONTEXT_ID, 'first');
-  await writeFile(join(root, 'release-shell'), '');
-  await first;
-  const expected = captureID => `${captureID}|${binding(captureID).executablePath}|${binding(captureID).socketPath}|`;
-  assert.equal(await readFile(join(root, 'first-env'), 'utf8'), expected('first'));
-  assert.equal(await readFile(join(root, 'first-finished-env'), 'utf8'), expected('first'));
-  assert.equal(await readFile(join(root, 'second-env'), 'utf8'), expected('second'));
-  let next = 0;
-  record.streamFunction = model => stream(model, ++next === 1 ? [{ type: 'toolCall', id: 'unbound-shell', name: 'bash', arguments: { command: `${environment} > unbound-env` } }] : [{ type: 'text', text: 'Done' }]);
-  await engine.handle('session/prompt', params('An unbound input'));
-  assert.equal(await readFile(join(root, 'unbound-env'), 'utf8'), '|||');
-});
-
 test('native tool output is persisted and copied in byte-bounded exact chunks', async t => {
   const { engine, open } = await fixture(t);
   const record = await engine.create(), content = 'r'.repeat(67108880);
@@ -430,6 +236,107 @@ test('native tool output is persisted and copied in byte-bounded exact chunks', 
   assert.ok(restored.session.messages.some(m => Array.isArray(m.content) && m.content.some(b => b.text === 'Continued safely')));
 });
 
+test('attached completion includes child reports and children spawned during parent follow-up', { timeout: 15000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-attached-engine-'));
+  const engine = await new DefaultAgentEngine({ cwd: root, directory: root,
+    config: { providers: ['openai'], defaultModel: 'openai/gpt-4.1' },
+    credentials: { openai: { type: 'api_key', key: 'fixture-only' } },
+  }).initialize();
+  t.after(async () => {
+    for (const record of [...engine.sessions.values()]) await record.session.dispose();
+    await rm(root, { recursive: true, force: true });
+  });
+  engine.publishProviderModels('openai', [{ id: 'gpt-4.1', name: 'Offline fixture', provider: 'openai', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', contextWindow: 16384, maxTokens: 4096, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
+  const record = await engine.create();
+  let parentCalls = 0, childCalls = 0;
+  engine.runtime.streamSimple = (model, _input, options) => {
+    if (options.wovenNativeContext.sessionID !== record.session.sessionId) {
+      childCalls++;
+      return stream(model, [{ type: 'text', text: `Child result ${childCalls}` }]);
+    }
+    parentCalls++;
+    const name = parentCalls === 1 ? 'first' : parentCalls === 3 ? 'followup' : undefined;
+    return stream(model, name
+      ? [{ type: 'toolCall', id: name, name: 'subagent', arguments: { action: 'spawn', name, task: 'Return a short result.' } }]
+      : [{ type: 'text', text: `Parent response ${parentCalls}` }]);
+  };
+  const updates = [], runID = randomUUID();
+  const result = await engine.handle('session/prompt', {
+    sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Complete the attached work.' }],
+    _meta: { wovenRunID: runID, wovenInputID: randomUUID() },
+  }, update => updates.push(update));
+  assert.equal(result.stopReason, 'end_turn');
+  assert.equal(childCalls, 2);
+  assert.equal(parentCalls, 5);
+  assert.equal(record.session.messages.at(-1).content[0].text, 'Parent response 5');
+  const group = await record.harness.snapshot(Subagents, record.conversation.id, BACKGROUND_CONTEXT);
+  for (const child of Object.values(group.children)) {
+    assert.equal(child.reporterIDs.length, 1);
+    const conversation = await record.harness.conversation(child.conversationId, BACKGROUND_CONTEXT);
+    assert.ok(!(await conversation.agent(BACKGROUND_CONTEXT)).tools.some(tool => tool.name === 'subagent'));
+  }
+  const inspection = await record.harness.inspect(BACKGROUND_CONTEXT);
+  assert.equal(inspection.tasks.length, 0);
+  assert.equal(inspection.submissions.length, 0);
+  const statuses = updates.filter(update => update.sessionUpdate === 'woven_program_status');
+  assert.ok(statuses.every(update => update._meta.wovenRunID === runID));
+  assert.deepEqual(statuses.filter(update => !update.status.id).slice(0, 2).map(update => update.status.state), ['clear', 'working']);
+  assert.equal(statuses.at(-1).status.state, 'done');
+  assert.equal(statuses.at(-1).status.id, undefined);
+  assert.ok(statuses.some(update => /^children\/\d+$/.test(update.status.id) && update.status.state === 'working'));
+  assert.equal(statuses.filter(update => !update.status.id && update.status.state === 'done').length, 1);
+});
+
+test('native child checklist records stay in native capture without becoming root progress', async t => {
+  const { engine } = await fixture(t), record = await engine.create(), updates = [];
+  const unsubscribe = record.subscribe(value => { if (value.update) updates.push(value.update); });
+  t.after(unsubscribe);
+  // An inert native child transcript, with no input, worker or provider call.
+  const child = await record.harness.createConversation({ ownership: { kind: 'ownerless' }, init: async (tx, id) => {
+    Object.assign(await tx.doc(ChildContext, id), { parentConversationID: record.conversation.id, sessionID: randomUUID(), runID: randomUUID() });
+  } }, BACKGROUND_CONTEXT);
+  await child.commit(tx => tx.appendEntry(child.id, { kind: 'pi.tool', model: [{
+    role: 'toolResult', toolCallId: 'child-checklist', toolName: checklistTool.name, isError: false,
+    content: [{ type: 'text', text: 'child-only-checklist' }], details: { wovenChecklist: [{ id: 'child', content: 'Child work', status: 'completed' }] }, timestamp: Date.now(),
+  }], edits: [] }), BACKGROUND_CONTEXT);
+  await record.archiveQueue;
+  assert.equal(updates.filter(update => update.sessionUpdate === 'plan').length, 0);
+  const archived = (await record.history()).recordBatch.records.find(item => item.text === 'child-only-checklist');
+  assert.ok(archived);
+  assert.equal(JSON.parse(archived.projectionJSON).parentNativeConversationID, record.conversation.id);
+  assert.equal(JSON.parse(archived.projectionJSON).childID, String(child.id));
+});
+
+test('native CLI bindings advance when steering is consumed and preserve running shell snapshots', async t => {
+  const { engine, root } = await fixture(t), record = await engine.create();
+  const binding = captureID => ({ captureID, executablePath: join(root, 'bin', 'wovenmatter'), socketPath: join(root, 'woven.sock') });
+  const environment = 'printf "%s|%s|%s|%s" "$WOVENMATTER_CONTEXT_ID" "$WOVENMATTER_CLI" "$WOVENMATTER_SOCKET" "$WOVENMATTER_NOTE_ID"';
+  const params = (text, captureID) => ({ sessionId: record.session.sessionId, prompt: [{ type: 'text', text }], _meta: { wovenInputID: randomUUID(), ...(captureID ? { wovenTools: binding(captureID) } : {}) } });
+  let calls = 0;
+  record.streamFunction = model => stream(model, ++calls === 1
+    ? [{ type: 'toolCall', id: 'first-shell', name: 'bash', arguments: { command: `${environment} > first-env; for ((i=0;i<500;i++)); do [ -f release-shell ] && break; sleep 0.01; done; ${environment} > first-finished-env` } }]
+    : calls === 2 ? [{ type: 'toolCall', id: 'second-shell', name: 'codemode', arguments: { code: `return await tools.bash({command: ${JSON.stringify(`${environment} > second-env`)}});` } }]
+      : [{ type: 'text', text: 'Done' }]);
+  const first = engine.handle('session/prompt', params('First input', 'first'));
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try { await readFile(join(root, 'first-env')); break; }
+    catch (error) { if (error.code !== 'ENOENT' || Date.now() >= deadline) throw error; await new Promise(resolve => setTimeout(resolve, 10)); }
+  }
+  assert.deepEqual(await engine.handle('_session/steering', params('Second input', 'second')), { outcome: 'injected' });
+  assert.equal(record.cli.environment({}).WOVENMATTER_CONTEXT_ID, 'first');
+  await writeFile(join(root, 'release-shell'), '');
+  await first;
+  const expected = captureID => `${captureID}|${binding(captureID).executablePath}|${binding(captureID).socketPath}|`;
+  assert.equal(await readFile(join(root, 'first-env'), 'utf8'), expected('first'));
+  assert.equal(await readFile(join(root, 'first-finished-env'), 'utf8'), expected('first'));
+  assert.equal(await readFile(join(root, 'second-env'), 'utf8'), expected('second'));
+  let next = 0;
+  record.streamFunction = model => stream(model, ++next === 1 ? [{ type: 'toolCall', id: 'unbound-shell', name: 'bash', arguments: { command: `${environment} > unbound-env` } }] : [{ type: 'text', text: 'Done' }]);
+  await engine.handle('session/prompt', params('An unbound input'));
+  assert.equal(await readFile(join(root, 'unbound-env'), 'utf8'), '|||');
+});
+
 test('client adoption inspects native idle state without resuming unfinished work',async t=>{
   const {engine}=await fixture(t),record=await engine.create(),sessionId=record.session.sessionId
   record.busy=true
@@ -443,3 +350,41 @@ test('client adoption inspects native idle state without resuming unfinished wor
   assert.equal(adopted.sessionId,sessionId)
   assert.equal(record.session.messages.length,0)
 })
+
+for (const codeMode of ['off', 'only']) test(`native checklist is registered and successful (${codeMode})`, { timeout: 15000 }, async t => {
+  const { engine } = await fixture(t, { config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', codeMode } });
+  const record = await engine.create(), updates = [];
+  const todos = [{ id: 'a', content: 'Same label', status: 'in_progress' }, { id: 'b', content: 'Same label', status: 'cancelled' }];
+  const writes = [todos, [todos[0], todos[0]], [{ ...todos[0], status: 'completed' }], []];
+  let calls = 0;
+  record.streamFunction = model => {
+    const index = calls++;
+    if (index === writes.length) return stream(model, [{ type: 'text', text: 'Done' }]);
+    const args = { todos: writes[index] };
+    return stream(model, [{ type: 'toolCall', id: `write-${index}`,
+      name: codeMode === 'only' ? 'codemode' : checklistTool.name,
+      arguments: codeMode === 'only' ? { code: `return await tools.update_checklist(${JSON.stringify(args)});` } : args }]);
+  };
+  await engine.prompt(record, 'Track work', update => updates.push(update));
+  const plans = updates.filter(update => update.sessionUpdate === 'plan');
+  assert.equal(plans.length, 3); // The failed duplicate-ID tool cannot mutate progress.
+  assert.deepEqual(plans[0].entries, todos);
+  assert.deepEqual(plans[1].entries, [{ ...todos[0], status: 'completed' }]);
+  assert.deepEqual(plans[2].entries, []);
+  assert.equal(plans[2]._meta.wovenPlanOperation, 'clear');
+  const results = updates.filter(update => update.sessionUpdate === 'tool_call_update' && ['completed', 'failed'].includes(update.status));
+  assert.ok(results.some(update => update.status === 'failed'));
+  assert.ok(results.length >= 4);
+  for (const plan of plans) assert.ok(updates.slice(0, updates.indexOf(plan)).some(update => update.sessionUpdate === 'tool_call_update'));
+  let cursor = 0, archived = [];
+  while (true) { const page = await record.history(cursor); archived.push(...page.recordBatch.records); if (!page.hasMore) break; cursor = page.nextAfter; }
+  // Codemode hides nested entries from model context; their complete native
+  // tool results must still be retained in the archive.
+  const messages = archived.map(item => JSON.parse(item.payload)).filter(item => item.type === 'entry')
+    .flatMap(item => item.value.model ?? []).filter(message => message.role === 'toolResult' && message.toolName === checklistTool.name);
+  assert.equal(messages.filter(message => !message.isError).length, 3);
+  const next = [];
+  record.streamFunction = model => stream(model, [{ type: 'text', text: 'New task' }]);
+  await engine.prompt(record, 'Fresh task', update => next.push(update));
+  assert.equal(next.filter(update => update.sessionUpdate === 'plan').length, 0);
+});

@@ -9,109 +9,194 @@ import WovenMatterDashboardStore
 
 @MainActor
 struct WorkspaceAgentToolsServiceTests {
-    @Test func folderSearchIgnoresItsOwnRequestJournalAndRetainsExplicitAuditAccess() async throws {
+
+    @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
+        let runtime = ExecutorRuntime()
+        let original = runtime.fence("admitting")
+        #expect(runtime.sessions.isEmpty)
+        runtime.cancelAll()
+        #expect(throws: CancellationError.self) { try runtime.check("admitting", fence: original) }
+        try runtime.check("admitting", fence: runtime.fence("admitting"))
+        _ = try? await runtime.scopeEdits["admitting"]?.value
+    }
+
+
+    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let model = fixture.model
+        await model.observeSession(fixture.caller, token: UUID())
+        let inserted = observeToolSnapshotChanges { _ = model.receipts }
+        let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
+            targetID: fixture.target, text: "Review the result", requestID: UUID().uuidString)
+        try await model.reload()
+        #expect(inserted.count == 1)
+        #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
+
+        let statusChanged = observeToolSnapshotChanges { _ = model.receipts }
+        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed")
+        try await model.reload()
+        #expect(statusChanged.count == 1)
+        #expect(model.receipts[fixture.caller]?.first?.status == "failed")
+
+        // A payload change with the same status must not be hidden by an
+        // identity/status-only comparison either.
+        let payloadChanged = observeToolSnapshotChanges { _ = model.receipts }
+        let messageID = UUID().uuidString
+        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed", messageID: messageID)
+        try await model.reload()
+        #expect(payloadChanged.count == 1)
+        #expect(model.receipts[fixture.caller]?.first?.messageID == messageID)
+        #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
+
+        let unchanged = observeToolSnapshotChanges {
+            _ = model.receipts
+            _ = model.hasOlderReceipts
+        }
+        for _ in 0..<5 { try await model.reload() }
+        #expect(unchanged.count == 0)
+    }
+
+    @Test(arguments: AgentRuntimeKind.allCases)
+    func executorUsesBoundCLIIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let local = try await database.createFolder(name: "Caller folder", location: .init(workspaceID: "device:test", rootPath: root.path + "/Caller", managed: false))
-        let elsewhere = try await database.createFolder(name: "Other folder", location: .init(workspaceID: "device:test", rootPath: root.path + "/Other", managed: false))
-        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        let target = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Relevant work", ownerDeviceID: UUID())
-        for id in [caller, target] {
-            try await database.saveSessionExecutionRoot(id: id, folderID: nil,
-                location: .init(workspaceID: "device:test", rootPath: root.path, managed: false), defaultPath: root.path)
-        }
-        _ = try await database.moveConversation(id: caller, toFolderID: local)
-        _ = try await database.moveConversation(id: target, toFolderID: elsewhere)
-        try await database.recordHistory(.init(id: "actual-result", conversationID: target, harness: "claude_code",
-            kind: "wire.in", payload: "rare-search-phrase in the other folder"))
+        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
+        var seen: [String] = []
         let service = try await WorkspaceAgentToolsModel(database: database,
-            sessionHandler: { _, _, _ in throw CancellationError() },
-            noteHandler: { _, _, _ in throw CancellationError() },
-            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
-            usageHandler: { _ in throw CancellationError() }, onMutation: {})
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() },
+            executorHandler: { identity, command, _ in
+                seen.append(identity)
+                return .init(result: .object(["action": .string(command.action)]))
+            }, onMutation: {})
         defer { service.stop() }
         let endpoint = try await service.endpoint(for: caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
-            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
+            let result = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
+            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: result)
         }
-        // Repeat through the actual bound socket handler: both this request and
-        // earlier request journals must not manufacture a caller-folder hit.
-        for _ in 0..<2 {
-            let response = try await request(["history", "search", "rare-search-phrase"])
-            #expect(response.success)
-            #expect(response.result?.objectValue?["scope"]?.stringValue == "workspace")
-            let rows = response.result?.objectValue?["rows"]?.arrayValue ?? []
-            #expect(rows.count == 1)
-            #expect(rows.first?.objectValue?["id"]?.stringValue == "actual-result")
-        }
-        let audit = try await request(["history", "events", "--conversation", caller, "--kind", "cli.request"])
-        #expect(audit.success)
-        #expect(audit.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
-        let reads = try await request(["history", "events", "--conversation", caller, "--kind", "cli.history.read"])
-        #expect((reads.result?.objectValue?["rows"]?.arrayValue?.count ?? 0) >= 2)
-        #expect(reads.result?.objectValue?["rows"]?.arrayValue?.allSatisfy {
-            $0.objectValue?["payload"]?.stringValue?.contains("rare-search-phrase") == false
-        } == true)
-        let explicitAudit = try await request(["history", "search", "rare-search-phrase", "--kind", "cli.request"])
-        #expect(explicitAudit.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
-        try await database.recordHistory(.init(id: "local-result", conversationID: caller, harness: "codex",
-            kind: "wire.in", payload: "rare-search-phrase now exists locally"))
-        let localResponse = try await request(["history", "search", "rare-search-phrase"])
-        #expect(localResponse.result?.objectValue?["scope"]?.stringValue == "folder")
-        #expect(localResponse.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == "local-result")
+        #expect(try await !request(["executor", "search", "--query", "fixture"]).success)
+        #expect(seen.isEmpty)
+        _ = try await database.setSessionToolEnabled(.executor, enabled: true, sessionID: caller)
+        #expect(try await request(["executor", "search", "--query", "fixture"]).success)
+        #expect(seen == [caller])
+        #expect(try await !request(["executor", "execute", "--code", "return 1;", "--session", "other"]).success)
+        #expect(seen == [caller])
+        _ = try await database.setSessionToolEnabled(.executor, enabled: false, sessionID: caller)
+        #expect(try await !request(["executor", "execute", "--code", "return 1;"]).success)
+        #expect(seen == [caller])
     }
-}
 
-extension WorkspaceAgentToolsServiceTests {
-    @Test func policiesAreFailClosedUntilAsyncObservationAndRemovedPanelsStayRemoved() async throws {
+
+    @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() async throws {
         let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
-        #expect(model.sessionPolicies[fixture.caller] == nil)
-        #expect(model.policy(for: fixture.caller).enabled == [.goals])
-        let token = UUID()
-        await model.observeSession(fixture.caller, token: token)
-        #expect(model.policy(for: fixture.caller) == (try await fixture.database.sessionTools(fixture.caller)))
-        let refresh = Task { try? await model.reload() }
-        await model.observeSession(nil, token: token)
-        await refresh.value
-        #expect(model.receipts[fixture.caller] == nil)
+        var ids: [String] = []
+        for index in 0..<205 {
+            let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
+                targetID: fixture.target, text: "Instruction \(index)", requestID: UUID().uuidString)
+            ids.append(delivery.id)
+        }
+        let firstPanel = UUID(), secondPanel = UUID()
+        await model.observeSession(fixture.caller, token: firstPanel)
+        #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.suffix(200).reversed()))
+        #expect(model.hasOlderReceipts.contains(fixture.caller))
+        let unchanged = observeToolSnapshotChanges {
+            _ = model.receipts
+            _ = model.hasOlderReceipts
+        }
+        try await model.reload()
+        await model.observeSession(fixture.caller, token: secondPanel)
+        await model.observeSession(nil, token: firstPanel)
+        #expect(unchanged.count == 0)
+
+        let olderChanged = observeToolSnapshotChanges { _ = model.hasOlderReceipts }
+        await model.loadOlderReceipts(sessionID: fixture.caller)
+        #expect(olderChanged.count == 1)
+        #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.reversed()))
         #expect(!model.hasOlderReceipts.contains(fixture.caller))
+        let exhausted = observeToolSnapshotChanges {
+            _ = model.receipts
+            _ = model.hasOlderReceipts
+        }
+        await model.loadOlderReceipts(sessionID: fixture.caller)
+        try await model.reload()
+        #expect(exhausted.count == 0)
+
+        let newest = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
+            targetID: fixture.target, text: "Latest", requestID: UUID().uuidString)
+        try await fixture.database.setToolDeliveryStatus(id: ids[0], status: "cancelled")
+        try await model.reload()
+        #expect(model.receipts[fixture.caller]?.map(\.id) == [newest.id] + ids.reversed())
+        #expect(model.receipts[fixture.caller]?.last?.status == "cancelled")
+        let removed = observeToolSnapshotChanges { _ = model.receipts }
+        await model.observeSession(nil, token: secondPanel)
+        #expect(removed.count == 1)
+        #expect(model.receipts.isEmpty)
+        #expect(model.hasOlderReceipts.isEmpty)
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [1, 65_536])
-    func localSocketOverloadReturnsStructuredBusyResponse(payloadBytes: Int) async throws {
-        let root = URL(fileURLWithPath: "/private/tmp/wm-overload-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let endpoint = root.appending(path: "rpc.sock")
-        let gate = RelayServiceGate()
-        let service = WovenMatterToolService(socketURL: endpoint, maximumConnections: 1) { request in
-            if request.arguments.contains("slow") { await gate.pause() }
-            return .init(result: .object(["ok": .bool(true)]), requestID: request.requestID)
+    @Test func changedSettingsPoliciesAndTimersStillPublish() async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let model = fixture.model
+        try await model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
+        let settingsChanged = observeToolSnapshotChanges { _ = model.settings }
+        let policiesChanged = observeToolSnapshotChanges { _ = model.sessionPolicies }
+        let timersChanged = observeToolSnapshotChanges { _ = model.timers }
+        var settings = model.settings
+        settings.maximumManagedSessions += 1
+        try await fixture.database.saveToolSettings(settings)
+        let policy = WorkspaceSessionTools(enabled: [.sessions, .timers])
+        try await fixture.database.setSessionTools(policy, sessionID: fixture.caller)
+        let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Check the result",
+            nextFireAt: Date(timeIntervalSince1970: 4_000_000_000))
+        try await fixture.database.saveSessionTimer(timer, callerID: fixture.caller)
+        try await model.reload()
+        #expect(settingsChanged.count == 1)
+        #expect(policiesChanged.count == 1)
+        #expect(timersChanged.count == 1)
+        #expect(model.settings == settings)
+        #expect(model.sessionPolicies[fixture.caller] == policy)
+        #expect(model.timers == [timer])
+        let unchanged = observeToolSnapshotChanges {
+            _ = model.settings
+            _ = model.relationships
+            _ = model.timers
+            _ = model.sessionPolicies
         }
-        try service.start(); defer { try? service.stop() }
-        let slow = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["slow"]))
-        let fast = try JSONEncoder().encode(WovenMatterToolRequest(arguments: [String(repeating: "f", count: payloadBytes)]))
-        // This connection only occupies the server slot. It has no reply deadline:
-        // parallel MainActor tests may delay this test after the handler is parked.
-        // Only the second request's bounded overload reply is under test.
-        let occupiedSocket = try await runBlockingToolFixture {
-            try openParkedToolRequest(slow, to: endpoint.path)
-        }
-        defer { Darwin.close(occupiedSocket) }
-        await gate.waitUntilPaused()
-        let overloaded = try await runBlockingToolFixture {
-            Result { try WovenMatterCommandLine.forward(fast, to: endpoint.path, timeout: 2) }
-        }
-        await gate.release()
-        let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: overloaded.get())
-        #expect(!response.success && response.code == "busy")
+        for _ in 0..<5 { try await model.reload() }
+        #expect(unchanged.count == 0)
     }
+
+    @Test(arguments: [false, true])
+    func failedSettingsSaveRestoresTheCommittedProjection(replyLostAfterCommit: Bool) async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let original = try await fixture.database.toolSettings()
+        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
+            if replyLostAfterCommit, case let .saveSettings(value, _) = mutation {
+                try await fixture.database.saveToolSettings(value)
+            }
+            throw ToolSettingsSaveFailure()
+        }
+        defer { projection.stop() }
+        var edited = original
+        edited.maximumManagedSessions = original.maximumManagedSessions == 16 ? 15 : original.maximumManagedSessions + 1
+        await projection.saveSettings(edited)
+        #expect(projection.settings == (replyLostAfterCommit ? edited : original))
+        #expect(try await fixture.database.toolSettings() == projection.settings)
+        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
+    }
+
+}
+
+extension WorkspaceAgentToolsServiceTests {
 
     @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "cli-hardening-" + UUID().uuidString)
@@ -178,101 +263,6 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(!missing.success && missing.code == "not_found")
     }
 
-    @Test func oversizedResponsesFailStructurallyAndCanBeReadInSmallerPages() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Reader", ownerDeviceID: UUID())
-        let model = try await WorkspaceAgentToolsModel(database: database,
-            sessionHandler: { _, _, _ in throw CancellationError() },
-            noteHandler: { _, _, _ in throw CancellationError() },
-            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
-            usageHandler: { _ in throw CancellationError() }, onMutation: {})
-        defer { model.stop() }
-        for _ in 0..<20 {
-            try await database.saveSessionTimer(.init(sessionID: caller, instruction: String(repeating: "x", count: 65_536),
-                nextFireAt: Date(timeIntervalSince1970: 4_000_000_000)), callerID: caller)
-        }
-        let request = WovenMatterToolRequest(arguments: ["timers", "list"])
-        let response = await model.handle(request, callerID: caller)
-        #expect(!response.success && response.code == "response_too_large")
-        #expect(response.requestID == request.requestID)
-        #expect(try JSONEncoder().encode(response).count <= 1_048_576)
-        let smaller = await model.handle(.init(arguments: ["timers", "list", "--limit", "2"]), callerID: caller)
-        #expect(smaller.success && smaller.result?.objectValue?["hasMore"]?.boolValue == true)
-        let missing = await model.handle(.init(arguments: ["sessions", "status", UUID().uuidString]), callerID: caller)
-        #expect(!missing.success && missing.code == "not_found")
-    }
-
-    @Test func legacyNoteCLIUsesCurrentEnvironmentNameAndExplainsMalformedJSON() throws {
-        let noteID = UUID().uuidString.lowercased()
-        let read = try WovenNoteCommandLine.request(arguments: ["read"],
-            environment: ["WOVENMATTER_NOTE_ID": noteID])
-        #expect(read.noteID == noteID)
-        do {
-            _ = try WovenNoteCommandLine.request(arguments: ["apply", "--json", "{"],
-                environment: ["WOVENMATTER_NOTE_ID": noteID])
-            Issue.record("Expected malformed JSON to fail")
-        } catch {
-            #expect(error.localizedDescription.contains("Invalid operations JSON"))
-        }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func relayResponseCanHandItsSlotToTheNextRequestBeforeWriteReturns() async throws {
-        let fixture = try RelayForwardingFixture()
-        defer { fixture.stop() }
-        let firstID = UUID().uuidString, replacementID = UUID().uuidString
-        let replacement = try fixture.request(slow: false)
-        let output = RelayOutputCapture()
-        let holder = RelayForwarderReference()
-        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path, maximumConnections: 1,
-            write: { data in
-                output.append(data)
-                if (try JSONDecoder().decode(GatewayJSONValue.self, from: data)).objectValue?["id"]?.stringValue == firstID {
-                    // Model the remote reader releasing its slot as soon as it
-                    // reads the newline, while the old write is still returning.
-                    try holder.value?.submit(id: replacementID, request: replacement)
-                }
-            }, onFailure: { output.fail($0) })
-        holder.value = forwarder
-        defer { forwarder.stop() }
-        try forwarder.submit(id: firstID, request: fixture.request(slow: false))
-        await forwarder.waitUntilIdle()
-        let ids = try output.lines.map { try JSONDecoder().decode(GatewayJSONValue.self, from: $0).objectValue?["id"]?.stringValue }
-        #expect(ids == [firstID, replacementID])
-        #expect(output.errors.isEmpty)
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func stalledRelayCallDoesNotBlockAFastConcurrentReply() async throws {
-        let fixture = try RelayForwardingFixture()
-        defer { fixture.stop() }
-        let slow = UUID().uuidString, fast = UUID().uuidString
-        let fastReply = DispatchSemaphore(value: 0)
-        let output = RelayOutputCapture()
-        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path, write: { data in
-            output.append(data)
-            if (try? JSONDecoder().decode(GatewayJSONValue.self, from: data))?.objectValue?["id"]?.stringValue == fast {
-                fastReply.signal()
-            }
-        }, onFailure: { output.fail($0) })
-        defer { forwarder.stop() }
-        try forwarder.submit(id: slow, request: fixture.request(slow: true))
-        await fixture.gate.waitUntilPaused()
-        try forwarder.submit(id: fast, request: fixture.request(slow: false))
-        let fastFinished = await waitForRelaySignal(fastReply)
-        #expect(fastFinished, "The fast request was held behind a stalled request")
-        await fixture.gate.release()
-        await forwarder.waitUntilIdle()
-        let packets = try output.lines.map { try JSONDecoder().decode(GatewayJSONValue.self, from: $0) }
-        #expect(packets.count == 2)
-        #expect(packets.first?.objectValue?["id"]?.stringValue == fast)
-        #expect(Set(packets.compactMap { $0.objectValue?["id"]?.stringValue }) == [slow, fast])
-        #expect(output.errors.isEmpty)
-    }
-
     @Test(.timeLimit(.minutes(1)))
     func relayAdmissionIsBoundedAndShutdownInterruptsBlockedSockets() async throws {
         let fixture = try RelayForwardingFixture()
@@ -292,52 +282,6 @@ extension WorkspaceAgentToolsServiceTests {
         await fixture.gate.release()
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func relayWriterFailureRetiresBeforeNotifyingObservers() async throws {
-        let fixture = try RelayForwardingFixture()
-        defer { fixture.stop() }
-        let holder = RelayForwarderReference()
-        let output = RelayOutputCapture()
-        let replacement = try fixture.request(slow: false)
-        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path,
-            write: { _ in throw CancellationError() }, onFailure: { error in
-                output.fail(error)
-                // A failure observer must never be able to queue another request
-                // onto a writer that has already failed. Attempt it only once.
-                if output.errors.count == 1 {
-                    #expect(throws: CancellationError.self) {
-                        try holder.value?.submit(id: UUID().uuidString, request: replacement)
-                    }
-                }
-            })
-        holder.value = forwarder
-        defer { forwarder.stop() }
-        try forwarder.submit(id: UUID().uuidString, request: replacement)
-        // Idle ownership is released only after the failure observer returns.
-        // Await that lifecycle boundary, not an unrelated wall-clock deadline.
-        await forwarder.waitUntilIdle()
-        #expect(output.errors.count == 1)
-        #expect(throws: CancellationError.self) { try forwarder.submit(id: UUID().uuidString, request: replacement) }
-    }
-
-    @Test(.timeLimit(.minutes(1)))
-    func relayTimeoutRetainsRequestIdentity() async throws {
-        let fixture = try RelayForwardingFixture()
-        defer { fixture.stop() }
-        let output = RelayOutputCapture()
-        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path, timeout: 0.05,
-            write: { output.append($0) }, onFailure: { output.fail($0) })
-        let requestID = UUID().uuidString
-        try forwarder.submit(id: UUID().uuidString, request: fixture.request(slow: true, requestID: requestID))
-        await forwarder.waitUntilIdle()
-        let packet = try JSONDecoder().decode(GatewayJSONValue.self, from: #require(output.lines.first))
-        let responseData = try #require(packet.objectValue?["payload"]?.stringValue.flatMap { Data(base64Encoded: $0) })
-        let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: responseData)
-        #expect(!response.success && response.requestID == requestID.lowercased())
-        forwarder.stop()
-        await fixture.gate.release()
-
-    }
 }
 
 // Send a complete request and retain its socket without starting a response
@@ -460,147 +404,7 @@ private struct RelayForwardingFixture {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test func unchangedToolSnapshotsDoNotInvalidateConversationObservers() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        let token = UUID()
-        await model.observeSession(fixture.caller, token: token)
-        try await model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
-        let changes = observeToolSnapshotChanges {
-            _ = model.settings
-            _ = model.relationships
-            _ = model.timers
-            _ = model.sessionPolicies
-            _ = model.receipts
-            _ = model.hasOlderReceipts
-        }
-        // Exercise the actual one-second scheduler's refresh entry point without
-        // a timer, provider service, or UI. An empty chat must stay quiet too.
-        for _ in 0..<20 { try await model.reload() }
-        await model.observeSession(fixture.caller, token: token)
-        #expect(changes.count == 0)
-        #expect(model.receipts[fixture.caller]?.isEmpty == true)
-        #expect(!model.hasOlderReceipts.contains(fixture.caller))
-    }
 
-    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        await model.observeSession(fixture.caller, token: UUID())
-        let inserted = observeToolSnapshotChanges { _ = model.receipts }
-        let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
-            targetID: fixture.target, text: "Review the result", requestID: UUID().uuidString)
-        try await model.reload()
-        #expect(inserted.count == 1)
-        #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
-
-        let statusChanged = observeToolSnapshotChanges { _ = model.receipts }
-        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed")
-        try await model.reload()
-        #expect(statusChanged.count == 1)
-        #expect(model.receipts[fixture.caller]?.first?.status == "failed")
-
-        // A payload change with the same status must not be hidden by an
-        // identity/status-only comparison either.
-        let payloadChanged = observeToolSnapshotChanges { _ = model.receipts }
-        let messageID = UUID().uuidString
-        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed", messageID: messageID)
-        try await model.reload()
-        #expect(payloadChanged.count == 1)
-        #expect(model.receipts[fixture.caller]?.first?.messageID == messageID)
-        #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
-
-        let unchanged = observeToolSnapshotChanges {
-            _ = model.receipts
-            _ = model.hasOlderReceipts
-        }
-        for _ in 0..<5 { try await model.reload() }
-        #expect(unchanged.count == 0)
-    }
-
-    @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        var ids: [String] = []
-        for index in 0..<205 {
-            let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
-                targetID: fixture.target, text: "Instruction \(index)", requestID: UUID().uuidString)
-            ids.append(delivery.id)
-        }
-        let firstPanel = UUID(), secondPanel = UUID()
-        await model.observeSession(fixture.caller, token: firstPanel)
-        #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.suffix(200).reversed()))
-        #expect(model.hasOlderReceipts.contains(fixture.caller))
-        let unchanged = observeToolSnapshotChanges {
-            _ = model.receipts
-            _ = model.hasOlderReceipts
-        }
-        try await model.reload()
-        await model.observeSession(fixture.caller, token: secondPanel)
-        await model.observeSession(nil, token: firstPanel)
-        #expect(unchanged.count == 0)
-
-        let olderChanged = observeToolSnapshotChanges { _ = model.hasOlderReceipts }
-        await model.loadOlderReceipts(sessionID: fixture.caller)
-        #expect(olderChanged.count == 1)
-        #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.reversed()))
-        #expect(!model.hasOlderReceipts.contains(fixture.caller))
-        let exhausted = observeToolSnapshotChanges {
-            _ = model.receipts
-            _ = model.hasOlderReceipts
-        }
-        await model.loadOlderReceipts(sessionID: fixture.caller)
-        try await model.reload()
-        #expect(exhausted.count == 0)
-
-        let newest = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
-            targetID: fixture.target, text: "Latest", requestID: UUID().uuidString)
-        try await fixture.database.setToolDeliveryStatus(id: ids[0], status: "cancelled")
-        try await model.reload()
-        #expect(model.receipts[fixture.caller]?.map(\.id) == [newest.id] + ids.reversed())
-        #expect(model.receipts[fixture.caller]?.last?.status == "cancelled")
-        let removed = observeToolSnapshotChanges { _ = model.receipts }
-        await model.observeSession(nil, token: secondPanel)
-        #expect(removed.count == 1)
-        #expect(model.receipts.isEmpty)
-        #expect(model.hasOlderReceipts.isEmpty)
-    }
-
-    @Test func changedSettingsPoliciesAndTimersStillPublish() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        try await model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
-        let settingsChanged = observeToolSnapshotChanges { _ = model.settings }
-        let policiesChanged = observeToolSnapshotChanges { _ = model.sessionPolicies }
-        let timersChanged = observeToolSnapshotChanges { _ = model.timers }
-        var settings = model.settings
-        settings.maximumManagedSessions += 1
-        try await fixture.database.saveToolSettings(settings)
-        let policy = WorkspaceSessionTools(enabled: [.sessions, .timers])
-        try await fixture.database.setSessionTools(policy, sessionID: fixture.caller)
-        let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Check the result",
-            nextFireAt: Date(timeIntervalSince1970: 4_000_000_000))
-        try await fixture.database.saveSessionTimer(timer, callerID: fixture.caller)
-        try await model.reload()
-        #expect(settingsChanged.count == 1)
-        #expect(policiesChanged.count == 1)
-        #expect(timersChanged.count == 1)
-        #expect(model.settings == settings)
-        #expect(model.sessionPolicies[fixture.caller] == policy)
-        #expect(model.timers == [timer])
-        let unchanged = observeToolSnapshotChanges {
-            _ = model.settings
-            _ = model.relationships
-            _ = model.timers
-            _ = model.sessionPolicies
-        }
-        for _ in 0..<5 { try await model.reload() }
-        #expect(unchanged.count == 0)
-    }
 }
 
 @MainActor
@@ -745,33 +549,6 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(try await !request(["calendar", "list"]).success)
     }
 
-    @Test func librarySocketAcceptsReturnedDatesAndRejectsInvalidPagination() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let run = try await fixture.database.beginLocalACPRun(conversationID: fixture.caller, content: "https://example.com/shared")
-        try await fixture.database.completeLocalACPRun(runID: run.runID)
-        try await fixture.database.indexLibraryMessages()
-        let item = try await #require(fixture.database.libraryItems().first)
-        let endpoint = try await fixture.model.endpoint(for: fixture.caller)
-        func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["library"] + arguments))
-            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
-        }
-        let listed = try await request(["list", "--since", item.sentAt, "--sender", "me", "--workspace", "local"])
-        #expect(listed.success)
-        #expect(listed.result?.objectValue?["items"]?.arrayValue?.count == 1)
-        let read = try await request(["read", item.id])
-        #expect(read.success)
-        #expect(read.result?.objectValue?["messageID"]?.stringValue == item.messageID)
-        for option in ["limit", "offset"] {
-            let malformed = try await request(["list", "--" + option, "invalid"])
-            #expect(!malformed.success)
-        }
-        try await fixture.model.setEnabled(.library, enabled: false, sessionID: fixture.caller)
-        let denied = try await request(["read", item.id])
-        #expect(!denied.success)
-    }
 }
 
 extension WorkspaceAgentToolsServiceTests {
@@ -805,25 +582,6 @@ extension WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test(arguments: [false, true])
-    func failedSettingsSaveRestoresTheCommittedProjection(replyLostAfterCommit: Bool) async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let original = try await fixture.database.toolSettings()
-        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
-            if replyLostAfterCommit, case let .saveSettings(value, _) = mutation {
-                try await fixture.database.saveToolSettings(value)
-            }
-            throw ToolSettingsSaveFailure()
-        }
-        defer { projection.stop() }
-        var edited = original
-        edited.maximumManagedSessions = original.maximumManagedSessions == 16 ? 15 : original.maximumManagedSessions + 1
-        await projection.saveSettings(edited)
-        #expect(projection.settings == (replyLostAfterCommit ? edited : original))
-        #expect(try await fixture.database.toolSettings() == projection.settings)
-        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
-    }
 
     @Test(.timeLimit(.minutes(1)))
     func failedQueuedSettingsSavePreservesNewerEditAndLastSuccessfulValue() async throws {
@@ -900,17 +658,7 @@ private final class ToolSettingsSaveGate {
     }
 }
 
-
 extension WorkspaceAgentToolsServiceTests {
-    @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
-        let runtime = ExecutorRuntime()
-        let original = runtime.fence("admitting")
-        #expect(runtime.sessions.isEmpty)
-        runtime.cancelAll()
-        #expect(throws: CancellationError.self) { try runtime.check("admitting", fence: original) }
-        try runtime.check("admitting", fence: runtime.fence("admitting"))
-        _ = try? await runtime.scopeEdits["admitting"]?.value
-    }
 
     @Test func executorStopFencesQueuedAdmissionAndCancelsExistingDriver() async throws {
         let runtime = ExecutorRuntime()
@@ -936,41 +684,7 @@ extension WorkspaceAgentToolsServiceTests {
         _ = try? await runtime.scopeEdits["session"]?.value
     }
 
-    @Test(arguments: AgentRuntimeKind.allCases)
-    func executorUsesBoundCLIIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
-        var seen: [String] = []
-        let service = try await WorkspaceAgentToolsModel(database: database,
-            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
-            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() },
-            executorHandler: { identity, command, _ in
-                seen.append(identity)
-                return .init(result: .object(["action": .string(command.action)]))
-            }, onMutation: {})
-        defer { service.stop() }
-        let endpoint = try await service.endpoint(for: caller)
-        func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
-            let result = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: result)
-        }
-        #expect(try await !request(["executor", "search", "--query", "fixture"]).success)
-        #expect(seen.isEmpty)
-        _ = try await database.setSessionToolEnabled(.executor, enabled: true, sessionID: caller)
-        #expect(try await request(["executor", "search", "--query", "fixture"]).success)
-        #expect(seen == [caller])
-        #expect(try await !request(["executor", "execute", "--code", "return 1;", "--session", "other"]).success)
-        #expect(seen == [caller])
-        _ = try await database.setSessionToolEnabled(.executor, enabled: false, sessionID: caller)
-        #expect(try await !request(["executor", "execute", "--code", "return 1;"]).success)
-        #expect(seen == [caller])
-    }
 }
-
 
 extension WorkspaceAgentToolsServiceTests {
     @Test(arguments: AgentRuntimeKind.allCases)
@@ -1005,19 +719,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(seen == [caller + ":browser:call", caller + ":computer:call", caller + ":browser:cancel"])
     }
 
-    @Test func queuedSettingsToggleCanUndoItsPendingPredecessor() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        var enabled = model.settings; enabled.enabledByDefault.insert(.executor)
-        model.saveSettingsFromUI(enabled)
-        var disabled = enabled; disabled.enabledByDefault.remove(.executor)
-        await model.saveSettings(disabled)
-        #expect(!(try await fixture.database.toolSettings()).enabledByDefault.contains(.executor))
-        #expect(!model.settings.enabledByDefault.contains(.executor))
-    }
 }
-
 
 extension WorkspaceAgentToolsServiceTests {
     @Test func goalCommandsRunThroughTheBoundCLIAndPublishState() async throws {

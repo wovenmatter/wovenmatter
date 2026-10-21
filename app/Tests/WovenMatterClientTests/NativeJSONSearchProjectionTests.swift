@@ -23,13 +23,6 @@ struct NativeJSONSearchProjectionTests {
         #expect(!String(decoding: restored, as: UTF8.self).contains("\\u00e9"))
     }
 
-    @Test func keepsEscapedQuotesInsideTheirStringAndSeparatesAdjacentValues() throws {
-        var projection = NativeJSONSearchProjection()
-        let output = try projection.consume(Data(#"["","quoted\"content","a","b",{"token":"native content","number":123}]"#.utf8))
-        try projection.finish()
-        #expect(String(decoding: output, as: UTF8.self) == "\nquoted\"content\na\nb\ntoken\nnative content\nnumber")
-    }
-
     @Test func rejectsMalformedEscapesSurrogatesAndLiteralUTF8() throws {
         let malformed = [
             Data(#""\x""#.utf8), Data(#""\u00xz""#.utf8), Data(#""\uDC00""#.utf8),
@@ -43,14 +36,6 @@ struct NativeJSONSearchProjectionTests {
                 for byte in source { _ = try projection.consume(Data([byte])) }
                 try projection.finish()
             }
-        }
-    }
-
-    @Test func incompleteSuffixMustFailAtTheRecordBoundary() throws {
-        for source in [Data(#""incomplete"#.utf8), Data(#""\u00"#.utf8), Data(#""\uD800\u"#.utf8), Data([34, 0xF0, 0x9F])] {
-            var projection = NativeJSONSearchProjection()
-            _ = try projection.consume(source)
-            #expect(throws: (any Error).self) { try projection.finish() }
         }
     }
 

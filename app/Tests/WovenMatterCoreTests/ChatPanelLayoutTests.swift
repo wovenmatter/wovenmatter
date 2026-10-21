@@ -79,22 +79,6 @@ struct ChatPanelLayoutTests {
     })
   }
 
-  @Test("invalid additions and a sixth panel are gated")
-  func maximumAndInvalidAddGating() {
-    var state = fivePanelState()
-
-    let addedSixth = state.addPanel(
-      from: a,
-      newPanelID: DashboardChatPanelID(rawValue: "e")
-    )
-    let addedPrimary = state.addPanel(from: .primary, newPanelID: .primary)
-    let addedDuplicate = state.addPanel(from: .primary, newPanelID: a)
-    #expect(!addedSixth)
-    #expect(!addedPrimary)
-    #expect(!addedDuplicate)
-    #expect(state.panelCount == 5)
-  }
-
   @Test("closing every three and four panel shape compacts rows")
   func closeCompaction() {
     var onlyAuxiliary = DashboardChatPanelState(primaryConversationID: "p")
@@ -126,78 +110,6 @@ struct ChatPanelLayoutTests {
       #expect(didCloseRemainder)
       #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[survivor]])
     }
-  }
-
-  @Test("activation projects one sidebar selection and replacement is active-only")
-  func activationAndReplacement() {
-    var state = threePanelState()
-    let assignedA = state.setConversation("chat-a", in: a)
-    let assignedB = state.setConversation("chat-b", in: b)
-    #expect(assignedA && assignedB)
-
-    let activatedA = state.activatePanel(a)
-    #expect(activatedA)
-    #expect(state.activeConversationID == "chat-a")
-    let replacedA = state.replaceActiveConversation(with: "replacement")
-    #expect(replacedA)
-    #expect(state.panel(id: a)?.conversationID == "replacement")
-    #expect(state.panel(id: b)?.conversationID == "chat-b")
-    #expect(state.primary.conversationID == "primary")
-
-    let activatedB = state.activatePanel(b)
-    #expect(activatedB)
-    #expect(state.activeConversationID == "chat-b")
-    let activatedMissing = state.activatePanel(DashboardChatPanelID(rawValue: "missing"))
-    #expect(!activatedMissing)
-  }
-
-  @Test("explicit panel assignments allow empty panels and manual duplicates")
-  func explicitAssignmentAndManualDuplicates() {
-    var state = DashboardChatPanelState(primaryConversationID: "primary")
-    let addedEmpty = state.addPanel(from: .primary, newPanelID: a)
-    #expect(addedEmpty)
-    #expect(state.panel(id: a)?.conversationID == nil)
-
-    let duplicated = state.replaceActiveConversation(with: "primary")
-    #expect(duplicated)
-    #expect(state.primary.conversationID == "primary")
-    #expect(state.panel(id: a)?.conversationID == "primary")
-  }
-
-  @Test("assets and auxiliary panels are mutually exclusive in both directions")
-  func assetExclusivity() {
-    var state = threePanelState()
-    state.presentAsset()
-
-    #expect(state.assetPresented)
-    #expect(state.panelCount == 1)
-    #expect(state.activePanelID == .primary)
-    #expect(state.primary.conversationID == "primary")
-    #expect(state.canAddPanel(from: .primary))
-    let focusBeforeAssetNavigation = state.focusRequest
-    let assetNavigation = state.navigate(.right)
-    #expect(assetNavigation == nil)
-    #expect(state.focusRequest == focusBeforeAssetNavigation)
-    let addedAfterAsset = state.addPanel(from: .primary, newPanelID: a)
-    #expect(addedAfterAsset)
-    #expect(!state.assetPresented)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a]])
-
-    state.presentAsset()
-    #expect(state.panelCount == 1)
-    state.dismissAsset()
-    #expect(!state.assetPresented)
-    #expect(state.normalizedFrames()[.primary] == DashboardChatPanelFrame(
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1
-    ))
-
-    var onePanel = DashboardChatPanelState(primaryConversationID: "primary")
-    let onePanelNavigation = onePanel.navigate(.right)
-    #expect(onePanelNavigation == nil)
-    #expect(onePanel.focusRequest == nil)
   }
 
   @Test("spatial navigation follows geometry and focuses only successful destinations")

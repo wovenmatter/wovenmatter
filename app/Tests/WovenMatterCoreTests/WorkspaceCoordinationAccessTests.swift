@@ -5,6 +5,20 @@ import WovenMatterCore
 
 @Suite("Session management access requests")
 struct WorkspaceCoordinationAccessTests {
+
+  @Test func cancellationAndShutdownCannotLaterGrantAccess() async throws {
+    let (db, directory, source, target) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let denied = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
+    #expect(try await db.resolveCoordinationAccess(requestID: denied.id, allowed: false).state == "rejected")
+    #expect(try await db.resolveCoordinationAccess(requestID: denied.id, allowed: true).state == "rejected")
+    let pending = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
+    try await db.cancelPendingCoordinationAccess()
+    #expect(try await db.resolveCoordinationAccess(requestID: pending.id, allowed: true).state == "cancelled")
+    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
+    #expect(try await db.sessionRelationship(target).coordinatorID == nil)
+  }
+
   private func fixture() async throws -> (WorkspaceDatabase, URL, String, String) {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -40,19 +54,6 @@ struct WorkspaceCoordinationAccessTests {
     }
   }
 
-  @Test func cancellationAndShutdownCannotLaterGrantAccess() async throws {
-    let (db, directory, source, target) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let denied = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    #expect(try await db.resolveCoordinationAccess(requestID: denied.id, allowed: false).state == "rejected")
-    #expect(try await db.resolveCoordinationAccess(requestID: denied.id, allowed: true).state == "rejected")
-    let pending = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    try await db.cancelPendingCoordinationAccess()
-    #expect(try await db.resolveCoordinationAccess(requestID: pending.id, allowed: true).state == "cancelled")
-    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
-    #expect(try await db.sessionRelationship(target).coordinatorID == nil)
-  }
-
   @Test func approvalRechecksCompetingCoordinatorAndRevokedCapability() async throws {
     let (db, directory, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -70,17 +71,4 @@ struct WorkspaceCoordinationAccessTests {
     #expect(try await db.sessionRelationship(target).coordinatorID == nil)
   }
 
-  @Test func historyAndAttachmentsStartWithoutAnApprovalSheet() async throws {
-    let (db, directory, source, target) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    try await db.attachConversationReference(sourceID: source, targetID: target)
-    let first = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Attached", requestID: UUID().uuidString)
-    #expect(first.state == "accepted")
-    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
-    try await db.endCoordination(targetID: target)
-    try await db.removeConversationReference(sourceID: source, targetID: target)
-    try await db.setSessionTools(.init(enabled: [.sessions, .history]), sessionID: source)
-    #expect(try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "History", requestID: UUID().uuidString).state == "accepted")
-    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
-  }
 }

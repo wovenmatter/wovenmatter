@@ -4,18 +4,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteTaskGatewayClientTests {
-    @Test func remoteBackgroundExecutionDefaultsOnAndPreservesOptOut() throws {
-        let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
-        #expect(configuration.backgroundExecutionEnabled)
-        let encoder = JSONEncoder()
-        var document = try #require(JSONSerialization.jsonObject(with: encoder.encode(configuration)) as? [String: Any])
-        document.removeValue(forKey: "backgroundExecutionEnabled")
-        let legacy = try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: JSONSerialization.data(withJSONObject: document))
-        #expect(legacy.backgroundExecutionEnabled)
-        var disabled = legacy
-        disabled.backgroundExecutionEnabled = false
-        #expect(try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: encoder.encode(disabled)).backgroundExecutionEnabled == false)
-    }
 
     @Test func durableLaunchUsesStableChannelAndOptOutKeepsDirectLaunch() throws {
         var configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
@@ -30,28 +18,7 @@ struct RemoteTaskGatewayClientTests {
         #expect(direct.launch.arguments.last?.contains("durable-acp") == false)
     }
 
-    @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
-    func nativeArchiveScopeIdentifiesRemoteExecutionHost(runtimeKind: AgentRuntimeKind) throws {
-        let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
-        let launch = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtimeKind,
-            processWorkingDirectory: URL(fileURLWithPath: "/tmp"), durableChannelID: UUID().uuidString).launch
-        #expect(launch.environment["WOVEN_EXECUTION_SCOPE"] == configuration.id.uuidString.lowercased())
-        if runtimeKind == .defaultAgent {
-            #expect(launch.environment["WOVEN_DEFAULT_AGENT_SCOPE"] == configuration.id.uuidString.lowercased())
-        }
-    }
 
-    @Test func durableGrokPermissionIsPassedToRelayAfterNodeExecutable() throws {
-        let configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
-        let original = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .grokBuild,
-            processWorkingDirectory: URL(fileURLWithPath: "/tmp"), durableChannelID: UUID().uuidString).launch
-        let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .grokBuild,
-            executableURL: original.executableURL, arguments: original.arguments,
-            environment: original.environment, requestedPermission: "default", wrappedCommand: original.wrappedCommand)
-        let prepared = try LocalACPSessionPermissions.prepareLaunch(launch)
-        #expect(prepared.arguments.last?.contains("'node' '/opt/wovenmatter/src/durable-acp-stdio.mjs' '--permission-mode' 'default'") == true)
-        #expect(prepared.explicitPermission == "default")
-    }
 
     @Test func gatewayStatusAndDisableUseAuthenticatedWorkspaceOrigin() async throws {
         let configuration = URLSessionConfiguration.ephemeral

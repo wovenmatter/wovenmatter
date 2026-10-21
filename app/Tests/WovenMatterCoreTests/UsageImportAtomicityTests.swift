@@ -6,84 +6,6 @@ import WovenMatterCore
 
 @Suite("Usage import atomicity")
 struct UsageImportAtomicityTests {
-  private let now = Date(timeIntervalSince1970: 1_780_000_000)
-
-  @Test("A caught source insertion failure rolls back its deletion and partial inserts")
-  func sourceSavepoint() throws {
-    let fixture = try UsageSQLFixture()
-    let store = try UsageStore(databaseURL: fixture.indexURL)
-    try replace(store, source: "failed", fingerprint: "original", events: [sample("original")])
-    try fixture.execute(at: fixture.indexURL, sql: """
-      CREATE TRIGGER reject_usage BEFORE INSERT ON usage_events
-      WHEN NEW.source_event_id = 'reject'
-      BEGIN SELECT RAISE(ABORT, 'injected insertion failure'); END;
-      """)
-    try store.performTransaction {
-      #expect(throws: UsageStoreError.self) {
-        try replace(store, source: "failed", fingerprint: "changed", events: [sample("partial"), sample("reject")], transactional: false)
-      }
-      try replace(store, source: "good", fingerprint: "new", events: [sample("good")], transactional: false)
-    }
-    #expect(try store.source("failed")?.fingerprint == "original")
-    #expect(try store.samples(in: interval, sourceID: "failed").map(\.sourceEventID) == ["original"])
-    #expect(try store.samples(in: interval, sourceID: "good").map(\.sourceEventID) == ["good"])
-  }
-
-  @Test("An SQLite transaction rollback cannot leave later source writes autocommitted")
-  func transactionInvalidation() throws {
-    let fixture = try UsageSQLFixture()
-    let store = try UsageStore(databaseURL: fixture.indexURL)
-    try replace(store, source: "failed", fingerprint: "original", events: [sample("original")])
-    try fixture.execute(at: fixture.indexURL, sql: """
-      CREATE TRIGGER rollback_usage BEFORE INSERT ON usage_events
-      WHEN NEW.source_event_id = 'reject'
-      BEGIN SELECT RAISE(ROLLBACK, 'injected transaction failure'); END;
-      """)
-    var outerFailed = false
-    do {
-      try store.performTransaction {
-        #expect(throws: UsageStoreError.self) {
-          try replace(store, source: "failed", fingerprint: "changed", events: [sample("partial"), sample("reject")], transactional: false)
-        }
-        #expect(throws: UsageStoreError.self) {
-          try replace(store, source: "later", fingerprint: "must-not-commit", events: [sample("later")], transactional: false)
-        }
-      }
-    } catch is UsageStoreError {
-      outerFailed = true
-    }
-    #expect(outerFailed)
-    #expect(try store.samples(in: interval).map(\.sourceEventID) == ["original"])
-    #expect(try store.source("later") == nil)
-    // The store remains usable after the outer transaction finishes rollback.
-    try replace(store, source: "recovery", fingerprint: "recovery", events: [sample("recovery")])
-    #expect(try store.source("recovery")?.fingerprint == "recovery")
-  }
-
-  @Test("OpenCode step errors retain indexed history and report partial coverage")
-  func readerStepFailure() async throws {
-    let fixture = try UsageSQLFixture()
-    let sourceURL = try fixture.openCodeSource(now: now)
-    // This fixture imports only its own SQLite files. The production initializer
-    // watches the app-wide account revision, including mock credential changes
-    // made by other tests, even when credential reads are disabled.
-    let service = fixture.service()
-    let initial = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
-    try #require(initial.samples.count == 1, "Initial import coverage: \(initial.sources)")
-    let store = try UsageStore(databaseURL: fixture.indexURL)
-    let originalFingerprint = try #require(try store.source("opencode:database")).fingerprint
-    let originalCoverage = try #require(try store.metadataDate("usage.local-indexed-after"))
-    let originalImportDate = try #require(try store.metadataDate("usage.local-import-at"))
-    try fixture.execute(at: sourceURL, sql: "INSERT INTO raw_part VALUES('broken', 'session', 'message', '{}');")
-    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(10)], ofItemAtPath: sourceURL.path)
-    let failed = try await service.analyticsSnapshot(range: .last7Days, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
-    #expect(failed.samples == initial.samples)
-    #expect(failed.sources.first { $0.id == "opencode" }?.status == .partial)
-    #expect(try store.source("opencode:database")?.fingerprint == originalFingerprint)
-    // A failed wider scan cannot claim coverage or defer its retry.
-    #expect(try store.metadataDate("usage.local-indexed-after") == originalCoverage)
-    #expect(try store.metadataDate("usage.local-import-at") == originalImportDate)
-  }
 
   @Test("A full import lane reports failed coverage and retries without claiming an empty index")
   func importCapacityAndFixtureIsolation() async throws {
@@ -169,6 +91,85 @@ struct UsageImportAtomicityTests {
       """)
     #expect(throws: UsageStoreError.self) { try store.metadataDate("fixture") }
     #expect(throws: UsageStoreError.self) { try store.runtimeSyncState(endpoint: "fixture") }
+  }
+
+  private let now = Date(timeIntervalSince1970: 1_780_000_000)
+
+  @Test("A caught source insertion failure rolls back its deletion and partial inserts")
+  func sourceSavepoint() throws {
+    let fixture = try UsageSQLFixture()
+    let store = try UsageStore(databaseURL: fixture.indexURL)
+    try replace(store, source: "failed", fingerprint: "original", events: [sample("original")])
+    try fixture.execute(at: fixture.indexURL, sql: """
+      CREATE TRIGGER reject_usage BEFORE INSERT ON usage_events
+      WHEN NEW.source_event_id = 'reject'
+      BEGIN SELECT RAISE(ABORT, 'injected insertion failure'); END;
+      """)
+    try store.performTransaction {
+      #expect(throws: UsageStoreError.self) {
+        try replace(store, source: "failed", fingerprint: "changed", events: [sample("partial"), sample("reject")], transactional: false)
+      }
+      try replace(store, source: "good", fingerprint: "new", events: [sample("good")], transactional: false)
+    }
+    #expect(try store.source("failed")?.fingerprint == "original")
+    #expect(try store.samples(in: interval, sourceID: "failed").map(\.sourceEventID) == ["original"])
+    #expect(try store.samples(in: interval, sourceID: "good").map(\.sourceEventID) == ["good"])
+  }
+
+  @Test("An SQLite transaction rollback cannot leave later source writes autocommitted")
+  func transactionInvalidation() throws {
+    let fixture = try UsageSQLFixture()
+    let store = try UsageStore(databaseURL: fixture.indexURL)
+    try replace(store, source: "failed", fingerprint: "original", events: [sample("original")])
+    try fixture.execute(at: fixture.indexURL, sql: """
+      CREATE TRIGGER rollback_usage BEFORE INSERT ON usage_events
+      WHEN NEW.source_event_id = 'reject'
+      BEGIN SELECT RAISE(ROLLBACK, 'injected transaction failure'); END;
+      """)
+    var outerFailed = false
+    do {
+      try store.performTransaction {
+        #expect(throws: UsageStoreError.self) {
+          try replace(store, source: "failed", fingerprint: "changed", events: [sample("partial"), sample("reject")], transactional: false)
+        }
+        #expect(throws: UsageStoreError.self) {
+          try replace(store, source: "later", fingerprint: "must-not-commit", events: [sample("later")], transactional: false)
+        }
+      }
+    } catch is UsageStoreError {
+      outerFailed = true
+    }
+    #expect(outerFailed)
+    #expect(try store.samples(in: interval).map(\.sourceEventID) == ["original"])
+    #expect(try store.source("later") == nil)
+    // The store remains usable after the outer transaction finishes rollback.
+    try replace(store, source: "recovery", fingerprint: "recovery", events: [sample("recovery")])
+    #expect(try store.source("recovery")?.fingerprint == "recovery")
+  }
+
+  @Test("OpenCode step errors retain indexed history and report partial coverage")
+  func readerStepFailure() async throws {
+    let fixture = try UsageSQLFixture()
+    let sourceURL = try fixture.openCodeSource(now: now)
+    // This fixture imports only its own SQLite files. The production initializer
+    // watches the app-wide account revision, including mock credential changes
+    // made by other tests, even when credential reads are disabled.
+    let service = fixture.service()
+    let initial = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
+    try #require(initial.samples.count == 1, "Initial import coverage: \(initial.sources)")
+    let store = try UsageStore(databaseURL: fixture.indexURL)
+    let originalFingerprint = try #require(try store.source("opencode:database")).fingerprint
+    let originalCoverage = try #require(try store.metadataDate("usage.local-indexed-after"))
+    let originalImportDate = try #require(try store.metadataDate("usage.local-import-at"))
+    try fixture.execute(at: sourceURL, sql: "INSERT INTO raw_part VALUES('broken', 'session', 'message', '{}');")
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(10)], ofItemAtPath: sourceURL.path)
+    let failed = try await service.analyticsSnapshot(range: .last7Days, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
+    #expect(failed.samples == initial.samples)
+    #expect(failed.sources.first { $0.id == "opencode" }?.status == .partial)
+    #expect(try store.source("opencode:database")?.fingerprint == originalFingerprint)
+    // A failed wider scan cannot claim coverage or defer its retry.
+    #expect(try store.metadataDate("usage.local-indexed-after") == originalCoverage)
+    #expect(try store.metadataDate("usage.local-import-at") == originalImportDate)
   }
 
   private var interval: DateInterval { DateInterval(start: now.addingTimeInterval(-1), end: now.addingTimeInterval(1)) }

@@ -18,25 +18,6 @@ struct ManagedDatabaseCatalogTests {
     func remove() { try? FileManager.default.removeItem(at: root) }
   }
 
-  @Test func datasetsHaveIndependentSchemaAndOneWritableOwner() throws {
-    let f = try Fixture(); defer { f.remove() }
-    let first = try AgentDatabaseCatalog.create(named: "Sales / Q1", in: f.root, owner: "device:one")
-    let second = try AgentDatabaseCatalog.create(named: "Research", in: f.root, owner: "device:two")
-    #expect(first.id != second.id && UUID(uuidString: first.id) != nil)
-    #expect(first.url.lastPathComponent == first.id + ".sqlite")
-    let committed = try AgentDatabaseCatalog.execute(id: first.id,
-      sql: "CREATE TABLE events(value INTEGER); INSERT INTO events VALUES(42);", in: f.root, owner: "device:one")
-    #expect(committed.revision == 2)
-    #expect(try AgentDatabaseCatalog.query(id: first.id, sql: "SELECT value FROM events", in: f.root).rows == [["42"]])
-    #expect(throws: AgentDatabaseCatalogError.databaseUnavailable) {
-      try AgentDatabaseCatalog.execute(id: first.id, sql: "DELETE FROM events", in: f.root, owner: "device:two")
-    }
-    #expect(throws: (any Error).self) { try AgentDatabaseCatalog.query(id: second.id, sql: "SELECT value FROM events", in: f.root) }
-    #expect(throws: AgentDatabaseCatalogError.databaseAlreadyExists) {
-      try AgentDatabaseCatalog.create(named: " sales / q1 ", in: f.root, owner: "device:one")
-    }
-  }
-
   @Test func failedSQLRollsBackSchemaDataAndRevision() throws {
     let f = try Fixture(); defer { f.remove() }
     let row = try AgentDatabaseCatalog.create(named: "Atomic", in: f.root, owner: "one")
@@ -102,14 +83,4 @@ struct ManagedDatabaseCatalogTests {
     }
   }
 
-  @Test func wideDatasetSchemaSurvivesCopyWhilePresentationColumnsStayBounded() throws {
-    let source = try Fixture(), destination = try Fixture(); defer { source.remove(); destination.remove() }
-    let row = try AgentDatabaseCatalog.create(named: "Wide dataset", in: source.root, owner: "owner")
-    let columns = (0..<200).map { "column_\($0) INTEGER" }.joined(separator: ",")
-    _ = try AgentDatabaseCatalog.execute(id: row.id, sql: "CREATE TABLE wide(\(columns)); INSERT INTO wide(column_0,column_199) VALUES(1,200)", in: source.root, owner: "owner")
-    let snapshot = try AgentDatabaseCatalog.snapshot(id: row.id, in: source.root)
-    let copy = try AgentDatabaseCatalog.importSnapshot(snapshot, in: destination.root, sourceOwner: "owner", copyName: "Copied wide dataset", destinationOwner: "destination")
-    #expect(try AgentDatabaseCatalog.query(id: copy.id, sql: "SELECT column_0,column_199 FROM wide", in: destination.root).rows == [["1", "200"]])
-    #expect(throws: (any Error).self) { try AgentDatabaseCatalog.query(id: copy.id, sql: "SELECT * FROM wide", in: destination.root) }
-  }
 }

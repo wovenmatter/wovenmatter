@@ -4,6 +4,20 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteDatabaseClientTests {
+
+    @Test func reportsOlderServiceAndOfflineErrorsWithoutEmptyCatalogSuccess() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RemoteDatabaseFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let old = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42003")!, token: "old", session: session)
+        await #expect(throws: RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")) {
+            try await old.databases()
+        }
+        let offline = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42004")!, token: "offline", session: session)
+        await #expect(throws: (any Error).self) { try await offline.databases() }
+    }
+
     private static let databaseID = "11111111-1111-4111-8111-111111111111"
     @Test func keepsDatabaseIDsInBodiesAndRequestsOnTheirWorkspaceOrigin() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -26,18 +40,6 @@ struct RemoteDatabaseClientTests {
         #expect(commit.objectValue?["revision"]?.intValue == 3)
     }
 
-    @Test func reportsOlderServiceAndOfflineErrorsWithoutEmptyCatalogSuccess() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [RemoteDatabaseFixtureProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let old = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42003")!, token: "old", session: session)
-        await #expect(throws: RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")) {
-            try await old.databases()
-        }
-        let offline = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42004")!, token: "offline", session: session)
-        await #expect(throws: (any Error).self) { try await offline.databases() }
-    }
 }
 
 private final class RemoteDatabaseFixtureProtocol: URLProtocol, @unchecked Sendable {

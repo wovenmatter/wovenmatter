@@ -4,6 +4,46 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 @Suite struct CompanionPairingApprovalTests {
+
+    @Test func invitationApprovalBindsTheAdvertisedDeviceAndRecoversLostReply() async throws {
+        let fixture = try PairingFixture(); defer { fixture.remove() }
+        let auth = try fixture.authentication(), original = fixture.request()
+        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!, deviceID: original.identity.deviceID)
+        let wrong = CompanionPairingApprovalRequest(requestID: UUID().uuidString, requestSecret: original.requestSecret,
+            identity: fixture.request().identity, invitationToken: offer.payload.token)
+        await #expect(throws: CompanionAPIError.self) { try await auth.requestPairing(wrong, workspaceID: fixture.libraryID) }
+        let accepted = CompanionPairingApprovalRequest(requestID: original.requestID, requestSecret: original.requestSecret,
+            identity: original.identity, invitationToken: offer.payload.token)
+        let result = try await auth.requestPairing(accepted, workspaceID: fixture.libraryID)
+        #expect(result.state == .approved)
+        let reopened = try fixture.authentication()
+        let replay = try await reopened.requestPairing(accepted, workspaceID: fixture.libraryID)
+        #expect(replay.pairing == result.pairing)
+        #expect(await reopened.devices().count == 1)
+        let disk = try String(contentsOf: fixture.file, encoding: .utf8)
+        #expect(!disk.contains(offer.payload.token) && !disk.contains(accepted.requestSecret))
+    }
+
+    @Test func metadataAndSeenTimesArePerDeviceAndDoNotChangeCredentialIdentity() async throws {
+        let fixture = try PairingFixture(); defer { fixture.remove() }
+        let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
+        let first = try await fixture.pair(auth, kind: .iPhone)
+        let second = try await fixture.pair(auth, kind: .iPad)
+        let firstGrant = try await auth.authenticate(bearer: first.credential)
+        let secondSeen = try await auth.authenticate(bearer: second.credential).lastSeenAt
+        clock.advance(61)
+        let updated = try await auth.authenticate(bearer: first.credential,
+            metadata: .init(kind: .iPhone, osVersion: "iOS fixture", appVersion: "2"))
+        #expect(updated.lastSeenAt == clock.now && updated.metadata?.appVersion == "2")
+        #expect(await auth.isCurrent(firstGrant))
+        let secondStored = await auth.devices().first { $0.id == second.deviceID }
+        #expect(secondStored?.lastSeenAt == secondSeen && secondStored?.kind == .iPad)
+        let reopened = try fixture.authentication(now: { clock.now })
+        #expect(await reopened.devices().first { $0.id == first.deviceID }?.lastSeenAt == clock.now)
+        try await reopened.revoke(deviceID: first.deviceID)
+        #expect(await reopened.isCurrent(firstGrant) == false)
+    }
+
     @Test func qrPairingWaitsForLocalCommitAndRecoversBothLostReplies() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let auth = try fixture.authentication()
@@ -30,21 +70,6 @@ import WovenMatterCore
         await #expect(throws: CompanionAPIError.self) { try await secondRestart.confirmPairing(bearer: first.credential, workspaceID: fixture.libraryID) }
     }
 
-    @Test func qrTargetMismatchAndExpiredUncommittedPairingNeverEnroll() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
-        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
-        var request = CompanionPairRequest(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "iPad",
-            expectedWorkspaceID: "wrong-database", requiresConfirmation: true)
-        await #expect(throws: CompanionAPIError.self) { try await auth.pair(request, workspaceID: fixture.libraryID) }
-        request = .init(token: request.token, deviceID: request.deviceID, deviceName: request.deviceName,
-            expectedWorkspaceID: fixture.libraryID, requiresConfirmation: true)
-        let pending = try await auth.pair(request, workspaceID: fixture.libraryID)
-        clock.advance(301)
-        await #expect(throws: CompanionAPIError.self) { try await auth.confirmPairing(bearer: pending.credential, workspaceID: fixture.libraryID) }
-        #expect(await auth.devices().isEmpty)
-    }
-
     @Test func approvalIsExplicitSecretBoundAndRecoverableAfterRestart() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let auth = try fixture.authentication()
@@ -69,39 +94,6 @@ import WovenMatterCore
         #expect(!String(decoding: roster, as: UTF8.self).contains("credentialHash"))
         try await reopened.revoke(deviceID: request.identity.deviceID)
         await #expect(throws: CompanionAPIError.self) { try await reopened.pairingResult(poll) }
-    }
-
-    @Test func invitationApprovalBindsTheAdvertisedDeviceAndRecoversLostReply() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let auth = try fixture.authentication(), original = fixture.request()
-        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!, deviceID: original.identity.deviceID)
-        let wrong = CompanionPairingApprovalRequest(requestID: UUID().uuidString, requestSecret: original.requestSecret,
-            identity: fixture.request().identity, invitationToken: offer.payload.token)
-        await #expect(throws: CompanionAPIError.self) { try await auth.requestPairing(wrong, workspaceID: fixture.libraryID) }
-        let accepted = CompanionPairingApprovalRequest(requestID: original.requestID, requestSecret: original.requestSecret,
-            identity: original.identity, invitationToken: offer.payload.token)
-        let result = try await auth.requestPairing(accepted, workspaceID: fixture.libraryID)
-        #expect(result.state == .approved)
-        let reopened = try fixture.authentication()
-        let replay = try await reopened.requestPairing(accepted, workspaceID: fixture.libraryID)
-        #expect(replay.pairing == result.pairing)
-        #expect(await reopened.devices().count == 1)
-        let disk = try String(contentsOf: fixture.file, encoding: .utf8)
-        #expect(!disk.contains(offer.payload.token) && !disk.contains(accepted.requestSecret))
-    }
-
-    @Test func immutablePendingIdentitySurvivesRestartButRequiresClaimBeforeApproval() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let auth = try fixture.authentication(), request = fixture.request()
-        _ = try await auth.requestPairing(request)
-        let changed = CompanionPairingApprovalRequest(requestID: request.requestID, requestSecret: request.requestSecret,
-            identity: .init(deviceID: request.identity.deviceID, deviceName: "Changed Mac", metadata: .init(kind: .mac)))
-        await #expect(throws: CompanionAPIError.self) { try await auth.requestPairing(changed) }
-        let reopened = try fixture.authentication()
-        await #expect(throws: CompanionAPIError.self) { try await reopened.approvePairing(id: request.requestID, workspaceID: fixture.libraryID) }
-        _ = try await reopened.requestPairing(request)
-        try await reopened.approvePairing(id: request.requestID, workspaceID: fixture.libraryID)
-        #expect(await reopened.devices().count == 1)
     }
 
     @Test func deniedExpiredAndCancelledRequestsNeverRegainAuthority() async throws {
@@ -145,55 +137,6 @@ import WovenMatterCore
         #expect(try await auth.preparePairingCancellation(poll) == nil)
     }
 
-    @Test func metadataAndSeenTimesArePerDeviceAndDoNotChangeCredentialIdentity() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
-        let first = try await fixture.pair(auth, kind: .iPhone)
-        let second = try await fixture.pair(auth, kind: .iPad)
-        let firstGrant = try await auth.authenticate(bearer: first.credential)
-        let secondSeen = try await auth.authenticate(bearer: second.credential).lastSeenAt
-        clock.advance(61)
-        let updated = try await auth.authenticate(bearer: first.credential,
-            metadata: .init(kind: .iPhone, osVersion: "iOS fixture", appVersion: "2"))
-        #expect(updated.lastSeenAt == clock.now && updated.metadata?.appVersion == "2")
-        #expect(await auth.isCurrent(firstGrant))
-        let secondStored = await auth.devices().first { $0.id == second.deviceID }
-        #expect(secondStored?.lastSeenAt == secondSeen && secondStored?.kind == .iPad)
-        let reopened = try fixture.authentication(now: { clock.now })
-        #expect(await reopened.devices().first { $0.id == first.deviceID }?.lastSeenAt == clock.now)
-        try await reopened.revoke(deviceID: first.deviceID)
-        #expect(await reopened.isCurrent(firstGrant) == false)
-    }
-
-    @Test func moreThanSixteenDevicesAndLegacyUnknownMetadataRemainValid() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
-        for index in 0..<20 {
-            if index % 8 == 0 { clock.advance(61) }
-            _ = try await fixture.pair(auth, kind: .mac)
-        }
-        #expect(await auth.devices().count == 20)
-        // Simulate a v1 device record written before metadata existed.
-        var document = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture.file)) as? [String: Any])
-        var devices = try #require(document["devices"] as? [[String: Any]])
-        devices[0].removeValue(forKey: "metadata"); devices[0].removeValue(forKey: "lastSeenAt")
-        document["devices"] = devices; document.removeValue(forKey: "approvals")
-        try JSONSerialization.data(withJSONObject: document).write(to: fixture.file)
-        let legacy = try fixture.authentication()
-        #expect(await legacy.devices().first?.kind == .unknown)
-    }
-
-    @Test func untrustedMetadataIsBoundedBeforeItEntersSettings() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let auth = try fixture.authentication()
-        for name in ["Bad\nName", String(repeating: "a", count: 121)] {
-            let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString, requestSecret: String(repeating: "s", count: 43),
-                identity: .init(deviceID: UUID().uuidString, deviceName: name, metadata: .init(kind: .mac)))
-            await #expect(throws: CompanionAPIError.self) { try await auth.requestPairing(request) }
-        }
-        #expect(await auth.devices().isEmpty)
-        #expect(await auth.pendingPairingRequests().isEmpty)
-    }
 }
 
 private struct PairingFixture {

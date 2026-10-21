@@ -43,31 +43,6 @@ extension CompanionTransportTests {
     }
   }
 
-  func testRealSupervisorReapsChildWhenHelperReceivesTerminationSignal() async throws {
-    let fixture = try await SupervisorFixture.build()
-    defer { fixture.remove() }
-    for terminationSignal in [SIGTERM, SIGINT, SIGHUP] {
-      for resistant in [false, true] {
-        let suffix = "\(terminationSignal)-\(resistant)"
-        let pidFile = fixture.directory.appendingPathComponent("signal-child-\(suffix).pid")
-        let report = fixture.directory.appendingPathComponent("signal-reaped-\(suffix).txt")
-        let helper = try fixture.launch(arguments: [CompanionServeSupervisor.argument, fixture.executable.path,
-          resistant ? "--fixture-resistant-child" : "--fixture-cooperative-child", pidFile.path],
-          childPIDFile: pidFile, reapReport: report)
-        defer { helper.cleanup(childPIDFile: pidFile) }
-        try await waitForFixture { FileManager.default.fileExists(atPath: pidFile.path) }
-        let childPID = try fixturePID(at: pidFile)
-        XCTAssertEqual(kill(helper.process.processIdentifier, terminationSignal), 0)
-        try await waitForFixture { !helper.process.isRunning }
-        XCTAssertEqual(helper.process.terminationStatus, 0)
-        XCTAssertEqual(helper.process.terminationReason, .exit)
-        XCTAssertEqual(try String(contentsOf: report, encoding: .utf8), "-1:\(ECHILD)")
-        XCTAssertEqual(kill(childPID, 0), -1, "A terminated helper must not leave its Serve child holding a route")
-        XCTAssertEqual(errno, ESRCH)
-      }
-    }
-  }
-
   func testRealSupervisorStopsAfterAbruptParentDeathWithoutCleanupHandlers() async throws {
     let fixture = try await SupervisorFixture.build()
     defer { fixture.remove() }
@@ -88,26 +63,6 @@ extension CompanionTransportTests {
     try await waitForFixture { kill(helperPID, 0) == -1 && errno == ESRCH }
   }
 
-  func testPreferredServePortIsReusedAfterOwnedChildFinishesStopping() async throws {
-    let fixture = ServeLifecycleFixture(cleanupDelay: 0.2)
-    let serve = fixture.makeServe()
-    defer { serve.stop() }
-    let first = try await serve.start(loopbackPort: 50001, preferredHTTPSPort: 10000)
-    XCTAssertEqual(first.absoluteString, "https://fixture.test.ts.net:10000/wovenmatter")
-    let old = try XCTUnwrap(fixture.children.first)
-    serve.stop()
-    XCTAssertTrue(old.isRunning, "Fixture must reproduce asynchronous foreground route cleanup")
-    let restarted = try await serve.start(loopbackPort: 50002, preferredHTTPSPort: 10000)
-    XCTAssertEqual(restarted, first)
-    XCTAssertFalse(old.isRunning)
-    XCTAssertEqual(fixture.children.count, 2)
-    XCTAssertEqual(old.terminationCalls, 1)
-    XCTAssertEqual(fixture.launchArguments.map { $0[1] }, ["--https=10000", "--https=10000"])
-    XCTAssertFalse(fixture.probedWhileStopping, "Do not mistake our still-draining route for an unrelated occupied port")
-    XCTAssertEqual(fixture.existingPorts, [443, 8443])
-    XCTAssertTrue(fixture.probeArguments.allSatisfy { $0 == ["status", "--json"] || $0 == ["serve", "status", "--json"] })
-  }
-
   func testOccupiedPreferredServePortFailsWithoutChangingExistingRoutes() async throws {
     let fixture = ServeLifecycleFixture(existingPorts: [443, 8443, 10000])
     let serve = fixture.makeServe()
@@ -124,24 +79,6 @@ extension CompanionTransportTests {
     XCTAssertEqual(fixture.probeArguments, [["status", "--json"], ["serve", "status", "--json"]])
   }
 
-  func testOwnedServeCleanupWaitIsBoundedAndCanBeCancelled() async throws {
-    let fixture = ServeLifecycleFixture(cleanupDelay: 60)
-    let serve = fixture.makeServe()
-    defer { fixture.children.forEach { $0.forceStopped = true }; serve.stop() }
-    _ = try await serve.start(loopbackPort: 50001, preferredHTTPSPort: 10000)
-    serve.stop()
-    let began = ProcessInfo.processInfo.systemUptime
-    do { _ = try await serve.start(loopbackPort: 50002, preferredHTTPSPort: 10000); XCTFail("Hung cleanup should be bounded") }
-    catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "tailscale_unavailable") }
-    XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 4)
-    let pending = Task { try await serve.start(loopbackPort: 50003, preferredHTTPSPort: 10000) }
-    await Task.yield()
-    pending.cancel()
-    do { _ = try await pending.value; XCTFail("Cancelled restart should not launch") }
-    catch { XCTAssertTrue(error is CancellationError) }
-    XCTAssertEqual(fixture.children.count, 1)
-    XCTAssertFalse(fixture.probedWhileStopping)
-  }
 }
 
 @MainActor

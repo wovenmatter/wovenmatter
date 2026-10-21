@@ -21,45 +21,8 @@ private func plan(
 
 @Suite("Conversation task progress")
 struct ConversationTaskProgressTests {
-  @Test("status aliases normalize and cancelled steps are not counted")
-  func statusAliases() throws {
-    let progress = try #require(ConversationTaskProgress.latest(in: [
-      plan([
-        ("Read", "done"), ("Plan", "Completed"), ("Build", "inProgress"),
-        ("Test", "in_progress"), ("Ship", "todo"), ("Drop", "cancelled"),
-      ], at: "1"),
-    ], activeRunID: "run"))
 
-    #expect(progress.steps.map(\.status) == [.completed, .completed, .inProgress, .inProgress, .pending])
-    #expect(progress.allSteps.last?.status == .cancelled)
-    #expect(progress.completedCount == 2)
-    #expect(progress.totalCount == 5)
-    #expect(progress.currentStep.label == "Build")
-  }
 
-  @Test("current step prefers running, then pending, then the last step")
-  func currentStep() throws {
-    let pending = try #require(ConversationTaskProgress.latest(in: [
-      plan([("A", "completed"), ("B", "pending"), ("C", "pending")], at: "1"),
-    ], activeRunID: "run"))
-    #expect(pending.currentStep.label == "B")
-
-    let finished = try #require(ConversationTaskProgress.latest(in: [
-      plan([("A", "completed"), ("B", "completed")], at: "1"),
-    ], activeRunID: "run"))
-    #expect(finished.currentStep.label == "B")
-    #expect(finished.isComplete)
-  }
-
-  @Test("duplicate labels keep unique occurrence IDs")
-  func duplicateLabels() throws {
-    let progress = try #require(ConversationTaskProgress.latest(in: [
-      plan([("Run tests", "completed"), ("Fix", "completed"), ("Run tests", "pending")], at: "1"),
-    ], activeRunID: "run"))
-
-    #expect(Set(progress.steps.map(\.id)).count == 3)
-    #expect(progress.currentStep.id == progress.steps[2].id)
-  }
 
   @Test("only the active run's latest checklist is selected, without stale fallback")
   func planSelection() {

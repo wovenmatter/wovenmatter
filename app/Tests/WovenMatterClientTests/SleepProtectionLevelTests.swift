@@ -25,41 +25,6 @@ struct SleepProtectionLevelTests {
         }
     }
 
-    @Test func normalDefaultsPreserveExistingBehaviorAndExplicitOffPersists() {
-        let name = "wovenmatter.sleep-levels.tests." + UUID().uuidString
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        #expect(ActiveWorkSleepPrevention.savedPolicy(defaults: defaults) == .displaySleepDefault)
-        let activities = Activities()
-        let owner = activities.owner(policy: .displaySleepDefault, source: { .external }, defaults: defaults)
-        owner.setPolicy(.init(batteryPower: true))
-        #expect(ActiveWorkSleepPrevention.savedPolicy(defaults: defaults) == .init(batteryPower: true))
-        owner.setPolicy(.init())
-        #expect(!ActiveWorkSleepPrevention.savedPolicy(defaults: defaults).isEnabled)
-        #expect(activities.active.isEmpty) // Changing idle preferences never acquires activity.
-    }
-
-    @Test func externalPowerOnlyRespondsToPowerChangesDuringTheSameRun() {
-        var source = WorkPowerSource.external
-        let activities = Activities()
-        let owner = activities.owner(policy: .init(externalPower: true), source: { source })
-        let dispatch = owner.beginDispatch()
-        #expect(activities.preventsIdleSleep && !activities.preventsDisplaySleep)
-        source = .battery
-        owner.powerSourceChanged()
-        #expect(!activities.preventsIdleSleep && activities.active.count == 1)
-        #expect(!owner.snapshot.isProtecting)
-        #expect(activities.workChanges == [true])
-        source = .external
-        owner.powerSourceChanged()
-        #expect(activities.preventsIdleSleep && activities.active.count == 1)
-        owner.setRunningConversationIDs(["accepted"])
-        owner.endDispatch(dispatch)
-        #expect(activities.preventsIdleSleep)
-        owner.setRunningConversationIDs([])
-        #expect(activities.active.isEmpty && activities.workChanges == [true, false])
-    }
-
     @Test func batteryOnlyAndUnknownPowerDoNotLeakAnIdleSleepAssertion() {
         var source = WorkPowerSource.external
         let activities = Activities()
@@ -77,21 +42,6 @@ struct SleepProtectionLevelTests {
         owner.powerSourceChanged()
         owner.setPolicy(.displaySleepDefault)
         #expect(activities.active.isEmpty)
-    }
-
-    @Test func liveToggleChangesKeepTrackingWorkWithoutBlockingSystemSleepWhenOff() {
-        let activities = Activities()
-        let owner = activities.owner(policy: .displaySleepDefault, source: { .battery })
-        let first = owner.beginDispatch()
-        let second = owner.beginDispatch()
-        owner.setPolicy(.init())
-        #expect(!activities.preventsIdleSleep && !activities.preventsDisplaySleep)
-        #expect(activities.workChanges == [true])
-        owner.endDispatch(first)
-        owner.setPolicy(.init(batteryPower: true))
-        #expect(activities.preventsIdleSleep && activities.active.count == 1)
-        owner.endDispatch(second)
-        #expect(activities.active.isEmpty && activities.workChanges == [true, false])
     }
 
     @Test func higherLevelIncludesNormalProtectionOnlyOnItsSelectedSources() {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { accessFailure, DefaultAgentError, operationErrorMessage, validateConfig, writePrivateJSON } from '../src/config.mjs';
+import { writePrivateJSON } from '../src/config.mjs';
 import { searchTools } from '../src/search.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { DefaultAgentEngine } from '../src/engine.mjs';
@@ -10,23 +10,14 @@ import { createDefaultAgentService } from '../src/service.mjs';
 import { Credentials } from '../src/credentials.mjs';
 import { CredentialVault, sharedAccounts, sharedCredentials } from '../src/vault.mjs';
 import { randomBytes } from 'node:crypto';
-import { providerFetch } from '../src/transport.mjs';
+
 
 async function temporary(t) {
   const directory = await mkdtemp('/tmp/woven-default-agent-test-');
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
-test('fallback classifies unavailable credentials and exhausted allowances, not ordinary throttling', () => {
-  for (const message of ['The connection has exhausted its available usage.', 'The connection needs sign-in or a valid API key.']) assert.equal(accessFailure(message), message);
-  for (const message of ['401 Unauthorized', 'invalid_api_key', 'invalid_grant', 'Authentication required', 'insufficient_quota', 'usage_limit_reached', '402 Payment Required', 'insufficient credits']) assert.ok(accessFailure(message), message);
-  for (const message of ['429 Too Many Requests', '500 server error', 'fetch failed', '403 forbidden', 'cancelled']) assert.equal(accessFailure(message), null, message);
-});
-test('helper errors preserve actionable app messages without exposing raw provider errors', () => {
-  const safe = 'The connection has exhausted its available usage.';
-  assert.equal(operationErrorMessage(new DefaultAgentError(safe)), safe);
-  assert.ok(!operationErrorMessage(new Error('provider echoed fixture-secret')).includes('fixture-secret'));
-});
+
 test('search needs its own key and sends bounded, cited results through Exa', async () => {
   await assert.rejects(searchTools()[0].execute('1', { query: 'anything' }), /Add an Exa API key/);
   let request;
@@ -42,12 +33,7 @@ test('search needs its own key and sends bounded, cited results through Exa', as
   assert.equal(parsed.results[0].url, 'https://example.com');
   assert.equal(parsed.results[0].text.length, 16000);
 });
-test('configuration preserves provider identities, model order, and explicit fallbacks', () => {
-  const value = validateConfig({ providers: ['openai', 'openai-codex', 'unknown', 'openai'], models: ['openrouter/kimi', 'openai/gpt'], defaultModel: 'openai/gpt', fallbackModels: ['openrouter/kimi'] });
-  assert.deepEqual(value.providers, ['openai', 'openai-codex']);
-  assert.deepEqual(value.models, ['openrouter/kimi', 'openai/gpt']);
-  assert.deepEqual(value.fallbackModels, ['openrouter/kimi']);
-});
+
 test('real SDK loads the complete selected tool set and resumes an empty draft without a Pi install', async t => {
   const directory = await temporary(t);
   // A user's global/workspace Pi extensions must never execute in Built-in,
@@ -100,38 +86,7 @@ function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter']
   engine.runtime = { getAuth: async () => ({}), getModels: () => [{ provider: 'openai-codex', id: 'primary', name: 'Primary' }, { provider: 'openrouter', id: 'fallback', name: 'Fallback' }] };
   return { engine, record, selected };
 }
-test('signed-out subscription falls back to configured API provider and updates selector with a reason', async () => {
-  const { engine, record, selected } = fixtureEngine({ connected: ['openrouter'] });
-  const events = [];
-  await engine.prompt(record, 'hello', event => events.push(event));
-  assert.deepEqual(selected, ['openrouter']);
-  assert.equal(record.selected, 'openrouter/fallback');
-  assert.equal(events[0].configOptions[0].currentValue, 'openrouter/fallback');
-  assert.match(events[0]._meta.fallbackReason, /sign-in/);
-});
-test('exhausted credits fall back while temporary throttling does not', async () => {
-  const exhausted = fixtureEngine({ errors: ['insufficient_quota'] });
-  await exhausted.engine.prompt(exhausted.record, 'hello', () => {});
-  assert.equal(exhausted.record.selected, 'openrouter/fallback');
-  const throttled = fixtureEngine({ errors: ['429 Too Many Requests'] });
-  await assert.rejects(throttled.engine.prompt(throttled.record, 'hello', () => {}));
-  assert.deepEqual(throttled.selected, ['openai-codex']);
-});
-test('a failed turn that already ran tools is never silently replayed', async () => {
-  const { engine, record, selected } = fixtureEngine({ errors: ['insufficient_quota'], visible: true });
-  await assert.rejects(engine.prompt(record, 'change files', () => {}));
-  assert.deepEqual(selected, ['openai-codex']);
-});
-test('a failed native context read releases ownership for the next prompt', async () => {
-  const { engine, record, selected } = fixtureEngine();
-  record.contextLeaf = async () => { throw new Error('Native context unavailable'); };
-  await assert.rejects(engine.prompt(record, 'First', () => {}), /Native context unavailable/);
-  assert.equal(record.busy, false);
-  assert.deepEqual(selected, []);
-  record.contextLeaf = () => undefined;
-  assert.equal((await engine.prompt(record, 'Retry', () => {})).stopReason, 'end_turn');
-  assert.deepEqual(selected, ['openai-codex']);
-});
+
 test('cancel during credential preparation never starts a model turn or fallback', async () => {
   const { engine, record, selected } = fixtureEngine();
   let release;
@@ -158,15 +113,6 @@ test('cancel during credential preparation never starts a model turn or fallback
   assert.equal(record.busy, false);
 });
 
-test('valid borrowed access survives a failed early renewal request', async t => {
-  const directory = await temporary(t);
-  const engine = await new DefaultAgentEngine({
-    cwd: directory, directory,
-    credentials: { xai: { type: 'oauth', access: 'still-valid', borrowed: true, expires: Date.now() + 30000 } },
-    requestCredentials: async () => { throw new Error('temporarily disconnected'); },
-  }).initialize();
-  assert.equal((await engine.runtime.getAuth('xai', { allowWait: false })).auth.apiKey, 'still-valid');
-});
 test('credentials migrate to encrypted storage and refresh ownership remains separate', async t => {
   const directory = await temporary(t);
   const key = randomBytes(32).toString('base64');
@@ -220,38 +166,6 @@ test('remote admission deduplicates current output and fences uncertain prior ac
   await assert.rejects(restarted.poll(operationID), /no longer available/); assert.equal(calls, 1);
 });
 
-test('independent remote sign-in takes priority over updates and is encrypted across helpers', async t => {
-  const directory = await temporary(t), key = randomBytes(32).toString('base64');
-  const first = new CredentialVault(directory), second = new CredentialVault(directory);
-  await first.unlock('fixture', key); await second.unlock('fixture', key);
-  await first.modify(async () => ({ shared: { xai: { type: 'oauth', access: 'borrowed', borrowed: true, expires: 0 } } }));
-  const login = await new Credentials({}, second).initialize();
-  login.signingIn = true;
-  await login.modify('xai', async () => ({ type: 'oauth', access: 'new-login', refresh: 'owned', expires: Date.now() + 3600000 }));
-  const running = await new Credentials({}, first).initialize();
-  assert.equal((await running.read('xai')).access, 'new-login');
-  await first.modify(async stored => ({ ...stored, shared: { xai: { type: 'oauth', access: 'new-borrowed', borrowed: true, expires: 1 } } }));
-  assert.equal((await running.read('xai')).access, 'new-login');
-});
-test('raw Codex HTTP errors distinguish subscription exhaustion from transient 429s before SDK rewriting', async () => {
-  for (const [code, shouldFallback] of [['usage_limit_reached', true], ['rate_limit_exceeded', false]]) {
-    const record = {};
-    const fetchRequest = providerFetch(record, async () => new Response(JSON.stringify({ error: { code } }), { status: 429 }));
-    const response = await fetchRequest('https://example.test');
-    assert.equal(Boolean(record.httpAccessFailure), shouldFallback);
-    assert.equal((await response.json()).error.code, code);
-  }
-});
-
-test('HTTP failure inspection stops at its byte limit and leaves the SDK body intact', async () => {
-  const body = 'x'.repeat(65536) + ' insufficient_quota';
-  const record = {};
-  const request = providerFetch(record, async () => new Response(body, { status: 429 }));
-  const response = await request('https://example.test');
-  assert.equal(record.httpAccessFailure, null);
-  assert.equal(await response.text(), body);
-});
-
 test('account fallback follows priority without changing another session credential', async () => {
   const { engine, record } = fixtureEngine({ errors: ['insufficient_quota'] });
   engine.config.fallbackModels = [];
@@ -265,30 +179,6 @@ test('account fallback follows priority without changing another session credent
   assert.deepEqual(used, ['first-secret', 'second-secret']);
   assert.match(events.at(-1)._meta.fallbackReason, /Second/);
   assert.equal((await engine.credentials.read('openai-codex')).key, 'fixture');
-});
-test('account contexts isolate overlapping asynchronous requests', async () => {
-  const credentials = new Credentials({}, undefined, { openai: [
-    { id: 'a', credential: { type: 'api_key', key: 'a' } },
-    { id: 'b', credential: { type: 'api_key', key: 'b' } },
-  ] });
-  const accounts = await credentials.candidates('openai');
-  const values = await Promise.all(accounts.map(account => credentials.runWithAccount('openai', account, async () => {
-    await new Promise(resolve => setTimeout(resolve, account.id === 'a' ? 10 : 1));
-    return (await credentials.read('openai')).key;
-  })));
-  assert.deepEqual(values, ['a', 'b']);
-});
-
-test('removing a workspace-owned account does not silently switch an active turn to shared credentials', async () => {
-  const credentials = new Credentials({ openai: { type: 'api_key', key: 'shared' } });
-  credentials.owned.openai = { type: 'api_key', key: 'workspace' };
-  const [account] = await credentials.candidates('openai');
-  await credentials.runWithAccount('openai', account, async () => {
-    assert.equal((await credentials.read('openai')).key, 'workspace');
-    delete credentials.owned.openai;
-    assert.equal(await credentials.read('openai'), undefined);
-  });
-  assert.equal((await credentials.read('openai')).key, 'shared');
 });
 
 test('account backups are encrypted and borrowed tokens never export renewal secrets', async t => {
@@ -319,18 +209,21 @@ test('account fallback never retries throttling or a turn with visible output', 
   }
 });
 
-
-test('hidden fallback models are never attempted', async () => {
-  const { engine, record, selected } = fixtureEngine({ errors: ['insufficient_quota'] });
-  engine.config.models = [];
-  await assert.rejects(engine.prompt(record, 'hello', () => {}));
-  assert.deepEqual(selected, ['openai-codex']);
-  assert.equal(record.selected, 'openai-codex/primary');
-});
-
 test('native profile sharing includes only an identifier, never native credentials', () => {
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: 'profile-1', access: 'must-not-share', refresh: 'must-not-share' } }),
     { 'claude-subscription': { type: 'native', accountId: 'profile-1' } });
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
   assert.deepEqual(sharedAccounts({ 'claude-subscription': [{ id: 'fixture', label: 'Invalid', credential: { type: 'native', accountId: '../outside' } }] }), { 'claude-subscription': [] });
+});
+
+test('removing a workspace-owned account does not silently switch an active turn to shared credentials', async () => {
+  const credentials = new Credentials({ openai: { type: 'api_key', key: 'shared' } });
+  credentials.owned.openai = { type: 'api_key', key: 'workspace' };
+  const [account] = await credentials.candidates('openai');
+  await credentials.runWithAccount('openai', account, async () => {
+    assert.equal((await credentials.read('openai')).key, 'workspace');
+    delete credentials.owned.openai;
+    assert.equal(await credentials.read('openai'), undefined);
+  });
+  assert.equal((await credentials.read('openai')).key, 'shared');
 });

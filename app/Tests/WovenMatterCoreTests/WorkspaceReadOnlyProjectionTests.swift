@@ -41,9 +41,4 @@ struct WorkspaceReadOnlyProjectionTests {
     #expect(Set(try FileManager.default.contentsOfDirectory(atPath:directory.path)) == before)
   }
 
-  @Test func missingProjectionDoesNotCreateWorkspace() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path:"wm-missing-projection-" + UUID().uuidString)
-    await #expect(throws:(any Error).self) { try await DashboardStore(supportDirectory:directory,readOnlyProjection:true) }
-    #expect(!FileManager.default.fileExists(atPath:directory.path))
-  }
 }

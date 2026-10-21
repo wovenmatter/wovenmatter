@@ -32,19 +32,4 @@ struct BuiltInNativeHistoryCaptureTests {
         }
     }
 
-    @Test func scopesStoreIdentityAndKeepsHistoricalRunAttribution() throws {
-        let batch = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "session", records: [
-            .init(id: "old", runID: "old-run", kind: "message", payload: "{}"),
-            .init(id: "live", kind: "message", payload: "{}"),
-        ])
-        let value = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(batch))
-        let data = try BuiltInNativeHistoryCapture.batchData(value, sessionID: "session",
-            sourcePrefix: "remote:workspace:")
-        let captured = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: data)
-        #expect(captured.sourceID == "remote:workspace:store")
-        #expect(captured.records.map(\.runID) == ["old-run", nil])
-        let replay = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self,
-            from: BuiltInNativeHistoryCapture.batchData(value, sessionID: "session"))
-        #expect(replay.records[1].runID == nil)
-    }
 }

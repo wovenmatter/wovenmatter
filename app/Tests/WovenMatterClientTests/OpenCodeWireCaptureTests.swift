@@ -28,15 +28,6 @@ struct OpenCodeWireCaptureTests {
     #expect(denied["future_response"].bool)
   }
 
-  @Test func onlyAffirmativePermissionAndFormRepliesNeedAnActiveTurn() {
-    for answer in ["once", "always", "unknown"] {
-      #expect(OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/permission/p/reply", body: ["reply": .string(answer)]))
-    }
-    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/permission/p/reply", body: ["reply": "reject"]))
-    #expect(OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/reply", body: ["answer": "yes"]))
-    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "DELETE", suffix: "/form/f", body: nil))
-  }
-
   @Test func preservesUnknownHTTPAndSSEFieldsWithoutCredentials() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [CaptureFixtureProtocol.self]

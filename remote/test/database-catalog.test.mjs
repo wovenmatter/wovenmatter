@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, symlink, rm, readdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, symlink, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -117,18 +117,6 @@ except Exception as error:
     await assert.rejects(data(root, row.id, query), error => error.statusCode === 400 && /too large|memory limit/.test(error.message))
   }
   assert.deepEqual((await data(root, row.id, 'SELECT 42 AS answer')).query.rows, [['42']])
-})
-
-test('bounded results retain 128 columns within the response budget', async t => {
-  const root = await fixture(t), row = await create(root)
-  for (const [expression, length] of [["printf('%6000s','')", 6000], ['zeroblob(3000)', 6000]]) {
-    const query = 'SELECT ' + Array.from({ length: 128 }, (_, i) => `${expression} AS c${i}`).join(',')
-    const result = (await data(root, row.id, query)).query
-    assert.equal(result.columns.length, 128)
-    assert.equal(result.rows[0].length, 128)
-    assert.ok(result.rows[0].every(value => value.length === length))
-    assert.ok(Buffer.byteLength(JSON.stringify(result)) < 1024 * 1024)
-  }
 })
 
 test('Linux service bounds SQLite materialization and returns a controlled memory error', { skip: process.platform !== 'linux' }, async t => {

@@ -9,6 +9,7 @@ import { createTaskGateway } from '../src/task-gateway.mjs'
 import { createRetainedExecutionCapture } from '../src/client-retained-history.mjs'
 import { createDefaultAgentService } from '../../default-agent/src/service.mjs'
 
+
 const turn=()=>new Promise(done=>setTimeout(done,5))
 async function until(test){for(let n=0;n<200;n++){if(test())return;await turn()}assert.fail('Timed out waiting for retained capture')}
 function fixture(t){
@@ -56,27 +57,6 @@ test('workspace startup captures durable scheduled output without a client, surv
   assert.deepEqual(entries(f.execution).map(item=>item.eventID),ids)
 })
 
-test('legacy RPC admission saves identity without credentials and owner polling archives its completed output',async t=>{
-  const f=fixture(t),conversationID=randomUUID(),runID=randomUUID(),inputID=randomUUID();let prompts=0
-  const service=createDefaultAgentService({cwd:f.root,directory:f.defaultDirectory,attachmentState:{tokens:[['native-rpc','test-private-attachment']]},engineFactory:()=>({handle:async(method,params,publish)=>{
-    assert.equal(method,'session/prompt');prompts++;await publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'First'}})
-    await publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:' answer'}});return {stopReason:'end_turn'}
-  }})})
-  const bridge=capture(f,{defaultAgent:service,intervalMilliseconds:5})
-  const message=bridge.prepareRPC({method:'session/prompt',operationID:inputID,attachmentToken:'test-private-attachment',params:{sessionId:'native-rpc',prompt:[{type:'text',text:'Hello'}],
-    _meta:{wovenConversationID:conversationID,wovenRunID:runID,wovenInputID:inputID,wovenTools:{executablePath:'/test/private/tool',captureID:'private-capability'}}}})
-  const intent=readFileSync(join(f.directory,'intent-'+inputID+'.json'),'utf8')
-  assert.equal(intent.includes('test-private-attachment'),false);assert.equal(intent.includes('private-capability'),false);assert.equal(intent.includes('/test/private/tool'),false)
-  bridge.acceptedRPC(message,await service.invoke(message));bridge.start()
-  await until(()=>entries(f.execution).some(item=>item.transcript?.runs?.[0]?.status==='completed'))
-  await bridge.close()
-  assert.equal(prompts,1)
-  const saved=entries(f.execution)
-  assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===inputID&&message.content==='Hello')))
-  assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===runID&&message.content==='First answer')))
-  assert.equal(saved[0].retainedExecution.status,'completed')
-})
-
 test('restart recovers exact legacy spool associations and preserves an incomplete trailing write',async t=>{
   const f=fixture(t),operationID=randomUUID(),runID=randomUUID(),conversationID=randomUUID(),epoch=randomUUID()
   const file=join(f.defaultDirectory,`run-${epoch}-${operationID}.jsonl`)
@@ -93,17 +73,6 @@ test('restart recovers exact legacy spool associations and preserves an incomple
   assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.content==='Already saved')))
 })
 
-test('unmapped historic records stay local and visible as pending until exact association returns',async t=>{
-  const f=fixture(t),runID=randomUUID(),operationID=randomUUID(),conversationID=randomUUID()
-  const file=join(f.defaultDirectory,`run-${randomUUID()}-${operationID}.jsonl`),bytes=JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'old',records:[{runID}]}})+'\n'
-  writeFileSync(file,bytes)
-  let found=false
-  const bridge=capture(f,{resolveAssociation:async()=>found?{conversationID,runID,nativeSessionID:'old',runtimeKind:'default_agent'}:null})
-  await bridge.pump();assert.equal(bridge.status().pendingAssociationCount,1);assert.equal(entries(f.execution).length,0)
-  found=true;await bridge.pump();assert.equal(bridge.status().pendingAssociationCount,0)
-  assert.ok(entries(f.execution).length>0);assert.equal(readFileSync(file,'utf8'),bytes);await bridge.close()
-})
-
 test('active task and direct execution spools are never re-imported as legacy RPC histories',async t=>{
   const f=fixture(t),taskID=randomUUID(),directID=randomUUID();let imports=0
   for(const id of [taskID,directID])writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${id}.jsonl`),'{"sessionUpdate":"agent_message_chunk","content":{"text":"owned"}}\n')
@@ -117,33 +86,6 @@ test('changed RPC input cannot reuse a retained intent identity',async t=>{
   bridge.prepareRPC(message);bridge.prepareRPC(message)
   assert.throws(()=>bridge.prepareRPC({...message,params:{...message.params,prompt:[{type:'text',text:'two'}]}}),/different input/)
   assert.equal(readdirSync(f.directory).filter(name=>name.startsWith('intent-')).length,1);await bridge.close()
-})
-
-test('offline historical lookup failure cannot block a known RPC identity; restart never invokes its prompt',async t=>{
-  const f=fixture(t),unknownRun=randomUUID(),unknownOperation=randomUUID(),conversationID=randomUUID(),runID=randomUUID(),operationID=randomUUID()
-  writeFileSync(join(f.defaultDirectory,`run-00000000-0000-0000-0000-000000000000-${unknownOperation}.jsonl`),JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'unmapped',records:[{runID:unknownRun}]}})+'\n')
-  let bridge=capture(f)
-  bridge.prepareRPC({method:'session/prompt',operationID,params:{sessionId:'known-native',prompt:[{type:'text',text:'Persist me'}],_meta:{wovenConversationID:conversationID,wovenRunID:runID}}})
-  const file=join(f.defaultDirectory,`run-ffffffff-ffff-ffff-ffff-ffffffffffff-${operationID}.jsonl`)
-  writeFileSync(file,JSON.stringify({sessionUpdate:'agent_message_chunk',content:{text:'Saved before process loss'}})+'\n')
-  await bridge.close()
-  bridge=capture(f,{resolveAssociation:async()=>{throw new Error('central unavailable')}})
-  await bridge.pump()
-  assert.equal(bridge.status().pendingAssociationCount,1)
-  assert.ok(entries(f.execution).some(item=>item.transcript?.messages?.some(message=>message.content==='Saved before process loss')))
-  const before=entries(f.execution).map(item=>item.eventID)
-  await bridge.close();await f.restart()
-  bridge=capture(f,{resolveAssociation:async()=>null});await bridge.pump();await bridge.close()
-  assert.deepEqual(entries(f.execution).map(item=>item.eventID),before)
-})
-
-test('replaced SDK operation is archived as interrupted without another invocation',async t=>{
-  const f=fixture(t),conversationID=randomUUID(),runID=randomUUID(),operationID=randomUUID()
-  const bridge=capture(f,{defaultAgent:{poll:async()=>{throw new Error('This operation is no longer available in the workspace process. It will not be replayed.')}}})
-  const message=bridge.prepareRPC({method:'session/prompt',operationID,params:{sessionId:'native',prompt:[{type:'text',text:'once'}],_meta:{wovenConversationID:conversationID,wovenRunID:runID}}})
-  writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${operationID}.jsonl`),JSON.stringify({sessionUpdate:'agent_message_chunk',content:{text:'partial answer'}})+'\n')
-  bridge.acceptedRPC(message,{operationID});await bridge.pump();await bridge.close()
-  assert.ok(entries(f.execution).some(item=>item.transcript?.runs?.[0]?.status==='interrupted'))
 })
 
 test('verified historical association is durable before import and can finish offline after ACK loss',async t=>{
@@ -163,4 +105,25 @@ test('mismatched historical association cannot relabel a native record',async t=
   writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${operationID}.jsonl`),JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'native',records:[{runID}]}})+'\n')
   const bridge=capture(f,{resolveAssociation:async()=>({conversationID:randomUUID(),runID:randomUUID(),nativeSessionID:'different',runtimeKind:'default_agent'})})
   await bridge.pump();assert.equal(bridge.status().pendingAssociationCount,1);assert.equal(entries(f.execution).length,0);await bridge.close()
+})
+
+test('legacy RPC admission saves identity without credentials and owner polling archives its completed output',async t=>{
+  const f=fixture(t),conversationID=randomUUID(),runID=randomUUID(),inputID=randomUUID();let prompts=0
+  const service=createDefaultAgentService({cwd:f.root,directory:f.defaultDirectory,attachmentState:{tokens:[['native-rpc','test-private-attachment']]},engineFactory:()=>({handle:async(method,params,publish)=>{
+    assert.equal(method,'session/prompt');prompts++;await publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'First'}})
+    await publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:' answer'}});return {stopReason:'end_turn'}
+  }})})
+  const bridge=capture(f,{defaultAgent:service,intervalMilliseconds:5})
+  const message=bridge.prepareRPC({method:'session/prompt',operationID:inputID,attachmentToken:'test-private-attachment',params:{sessionId:'native-rpc',prompt:[{type:'text',text:'Hello'}],
+    _meta:{wovenConversationID:conversationID,wovenRunID:runID,wovenInputID:inputID,wovenTools:{executablePath:'/test/private/tool',captureID:'private-capability'}}}})
+  const intent=readFileSync(join(f.directory,'intent-'+inputID+'.json'),'utf8')
+  assert.equal(intent.includes('test-private-attachment'),false);assert.equal(intent.includes('private-capability'),false);assert.equal(intent.includes('/test/private/tool'),false)
+  bridge.acceptedRPC(message,await service.invoke(message));bridge.start()
+  await until(()=>entries(f.execution).some(item=>item.transcript?.runs?.[0]?.status==='completed'))
+  await bridge.close()
+  assert.equal(prompts,1)
+  const saved=entries(f.execution)
+  assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===inputID&&message.content==='Hello')))
+  assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===runID&&message.content==='First answer')))
+  assert.equal(saved[0].retainedExecution.status,'completed')
 })

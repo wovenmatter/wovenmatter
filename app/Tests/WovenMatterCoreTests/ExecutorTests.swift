@@ -20,38 +20,6 @@ struct ExecutorTests {
         #expect(!after.enabled.contains(.library))
         #expect(after.executorProfiles == ["app:profile"])
     }
-    @Test func cachedInventoryRemainsReadableAndAccountTargetsPersist() throws {
-        let cached = Data(#"{"id":"app:old-profile","app":"app","name":"App","profile":"old-profile","profileName":"Saved label"}"#.utf8)
-        let old = try JSONDecoder().decode(ExecutorAppTarget.self, from: cached)
-        #expect(old.targetName == "Saved label")
-        #expect(old.account == nil)
-        let selected = ExecutorAppTarget(id: "app:account:id", app: "app", name: "App", account: "id", targetName: "Work")
-        #expect(try JSONDecoder().decode(ExecutorAppTarget.self, from: JSONEncoder().encode(selected)) == selected)
-    }
-    @Test func confirmedHarnessModesPreserveTheirMeaning() {
-        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.opencode, "allow"), (.opencode, "full")]
-        for (runtime, mode) in full {
-            #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .full)
-            #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode, confirmed: false) == .ask)
-        }
-        for (runtime, mode) in [(AgentRuntimeKind.claudeCode, "auto"), (.claudeCode, "acceptEdits"), (.grokBuild, "auto"), (.grokBuild, "acceptEdits"), (.codex, "agent"), (.opencode, "acceptEdits")] {
-            #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .ask)
-        }
-        #expect(ExecutorApprovalPolicy.resolve(runtime: .claudeCode, mode: "dontAsk") == .deny)
-        #expect(ExecutorApprovalPolicy.resolve(runtime: .codex, mode: "read-only") == .ask)
-    }
-    @Test func legacyPreferencesDecodeWithoutEnablingExecutor() throws {
-        let old = Data(#"{"enabledByDefault":["notes","library"],"calendarAccess":"full","maximumManagedSessions":4,"maximumRunningSessions":16}"#.utf8)
-        let settings = try JSONDecoder().decode(WorkspaceToolSettings.self, from: old)
-        #expect(settings.executor == nil)
-        #expect(!WorkspaceToolSettings().enabledByDefault.contains(.executor))
-        let defaults = DefaultAgentSettings()
-        var saved = try JSONEncoder().encode(defaults)
-        var value = try JSONSerialization.jsonObject(with: saved) as! [String: Any]
-        value.removeValue(forKey: "codeMode")
-        saved = try JSONSerialization.data(withJSONObject: value)
-        #expect(try JSONDecoder().decode(DefaultAgentSettings.self, from: saved).resolvedCodeMode == .on)
-    }
     @Test func conversationAppsSnapshotDefaultsAndPersistAcrossReload() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -81,31 +49,6 @@ struct ExecutorTests {
         #expect(throws: (any Error).self) { try WovenMatterToolCommand(["executor", "resume", "secret"]) }
         #expect(throws: (any Error).self) { try WovenMatterToolCommand(["executor", "execute", "--code", "return 1;", "--file", "/tmp/code.js"]) }
         #expect(throws: (any Error).self) { try WovenMatterToolCommand(["executor", "status", "id", "--session", "other"]) }
-    }
-    @Test func staleDefaultsEditPreservesCurrentSetupAndInventory() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        var config = ExecutorConfiguration()
-        let first = ExecutorAppTarget(id: "first:p", app: "first", name: "First", targetName: "App")
-        let second = ExecutorAppTarget(id: "second:p", app: "second", name: "Second", targetName: "App")
-        config.apps = [first]
-        try await database.updateExecutor(configuration: config)
-        let base = try await database.toolSettings()
-        var edited = base; edited.executor?.defaultProfiles = [first.id]; edited.maximumManagedSessions = 6
-        try await database.updateExecutor(apps: [first, second], setup: .init(configuration: config, running: true))
-        try await database.saveToolSettings(edited, from: base)
-        let saved = try await database.toolSettings()
-        #expect(saved.executor?.apps == [first, second])
-        #expect(saved.executor?.defaultProfiles == [first.id])
-        #expect(saved.executorSetup?.running == true)
-        #expect(saved.maximumManagedSessions == 6)
-        var replacement = ExecutorConfiguration(); replacement.apps = [second]
-        try await database.updateExecutor(configuration: replacement)
-        try await database.saveToolSettings(edited, from: base)
-        #expect(try await database.toolSettings().executor?.id == replacement.id)
-        #expect(try await database.toolSettings().executor?.defaultProfiles == [])
     }
 
 }

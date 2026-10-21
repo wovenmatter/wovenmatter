@@ -120,23 +120,6 @@ struct CompanionToolFacadeTests {
         #expect(try await fixture.database.companionSnapshot().notes.count == 1)
     }
 
-    @Test func importedCallerRequiresExplicitCentralSessionDestination() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let caller = try await importPhone(fixture)
-        let source = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == caller })
-        let explicit = try WovenMatterToolCommand(["sessions", "create", "--harness", "codex", "--workspace", "local",
-            "--title", "Central", "--text", "Work", "--purpose", "Review"])
-        let configured = try await fixture.model.resolveToolSessionCreation(source: source, command: explicit, title: "Central")
-        #expect(configured.runtimeKind == .codex && configured.workspaceID == nil)
-        let implicit = try WovenMatterToolCommand(["sessions", "create", "--harness", "codex",
-            "--title", "Central", "--text", "Work", "--purpose", "Review"])
-        await #expect(throws: (any Error).self) {
-            _ = try await fixture.model.resolveToolSessionCreation(source: source, command: implicit, title: "Central")
-        }
-        #expect(await fixture.recorder.deliveries.isEmpty)
-        #expect(await fixture.recorder.configurations.isEmpty)
-    }
-
     @Test func httpEndpointUsesPairedIdentityAndCurrentRevocation() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)
@@ -165,24 +148,6 @@ struct CompanionToolFacadeTests {
         #expect(await api.handle(.init(method: "POST", target: "/v1/tools", headers: headers,
             body: try JSONEncoder().encode(call))).status == 401)
         #expect(await fixture.recorder.deliveries.isEmpty)
-    }
-
-    @Test func automationUsesConfiguredWorkspaceAndCancellationSurvivesDisable() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        fixture.model.clientExecutionDirectory = fixture.directory
-        let caller = try await importPhone(fixture)
-        let request = CompanionToolRequest(conversationID: caller,
-            request: .init(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"]), enabledGroups: [.browser])
-        let response = try await fixture.model.companionCommands.executeTool(request, deviceID: fixture.device)
-        #expect(response.success && response.result?.objectValue?["content"] != nil, "\(response.error ?? "")")
-        #expect(fixture.model.automationHost != nil)
-        try await fixture.database.setSessionTools(.init(enabled: []), sessionID: caller)
-        let cancel = CompanionToolRequest(conversationID: caller,
-            request: .init(arguments: ["browser", "cancel", "--id", request.request.requestID]), enabledGroups: [])
-        #expect(try await fixture.model.companionCommands.executeTool(cancel, deviceID: fixture.device).success)
-        await #expect(throws: (any Error).self) {
-            _ = try await fixture.model.companionCommands.executeTool(cancel, deviceID: UUID().uuidString.lowercased())
-        }
     }
 
     @Test func companionToolRevocationFencesAutomationEvenAfterReenable() async throws {

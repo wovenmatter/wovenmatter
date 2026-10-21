@@ -8,6 +8,48 @@ import WovenMatterCore
 
 @MainActor @Suite("Secondary Mac offline calendar projection", .serialized)
 struct SecondaryMacCalendarProjectionTests {
+
+    @Test func offlineUIAndNativeAgentEditsShareCalendarAndSyncWithoutRevisionChurn() async throws {
+        let f = try await Fixture(); defer { f.remove() }
+        let saved = try await f.replica.calendar.save(expectedRevision: nil,
+            draft: .init(title: "Offline UI", startsAt: Date(timeIntervalSince1970: 1_700_000_000.123456), timeZoneID: "UTC"))
+        try await f.bridge.reconcile()
+        let initial = try #require(try await f.database.calendarItems().first)
+        #expect(initial.title == "Offline UI")
+        try await f.bridge.reconcile()
+        try await f.restartBridge().reconcile()
+        #expect(try await f.database.calendarItems().first?.calendar.revision == initial.calendar.revision)
+        try await f.synchronize()
+        try await f.bridge.reconcile()
+        let current = try #require(try await f.database.calendarItems().first)
+        var edit = WorkspaceCalendarDraft(current); edit.title = "Native agent edit"
+        _ = try await f.database.saveCalendarEvent(id: saved.id, draft: edit, creating: false, expectedRevision: current.calendar.revision)
+        try await f.bridge.reconcile()
+        #expect(await f.replica.calendar.record(id: saved.id)?.event.draft.title == edit.title)
+        try await f.synchronize()
+        #expect(try await f.central.calendarItems().map(\.title) == [edit.title])
+        let projectedRevision = try #require(try await f.database.calendarItems().first?.calendar.revision)
+        try await f.restartBridge().reconcile()
+        #expect(try await f.database.calendarItems().first?.calendar.revision == projectedRevision)
+        #expect(await f.replica.calendar.pendingCount() == 0)
+    }
+
+
+    @Test func crashAfterReplicaImportBeforeBaselinePersistenceDoesNotDuplicateOrConflict() async throws {
+        let f = try await Fixture(); defer { f.remove() }
+        let id = try await f.database.saveCalendarEvent(draft: .init(title: "Native creation", startsAt: Date(timeIntervalSince1970: 1_700_000_000), timeZoneID: "UTC"), creating: true)
+        let native = try #require(try await f.database.companionCalendarSnapshot().records.first)
+        try await f.replica.calendar.importExecutionRecord(native, base: nil)
+        // The sidecar baseline does not yet exist, as if the process stopped
+        // immediately after the durable replica accepted the native creation.
+        try await f.restartBridge().reconcile()
+        #expect(await f.replica.calendar.conflicts().isEmpty)
+        #expect(await f.replica.calendar.allRecords().map(\.id) == [id])
+        #expect(await f.replica.calendar.pendingCount() == 1)
+        try await f.synchronize()
+        #expect(try await f.central.calendarItems().map(\.id) == [id])
+    }
+
     @MainActor private struct Fixture {
         let directory: URL
         let database: WorkspaceDatabase
@@ -37,31 +79,6 @@ struct SecondaryMacCalendarProjectionTests {
         func restartBridge() throws -> SecondaryMacCalendarProjection {
             try .init(database: database, replica: replica, descriptor: descriptor, directory: directory)
         }
-    }
-
-    @Test func offlineUIAndNativeAgentEditsShareCalendarAndSyncWithoutRevisionChurn() async throws {
-        let f = try await Fixture(); defer { f.remove() }
-        let saved = try await f.replica.calendar.save(expectedRevision: nil,
-            draft: .init(title: "Offline UI", startsAt: Date(timeIntervalSince1970: 1_700_000_000.123456), timeZoneID: "UTC"))
-        try await f.bridge.reconcile()
-        let initial = try #require(try await f.database.calendarItems().first)
-        #expect(initial.title == "Offline UI")
-        try await f.bridge.reconcile()
-        try await f.restartBridge().reconcile()
-        #expect(try await f.database.calendarItems().first?.calendar.revision == initial.calendar.revision)
-        try await f.synchronize()
-        try await f.bridge.reconcile()
-        let current = try #require(try await f.database.calendarItems().first)
-        var edit = WorkspaceCalendarDraft(current); edit.title = "Native agent edit"
-        _ = try await f.database.saveCalendarEvent(id: saved.id, draft: edit, creating: false, expectedRevision: current.calendar.revision)
-        try await f.bridge.reconcile()
-        #expect(await f.replica.calendar.record(id: saved.id)?.event.draft.title == edit.title)
-        try await f.synchronize()
-        #expect(try await f.central.calendarItems().map(\.title) == [edit.title])
-        let projectedRevision = try #require(try await f.database.calendarItems().first?.calendar.revision)
-        try await f.restartBridge().reconcile()
-        #expect(try await f.database.calendarItems().first?.calendar.revision == projectedRevision)
-        #expect(await f.replica.calendar.pendingCount() == 0)
     }
 
     @Test func concurrentNativeAndReplicaEditsRetainBothAndResolutionSurvivesRestart() async throws {
@@ -170,18 +187,4 @@ struct SecondaryMacCalendarProjectionTests {
         #expect(resumed.task.configuration.tools.enabled == [.calendar, .goals])
     }
 
-    @Test func crashAfterReplicaImportBeforeBaselinePersistenceDoesNotDuplicateOrConflict() async throws {
-        let f = try await Fixture(); defer { f.remove() }
-        let id = try await f.database.saveCalendarEvent(draft: .init(title: "Native creation", startsAt: Date(timeIntervalSince1970: 1_700_000_000), timeZoneID: "UTC"), creating: true)
-        let native = try #require(try await f.database.companionCalendarSnapshot().records.first)
-        try await f.replica.calendar.importExecutionRecord(native, base: nil)
-        // The sidecar baseline does not yet exist, as if the process stopped
-        // immediately after the durable replica accepted the native creation.
-        try await f.restartBridge().reconcile()
-        #expect(await f.replica.calendar.conflicts().isEmpty)
-        #expect(await f.replica.calendar.allRecords().map(\.id) == [id])
-        #expect(await f.replica.calendar.pendingCount() == 1)
-        try await f.synchronize()
-        #expect(try await f.central.calendarItems().map(\.id) == [id])
-    }
 }

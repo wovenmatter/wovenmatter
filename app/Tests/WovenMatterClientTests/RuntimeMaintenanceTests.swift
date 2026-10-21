@@ -4,28 +4,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RuntimeMaintenanceTests {
-    @Test func ordersVersionsWithoutTreatingUnknownAsCurrent() {
-        #expect(RuntimeMaintenance.version("codex-acp 1.7.0", precedes: "1.11.0"))
-        #expect(!RuntimeMaintenance.version("1.11.0", precedes: "1.7.0"))
-        #expect(RuntimeMaintenance.version("0.0.0-beta-19000", precedes: "0.0.0-beta-19278"))
-        #expect(RuntimeMaintenance.version("1.2.3-beta.9", precedes: "1.2.3"))
-        #expect(!RuntimeMaintenance.version("unknown", precedes: "1.11.0"))
-        #expect(!RuntimeMaintenance.version("2026.09.10-abc", precedes: "2026.09.10-def"))
-        #expect(RuntimeMaintenance.version("2026.09.09-abc", precedes: "2026.09.10-def"))
-    }
-
-    @Test func registryRejectsPlaceholderAndRanges() async throws {
-        let version = try await RuntimeMaintenance.registryVersion("@example/cli", fetch: { url in
-            #expect(url.absoluteString == "https://registry.npmjs.org/@example%2fcli/latest")
-            return Data(#"{"version":"1.11.0","bin":{"cli":"bin.js"}}"#.utf8)
-        })
-        #expect(version == "1.11.0")
-        await #expect(throws: (any Error).self) {
-            try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: { _ in
-                Data(#"{"version":"0.0.0-reserved"}"#.utf8)
-            })
-        }
-    }
 
     @Test func newestSupportedMajorSurvivesLatestTagMoving() async throws {
         let version = try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: { url in
@@ -90,6 +68,38 @@ struct RuntimeMaintenanceTests {
         #expect(RuntimeMaintenance.bundledEngine(in: root, kind: .claudeCode) == native.appending(path: "claude"))
     }
 
+    @Test func openCodeInventorySeparatesV2CLIFromRegisteredServiceWithoutCopyingCredentials() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appending(path: "opencode2")
+        try Data("#!/bin/sh\necho 2.0.22\n".utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        let registration = root.appending(path: "service.json")
+        try JSONSerialization.data(withJSONObject: ["url": "http://127.0.0.1:12345", "pid": 12345, "password": "fixture-secret", "version": "0.0.0-beta-19000"]).write(to: registration)
+        let inventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: false,
+            resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.path]),
+            selectedOpenCode: cli, openCodeRegistration: registration)
+        #expect(inventory.isInstalled)
+        #expect(inventory.components[0].installed == "2.0.22")
+        #expect(inventory.components[1].installed == "0.0.0-beta-19000")
+        #expect(!inventory.components[1].required)
+        let prompt = RuntimeMaintenance.diagnostic(inventory: inventory, kind: .opencode, attempts: 2, failure: "Verification failed")
+        #expect(!prompt.contains("fixture-secret"))
+        #expect(!prompt.contains("12345"))
+        #expect(!prompt.contains(root.path))
+    }
+
+    @Test func ordersVersionsWithoutTreatingUnknownAsCurrent() {
+        #expect(RuntimeMaintenance.version("codex-acp 1.7.0", precedes: "1.11.0"))
+        #expect(!RuntimeMaintenance.version("1.11.0", precedes: "1.7.0"))
+        #expect(RuntimeMaintenance.version("0.0.0-beta-19000", precedes: "0.0.0-beta-19278"))
+        #expect(RuntimeMaintenance.version("1.2.3-beta.9", precedes: "1.2.3"))
+        #expect(!RuntimeMaintenance.version("unknown", precedes: "1.11.0"))
+        #expect(!RuntimeMaintenance.version("2026.09.10-abc", precedes: "2026.09.10-def"))
+        #expect(RuntimeMaintenance.version("2026.09.09-abc", precedes: "2026.09.10-def"))
+    }
+
     @Test func failedVerificationPreservesThePreviousLauncherAndDependencyTree() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -123,28 +133,6 @@ struct RuntimeMaintenanceTests {
         #expect(FileManager.default.isExecutableFile(atPath: firstTree.path))
         let installed = try FileManager.default.contentsOfDirectory(at: prefix.appending(path: "Installations"), includingPropertiesForKeys: nil)
         #expect(installed.count == 1)
-    }
-
-    @Test func openCodeInventorySeparatesV2CLIFromRegisteredServiceWithoutCopyingCredentials() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let cli = root.appending(path: "opencode2")
-        try Data("#!/bin/sh\necho 2.0.22\n".utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
-        let registration = root.appending(path: "service.json")
-        try JSONSerialization.data(withJSONObject: ["url": "http://127.0.0.1:12345", "pid": 12345, "password": "fixture-secret", "version": "0.0.0-beta-19000"]).write(to: registration)
-        let inventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: false,
-            resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.path]),
-            selectedOpenCode: cli, openCodeRegistration: registration)
-        #expect(inventory.isInstalled)
-        #expect(inventory.components[0].installed == "2.0.22")
-        #expect(inventory.components[1].installed == "0.0.0-beta-19000")
-        #expect(!inventory.components[1].required)
-        let prompt = RuntimeMaintenance.diagnostic(inventory: inventory, kind: .opencode, attempts: 2, failure: "Verification failed")
-        #expect(!prompt.contains("fixture-secret"))
-        #expect(!prompt.contains("12345"))
-        #expect(!prompt.contains(root.path))
     }
 
     @Test func timesOutWithoutLeavingAChildWriter() throws {

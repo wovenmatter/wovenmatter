@@ -7,6 +7,107 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct SecondaryMacExecutionWorkspaceTests {
+
+    @Test func toolChangesProjectThroughReplicaWithoutOverwritingOfflineEdits() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let libraryID = UUID().uuidString.lowercased()
+        let content = try NoteDocument(blocks: [.richText(.init(text: "Original"))]).encoded()
+        let note = CompanionNote(id: UUID().uuidString.lowercased(), title: "Shared", content: content, revision: 1)
+        try await replica.apply(.init(workspaceID: libraryID, cursor: 0, notes: [note]))
+        let owner = await replica.snapshot().deviceID
+        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
+            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        #expect(try await fixture.database.companionNote(id: note.id)?.content == content)
+        let offlineContent = try NoteDocument(blocks: [.richText(.init(text: "Offline editor"))]).encoded()
+        try await replica.editNote(id: note.id, title: note.title, content: offlineContent, folderID: nil, base: note)
+        let toolContent = try NoteDocument(blocks: [.richText(.init(text: "Agent writing"))]).encoded()
+        let current = try #require(try await fixture.database.companionNote(id: note.id))
+        let changed = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .updateNote,
+            resourceID: note.id, expectedRevision: current.revision, title: note.title, content: toolContent))
+        #expect(changed.status == .accepted)
+        try await workspace.capture()
+        let conflict = try #require(await replica.snapshot().conflicts[note.id])
+        #expect(conflict.local.content == toolContent)
+        #expect(conflict.remote?.content == offlineContent)
+        #expect(try await fixture.database.companionNote(id: note.id)?.content == toolContent)
+        _ = try await replica.preserveConflictAsCopy(id: note.id)
+        try await workspace.capture()
+        #expect(await replica.snapshot().conflicts[note.id] == nil)
+        #expect(try await fixture.database.companionNote(id: note.id)?.content == offlineContent)
+    }
+
+
+    @Test func toolCreatedFoldersAndNotesUseStableIDsAndDeletionReturnsToReplica() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let libraryID = UUID().uuidString.lowercased()
+        try await replica.verifyWorkspace(libraryID)
+        let owner = await replica.snapshot().deviceID
+        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
+            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        let folder = try await fixture.database.createFolder(name: "Tool folder")
+        let content = try NoteDocument(blocks: [.richText(.init(text: "Tool note"))]).encoded()
+        let note = try await fixture.database.createNote(folderID: folder, title: "Tool note", content: content)
+        try await workspace.capture()
+        let projected = await replica.snapshot()
+        #expect(projected.folders[folder]?.name == "Tool folder")
+        #expect(projected.notes[note]?.folderID == folder)
+        #expect(projected.outbox.map(\.mutation.kind) == [.createFolder, .createNote])
+        // A tool rename updates the queued creation without changing identity.
+        try await fixture.database.renameFolder(id: folder, name: "Renamed tool folder")
+        try await workspace.capture()
+        let renamed = await replica.snapshot()
+        #expect(renamed.folders[folder]?.name == "Renamed tool folder")
+        #expect(renamed.notes[note]?.folderID == folder)
+        #expect(renamed.outbox.filter { $0.mutation.resourceID == folder }.count == 1)
+        #expect(renamed.outbox.first { $0.mutation.resourceID == folder }?.mutation.title == "Renamed tool folder")
+        let saved = try #require(try await fixture.database.companionNote(id: note))
+        #expect(try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .deleteNote,
+            resourceID: note, expectedRevision: saved.revision)).status == .accepted)
+        try await workspace.capture()
+        #expect(await replica.snapshot().notes[note] == nil)
+        #expect(!(await replica.snapshot().outbox.contains { $0.mutation.resourceID == note }))
+        try await fixture.database.deleteFolder(id: folder)
+        try await workspace.capture()
+        let removed = await replica.snapshot()
+        #expect(removed.folders[folder] == nil)
+        #expect(!removed.outbox.contains { $0.mutation.resourceID == folder })
+        let reopened = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let restored = await reopened.snapshot()
+        #expect(restored.folders[folder] == nil && restored.notes[note] == nil)
+        #expect(!restored.outbox.contains { $0.mutation.resourceID == folder || $0.mutation.resourceID == note })
+    }
+
+    @Test func linkedDocumentsProjectWithoutWeakeningNetworkMutationAndStaleDeletionRecovers() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let libraryID = UUID().uuidString.lowercased()
+        let content = try NoteDocument(kind: .html, html: "<p>Linked</p>", databaseLink: .init(
+            sourceID: "workspace", databaseID: "fixture", relativePath: "data.sqlite")).encoded()
+        let note = CompanionNote(id: UUID().uuidString.lowercased(), title: "Linked", content: content, revision: 1)
+        try await replica.apply(.init(workspaceID: libraryID, cursor: 0, notes: [note]))
+        let owner = await replica.snapshot().deviceID
+        let rejected = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .createNote,
+            resourceID: UUID().uuidString.lowercased(), title: note.title, content: content))
+        #expect(rejected.status == .invalid)
+        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
+            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        let projected = try #require(try await fixture.database.companionNote(id: note.id))
+        #expect(projected.content == content)
+        _ = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .deleteNote,
+            resourceID: note.id, expectedRevision: projected.revision))
+        try await replica.editNote(id: note.id, title: "Newer title", content: content, folderID: nil, base: note)
+        try await workspace.capture()
+        #expect(await replica.snapshot().notes[note.id]?.title == "Newer title")
+        #expect(try await fixture.database.companionNote(id: note.id)?.title == "Newer title")
+        let ownLibrary = try await fixture.database.companionWorkspaceID()
+        await #expect(throws: (any Error).self) {
+            _ = try await fixture.database.applyExecutionReplicaProjection(.init(deviceID: owner, kind: .deleteNote,
+                resourceID: note.id, expectedRevision: projected.revision), libraryID: ownLibrary, workspaceID: owner)
+        }
+    }
+
     @Test func largeOwnerHistoryImportsCompletelyAndDoesNotBlockLaterEvents() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let identity = try await fixture.database.companionLibraryIdentity()
@@ -42,30 +143,6 @@ struct SecondaryMacExecutionWorkspaceTests {
         _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: later), deviceID: identity.hostDeviceID)
         #expect(await journal.snapshot().transcripts[id]?.activities.compactMap(\.detail).joined() == "Short update")
         #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == entries.last!.originSequence + Int64(later.count))
-    }
-
-    @Test func freshConversationJournalImportsIntoTheCentralLibraryBeforeAnyRun() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let central = try await WorkspaceDatabase(url: fixture.directory.appending(path: "central.sqlite"))
-        let libraryID = try await central.companionLibraryIdentity().libraryID
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        try await replica.apply(CompanionSnapshot(workspaceID: libraryID, cursor: 0))
-        let owner = await replica.snapshot().deviceID
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        _ = try await central.registerCompanionExecutionWorkspace(.init(workspace: workspace.descriptor), deviceID: owner)
-        let conversation = UUID().uuidString.lowercased()
-        let command = CompanionCommand(deviceID: owner, kind: .createSession, conversationID: conversation, providerID: "local:codex", workspaceID: owner)
-        let receipt = try await workspace.command(command)
-        #expect(receipt.status == .completed)
-        let page = try await workspace.events(after: 0)
-        #expect(page.entries.first?.kind == .conversation)
-        let accepted = try await central.ingestCompanionJournal(.init(libraryID: libraryID, entries: page.entries), deviceID: owner)
-        #expect(accepted.acceptedEventIDs == page.entries.map(\.eventID))
-        #expect(try await central.companionExecutionOwner(conversationID: conversation) == owner)
-        #expect(try await workspace.command(command) == receipt)
-        let retried = try await workspace.events(after: accepted.cursor)
-        _ = try await central.ingestCompanionJournal(.init(libraryID: libraryID, entries: retried.entries), deviceID: owner)
     }
 
     @Test func managementRequestCannotCrossAHostRestartAtTheSameEndpoint() async throws {
@@ -117,88 +194,6 @@ struct SecondaryMacExecutionWorkspaceTests {
             "authorization": "Bearer " + credential.token, "x-woven-protocol": String(CompanionProtocol.version),
             "x-woven-library": libraryID, "x-woven-workspace": owner, "x-woven-device": deviceID])
         #expect(await restarted(executionRead).status == 401)
-    }
-
-    @Test func toolChangesProjectThroughReplicaWithoutOverwritingOfflineEdits() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        let content = try NoteDocument(blocks: [.richText(.init(text: "Original"))]).encoded()
-        let note = CompanionNote(id: UUID().uuidString.lowercased(), title: "Shared", content: content, revision: 1)
-        try await replica.apply(.init(workspaceID: libraryID, cursor: 0, notes: [note]))
-        let owner = await replica.snapshot().deviceID
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        #expect(try await fixture.database.companionNote(id: note.id)?.content == content)
-        let offlineContent = try NoteDocument(blocks: [.richText(.init(text: "Offline editor"))]).encoded()
-        try await replica.editNote(id: note.id, title: note.title, content: offlineContent, folderID: nil, base: note)
-        let toolContent = try NoteDocument(blocks: [.richText(.init(text: "Agent writing"))]).encoded()
-        let current = try #require(try await fixture.database.companionNote(id: note.id))
-        let changed = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .updateNote,
-            resourceID: note.id, expectedRevision: current.revision, title: note.title, content: toolContent))
-        #expect(changed.status == .accepted)
-        try await workspace.capture()
-        let conflict = try #require(await replica.snapshot().conflicts[note.id])
-        #expect(conflict.local.content == toolContent)
-        #expect(conflict.remote?.content == offlineContent)
-        #expect(try await fixture.database.companionNote(id: note.id)?.content == toolContent)
-        _ = try await replica.preserveConflictAsCopy(id: note.id)
-        try await workspace.capture()
-        #expect(await replica.snapshot().conflicts[note.id] == nil)
-        #expect(try await fixture.database.companionNote(id: note.id)?.content == offlineContent)
-    }
-
-    @Test func toolCreatedFoldersAndNotesUseStableIDsAndDeletionReturnsToReplica() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        try await replica.verifyWorkspace(libraryID)
-        let owner = await replica.snapshot().deviceID
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        let folder = try await fixture.database.createFolder(name: "Tool folder")
-        let content = try NoteDocument(blocks: [.richText(.init(text: "Tool note"))]).encoded()
-        let note = try await fixture.database.createNote(folderID: folder, title: "Tool note", content: content)
-        try await workspace.capture()
-        let projected = await replica.snapshot()
-        #expect(projected.folders[folder]?.name == "Tool folder")
-        #expect(projected.notes[note]?.folderID == folder)
-        #expect(projected.outbox.map(\.mutation.kind) == [.createFolder, .createNote])
-        let saved = try #require(try await fixture.database.companionNote(id: note))
-        #expect(try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .deleteNote,
-            resourceID: note, expectedRevision: saved.revision)).status == .accepted)
-        try await workspace.capture()
-        #expect(await replica.snapshot().notes[note] == nil)
-        #expect(!(await replica.snapshot().outbox.contains { $0.mutation.resourceID == note }))
-    }
-
-    @Test func linkedDocumentsProjectWithoutWeakeningNetworkMutationAndStaleDeletionRecovers() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        let content = try NoteDocument(kind: .html, html: "<p>Linked</p>", databaseLink: .init(
-            sourceID: "workspace", databaseID: "fixture", relativePath: "data.sqlite")).encoded()
-        let note = CompanionNote(id: UUID().uuidString.lowercased(), title: "Linked", content: content, revision: 1)
-        try await replica.apply(.init(workspaceID: libraryID, cursor: 0, notes: [note]))
-        let owner = await replica.snapshot().deviceID
-        let rejected = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .createNote,
-            resourceID: UUID().uuidString.lowercased(), title: note.title, content: content))
-        #expect(rejected.status == .invalid)
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        let projected = try #require(try await fixture.database.companionNote(id: note.id))
-        #expect(projected.content == content)
-        _ = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .deleteNote,
-            resourceID: note.id, expectedRevision: projected.revision))
-        try await replica.editNote(id: note.id, title: "Newer title", content: content, folderID: nil, base: note)
-        try await workspace.capture()
-        #expect(await replica.snapshot().notes[note.id]?.title == "Newer title")
-        #expect(try await fixture.database.companionNote(id: note.id)?.title == "Newer title")
-        let ownLibrary = try await fixture.database.companionWorkspaceID()
-        await #expect(throws: (any Error).self) {
-            _ = try await fixture.database.applyExecutionReplicaProjection(.init(deviceID: owner, kind: .deleteNote,
-                resourceID: note.id, expectedRevision: projected.revision), libraryID: ownLibrary, workspaceID: owner)
-        }
     }
 
     @Test func directCommandsAreIdempotentAndActiveRunsBlockRoleChanges() async throws {

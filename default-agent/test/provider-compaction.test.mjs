@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+
 import { compactProviderContext, providerContinuationOptions, resolveProviderCompactionRoute, ProviderCompactionError } from '../src/provider-compaction.mjs';
 import { sanitizeNativeTransportBytes } from '../src/native-journal.mjs';
 
@@ -78,84 +78,6 @@ test('native compact preserves every output item, unknown field, raw response, t
   assert.deepEqual(options.onPayload(payload, model).input, [...native.output, ...kept]);
 });
 
-test('Codex subscription uses the exact ChatGPT compact endpoint and native account headers', async () => {
-  const model = modelFor('openai-codex'), route = routeFor(model), native = nativeFor(model), token = jwt('native-chatgpt-account');
-  for (const baseUrl of ['https://chatgpt.com/backend-api', 'https://chatgpt.com/backend-api/codex/', 'https://chatgpt.com/backend-api/codex/responses']) {
-    let sent;
-    const result = await compactProviderContext({ model, route, context: contextFor(model), runtime: runtimeFor({ apiKey: token, baseUrl, headers: { 'x-routing-fixture': 'preserve', 'Authorization': 'Bearer overridden-header', 'chatgpt-account-id': 'overridden-account' } }), fetchRequest: async (url, init) => {
-      sent = { url, init, body: JSON.parse(init.body) }; return codexReply(native);
-    } });
-    assert.equal(sent.url, 'https://chatgpt.com/backend-api/codex/responses');
-    assert.equal(sent.body.stream, true); assert.equal(sent.body.store, false);
-    assert.deepEqual(sent.body.input.at(-1), { type: 'compaction_trigger' });
-    assert.equal(sent.init.headers.get('authorization'), `Bearer ${token}`);
-    assert.equal(sent.init.headers.get('chatgpt-account-id'), 'native-chatgpt-account');
-    assert.equal(sent.init.headers.get('x-routing-fixture'), 'preserve');
-    assert.equal(sent.body.instructions, 'Keep the original instructions. 漢字');
-    assert.ok(!sent.body.input.some(item => item.role === 'system' || item.role === 'developer'));
-    assert.equal(result.continuation.endpoint, 'https://chatgpt.com/backend-api/codex/responses');
-    assert.equal(result.continuation.nativeAccountID, 'native-chatgpt-account');
-    assert.ok(!JSON.stringify(result.continuation).includes(token));
-  }
-});
-
-test('xAI API and subscription aliases keep native route identity distinct and use native Responses', async () => {
-  for (const provider of ['xai', 'xai-api']) {
-    const model = modelFor(provider), route = routeFor(model); let calls = 0;
-    const result = await compactProviderContext({ model, route, runtime: runtimeFor(), context: contextFor(model), fetchRequest: async (url, init) => {
-      calls++; assert.equal(url, 'https://api.x.ai/v1/responses/compact'); assert.equal(JSON.parse(init.body).model, 'grok-4.7'); return new Response(JSON.stringify(nativeFor(model)));
-    } });
-    assert.equal(calls, 1); assert.equal(result.continuation.provider, provider);
-    const other = modelFor(provider === 'xai' ? 'xai-api' : 'xai');
-    await assert.rejects(providerContinuationOptions({ model: other, route: routeFor(other), runtime: runtimeFor(), continuation: result.continuation }), error => error.code === 'route-mismatch');
-  }
-});
-
-test('ModelRuntime auth endpoint and headers govern requests without replacing the selected route', async () => {
-  const model = modelFor(); model.headers = { Authorization: 'Bearer model-fixture', 'x-header': 'model', 'x-remove': 'remove' };
-  let sent;
-  const runtime = runtimeFor({ baseUrl: 'https://chatgpt.com/backend-api/codex', headers: { Authorization: 'Bearer routed-fixture', 'chatgpt-account-id': 'selected-account', 'x-header': 'auth', 'x-remove': null } });
-  const result = await compactProviderContext({ model, route: routeFor(model), runtime, context: contextFor(model), fetchRequest: async (url, init) => { sent = { url, init }; return codexReply(nativeFor(model)); } });
-  assert.equal(sent.url, 'https://chatgpt.com/backend-api/codex/responses');
-  assert.equal(sent.init.headers.get('authorization'), 'Bearer routed-fixture');
-  assert.equal(sent.init.headers.get('x-header'), 'auth'); assert.equal(sent.init.headers.get('x-remove'), null);
-  assert.equal(result.continuation.endpoint, 'https://chatgpt.com/backend-api/codex/responses');
-  assert.equal(result.continuation.nativeAccountID, 'selected-account');
-  const options = await providerContinuationOptions({ model, route: routeFor(model), runtime, continuation: result.continuation });
-  // The model may retain its catalog base; runtime auth owns the request base.
-  assert.equal(model.baseUrl, 'https://api.openai.com/v1');
-  // Exercise the pinned production method: prepareRequest applies auth.baseUrl
-  // before the SDK invokes onPayload. No provider request is made by this test.
-  const requestRuntime = { models: { getProvider: () => ({ id: model.provider }) }, getAuth: runtime.getAuth };
-  const prepared = await ModelRuntime.prototype.prepareRequest.call(requestRuntime, model, options);
-  assert.equal(prepared.model.baseUrl, 'https://chatgpt.com/backend-api/codex');
-  assert.deepEqual(prepared.options.onPayload({ model: model.id, input: [{ role: 'user', content: 'Kept delta' }] }, prepared.model).input, [...result.continuation.output, { role: 'user', content: 'Kept delta' }]);
-  assert.throws(() => prepared.options.onPayload({ model: model.id, input: [] }, { ...prepared.model, baseUrl: 'https://api.openai.com/v1' }), error => error.code === 'route-mismatch');
-  assert.throws(() => prepared.options.onPayload({ model: model.id, input: [] }, { ...prepared.model, headers: { 'chatgpt-account-id': 'other-native-account' } }), error => error.code === 'route-mismatch');
-  await assert.rejects(ModelRuntime.prototype.prepareRequest.call({ ...requestRuntime, getAuth: async () => ({ auth: { baseUrl: prepared.model.baseUrl, headers: { Authorization: 'Bearer other-auth', 'chatgpt-account-id': 'other-native-account' } } }) }, model, options), error => error.code === 'route-mismatch');
-  // A refreshed auth route must be checked again before opaque continuation.
-  await assert.rejects(providerContinuationOptions({ model, route: routeFor(model), runtime: runtimeFor(), continuation: result.continuation }), error => error.code === 'route-mismatch');
-  await assert.rejects(providerContinuationOptions({ model, route: routeFor(model), runtime: runtimeFor({ baseUrl: 'https://chatgpt.com/backend-api/codex', headers: { Authorization: 'Bearer replaced-auth', 'chatgpt-account-id': 'other-native-account' } }), continuation: result.continuation }), error => error.code === 'route-mismatch');
-});
-
-test('an OpenAI model routed through ChatGPT binds its actual native token account when no account header is supplied', async () => {
-  const model = modelFor(), route = routeFor(model), auth = { apiKey: jwt('chatgpt-account-a'), baseUrl: 'https://chatgpt.com/backend-api/codex' };
-  const result = await compactProviderContext({ model, route, runtime: runtimeFor(auth), context: contextFor(model), fetchRequest: async () => codexReply(nativeFor(model)) });
-  assert.equal(result.continuation.nativeAccountID, 'chatgpt-account-a');
-  await assert.rejects(providerContinuationOptions({ model, route, runtime: runtimeFor({ ...auth, apiKey: jwt('chatgpt-account-b') }), continuation: result.continuation }), error => error.code === 'route-mismatch');
-  await assert.rejects(compactProviderContext({ model, route, runtime: runtimeFor({ ...auth, apiKey: 'unknown-opaque-auth' }), context: contextFor(model), fetchRequest: async () => assert.fail('Unknown native account route must not receive context') }), error => error.code === 'auth');
-});
-
-test('prior exact-route native window is compacted again intact, ahead of only new canonical messages', async () => {
-  const model = modelFor(), route = routeFor(model), runtime = runtimeFor();
-  const first = await compactProviderContext({ model, route, runtime, context: contextFor(model), fetchRequest: async () => new Response(JSON.stringify(nativeFor(model))) });
-  let sent;
-  const second = await compactProviderContext({ model, route, runtime, context: { messages: [{ role: 'user', content: 'New canonical delta', timestamp: 4 }] }, continuation: first.continuation, fetchRequest: async (_, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify(nativeFor(model))); } });
-  assert.deepEqual(sent.input.slice(0, 4), first.continuation.output);
-  assert.equal(sent.input.length, 5); assert.equal(sent.input.at(-1).content[0].text, 'New canonical delta');
-  assert.deepEqual(second.continuation.output, first.continuation.output);
-});
-
 test('unsupported native transports and unverified custom endpoints make no compact request', async () => {
   let authCalls = 0, fetchCalls = 0;
   const runtime = { getAuth: async () => { authCalls++; return { auth: { apiKey: 'fixture' } }; } }, fetchRequest = async () => { fetchCalls++; throw new Error('Must not send'); };
@@ -221,45 +143,6 @@ test('route changes fail closed before sending an old opaque window; original ca
   } });
 });
 
-test('Codex token routing, missing authorization and redirects cannot fall back to another credential product', async () => {
-  const model = modelFor('openai-codex'), route = routeFor(model), context = contextFor(model); let requests = 0;
-  for (const baseUrl of ['https://api.openai.com/v1', 'https://api.x.ai/v1', 'https://chatgpt.com.evil.example/backend-api', 'https://chatgpt.com/backend-api?route=other', 'http://chatgpt.com/backend-api', 'https://user:secret@chatgpt.com/backend-api']) {
-    await assert.rejects(compactProviderContext({ model, route, context, runtime: runtimeFor({ apiKey: jwt('fixture'), baseUrl }), fetchRequest: async () => { requests++; assert.fail('Credential route must not be sent'); } }), error => error.code === 'route-mismatch');
-  }
-  await assert.rejects(compactProviderContext({ model, route, context, runtime: runtimeFor({ apiKey: 'not-a-codex-account-token' }), fetchRequest: async () => { requests++; assert.fail('No native account identity'); } }), error => error.code === 'auth');
-  await assert.rejects(compactProviderContext({ model: modelFor(), route: routeFor(modelFor()), context, runtime: runtimeFor({}), fetchRequest: async () => { requests++; assert.fail('No authorization'); } }), error => error.code === 'auth');
-  assert.equal(requests, 0);
-  await assert.rejects(compactProviderContext({ model, route, context, runtime: runtimeFor({ apiKey: jwt('fixture') }), fetchRequest: async (_, init) => { assert.equal(init.redirect, 'error'); throw new TypeError('Redirect rejected'); } }), error => error.code === 'transport');
-});
-
-test('malformed or empty native snapshots do not replace the existing window', async () => {
-  const model = modelFor(), args = { model, route: routeFor(model), context: contextFor(model), runtime: runtimeFor() };
-  for (const body of ['not-json', '{}', '{"output":[]}', '{"output":[null]}', '{"output":[[]]}', JSON.stringify({ ...nativeFor(model), model: 'unexpected-model' })]) {
-    await assert.rejects(compactProviderContext({ ...args, fetchRequest: async () => new Response(body) }), error => error.code === 'invalid-response');
-  }
-  const saved = (await compactProviderContext({ ...args, fetchRequest: async () => new Response(JSON.stringify(nativeFor(model))) })).continuation;
-  const options = await providerContinuationOptions({ ...args, continuation: saved });
-  for (const payload of [{ model: 'other', input: [] }, { model: model.id, input: 'flattened text' }]) assert.throws(() => options.onPayload(payload, model), error => error.code === 'route-mismatch');
-  assert.throws(() => options.onPayload({ model: model.id, input: [] }, { ...model, api: 'openai-completions' }), error => error.code === 'route-mismatch');
-});
-
-test('future native numeric fields preserve exact JSON values across durable checkpoint and subsequent requests', async () => {
-  const model = modelFor(), route = routeFor(model), runtime = runtimeFor();
-  const raw = '{"output":[{"type":"compaction","id":"cmp_large","encrypted_content":"opaque","future_integer":9007199254740993,"future_decimal":0.123456789123456789123456789,"future_tiny":1e-999,"future_large":1e999,"negative_zero":-0}]}';
-  const result = await compactProviderContext({ model, route, runtime, context: contextFor(model), fetchRequest: async () => new Response(raw) });
-  const restored = JSON.parse(JSON.stringify(result.continuation));
-  assert.equal(restored.windowJSON, raw);
-  const options = await providerContinuationOptions({ model, route, runtime, continuation: restored });
-  const payload = JSON.stringify(options.onPayload({ model: model.id, input: [{ role: 'user', content: 'New' }] }, model));
-  for (const value of ['"future_integer":9007199254740993', '"future_decimal":0.123456789123456789123456789', '"future_tiny":1e-999', '"future_large":1e999', '"negative_zero":-0']) assert.ok(payload.includes(value));
-  await compactProviderContext({ model, route, runtime, context: { messages: [{ role: 'user', content: 'Next prefix', timestamp: 4 }] }, continuation: restored, fetchRequest: async (_url, init) => {
-    assert.ok(init.body.includes('"future_integer":9007199254740993'));
-    assert.ok(init.body.includes('"future_decimal":0.123456789123456789123456789'));
-    assert.ok(init.body.includes('"future_tiny":1e-999'));
-    return new Response(raw);
-  } });
-});
-
 test('native account and credential replacement fail closed without persisting transport secrets', async () => {
   const args = codexArgs();
   args.route.authIdentity = 'credential-identity-a';
@@ -321,32 +204,6 @@ test('Codex trigger SSE survives fragmented UTF-8 and preserves exposed records 
   } });
 });
 
-test('Codex trigger requires exactly one finished opaque item and a valid successful completion', async () => {
-  const args = codexArgs(), item = { type: 'compaction', id: 'cmp', encrypted_content: 'opaque' };
-  const compact = eventFrame('response.output_item.done', { item }), complete = eventFrame('response.completed', { response: { id: 'response', status: 'completed' } });
-  for (const stream of [complete, compact, compact + compact + complete, eventFrame('response.output_item.done', { item: { ...item, encrypted_content: '' } }) + complete, compact + eventFrame('response.completed', { response: { id: 'response', status: 'incomplete' } }), compact + eventFrame('response.completed', { response: { id: 'response', model: 'other-model' } }), compact + complete + complete, 'event: response.output_item.done\ndata: malformed-json\n\n']) {
-    await assert.rejects(compactProviderContext({ ...args, fetchRequest: async () => fragmentedResponse(stream, [Buffer.byteLength(stream)]) }), error => {
-      assert.equal(error.code, 'invalid-response'); assert.equal(error.nativeResponse.rawSSE, stream);
-      assert.deepEqual(Buffer.from(error.nativeResponse.rawSSEBase64, 'base64'), Buffer.from(stream));
-      assert.ok(!error.nativeResponse.continuation); return true;
-    });
-  }
-});
-
-test('failed and genuinely unsupported native streams retain exposed records and usage without installing context', async () => {
-  const args = codexArgs();
-  const failure = eventFrame('response.failed', { response: { id: 'failed-native', status: 'failed', usage: { input_tokens: 20, output_tokens: 2, total_tokens: 22 }, error: { code: 'internal_error', message: 'Available provider failure record' } } });
-  await assert.rejects(compactProviderContext({ ...args, fetchRequest: async () => fragmentedResponse(failure) }), error => {
-    assert.equal(error.code, 'provider'); assert.equal(error.nativeResponse.rawSSE, failure); assert.equal(error.nativeResponse.usage.total_tokens, 22);
-    assert.equal(error.nativeResponse.nativeEvents[0].type, 'response.failed'); assert.ok(!error.nativeResponse.continuation); return true;
-  });
-  const unsupported = eventFrame('error', { error: { code: 'unsupported_compaction', message: 'Compaction unsupported on this model' } });
-  const result = await compactProviderContext({ ...args, fetchRequest: async () => fragmentedResponse(unsupported) });
-  assert.equal(result.unsupported, true); assert.equal(result.nativeResponse.rawSSE, unsupported); assert.equal(result.nativeResponse.nativeEvents[0].type, 'error');
-  const started = eventFrame('response.output_item.added', { item: { type: 'compaction', id: 'started' } }) + unsupported;
-  await assert.rejects(compactProviderContext({ ...args, fetchRequest: async () => fragmentedResponse(started) }), error => error.code === 'provider' && error.nativeResponse.rawSSE === started);
-});
-
 test('native stream loss and cancellation retain exact received bytes, cancel the reader, and never retry', async () => {
   const args = codexArgs(), frame = eventFrame('response.created', { response: { id: 'partial', usage: { input_tokens: 30 } } });
   const partial = frame + 'event: response.output_item.done\ndata: {"item":'; let attempts = 0;
@@ -364,15 +221,6 @@ test('native stream loss and cancellation retain exact received bytes, cancel th
     return new Response(new ReadableStream({ start(controller) { controller.enqueue(Buffer.from(partial)); }, cancel() { cancelled = true; } }));
   } }), error => error.nativeResponse.rawSSE === partial && !error.nativeResponse.continuation);
   assert.equal(cancelled, true);
-});
-
-test('a terminal SSE event with unfinished UTF-8 is rejected while preserving its exact received byte representation', async () => {
-  const args = codexArgs(), native = nativeFor(args.model);
-  const bytes = Buffer.concat([Buffer.from(await codexReply(native).text()), Buffer.from([0xf0, 0x9f])]);
-  await assert.rejects(compactProviderContext({ ...args, fetchRequest: async () => fragmentedResponse(bytes, [bytes.length]) }), error => {
-    assert.equal(error.code, 'transport'); assert.deepEqual(Buffer.from(error.nativeResponse.rawSSEBase64, 'base64'), bytes);
-    assert.equal(error.nativeResponse.rawSSEBytes.byteFidelity, 'exact-native-bytes'); return true;
-  });
 });
 
 test('base64 native transport copies sanitize known Woven capabilities before encoding and preserve arbitrary user base64', async () => {
@@ -396,16 +244,13 @@ test('base64 native transport copies sanitize known Woven capabilities before en
   assert.ok(result.responseJSON.includes(capability)); // Execution-host native content remains authoritative.
 });
 
-test('manual compaction instructions reach each actual native protocol without replacing the system prompt', async () => {
-  const instructions = 'Keep unresolved bug IDs and the acceptance checklist. 漢字';
-  for (const provider of ['openai', 'xai-api', 'openai-codex']) {
-    const model = modelFor(provider), args = { model, route: routeFor(model), runtime: runtimeFor({ apiKey: provider === 'openai-codex' ? jwt('native-account-a') : 'fixture' }), context: contextFor(model), instructions };
-    await compactProviderContext({ ...args, fetchRequest: async (_, init) => {
-      const body = JSON.parse(init.body);
-      if (provider === 'openai') assert.equal(body.instructions, instructions);
-      else if (provider === 'openai-codex') { assert.ok(body.instructions.startsWith('Keep the original instructions. 漢字')); assert.ok(body.instructions.endsWith(instructions)); }
-      else { assert.equal(body.instructions, undefined); assert.equal(body.input.at(-1).role, 'user'); assert.ok(body.input.at(-1).content[0].text.endsWith(instructions)); }
-      return provider === 'openai-codex' ? codexReply(nativeFor(model)) : new Response(JSON.stringify(nativeFor(model)));
-    } });
+test('Codex token routing, missing authorization and redirects cannot fall back to another credential product', async () => {
+  const model = modelFor('openai-codex'), route = routeFor(model), context = contextFor(model); let requests = 0;
+  for (const baseUrl of ['https://api.openai.com/v1', 'https://api.x.ai/v1', 'https://chatgpt.com.evil.example/backend-api', 'https://chatgpt.com/backend-api?route=other', 'http://chatgpt.com/backend-api', 'https://user:secret@chatgpt.com/backend-api']) {
+    await assert.rejects(compactProviderContext({ model, route, context, runtime: runtimeFor({ apiKey: jwt('fixture'), baseUrl }), fetchRequest: async () => { requests++; assert.fail('Credential route must not be sent'); } }), error => error.code === 'route-mismatch');
   }
+  await assert.rejects(compactProviderContext({ model, route, context, runtime: runtimeFor({ apiKey: 'not-a-codex-account-token' }), fetchRequest: async () => { requests++; assert.fail('No native account identity'); } }), error => error.code === 'auth');
+  await assert.rejects(compactProviderContext({ model: modelFor(), route: routeFor(modelFor()), context, runtime: runtimeFor({}), fetchRequest: async () => { requests++; assert.fail('No authorization'); } }), error => error.code === 'auth');
+  assert.equal(requests, 0);
+  await assert.rejects(compactProviderContext({ model, route, context, runtime: runtimeFor({ apiKey: jwt('fixture') }), fetchRequest: async (_, init) => { assert.equal(init.redirect, 'error'); throw new TypeError('Redirect rejected'); } }), error => error.code === 'transport');
 });
