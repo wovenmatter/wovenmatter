@@ -67,7 +67,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: ^24.22.1
+          check-latest: true
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
@@ -102,7 +103,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: ^24.22.1
+          check-latest: true
       - name: Test companion protocol and runtime integration
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-companion-${{ github.run_id }}-${{ github.run_attempt }}
@@ -154,7 +156,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: ^24.22.1
+          check-latest: true
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote
       - name: Build the remote workspace image
