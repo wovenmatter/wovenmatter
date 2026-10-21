@@ -10,7 +10,7 @@
 - Build and launch: `scripts/build_and_run.sh`.
 - Dev builds have three modes. "Build/run this as a client", "use live data", or "use a live client"
   means `scripts/build_and_run.sh --mode client`. "Build this from a snapshot"
-  or "use a snapshot" means `--mode snapshot`. "Use mode live" or "host the
+  or "use a snapshot" means `--mode snapshot`. "Build the live database" or "host the
   production database directly" means `--mode live`: this Dev app becomes the
   production library host and requires its exclusive execution lease.
   If unspecified, choose client for UI, harness, tool, and instance-owned scheduling

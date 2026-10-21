@@ -28,7 +28,7 @@ the production library, regardless of its instance name.
 
 Agents understand ordinary wording: "build this as a client" means `--mode client`;
 "build this from a snapshot" or "use a snapshot" means `--mode snapshot`.
-"Use mode live" or "host the production database directly" means `--mode live`.
+"Build the live database" or "host the production database directly" means `--mode live`.
 "Live client" or "use live data" still means client; the named `live` mode means the actual host.
 
 Honor the user's explicit choice. Otherwise, agents should choose **client** for
