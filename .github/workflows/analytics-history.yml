@@ -1,7 +1,9 @@
 name: Analytics history
 on:
   schedule:
-    - cron: '0 12 * * *'
+    # Collect ahead of the independent 12:00 UTC PostHog email. Actions may delay
+    # scheduled starts; the dashboard includes the last successful collection time.
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       bootstrap_history:

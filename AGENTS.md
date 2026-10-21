@@ -31,8 +31,10 @@ Follow [the dependency policy](docs/DEPENDENCIES.md).
   reason, documented beside it and in `docs/DEPENDENCIES.md`. It also needs
   a documented maintenance process and a stated validation boundary.
 - Lockfiles, `app/Package.resolved`, and the Node, CEF, and Sparkle records are
-  required. Builds, tests, images, and launch use them (`npm ci`) and never
-  resolve newer dependencies. Change them only through maintenance refresh, and
+  required. Builds and tests consume the committed package graphs (`npm ci`)
+  and native runtime records. Linux base images intentionally follow their
+  supported LTS line, as documented in the policy. Change recorded selections
+  only through maintenance refresh, and
   regenerate dependent provenance in the same change. Never hand-edit
   `app/Package.resolved`; use package-manager tooling to generate the combined
   SwiftPM/Xcode graph. Normal builds consume it with resolution frozen.

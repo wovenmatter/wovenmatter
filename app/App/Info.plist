@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Woven Matter uses your microphone to transcribe dictation with your connected Grok subscription.</string>
+    <string>Woven Matter uses your microphone to transcribe dictation on your Mac. Audio stays on this device.</string>
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>

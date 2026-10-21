@@ -3476,7 +3476,6 @@ final class ApplicationModel {
     var pendingDefaultAgentSettingsScope: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
-    private let backendSpeech = BackendSpeechService()
 
     func refreshLocalACPRuntimesNow(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) {
         if isBackendFrontend { sendBackendRuntimeCommand(.refreshRuntimes(runtimeKinds)); return }
@@ -4337,7 +4336,7 @@ extension ApplicationModel {
     }
 
     private func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
-        let isCommand = request.method.hasSuffix(".command") || request.method == "speech.start"
+        let isCommand = request.method.hasSuffix(".command")
         guard !backendStopping else { return .init(id: request.id, error: "The background service is stopping.") }
         if isCommand { backendCommandsInFlight += 1 }
         defer { if isCommand { backendCommandsInFlight -= 1 } }
@@ -4353,9 +4352,6 @@ extension ApplicationModel {
             if request.method == "analytics.events" {
                 let batch = try JSONDecoder().decode(ProductAnalyticsBatch.self, from: request.payload)
                 return .init(id: request.id, result: try JSONEncoder().encode(await analytics.ingest(batch)))
-            }
-            if request.method.hasPrefix("speech.") {
-                return .init(id: request.id, result: try await backendSpeech.handle(method: request.method, payload: request.payload))
             }
             if request.method == "surfaceProfile.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(macSurfaceProfile))
@@ -4404,9 +4400,6 @@ extension ApplicationModel {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendApplicationState()))
             }
             if request.method == "application.stop" {
-                guard await !backendSpeech.isActive else {
-                    throw BackendRPCError.remote("Finish dictation before stopping the background service.")
-                }
                 guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, !connections.sdks.isBusy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
                       !remoteWorkspaces.isCreating, runningToolSessionIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
                       pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
@@ -4515,10 +4508,6 @@ extension ApplicationModel {
                 try await LocalBackgroundExecution.launchBackendProcess()
             }
             usage.backendRequest = { [weak self] method, payload in
-                guard let self else { throw CancellationError() }
-                return try await self.callBackend(method: method, payload: payload)
-            }
-            DictationModel.shared.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
             }

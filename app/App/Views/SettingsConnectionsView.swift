@@ -18,7 +18,7 @@ struct SettingsConnectionsView: View {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     var body: some View {
-        SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable, Usage, and Dictation.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable and Usage.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
                 keyDrafts.removeAll()
                 answer = ""
@@ -35,7 +35,7 @@ struct SettingsConnectionsView: View {
                     agent.setInherits($0)
                     agent.loadAccounts()
                 }))
-                Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Pi Durable.").font(.callout).foregroundStyle(.secondary)
+                Text("App-wide Usage uses the shared accounts. Workspace overrides apply to Pi Durable.").font(.callout).foregroundStyle(.secondary)
             }
             connectionsSection
                 .transaction { transaction in

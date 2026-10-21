@@ -25,6 +25,8 @@ IOS_DESKTOP_SOURCES = frozenset({
 def scopes(paths):
     def changed(pattern):
         return any(re.search(pattern, path) for path in paths)
+    # Changes to the orchestrator must exercise every lane it controls.
+    infrastructure = changed(r'^(\.github/workflows/ci\.yml|scripts/(test-changes\.sh|ci-scopes\.py|test-support/test_(ci_scopes|ios_runner)\.py))$')
     shared_desktop = any(path == source or path.startswith(source + '/')
                          for path in paths for source in IOS_DESKTOP_SOURCES)
     return dict(
@@ -32,9 +34,9 @@ def scopes(paths):
         # Integration consumes DashboardStore -> Client -> Core. Conservatively
         # cover package sources as the target graph evolves, plus its manifests
         # and lockfile. The companion job also compiles iOS shared desktop files.
-        companion=shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|app/App/(Services/Companion|Models/.*Companion)|app/Sources/|app/Package\.(swift|resolved)$|scripts/(test-companion|test-ios|build-ios))'),
-        ios=shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|scripts/(test-ios|build-ios))'),
-        remote=changed(r'^(remote/|default-agent/|harnesses/|\.dockerignore$|scripts/(remote-workspace|scan-public-tree|test-container|test-remote-workspace)\.sh$)'),
+        companion=infrastructure or shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|app/App/(Services/Companion|Models/.*Companion)|app/Sources/|app/Package\.(swift|resolved)$|scripts/(test-companion|test-ios|build-ios))'),
+        ios=infrastructure or shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|scripts/(test-ios|build-ios))'),
+        remote=infrastructure or changed(r'^(remote/|default-agent/|harnesses/|\.dockerignore$|scripts/(remote-workspace|scan-public-tree|test-container|test-remote-workspace)\.sh$)'),
         updates=changed(r'^(scripts/.*(release|update|sparkle|delta)|app/Updater/|app/App/Services/DesktopUpdater\.swift|\.github/(release-refresh\.json|workflows/(refresh-release|release)\.yml))'),
     )
 

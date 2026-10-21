@@ -28,7 +28,7 @@ struct DictationMicrophone: View {
         }
         .disabled(dictation.phase == .finishing)
         .accessibilityLabel(dictation.retainedTranscript != nil ? "Insert retained dictation here" : dictation.isRecording ? "Stop recording and insert here" : "Start dictation")
-        .help(dictation.retainedTranscript != nil ? "Insert retained dictation here" : dictation.isRecording ? "Stop recording and insert here" : "Dictate with your Grok subscription")
+        .help(dictation.retainedTranscript != nil ? "Insert retained dictation here" : dictation.isRecording ? "Stop recording and insert here" : "Dictate on this Mac")
     }
 
     private var microphoneIcon: some View {
@@ -61,7 +61,7 @@ struct DictationFeedback: View {
     }
     private var title: String {
         switch dictation.phase {
-        case .connecting: "Connecting dictation…"
+        case .preparing: dictation.session.downloadProgress.map { "Preparing dictation language… \(Int($0 * 100))%" } ?? "Preparing on-device dictation…"
         case .recording: "Recording · Stop in any conversation or note to insert there"
         case .finishing: "Finishing transcription…"
         case .idle: dictation.retainedTranscript == nil ? "Dictation" : "Transcript ready"

@@ -28,11 +28,11 @@ for every package update. Three separate mechanisms do that:
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
 
-## Exact selections and their reasons
+## Build selections and compatibility boundaries
 
-These are exact because a wrong or unreviewed version could break security or
-core function. Maintenance checks each for newer releases; exact does not mean
-frozen.
+Security-critical runtimes retain verified exact selections. Ordinary libraries
+use compatibility ranges with their resolved versions recorded in lockfiles.
+Maintenance checks both for newer releases; recorded does not mean frozen.
 
 - **Node LTS** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
@@ -46,8 +46,9 @@ frozen.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
   release commit, and its signing tools come from the same release record.
   Major lines are proposed with the other majors and need careful review.
-- **Peekaboo** runs inside the signed GUI process under its macOS privacy
-  grants. It is required by exact release tag.
+- **Peekaboo** accepts compatible releases from the tested release floor. Its
+  exact build selection lives in the shared native lockfile; maintenance validates
+  automation API compatibility before changing that snapshot.
 - **Pi family and Chord** must resolve to one release, because the desktop
   and mobile bridges share their data contracts. A partially published release
   is skipped.
@@ -77,8 +78,8 @@ background updater.
 
 Maintenance belongs in an owner-run agent task or a manual session. Do not add
 Dependabot or GitHub-hosted dependency proposal schedules. The former monolithic
-refresh script has been removed. Its replacement task, scheduler, and visible
-application owner have not been configured.
+refresh script has been removed. External maintenance jobs are configured separately; this PR does not create
+or alter them.
 
 - Scan the complete dependency declarations and runtime records against current
   upstream releases, including ordinary npm packages, coordinated SDK families,

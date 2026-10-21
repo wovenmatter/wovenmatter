@@ -76,7 +76,8 @@ several independently named workspaces.
 
 Dependency maintenance runs manually or through an owner-run agent task; see
 [the dependency policy](../DEPENDENCIES.md). The former monolithic refresh
-script has been removed, and the replacement scheduled task is not configured.
+script has been removed. External maintenance jobs are configured separately
+from repository CI.
 
 Prepare updates on a dedicated branch based on current `main`. Review current
 upstream releases, update package declarations and lockfiles through their

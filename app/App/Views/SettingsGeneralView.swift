@@ -219,17 +219,16 @@ struct SettingsGeneralView: View {
     }
     private var dictationCard: some View {
         @Bindable var dictation = DictationModel.shared
-        return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes using your Grok subscription.") {
-            Toggle("Enable dictation", isOn: $dictation.enabled)
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(dictation.accountLabel).font(.callout)
-                    Text(dictation.availability).font(.caption).foregroundStyle(.secondary)
+        return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes with Apple on-device speech.") {
+            Picker("Language", selection: $dictation.languageIdentifier) {
+                Text("Automatic").tag("")
+                ForEach(dictation.session.availableLanguages, id: \.self) { identifier in
+                    Text(Locale.current.localizedString(forIdentifier: identifier) ?? identifier).tag(identifier)
                 }
-                Spacer()
-                ConnectionsLink()
             }
-            Text("Audio is sent to Grok while recording. Transcripts are inserted for review; nothing is sent to an agent automatically. Turning this off keeps your Grok account connected.")
+            .disabled(dictation.isBusy)
+            Text(dictation.availability).font(.caption).foregroundStyle(.secondary)
+            Text("Audio stays on this Mac. Apple may download language support the first time you dictate. Transcripts remain drafts for review. Use ⇧⌘D to start or stop in the focused editor.")
                 .font(.caption).foregroundStyle(.secondary)
         }.task { await dictation.refreshAvailability() }
     }

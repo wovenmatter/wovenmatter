@@ -66,6 +66,7 @@ final class CompanionUITests: XCTestCase {
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
     app.buttons["tab-notes"].tap()
     XCTAssertTrue(app.descendants(matching: .any)["note-title"].firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["dictation-microphone"].exists)
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Native note pane"; attachment.lifetime = .keepAlways
     add(attachment)
   }
@@ -100,6 +101,9 @@ final class CompanionUITests: XCTestCase {
     chooser.tap()
     let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    XCTAssertEqual(composer.label, "Chat…")
+    XCTAssertTrue(app.buttons["dictation-microphone"].exists)
+    XCTAssertEqual(app.buttons["dictation-microphone"].label, "Start dictation")
     XCTAssertFalse(app.buttons["Conversation actions"].exists)
     XCTAssertFalse(app.buttons["Add connection"].exists)
     XCTAssertTrue(app.buttons["Choose model"].exists)
@@ -157,6 +161,10 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(field.waitForExistence(timeout: 5))
     field.tap()
     field.typeText(name)
+    // The remote iPad keyboard can finish delivering text after typeText
+    // returns. Observe the complete value before reading or submitting it.
+    let enteredName = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", name), object: field)
+    XCTAssertEqual(XCTWaiter.wait(for: [enteredName], timeout: 5), .completed)
     XCTAssertEqual(field.value as? String, name)
     // One tap must submit while the keyboard is open, without a second tap to
     // compensate for the app's outside-tap keyboard dismissal gesture.

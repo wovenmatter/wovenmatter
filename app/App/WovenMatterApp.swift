@@ -471,12 +471,25 @@ struct WovenMatterApp: App {
                 ) { _ in
                     Task { await applicationModel.flushNoteDrafts() }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in
+                    // AppKit focus is not observable. Publish changes after its
+                    // event cycle so the dictation command's enabled state follows it.
+                    DictationModel.shared.refreshShortcutEditor()
+                }
 
         }
         .defaultSize(width: 1320, height: 860)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .textEditing) {
+                Button(DictationModel.shared.isRecording ? "Stop and Insert Dictation" : "Dictate into Current Editor") {
+                    DictationModel.shared.toggleActiveEditor()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(DictationModel.shared.shortcutEditor?.ticket() == nil
+                    || DictationModel.shared.phase == .finishing)
+            }
             CommandMenu("Workspace") {
                 Button("Refresh Workspace") {
                     Task { await applicationModel.refreshWorkspace() }

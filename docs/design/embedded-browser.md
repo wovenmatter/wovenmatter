@@ -48,7 +48,8 @@ Automation receipts retain completion metadata, without page or desktop captures
 retries after completion inspect fresh state instead of replaying input.
 
 Computer Use is an independent, default-off capability. Peekaboo's Swift
-libraries, required at an exact release tag, run inside the signed GUI process, so macOS grants apply to Woven Matter.
+libraries, selected by the shared native lockfile within a compatible release
+range, run inside the signed GUI process, so macOS grants apply to Woven Matter.
 MCP and CLI route local and remote harnesses to this host. Screen capture returns
 a bounded image and a single-use, chat-scoped frame for coordinate input; Stop or
 capability revocation cancels work. Cua and cross-platform desktop hosts are deferred.

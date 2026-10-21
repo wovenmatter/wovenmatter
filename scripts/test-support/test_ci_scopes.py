@@ -6,8 +6,8 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 updater = module.scopes(['app/App/Services/DesktopUpdater.swift', 'app/App/Views/SettingsGeneralView.swift',
-                        'scripts/stage-update.py', '.github/workflows/release.yml', '.github/workflows/ci.yml',
-                        '.github/release-refresh.json', 'scripts/test-changes.sh'])
+                        'scripts/stage-update.py', '.github/workflows/release.yml',
+                        '.github/release-refresh.json'])
 assert updater == dict(macos=True, companion=False, ios=False, remote=False, updates=True), updater
 # The security-critical updater record changes both the framework and tools;
 # metadata-only refreshes must run signed delta validation too.
@@ -41,4 +41,9 @@ for path in desktop_sources:
 asset = 'app/App/SharedAssets.xcassets/AccentColor.colorset/Contents.json'
 assert module.scopes([asset])['ios'], asset
 assert not module.scopes(['app/App/Views/DashboardStyle.swift.backup'])['ios']
-print('CI scopes passed: desktop UI stays scoped; package and shared iOS inputs retain companion coverage.')
+
+for path in ['.github/workflows/ci.yml', 'scripts/test-changes.sh', 'scripts/ci-scopes.py',
+             'scripts/test-support/test_ci_scopes.py', 'scripts/test-support/test_ios_runner.py']:
+    assert module.scopes([path]) == dict(macos=True, companion=True, ios=True, remote=True, updates=False), path
+
+print('CI scopes passed: desktop UI stays scoped; orchestrator changes exercise every lane.')

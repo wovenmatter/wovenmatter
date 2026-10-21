@@ -53,19 +53,11 @@ extension ProviderAccountCoordinator {
         try await prepare("global").credentials
     }
 
-    public func grokDictationCredential() async throws -> DefaultAgentCredential {
-        guard let credential = try await appCredentials()[ProviderConnectionID.grok.rawValue],
-            credential.type == "oauth", let token = credential.access, !token.isEmpty,
-            (credential.expires ?? 0) > Date().timeIntervalSince1970 * 1000
-        else {
-            throw GrokSpeechError.signInRequired
-        }
-        return credential
-    }
+
 }
 
 /// Account secrets and their ordering live together in Keychain. The canonical
-/// slot remains compatible with Usage and Dictation, including OpenRouter's
+/// slot remains compatible with Usage, including OpenRouter's
 /// existing shared key. Nothing here writes credentials to preferences or disk.
 public enum ProviderConnectionAccounts {
     public static let limit = 4
