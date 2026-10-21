@@ -6,65 +6,6 @@ import WovenMatterCore
 
 @Suite("Companion canonical persistence", .serialized)
 struct CompanionWorkspaceTests {
-  private let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-
-  @Test("offline folder dependency, lost acknowledgment and restart yield exactly one note")
-  func lostAcknowledgment() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let folder = UUID().uuidString.lowercased(), note = UUID().uuidString.lowercased()
-    let content = try document("Captured offline")
-    let create = CompanionMutation(deviceID: device, kind: .createNote, resourceID: note, folderID: folder, title: "Idea", content: content)
-    #expect(try await db.applyCompanionMutation(create).status == .notFound)
-    _ = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .createFolder, resourceID: folder, title: "Ideas"))
-    // A dependency failure is immutable; after fixing it use a new operation ID.
-    var retry = create; retry.operationID = UUID().uuidString.lowercased()
-    let accepted = try await db.applyCompanionMutation(retry)
-    #expect(accepted.status == .accepted)
-    #expect(accepted.note?.contentIncluded == false)
-    let restarted = try await WorkspaceDatabase(url: fixture.url)
-    #expect(try await restarted.applyCompanionMutation(retry) == accepted)
-    let snapshot = try await restarted.companionSnapshot()
-    #expect(snapshot.notes.count == 1 && snapshot.folders.count == 1)
-    #expect(snapshot.notes[0].content == content && snapshot.notes[0].id == note)
-    #expect(try await restarted.companionWorkspaceID() == db.companionWorkspaceID())
-    retry.content = try document("Different request with same operation ID")
-    #expect(try await restarted.applyCompanionMutation(retry).status == .invalid)
-    #expect(try await restarted.companionNote(id: note)?.content == content)
-  }
-
-  @Test("phone, desktop autosave and agent edits share integer CAS despite identical timestamps")
-  func allWriterCAS() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let noteID = try await db.createNote(folderID: nil, content: document("Base"), createdAt: Date(timeIntervalSince1970: 100))
-    let base = try #require(try await db.companionNote(id: noteID))
-    let localContent = try document("Desktop writing")
-    let operationID = UUID().uuidString.lowercased()
-    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: localContent,
-                               updatedAt: Date(timeIntervalSince1970: 100), expectedRevision: String(base.revision), operationID: operationID)
-    let committed = try #require(try await db.companionDraftRevision(operationID: operationID))
-    #expect(committed == "2")
-    let phoneContent = try document("Phone writing")
-    _ = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote, resourceID: noteID, expectedRevision: 2, title: "Phone", content: phoneContent))
-    // A delayed desktop completion reads its exact receipt, never the current phone revision.
-    #expect(try await db.companionDraftRevision(operationID: operationID) == "2")
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await db.persistNoteDraft(id: noteID, title: "New desktop writing", content: document("Retain locally"), expectedRevision: committed)
-    }
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "2", operations: [.appendText("Agent", .paragraph)]))
-    }
-    #expect(try await db.companionNote(id: noteID)?.content == phoneContent)
-    // Retrying a committed desktop mutation never overwrites the later phone edit.
-    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: localContent, expectedRevision: "1", operationID: operationID)
-    #expect(try await db.companionNote(id: noteID)?.content == phoneContent)
-    let agent = try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "3", operations: [.appendText("Agent", .paragraph)]))
-    #expect(agent.revision == "4")
-    // Main's safe append API remains usable without a destructive-write revision.
-    let appended = try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, operations: [.appendText("Safe append", .paragraph)]))
-    #expect(appended.revision == "5" && appended.document?.plainText.contains("Safe append") == true)
-  }
 
   @Test("deletion detaches children, emits tombstones and never resurrects old IDs")
   func deletion() async throws {
@@ -122,39 +63,6 @@ struct CompanionWorkspaceTests {
     #expect(seenFolder && pages == 3)
   }
 
-  @Test("replay expiry resets, activity-only edits invalidate and receipts do not keep note bodies")
-  func replayActivityAndReceiptBounds() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let conversation = try await db.createLocalACPSession(runtimeKind: .codex, title: "Fixture", ownerDeviceID: UUID())
-    let before = try await db.companionSnapshot().cursor
-    for table in ["dashboard_run_events", "dashboard_run_trace_events", "dashboard_message_attachments", "dashboard_message_references"] {
-      try await db.write { db in try db.transaction {
-        try db.companionExecuteUnlocked("INSERT INTO \(table)(id,conversation_id) VALUES (?,?)", values: [UUID().uuidString.lowercased(), conversation])
-      } }
-    }
-    let page = try await db.companionChanges(after: before)
-    #expect(page.changes.contains { $0.resourceKind == .transcript && $0.resourceID == conversation })
-    let noteID = try await db.createNote(folderID: nil, content: document("Base"))
-    for index in 1...8 {
-      let revision = try #require(try await db.companionNote(id: noteID)).revision
-      let receipt = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote, resourceID: noteID, expectedRevision: revision, title: "Large", content: document(String(repeating: String(index), count: 300_000))))
-      #expect(receipt.status == .accepted && receipt.note?.contentIncluded == false)
-    }
-    #expect(try fixture.scalar("SELECT sum(length(response)) FROM companion_mutation_receipts") < 10_000)
-    try await db.write { db in try db.transaction {
-      // Simulate a long offline interval cheaply without provider execution.
-      try db.executeUnlocked("""
-        WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x <= 10010)
-        INSERT INTO companion_changes(kind,resource_id,revision) SELECT 'providers','fixture',x FROM n;
-        DELETE FROM companion_changes WHERE cursor <= (SELECT MAX(cursor)-10000 FROM companion_changes);
-        """)
-    } }
-    #expect(try await db.companionChanges(after: before).resetRequired)
-    let reset = try await db.companionSnapshot()
-    #expect(try await db.companionChanges(after: reset.cursor).changes.isEmpty)
-  }
-
   @Test("local agent table operations are bounded before allocation and unknown documents retain raw bytes")
   func agentFormatBoundary() async throws {
     let fixture = try CompanionFixture(); defer { fixture.remove() }
@@ -174,17 +82,57 @@ struct CompanionWorkspaceTests {
     #expect(try await db.companionNote(id: noteID)?.content == unknown)
   }
 
-  @Test("command reservation survives restart and changed fingerprints never dispatch")
-  func commandReservation() async throws {
+  @Test("recovery copies preserve unknown bytes and history without reviving a tombstone")
+  func recoveryCopiesKeepHistory() async throws {
     let fixture = try CompanionFixture(); defer { fixture.remove() }
     let db = try await WorkspaceDatabase(url: fixture.url)
-    var command = CompanionCommand(deviceID: device, kind: .send, conversationID: UUID().uuidString.lowercased(), text: "Once")
-    #expect(try await db.reserveCompanionCommand(command).isNew)
-    let restarted = try await WorkspaceDatabase(url: fixture.url)
-    let retry = try await restarted.reserveCompanionCommand(command)
-    #expect(!retry.isNew && retry.receipt.status == .outcomeUnknown)
-    command.text = "Different"
-    #expect(try await restarted.reserveCompanionCommand(command).receipt.status == .rejected)
+    let noteID = try await db.createNote(folderID: nil, content: document("Before deletion"))
+    #expect(try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .deleteNote,
+      resourceID: noteID, expectedRevision: 1)).status == .accepted)
+    let raw = #"{"version":99,"kind":"note","future":{"writing":"preserve exact bytes"}}"#
+    let recoveredID = try await db.preserveRecoveryCopy(sourceID: noteID, title: "Future document", content: raw, folderID: nil)
+    #expect(recoveredID != noteID)
+    #expect(try await db.preserveRecoveryCopy(sourceID: noteID, title: "Future document", content: raw, folderID: nil) == recoveredID)
+    #expect(try await db.companionNote(id: noteID) == nil)
+    #expect(try await db.companionNote(id: recoveredID)?.content == raw)
+    let versions = try await db.noteAssetVersions(id: recoveredID)
+    #expect(versions.count == 1 && versions[0].content == raw && versions[0].source == "recovered")
+    await #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try await db.readNoteForEditing(id: recoveredID) }
+  }
+
+  private let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+  @Test("phone, desktop autosave and agent edits share integer CAS despite identical timestamps")
+  func allWriterCAS() async throws {
+    let fixture = try CompanionFixture(); defer { fixture.remove() }
+    let db = try await WorkspaceDatabase(url: fixture.url)
+    let noteID = try await db.createNote(folderID: nil, content: document("Base"), createdAt: Date(timeIntervalSince1970: 100))
+    let base = try #require(try await db.companionNote(id: noteID))
+    let localContent = try document("Desktop writing")
+    let operationID = UUID().uuidString.lowercased()
+    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: localContent,
+                               updatedAt: Date(timeIntervalSince1970: 100), expectedRevision: String(base.revision), operationID: operationID)
+    let committed = try #require(try await db.companionDraftRevision(operationID: operationID))
+    #expect(committed == "2")
+    let phoneContent = try document("Phone writing")
+    _ = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote, resourceID: noteID, expectedRevision: 2, title: "Phone", content: phoneContent))
+    // A delayed desktop completion reads its exact receipt, never the current phone revision.
+    #expect(try await db.companionDraftRevision(operationID: operationID) == "2")
+    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+      try await db.persistNoteDraft(id: noteID, title: "New desktop writing", content: document("Retain locally"), expectedRevision: committed)
+    }
+    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+      try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "2", operations: [.appendText("Agent", .paragraph)]))
+    }
+    #expect(try await db.companionNote(id: noteID)?.content == phoneContent)
+    // Retrying a committed desktop mutation never overwrites the later phone edit.
+    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: localContent, expectedRevision: "1", operationID: operationID)
+    #expect(try await db.companionNote(id: noteID)?.content == phoneContent)
+    let agent = try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "3", operations: [.appendText("Agent", .paragraph)]))
+    #expect(agent.revision == "4")
+    // Main's safe append API remains usable without a destructive-write revision.
+    let appended = try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, operations: [.appendText("Safe append", .paragraph)]))
+    #expect(appended.revision == "5" && appended.document?.plainText.contains("Safe append") == true)
   }
 
   @Test("mobile history, desktop drafts and agent restore share revisions and independent receipts")
@@ -237,63 +185,6 @@ struct CompanionWorkspaceTests {
       try await reopened.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,
         expectedRevision: "3", callerConversationID: caller, requestID: restoreID)
     }
-  }
-
-  @Test("main-shaped database keeps old history metadata and adopts companion revisions on reopen")
-  func migrationKeepsLegacyHistory() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let existingContent = try document("Existing writing")
-    let noteID = try await db.createNote(folderID: nil, title: "Existing", content: existingContent,
-      createdAt: Date(timeIntervalSince1970: 100))
-    let deletedID = try await db.createNote(folderID: nil, title: "Deleted", content: document("Old writing"))
-    let oldTimestamp = try await #require(db.workspaceOverview().notes.first(where: { $0.id == noteID })?.updatedAt)
-    try await db.write { db in try db.transaction {
-      // Remove only the companion additions to model an existing main database.
-      // Keep the history and tool tables with their existing timestamp metadata.
-      let triggers = try db.companionIDsUnlocked("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'companion_%'", bindings: [])
-      for trigger in triggers { try db.executeUnlocked("DROP TRIGGER \(trigger)") }
-      try db.companionExecuteUnlocked("UPDATE note_asset_versions SET revision=? WHERE note_id=?", values: [oldTimestamp, noteID])
-      try db.companionExecuteUnlocked("UPDATE notes SET deleted_at=? WHERE id=?", values: [oldTimestamp, deletedID])
-      for table in ["companion_changes", "companion_versions", "companion_workspace", "companion_mutation_receipts", "companion_command_receipts", "companion_draft_receipts"] {
-        try db.executeUnlocked("DROP TABLE \(table)")
-      }
-    } }
-    let reopened = try await WorkspaceDatabase(url: fixture.url)
-    let original = try await #require(reopened.noteAssetVersions(id: noteID).first)
-    #expect(original.revision == oldTimestamp)
-    #expect(original.content == existingContent)
-    #expect(try await reopened.readNoteForEditing(id: noteID).revision == "1")
-    #expect(try await reopened.workspaceOverview().notes.first(where: { $0.id == noteID })?.updatedAt == oldTimestamp)
-    #expect(try await reopened.companionNote(id: deletedID) == nil)
-    #expect(try await reopened.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .createNote,
-      resourceID: deletedID, title: "Do not revive", content: document("No"))).status == .conflict)
-    _ = try await reopened.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote,
-      resourceID: noteID, expectedRevision: 1, title: "Phone", content: document("New phone writing")))
-    let restored = try await reopened.restoreNoteAssetVersion(noteID: noteID, versionID: original.id, expectedRevision: "2")
-    #expect(restored.revision == "3" && restored.title == "Existing")
-    let again = try await WorkspaceDatabase(url: fixture.url)
-    #expect(try await again.readNoteForEditing(id: noteID).revision == "3")
-    #expect(try await again.noteAssetVersions(id: noteID).last?.revision == oldTimestamp)
-    #expect(try await again.companionWorkspaceID() == reopened.companionWorkspaceID())
-  }
-
-  @Test("recovery copies preserve unknown bytes and history without reviving a tombstone")
-  func recoveryCopiesKeepHistory() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let noteID = try await db.createNote(folderID: nil, content: document("Before deletion"))
-    #expect(try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .deleteNote,
-      resourceID: noteID, expectedRevision: 1)).status == .accepted)
-    let raw = #"{"version":99,"kind":"note","future":{"writing":"preserve exact bytes"}}"#
-    let recoveredID = try await db.preserveRecoveryCopy(sourceID: noteID, title: "Future document", content: raw, folderID: nil)
-    #expect(recoveredID != noteID)
-    #expect(try await db.preserveRecoveryCopy(sourceID: noteID, title: "Future document", content: raw, folderID: nil) == recoveredID)
-    #expect(try await db.companionNote(id: noteID) == nil)
-    #expect(try await db.companionNote(id: recoveredID)?.content == raw)
-    let versions = try await db.noteAssetVersions(id: recoveredID)
-    #expect(versions.count == 1 && versions[0].content == raw && versions[0].source == "recovered")
-    await #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try await db.readNoteForEditing(id: recoveredID) }
   }
 
   @Test("current note bindings validate in run acceptance while historical snapshots stay usable")

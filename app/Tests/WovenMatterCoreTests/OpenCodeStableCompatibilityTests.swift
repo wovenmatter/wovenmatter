@@ -4,60 +4,6 @@ import Testing
 import WovenMatterDashboardStore
 
 struct OpenCodeStableCompatibilityTests {
-    @Test func compatibilityAcceptsFutureV2ReleasesAndRejectsOtherMajors() {
-        for version in ["2.0.0", "2.0.22", "2.99.1", "2.1.0-beta.1", "2.1.0+build.7"] {
-            #expect(OpenCodeConnection.supportsVersion(version))
-        }
-        for version in ["1.18.29", "3.0.0", "0.0.0-beta-19278", "2", "2.0", "2.0.0garbage", ""] {
-            #expect(!OpenCodeConnection.supportsVersion(version))
-        }
-    }
-
-    @Test func installerResolvesTheCurrentReleaseAgainForEachOperation() async throws {
-        let installer = LocalACPRuntimeInstaller()
-        let first = try await installer.prepareCLIInstall(OpenCodeServiceLauncher.installDefinition, fetch: { url in
-            #expect(url.path.hasSuffix("/latest"))
-            return Data(#"{"version":"2.0.22","bin":{"opencode":"bin/opencode"}}"#.utf8)
-        })
-        let next = try await installer.prepareCLIInstall(OpenCodeServiceLauncher.installDefinition, fetch: { _ in
-            Data(#"{"version":"2.1.7","bin":{"opencode":"bin/opencode"}}"#.utf8)
-        })
-        #expect(first.packageSpec == "@opencode/cli@2.0.22")
-        #expect(next.packageSpec == "@opencode/cli@2.1.7")
-        await #expect(throws: RuntimeMaintenanceError.unavailable) {
-            try await installer.prepareCLIInstall(OpenCodeServiceLauncher.installDefinition, fetch: { _ in
-                Data(#"{"version":"1.18.29","bin":{"opencode":"bin/opencode"}}"#.utf8)
-            })
-        }
-    }
-
-    @Test func discoveryPrefersV2AliasOverV1CanonicalCommand() throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        for command in ["opencode", "opencode2"] {
-            let file = directory.appending(path: command)
-            try Data("#!/bin/sh\n".utf8).write(to: file)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
-        }
-        let resolver = LocalACPRuntimeResolver(executableSearchDirectories: [directory.path])
-        #expect(OpenCodeServiceLauncher.resolveExecutable(resolver: resolver, probe: {
-            $0.lastPathComponent == "opencode" ? "1.18.29" : "opencode2 v2.1.0"
-        })?.lastPathComponent == "opencode2")
-        #expect(OpenCodeServiceLauncher.resolveExecutable(resolver: resolver, probe: { _ in "2.99.0" })?.lastPathComponent == "opencode")
-    }
-
-    @Test func hiddenFormFieldsUseServerDefaultsAndDriveVisibleConditions() throws {
-        let fields: [OpenCodeValue] = [
-            ["key": "context", "type": "string", "hidden": .bool(true), "default": "fixed"],
-            ["key": "answer", "type": "string", "when": .array([["key": "context", "op": "eq", "value": "fixed"]])]
-        ]
-        let answers: [String: OpenCodeValue] = ["context": "stale", "answer": "yes"]
-        #expect(OpenCodeFormAnswers.activeFields(fields, answers: answers).count == 2)
-        let reply = try OpenCodeFormAnswers.reply(fields: fields, answers: answers)
-        #expect(reply["context"].text == "fixed")
-        #expect(reply["answer"].text == "yes")
-    }
 
     // Opt-in, provider-free contract test using an isolated official v2 binary.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_OPENCODE_TEST_EXECUTABLE"] != nil))

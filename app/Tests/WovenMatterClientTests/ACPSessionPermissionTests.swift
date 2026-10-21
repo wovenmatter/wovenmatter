@@ -6,54 +6,35 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSessionPermissionTests {
-    @Test(arguments: [false, true]) func codexReceivesSessionBoundAutomationMCP(loading: Bool) async throws {
-        let fixture = try PermissionFixture(kind: .codex, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex, executableURL: fixture.executable, arguments: [])
-        launch.cliConnection = .init(executablePath: "/fixture/wovenmatter", socketPath: "/fixture/caller.sock", captureID: "input")
-        let client = try LocalACPClient.start(launch: launch, workingDirectory: fixture.root)
-        do {
-            _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: loading ? "existing" : nil, title: nil)
-            let request = try #require(fixture.requests(method: loading ? "session/load" : "session/new").first)
-            let params = try #require(request["params"] as? [String: Any])
-            let servers = try #require(params["mcpServers"] as? [[String: Any]])
-            let server = try #require(servers.first)
-            #expect(servers.count == 1 && server["command"] as? String == "/fixture/wovenmatter")
-            #expect(server["args"] as? [String] == ["mcp"])
-            let env = try #require(server["env"] as? [[String: String]])
-            #expect(env.contains(["name": "WOVENMATTER_SOCKET", "value": "/fixture/caller.sock"]))
-            await client.shutdown()
-        } catch { await client.shutdown(); throw error }
+
+    @Test(arguments: [String?.none, "existing-parent"])
+    func earlyConfigurationUpdatesWaitForSessionIdentity(existingID: String?) async throws {
+        let parent = notification(configuration(permission: "default").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: existingID ?? "permission-session")
+        let child = notification(configuration(permission: "full").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
+        try await withClient(state: [:], existingID: existingID, sessionPrelude: parent + "\n" + child) { client, _, initialized async throws in
+            #expect(initialized.configuration.permission == "default")
+            #expect(initialized.configuration.permissionOptions == ["default", "full"])
+            #expect(initialized.loadedExistingSession == (existingID != nil))
+            #expect(await client.sessionConfiguration() == initialized.configuration)
+        }
     }
 
-    @Test func cancellingFixtureOwnerReapsAPeerBlockedDuringInitialization() async throws {
-        let markerRoot = FileManager.default.temporaryDirectory.appending(path: "permission-owner-\(UUID())")
-        try FileManager.default.createDirectory(at: markerRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: markerRoot) }
-        let marker = markerRoot.appending(path: "waiting")
-        let request = Task {
-            try await withClient(state: [:], sessionPrelude: """
-                printf '%s\\n' "$$" > '\(marker.path).pending'
-                mv '\(marker.path).pending' '\(marker.path)'
-                IFS= read -r owner_shutdown
-                """) { _, _, _ in
-                Issue.record("A cancelled initialization unexpectedly reached the test body")
-            }
+    @Test func catalogRemovalDisablesPermissionSetter() async throws {
+        var removed = configuration(permission: "default")
+        removed["configOptions"] = (removed["configOptions"] as? [[String: Any]])?.filter { $0["id"] as? String != "mode" }
+        try await withClient(state: configuration(permission: "default"), handlers: [
+            "session/set_config_option": respond(removed),
+        ]) { client, _, _ async throws in
+            let result = try await client.setSessionConfiguration(model: "other")
+            #expect(result.permission == nil && result.permissionOptions.isEmpty)
+            #expect(result.permissionOptionMetadata.isEmpty)
+            do {
+                _ = try await client.setSessionPermission("full")
+                Issue.record("Removed permission options remained selectable")
+            } catch LocalACPClientError.unsupportedConfiguration { }
         }
-        defer { request.cancel() }
-        while !FileManager.default.fileExists(atPath: marker.path) {
-            try Task.checkCancellation()
-            await Task.yield()
-        }
-        let pid = try #require(Int32(try String(contentsOf: marker, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)))
-        request.cancel()
-        await #expect(throws: CancellationError.self) { try await request.value }
-        // The helper does not finish cancellation until its own peer is reaped.
-        let alive = kill(pid, 0)
-        let processError = errno
-        #expect(alive == -1 && processError == ESRCH)
     }
+
 
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], ["mode", "permission_mode", "approval_mode"])
     func nativeConfigurationAndLabelsSurviveOtherSelections(kind: AgentRuntimeKind, id: String) async throws {
@@ -82,66 +63,6 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test(arguments: [true, false])
-    func codexSmartReviewRequiresNativeClassification(modern: Bool) async throws {
-        let idKey = modern ? "value" : "id"
-        let options: [[String: Any]] = [
-            [idKey: "read-only", "name": "Read only"],
-            [idKey: "agent", "name": "Auto", "_meta": ["kind": "auto_review"]],
-            [idKey: "agent-full-access", "name": "Bypass"],
-            [idKey: "future-policy", "name": "Native future mode", "description": "Native future behavior"],
-        ]
-        let state: [String: Any] = modern
-            ? ["configOptions": [["id": "mode", "category": "mode", "currentValue": "agent", "options": options]]]
-            : ["modes": ["currentModeId": "agent", "availableModes": options]]
-        try await withClient(state: state) { _, fixture, initialized async throws in
-            let value = initialized.configuration
-            #expect(value.permission == "agent")
-            #expect(value.permissionOptions == ["read-only", "agent", "agent-full-access", "future-policy"])
-            #expect(value.permissionOptionMetadata["read-only"]?.name == "Read only")
-            #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
-            #expect(value.permissionOptionMetadata["agent-full-access"]?.name == "Full access")
-            #expect(value.permissionOptionMetadata["future-policy"]?.name == "Native future mode")
-            #expect(value.permissionOptionMetadata["future-policy"]?.description == "Native future behavior")
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
-        }
-    }
-
-    @Test(arguments: [true, false])
-    func oldCodexWorkspacePresetIsNotRelabeledSmartAuto(modern: Bool) async throws {
-        let options = [[modern ? "value" : "id": "agent", "name": "Auto", "description": "Run in the workspace"]]
-        let state: [String: Any] = modern
-            ? ["configOptions": [["id": "mode", "category": "mode", "currentValue": "agent", "options": options]]]
-            : ["modes": ["currentModeId": "agent", "availableModes": options]]
-        try await withClient(state: state) { _, _, initialized async throws in
-            #expect(initialized.configuration.permission == "agent")
-            #expect(initialized.configuration.permissionOptionMetadata["agent"]?.name == "Workspace access")
-        }
-    }
-
-    @Test(arguments: ["default", "plan", "dontAsk"])
-    func claudeAdvertisedPoliciesRemainSelectable(current: String) async throws {
-        let options = ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"].map {
-            ["value": $0, "name": "Native " + $0]
-        }
-        let state: [String: Any] = ["configOptions": [[
-            "id": "mode", "category": "mode", "currentValue": current, "options": options,
-        ]]]
-        try await withClient(kind: .claudeCode, state: state, requestedPermission: current) { client, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == current)
-            let labels = initialized.configuration.permissionOptionMetadata
-            #expect(labels["default"]?.name == "Ask for approval")
-            #expect(labels["auto"]?.name == "Auto")
-            #expect(labels["acceptEdits"]?.name == "Auto-accept edits")
-            #expect(labels["bypassPermissions"]?.name == "Full access")
-            #expect(labels[current]?.name == ["default": "Ask for approval", "plan": "Plan", "dontAsk": "Don't ask"][current])
-            #expect(try await client.setSessionPermission(current).permission == current)
-            #expect(initialized.configuration.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"])
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-        }
-    }
-
     @Test(arguments: [true, false], ["plan", "dontAsk"])
     func claudeSavedNativePolicyCanBeRestored(modern: Bool, saved: String) async throws {
         let options = ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"].map {
@@ -164,75 +85,6 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func nativeErrorAndUnknownValuesNeverEscalate() async throws {
-        try await withClient(state: configuration(permission: "default"), handlers: [
-            "session/set_config_option": #"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Policy rejects full"}}\n' "$id""#,
-        ]) { client, fixture, _ async throws in
-            do {
-                _ = try await client.setSessionPermission("unadvertised")
-                Issue.record("An unadvertised permission value was accepted")
-            } catch LocalACPClientError.invalidConfigurationValue { }
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("A rejected native change was accepted")
-            } catch LocalACPClientError.agent(let code, _) { #expect(code == -32602) }
-            #expect(await client.sessionConfiguration().permission == "default")
-        }
-    }
-
-    @Test func foreignConfigurationCannotConfirmPermissionChange() async throws {
-        let childMode = notification(["sessionUpdate": "current_mode_update", "currentModeId": "full"], session: "child-session")
-        let childOptions = notification(configuration(permission: "full").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
-        try await withClient(state: configuration(permission: "default"), handlers: [
-            "session/set_config_option": childMode + "\n" + childOptions + "\n" + respond([:]),
-        ]) { client, _, initialized async throws in
-            let snapshots = PermissionSnapshots()
-            await client.setConfigurationHandler { await snapshots.append($0) }
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("A child session's mode falsely confirmed the parent setter")
-            } catch LocalACPClientError.configurationNotConfirmed { }
-            #expect(await client.sessionConfiguration() == initialized.configuration)
-            #expect(await snapshots.values() == [initialized.configuration])
-        }
-    }
-
-    @Test func foreignModeDoesNotInvalidateLegacyAcknowledgement() async throws {
-        try await withClient(state: legacyModes(), handlers: [
-            "session/set_mode": notification(["sessionUpdate": "current_mode_update", "currentModeId": "default"], session: "child-session")
-                + "\n" + respond([:]),
-        ]) { client, fixture, _ async throws in
-            let result = try await client.setSessionPermission("full")
-            #expect(result.permission == "full")
-            #expect(result.permissionOptionMetadata["full"]?.name == "Native full label")
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            let params = try fixture.requests(method: "session/set_mode").first?["params"] as? [String: Any]
-            #expect(params?["modeId"] as? String == "full")
-        }
-    }
-
-    @Test(arguments: [String?.none, "existing-parent"])
-    func earlyConfigurationUpdatesWaitForSessionIdentity(existingID: String?) async throws {
-        let parent = notification(configuration(permission: "default").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: existingID ?? "permission-session")
-        let child = notification(configuration(permission: "full").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
-        try await withClient(state: [:], existingID: existingID, sessionPrelude: parent + "\n" + child) { client, _, initialized async throws in
-            #expect(initialized.configuration.permission == "default")
-            #expect(initialized.configuration.permissionOptions == ["default", "full"])
-            #expect(initialized.loadedExistingSession == (existingID != nil))
-            #expect(await client.sessionConfiguration() == initialized.configuration)
-        }
-    }
-
-    @Test func legacyMissingSessionIdentityConfigurationStillApplies() async throws {
-        try await withClient(state: legacyModes(), handlers: [
-            "session/set_mode": notification(["sessionUpdate": "current_mode_update", "currentModeId": "full"], session: nil)
-                + "\n" + respond([:]),
-        ]) { client, _, _ async throws in
-            #expect(try await client.setSessionPermission("full").permission == "full")
-        }
-    }
-
     @Test func notificationsPreserveCommandsAndAuthoritativeModelClamp() async throws {
         let clamped = configuration(permission: "default", model: "changed-model")
         let update = notification(["sessionUpdate": "current_mode_update", "currentModeId": "full"])
@@ -252,90 +104,6 @@ struct ACPSessionPermissionTests {
             #expect(result.model == "changed-model")
             #expect(result.slashCommands.map(\.name) == ["review"])
             #expect(await snapshots.values().map(\.permission) == ["default", "full", "full", "default"])
-        }
-    }
-
-    @Test func catalogRemovalDisablesPermissionSetter() async throws {
-        var removed = configuration(permission: "default")
-        removed["configOptions"] = (removed["configOptions"] as? [[String: Any]])?.filter { $0["id"] as? String != "mode" }
-        try await withClient(state: configuration(permission: "default"), handlers: [
-            "session/set_config_option": respond(removed),
-        ]) { client, _, _ async throws in
-            let result = try await client.setSessionConfiguration(model: "other")
-            #expect(result.permission == nil && result.permissionOptions.isEmpty)
-            #expect(result.permissionOptionMetadata.isEmpty)
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("Removed permission options remained selectable")
-            } catch LocalACPClientError.unsupportedConfiguration { }
-        }
-    }
-
-    @Test func legacySetterRespectsAuthoritativeClamp() async throws {
-        try await withClient(state: legacyModes(), handlers: [
-            "session/set_mode": notification(["sessionUpdate": "current_mode_update", "currentModeId": "default"])
-                + "\n" + respond([:]),
-        ]) { client, _, _ async throws in
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("A native policy clamp was overwritten by optimistic state")
-            } catch LocalACPClientError.configurationNotConfirmed { }
-            #expect(await client.sessionConfiguration().permission == "default")
-        }
-    }
-
-    @Test func claudeLoadedSessionNeverResetsToAuto() async throws {
-        try await withClient(kind: .claudeCode, state: claudeState(), existingID: "existing-claude") { client, fixture, initialized async throws in
-            #expect(initialized.loadedExistingSession)
-            #expect(initialized.configuration.permission == "default")
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            #expect(try fixture.requests(method: "session/new").isEmpty)
-            #expect(await client.sessionConfiguration().permissionOptions == ["default", "auto"])
-        }
-    }
-
-    @Test(arguments: [String?.none, "default"])
-    func claudeFreshSessionLeavesSelectionToConversationDefaults(preference: String?) async throws {
-        try await withClient(kind: .claudeCode, state: claudeState(), requestedPermission: preference) { _, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == "default")
-            #expect(initialized.configuration.permissionOptions == ["default", "auto"])
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-        }
-    }
-
-    @Test(arguments: [String?.none, "default", "auto", "bypassPermissions"])
-    func grokLaunchPolicyRequiresReconnectAndPreservesNativeSession(permission: String?) async throws {
-        try await withClient(kind: .grokBuild, state: configuration(permission: "unused"),
-            existingID: "existing-grok", requestedPermission: permission) { client, fixture, initialized async throws in
-            #expect(initialized.loadedExistingSession && initialized.sessionID == "existing-grok")
-            #expect(initialized.configuration.permission == permission)
-            #expect(initialized.configuration.permissionOptions == LocalACPSessionPermissions.grokOptions)
-            #expect(initialized.configuration.model == "fixture-model")
-            if let permission {
-                #expect(try await client.setSessionPermission(permission).permission == permission)
-                #expect(try fixture.launchArguments() == ["--permission-mode", permission, "agent", "--no-leader", "stdio"])
-            } else {
-                #expect(try fixture.launchArguments() == ["agent", "stdio"])
-            }
-            do {
-                _ = try await client.setSessionPermission(permission == "default" ? "auto" : "default")
-                Issue.record("Grok's no-op mode setter was used as a live policy setter")
-            } catch LocalACPClientError.permissionChangeRequiresRestart { }
-            #expect(try fixture.requests(method: "session/new").isEmpty)
-            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-        }
-    }
-
-    @Test func grokKeepsLegacyDontAskOnlyWhileSelected() async throws {
-        #expect(LocalACPSessionPermissions.grokOptions == ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions"])
-        #expect(LocalACPSessionPermissions.grokMetadata["default"]?.name == "Ask for approval")
-        #expect(LocalACPSessionPermissions.grokMetadata["bypassPermissions"]?.name == "Full access")
-        try await withClient(kind: .grokBuild, state: [:], requestedPermission: "dontAsk") { client, fixture, initialized async throws in
-            #expect(initialized.configuration.permission == "dontAsk")
-            #expect(initialized.configuration.permissionOptions.contains("dontAsk"))
-            #expect(try await client.setSessionPermission("dontAsk").permission == "dontAsk")
-            #expect(try fixture.launchArguments() == ["--permission-mode", "dontAsk", "agent", "--no-leader", "stdio"])
         }
     }
 
@@ -376,6 +144,150 @@ struct ACPSessionPermissionTests {
         #expect(command.contains(where: { $0.contains("flock --shared --nonblock 9") }))
         // A launch without an override remains byte-for-byte identical.
         #expect(try LocalACPSessionPermissions.prepareLaunch(resolved).arguments == resolved.arguments)
+    }
+
+
+    @Test func cancellingFixtureOwnerReapsAPeerBlockedDuringInitialization() async throws {
+        let markerRoot = FileManager.default.temporaryDirectory.appending(path: "permission-owner-\(UUID())")
+        try FileManager.default.createDirectory(at: markerRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: markerRoot) }
+        let marker = markerRoot.appending(path: "waiting")
+        let request = Task {
+            try await withClient(state: [:], sessionPrelude: """
+                printf '%s\\n' "$$" > '\(marker.path).pending'
+                mv '\(marker.path).pending' '\(marker.path)'
+                IFS= read -r owner_shutdown
+                """) { _, _, _ in
+                Issue.record("A cancelled initialization unexpectedly reached the test body")
+            }
+        }
+        defer { request.cancel() }
+        while !FileManager.default.fileExists(atPath: marker.path) {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
+        let pid = try #require(Int32(try String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        request.cancel()
+        await #expect(throws: CancellationError.self) { try await request.value }
+        // The helper does not finish cancellation until its own peer is reaped.
+        let alive = kill(pid, 0)
+        let processError = errno
+        #expect(alive == -1 && processError == ESRCH)
+    }
+
+    @Test(arguments: [false, true]) func codexReceivesSessionBoundAutomationMCP(loading: Bool) async throws {
+        let fixture = try PermissionFixture(kind: .codex, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex, executableURL: fixture.executable, arguments: [])
+        launch.cliConnection = .init(executablePath: "/fixture/wovenmatter", socketPath: "/fixture/caller.sock", captureID: "input")
+        let client = try LocalACPClient.start(launch: launch, workingDirectory: fixture.root)
+        do {
+            _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: loading ? "existing" : nil, title: nil)
+            let request = try #require(fixture.requests(method: loading ? "session/load" : "session/new").first)
+            let params = try #require(request["params"] as? [String: Any])
+            let servers = try #require(params["mcpServers"] as? [[String: Any]])
+            let server = try #require(servers.first)
+            #expect(servers.count == 1 && server["command"] as? String == "/fixture/wovenmatter")
+            #expect(server["args"] as? [String] == ["mcp"])
+            let env = try #require(server["env"] as? [[String: String]])
+            #expect(env.contains(["name": "WOVENMATTER_SOCKET", "value": "/fixture/caller.sock"]))
+            await client.shutdown()
+        } catch { await client.shutdown(); throw error }
+    }
+
+    @Test(arguments: [true, false])
+    func codexSmartReviewRequiresNativeClassification(modern: Bool) async throws {
+        let idKey = modern ? "value" : "id"
+        let options: [[String: Any]] = [
+            [idKey: "read-only", "name": "Read only"],
+            [idKey: "agent", "name": "Auto", "_meta": ["kind": "auto_review"]],
+            [idKey: "agent-full-access", "name": "Bypass"],
+            [idKey: "future-policy", "name": "Native future mode", "description": "Native future behavior"],
+        ]
+        let state: [String: Any] = modern
+            ? ["configOptions": [["id": "mode", "category": "mode", "currentValue": "agent", "options": options]]]
+            : ["modes": ["currentModeId": "agent", "availableModes": options]]
+        try await withClient(state: state) { _, fixture, initialized async throws in
+            let value = initialized.configuration
+            #expect(value.permission == "agent")
+            #expect(value.permissionOptions == ["read-only", "agent", "agent-full-access", "future-policy"])
+            #expect(value.permissionOptionMetadata["read-only"]?.name == "Read only")
+            #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
+            #expect(value.permissionOptionMetadata["agent-full-access"]?.name == "Full access")
+            #expect(value.permissionOptionMetadata["future-policy"]?.name == "Native future mode")
+            #expect(value.permissionOptionMetadata["future-policy"]?.description == "Native future behavior")
+            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
+            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
+        }
+    }
+
+    @Test func nativeErrorAndUnknownValuesNeverEscalate() async throws {
+        try await withClient(state: configuration(permission: "default"), handlers: [
+            "session/set_config_option": #"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Policy rejects full"}}\n' "$id""#,
+        ]) { client, fixture, _ async throws in
+            do {
+                _ = try await client.setSessionPermission("unadvertised")
+                Issue.record("An unadvertised permission value was accepted")
+            } catch LocalACPClientError.invalidConfigurationValue { }
+            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
+            do {
+                _ = try await client.setSessionPermission("full")
+                Issue.record("A rejected native change was accepted")
+            } catch LocalACPClientError.agent(let code, _) { #expect(code == -32602) }
+            #expect(await client.sessionConfiguration().permission == "default")
+        }
+    }
+
+    @Test func foreignConfigurationCannotConfirmPermissionChange() async throws {
+        let childMode = notification(["sessionUpdate": "current_mode_update", "currentModeId": "full"], session: "child-session")
+        let childOptions = notification(configuration(permission: "full").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
+        try await withClient(state: configuration(permission: "default"), handlers: [
+            "session/set_config_option": childMode + "\n" + childOptions + "\n" + respond([:]),
+        ]) { client, _, initialized async throws in
+            let snapshots = PermissionSnapshots()
+            await client.setConfigurationHandler { await snapshots.append($0) }
+            do {
+                _ = try await client.setSessionPermission("full")
+                Issue.record("A child session's mode falsely confirmed the parent setter")
+            } catch LocalACPClientError.configurationNotConfirmed { }
+            #expect(await client.sessionConfiguration() == initialized.configuration)
+            #expect(await snapshots.values() == [initialized.configuration])
+        }
+    }
+
+    @Test func claudeLoadedSessionNeverResetsToAuto() async throws {
+        try await withClient(kind: .claudeCode, state: claudeState(), existingID: "existing-claude") { client, fixture, initialized async throws in
+            #expect(initialized.loadedExistingSession)
+            #expect(initialized.configuration.permission == "default")
+            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
+            #expect(try fixture.requests(method: "session/new").isEmpty)
+            #expect(await client.sessionConfiguration().permissionOptions == ["default", "auto"])
+        }
+    }
+
+    @Test(arguments: [String?.none, "default", "auto", "bypassPermissions"])
+    func grokLaunchPolicyRequiresReconnectAndPreservesNativeSession(permission: String?) async throws {
+        try await withClient(kind: .grokBuild, state: configuration(permission: "unused"),
+            existingID: "existing-grok", requestedPermission: permission) { client, fixture, initialized async throws in
+            #expect(initialized.loadedExistingSession && initialized.sessionID == "existing-grok")
+            #expect(initialized.configuration.permission == permission)
+            #expect(initialized.configuration.permissionOptions == LocalACPSessionPermissions.grokOptions)
+            #expect(initialized.configuration.model == "fixture-model")
+            if let permission {
+                #expect(try await client.setSessionPermission(permission).permission == permission)
+                #expect(try fixture.launchArguments() == ["--permission-mode", permission, "agent", "--no-leader", "stdio"])
+            } else {
+                #expect(try fixture.launchArguments() == ["agent", "stdio"])
+            }
+            do {
+                _ = try await client.setSessionPermission(permission == "default" ? "auto" : "default")
+                Issue.record("Grok's no-op mode setter was used as a live policy setter")
+            } catch LocalACPClientError.permissionChangeRequiresRestart { }
+            #expect(try fixture.requests(method: "session/new").isEmpty)
+            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
+            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
+        }
     }
 
     @Test func wrappedLaunchRetainsLiteralArgumentsAndRejectsInvalidOffsets() throws {

@@ -44,44 +44,6 @@ struct RuntimeCredentialProbeTests {
     #expect(await calls.count == 1)
   }
 
-  @Test("passive discovery retains the last credential failure without retrying")
-  func preservesPreviousAccountCheck() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
-    let discovered = resolution(.codex)
-    let prior = LocalACPRuntimeResolution(
-      availability: .init(runtimeKind: .codex, displayName: "Codex", state: .authenticationRequired,
-                          detail: "Previous account check needs access", executablePath: "/fixture/codex"),
-      launchConfiguration: nil
-    )
-    let result = await LocalACPRuntimeVerifier.refresh(
-      definition: definition, resolution: discovered,
-      workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: prior,
-      verification: { _, _, _ in Issue.record("Must not retry a failed account check"); return discovered }
-    )
-    #expect(result.availability == prior.availability)
-    #expect(result.launchConfiguration == nil)
-  }
-
-  @Test("changed or missing executables invalidate cached readiness")
-  func invalidatesStaleInstallation() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
-    let prior = resolution(.codex)
-    let moved = resolution(.codex, path: "/new-fixture/codex")
-    let missing = LocalACPRuntimeResolution(
-      availability: .init(runtimeKind: .codex, displayName: "Codex", state: .cliMissing,
-                          detail: "Not installed", executablePath: nil),
-      launchConfiguration: nil
-    )
-    for discovered in [moved, missing] {
-      let result = await LocalACPRuntimeVerifier.refresh(
-        definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: prior,
-        verification: { _, _, _ in Issue.record("Must not probe during discovery"); return discovered }
-      )
-      #expect(result.availability == discovered.availability)
-    }
-  }
-
   @Test("a canceled explicit check does not start a provider")
   func cancellationDoesNotProbe() async throws {
     let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))

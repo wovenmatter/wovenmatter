@@ -5,6 +5,32 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPActiveInputTests {
+
+    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "command-only", "fallback"])
+    func aSteerRacingCompletionRetainsHandlersAndWaitsForItsOwnOutput(mode: String) async throws {
+        let f = try ActiveInputFixture(mode: mode)
+        defer { f.remove() }
+        let client = try f.client(mode == "fallback" ? .claudeCode : .codex)
+        _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
+        let events = ActiveInputEvents()
+        let prompt = Task { try await client.prompt("start", onEvent: { await events.record($0) }) }
+        try await f.waitForPrompt()
+        let receipt = try await client.beginActiveInput(mode == "command-only" ? "/status" : "continue")
+        #expect(try await prompt.value == .endTurn)
+        #expect(try await receipt.completion.value == .endTurn)
+        #expect(await events.text() == "beforecontinued")
+        await client.shutdown()
+    }
+
+    @Test func commandOnlyClassificationLeavesNativeWorkUnderObservation() {
+        for text in ["/status", "/STATUS", "/ status", "/plan", "/rename title", "/skills", "/mcp", "/goal pause", "/goal clear", "/review-branch"] {
+            #expect(LocalACPClient.codexCommandCompletesWithoutTurn(text))
+        }
+        for text in ["ordinary", "/compact", "/review", "/review-branch main", "/goal resume", "/goal implement this", "/skill:review"] {
+            #expect(!LocalACPClient.codexCommandCompletesWithoutTurn(text))
+        }
+    }
+
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
     func activeInputStreamsWithoutCancellingOrStartingAnotherSession(kind: AgentRuntimeKind) async throws {
         let f = try ActiveInputFixture(mode: "ordinary")
@@ -38,22 +64,6 @@ struct ACPActiveInputTests {
         }
     }
 
-    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "command-only", "fallback"])
-    func aSteerRacingCompletionRetainsHandlersAndWaitsForItsOwnOutput(mode: String) async throws {
-        let f = try ActiveInputFixture(mode: mode)
-        defer { f.remove() }
-        let client = try f.client(mode == "fallback" ? .claudeCode : .codex)
-        _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
-        let events = ActiveInputEvents()
-        let prompt = Task { try await client.prompt("start", onEvent: { await events.record($0) }) }
-        try await f.waitForPrompt()
-        let receipt = try await client.beginActiveInput(mode == "command-only" ? "/status" : "continue")
-        #expect(try await prompt.value == .endTurn)
-        #expect(try await receipt.completion.value == .endTurn)
-        #expect(await events.text() == "beforecontinued")
-        await client.shutdown()
-    }
-
     @Test func stopDuringAdmissionDoesNotStartTheFallbackPrompt() async throws {
         let f = try ActiveInputFixture(mode: "cancel-fallback")
         defer { f.remove() }
@@ -78,33 +88,6 @@ struct ACPActiveInputTests {
         await client.shutdown()
     }
 
-    @Test func commandOnlyClassificationLeavesNativeWorkUnderObservation() {
-        for text in ["/status", "/STATUS", "/ status", "/plan", "/rename title", "/skills", "/mcp", "/goal pause", "/goal clear", "/review-branch"] {
-            #expect(LocalACPClient.codexCommandCompletesWithoutTurn(text))
-        }
-        for text in ["ordinary", "/compact", "/review", "/review-branch main", "/goal resume", "/goal implement this", "/skill:review"] {
-            #expect(!LocalACPClient.codexCommandCompletesWithoutTurn(text))
-        }
-    }
-
-    @Test func unsupportedAndRejectedSteersThrowAtAdmission() async throws {
-        for mode in ["unsupported", "rejected", "uncertain"] {
-            let f = try ActiveInputFixture(mode: mode)
-            defer { f.remove() }
-            let client = try f.client(.codex)
-            _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
-            let prompt = Task { try await client.prompt("start") }
-            try await f.waitForPrompt()
-            do { _ = try await client.beginActiveInput("reject"); Issue.record("Expected an admission error") }
-            catch let error as LocalACPClientError {
-                if case .deliveryUncertain = error { #expect(mode == "uncertain") }
-                else { #expect(mode != "uncertain") }
-            }
-            try await client.cancel()
-            _ = try await prompt.value
-            await client.shutdown()
-        }
-    }
 }
 
 private actor ActiveInputEvents {

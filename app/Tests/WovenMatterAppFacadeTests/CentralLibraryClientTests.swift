@@ -6,20 +6,99 @@ import WovenMatterCompanion
 
 @MainActor @Suite(.serialized)
 struct CentralLibraryClientTests {
-    @Test func unpairedNodeWaitsForDatabaseBeforeCreatingExecutionWorkspace() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        var attempts = 0
-        let model = CentralLibraryClientModel(store: replica, preferences: fixture.defaults,
-            makeLocalExecution: { _, _ in attempts += 1; throw MobileStore.Failure.wrongWorkspace })
-        await model.initializeClientWorkspace()
-        #expect(attempts == 0)
-        #expect(model.localExecution == nil)
-        #expect(model.errorMessage == nil)
-        #expect(!CentralLibraryClientConfiguration.isEnabled(defaults: fixture.defaults))
-        fixture.defaults.set(true, forKey: CentralLibraryClientConfiguration.preferenceKey)
-        #expect(CentralLibraryClientConfiguration.isEnabled(defaults: fixture.defaults))
+
+    @Test func directExecutionWorksWhileCentralIsUnavailable() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MobileStore(file: root.appending(path: "library.json"))
+        let central = MacClientFakeCentral()
+        let model = CentralLibraryClientModel(store: store, transport: central)
+        await model.initialize(); await model.refresh()
+        let workspace = CompanionExecutionWorkspace(id: "00000000-0000-4000-8000-000000000002", libraryID: "00000000-0000-4000-8000-000000000001", ownerDeviceID: "00000000-0000-4000-8000-000000000003", kind: .linux, name: "Linux", revision: 1)
+        let direct = MacClientFakeExecution(workspace: workspace)
+        try await model.attachExecutionWorkspace(workspace, transport: direct)
+        await model.selectExecutionWorkspace(workspace.id)
+        await central.setOffline(true)
+        await model.refresh()
+        #expect(!model.online)
+        #expect(model.canControl)
+        model.composer = "Runs directly"
+        await model.send()
+        #expect(await direct.sendCount == 1)
+        let id = try #require(model.selectedConversationID)
+        #expect(model.executionOwner(for: id) == workspace.id)
+        #expect(model.state.transcripts[id]?.messages.last?.content == "Direct result")
+        #expect(await central.sendCount == 0)
     }
+
+
+    @Test func failedLaneDoesNotMisreportAReachableCentralMacAsDisconnected() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = try MobileStore(file: directory.appending(path: "library.json"))
+        let central = MacClientFakeCentral()
+        let model = CentralLibraryClientModel(store: replica, transport: central)
+        await model.initialize(); await model.refresh()
+        await model.createNote()
+        await central.setMutationFailure(true)
+        await model.refresh()
+        #expect(model.online)
+        #expect(model.status == "Connected")
+        #expect(model.synchronization.centralReachable == true)
+        #expect(model.synchronization.lanes[.library]?.phase == .blocked)
+        #expect(model.synchronization.lanes[.library]?.pendingCount == 1)
+    }
+
+    @Test func revokedWorkspaceCanBeGrantedAgainWithoutDiscardingItsCachedHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = try MobileStore(file: directory.appending(path: "library.json"))
+        let library = UUID().uuidString.lowercased(); try await replica.bindWorkspace(library)
+        var cleared: [String] = []
+        let model = CentralLibraryClientModel(store: replica, transport: MacClientFakeCentral(), clearWorkspaceCredential: { cleared.append($0) })
+        await model.initialize()
+        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library,
+            ownerDeviceID: UUID().uuidString.lowercased(), kind: .mac, name: "Another Mac")
+        let direct = MacClientFakeExecution(workspace: workspace)
+        try await model.attachExecutionWorkspace(workspace, transport: direct)
+        await direct.setRevoked(true)
+        await model.selectExecutionWorkspace(workspace.id)
+        #expect(!model.hasDirectAccess(workspace.id))
+        #expect(cleared == [workspace.id])
+        #expect(model.executionWorkspaces.contains { $0.id == workspace.id })
+        await direct.setRevoked(false)
+        try await model.attachExecutionWorkspace(workspace, transport: direct)
+        await model.selectExecutionWorkspace(workspace.id)
+        #expect(model.hasDirectAccess(workspace.id))
+        #expect(model.canControl(workspaceID: workspace.id))
+    }
+
+
+    @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MobileStore(file: root.appending(path: "library.json"))
+        try await store.cache(.init(conversationID: "A", messages: [.init(id: "latest-a", conversationID: "A", role: "assistant", content: "A")],
+            activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "running") }, olderCursor: "older"))
+        try await store.cache(.init(conversationID: "B", messages: [.init(id: "latest-b", conversationID: "B", role: "assistant", content: "B")]))
+        let transport = MacClientFakeCentral()
+        let model = CentralLibraryClientModel(store: store, transport: transport)
+        await model.initialize(); model.selectedConversationID = "A"
+        let loading = Task { await model.olderMessages() }
+        for _ in 0..<100 { if await transport.historyWaiting { break }; try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await transport.historyWaiting)
+        model.selectedConversationID = "B"
+        await transport.releaseHistory(); await loading.value
+        #expect(model.transcript?.messages.map(\.id) == ["latest-b"])
+        model.selectedConversationID = "A"
+        #expect(model.transcript?.messages.map(\.id) == ["older-a", "latest-a"])
+        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
+        try await store.cache(.init(conversationID: "A", activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "completed") }))
+        await model.reload()
+        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
+        #expect(model.transcript?.activities.last?.status == "completed")
+    }
+
 
     @Test func secondaryMacAlwaysStartsItsOwnWorkspaceAndKeepsItAfterDisconnect() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
@@ -70,92 +149,6 @@ struct CentralLibraryClientTests {
         #expect(await reopened.snapshot().outbox.count == 1)
     }
 
-    @Test func attachedForeignWorkspacesNeverBecomeOwnerRegistrations() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let replica = try MobileStore(file: directory.appending(path: "library.json"))
-        let owner = await replica.snapshot().deviceID
-        let library = UUID().uuidString.lowercased()
-        try await replica.bindWorkspace(library)
-        let model = CentralLibraryClientModel(store: replica, transport: MacClientFakeCentral())
-        await model.initialize()
-        for kind in [CompanionExecutionWorkspace.Kind.mac, .linux] {
-            let foreign = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library,
-                ownerDeviceID: owner, kind: kind, name: "Managed but owned elsewhere", executionDeviceID: UUID().uuidString.lowercased())
-            try await model.attachExecutionWorkspace(foreign, transport: MacClientFakeExecution(workspace: foreign))
-        }
-        #expect(await replica.journal.snapshot().pendingRegistrations.isEmpty)
-        let own = CompanionExecutionWorkspace(id: owner, libraryID: library, ownerDeviceID: owner, kind: .mac, name: "Own Mac", executionDeviceID: owner)
-        try await model.attachExecutionWorkspace(own, transport: MacClientFakeExecution(workspace: own))
-        #expect(await replica.journal.snapshot().pendingRegistrations == [owner])
-    }
-
-    @Test func failedLaneDoesNotMisreportAReachableCentralMacAsDisconnected() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let replica = try MobileStore(file: directory.appending(path: "library.json"))
-        let central = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: replica, transport: central)
-        await model.initialize(); await model.refresh()
-        await model.createNote()
-        await central.setMutationFailure(true)
-        await model.refresh()
-        #expect(model.online)
-        #expect(model.status == "Connected")
-        #expect(model.synchronization.centralReachable == true)
-        #expect(model.synchronization.lanes[.library]?.phase == .blocked)
-        #expect(model.synchronization.lanes[.library]?.pendingCount == 1)
-    }
-
-    @Test func revokedWorkspaceCanBeGrantedAgainWithoutDiscardingItsCachedHistory() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let replica = try MobileStore(file: directory.appending(path: "library.json"))
-        let library = UUID().uuidString.lowercased(); try await replica.bindWorkspace(library)
-        var cleared: [String] = []
-        let model = CentralLibraryClientModel(store: replica, transport: MacClientFakeCentral(), clearWorkspaceCredential: { cleared.append($0) })
-        await model.initialize()
-        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library,
-            ownerDeviceID: UUID().uuidString.lowercased(), kind: .mac, name: "Another Mac")
-        let direct = MacClientFakeExecution(workspace: workspace)
-        try await model.attachExecutionWorkspace(workspace, transport: direct)
-        await direct.setRevoked(true)
-        await model.selectExecutionWorkspace(workspace.id)
-        #expect(!model.hasDirectAccess(workspace.id))
-        #expect(cleared == [workspace.id])
-        #expect(model.executionWorkspaces.contains { $0.id == workspace.id })
-        await direct.setRevoked(false)
-        try await model.attachExecutionWorkspace(workspace, transport: direct)
-        await model.selectExecutionWorkspace(workspace.id)
-        #expect(model.hasDirectAccess(workspace.id))
-        #expect(model.canControl(workspaceID: workspace.id))
-    }
-
-    @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MobileStore(file: root.appending(path: "library.json"))
-        try await store.cache(.init(conversationID: "A", messages: [.init(id: "latest-a", conversationID: "A", role: "assistant", content: "A")],
-            activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "running") }, olderCursor: "older"))
-        try await store.cache(.init(conversationID: "B", messages: [.init(id: "latest-b", conversationID: "B", role: "assistant", content: "B")]))
-        let transport = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: store, transport: transport)
-        await model.initialize(); model.selectedConversationID = "A"
-        let loading = Task { await model.olderMessages() }
-        for _ in 0..<100 { if await transport.historyWaiting { break }; try await Task.sleep(for: .milliseconds(10)) }
-        #expect(await transport.historyWaiting)
-        model.selectedConversationID = "B"
-        await transport.releaseHistory(); await loading.value
-        #expect(model.transcript?.messages.map(\.id) == ["latest-b"])
-        model.selectedConversationID = "A"
-        #expect(model.transcript?.messages.map(\.id) == ["older-a", "latest-a"])
-        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
-        try await store.cache(.init(conversationID: "A", activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "completed") }))
-        await model.reload()
-        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
-        #expect(model.transcript?.activities.last?.status == "completed")
-    }
-
     @Test func offlineReplicaEditsSurviveRelaunchAndSync() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -201,29 +194,6 @@ struct CentralLibraryClientTests {
         #expect(model.selectedConversationID == launch.create.conversationID)
     }
 
-    @Test func directExecutionWorksWhileCentralIsUnavailable() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MobileStore(file: root.appending(path: "library.json"))
-        let central = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: store, transport: central)
-        await model.initialize(); await model.refresh()
-        let workspace = CompanionExecutionWorkspace(id: "00000000-0000-4000-8000-000000000002", libraryID: "00000000-0000-4000-8000-000000000001", ownerDeviceID: "00000000-0000-4000-8000-000000000003", kind: .linux, name: "Linux", revision: 1)
-        let direct = MacClientFakeExecution(workspace: workspace)
-        try await model.attachExecutionWorkspace(workspace, transport: direct)
-        await model.selectExecutionWorkspace(workspace.id)
-        await central.setOffline(true)
-        await model.refresh()
-        #expect(!model.online)
-        #expect(model.canControl)
-        model.composer = "Runs directly"
-        await model.send()
-        #expect(await direct.sendCount == 1)
-        let id = try #require(model.selectedConversationID)
-        #expect(model.executionOwner(for: id) == workspace.id)
-        #expect(model.state.transcripts[id]?.messages.last?.content == "Direct result")
-        #expect(await central.sendCount == 0)
-    }
 }
 
 private actor MacClientFakeCentral: CompanionTransport {

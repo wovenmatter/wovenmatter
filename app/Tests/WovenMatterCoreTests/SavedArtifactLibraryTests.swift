@@ -5,6 +5,37 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct SavedArtifactLibraryTests {
+
+  @Test func tamperedOpeningCopyIsRebuiltAndUnsafeNamesStayInsideCache() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.remove() }
+    let bytes = Data("Saved output".utf8)
+    let artifact = try await fixture.save(bytes, title: "../../outside/\\report")
+    let service = SavedArtifactLibraryService(database: fixture.database)
+    let url = try await service.openURL(id: artifact.id, revision: artifact.revision)
+    #expect(url.path.hasPrefix(fixture.root.appending(path: "saved-artifact-open").path + "/"))
+    #expect(!url.lastPathComponent.contains("/"))
+    #expect(!url.lastPathComponent.contains("\\"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    try Data("Wrong output".utf8).write(to: url)
+    let rebuilt = try await service.openURL(id: artifact.id, revision: artifact.revision)
+    #expect(try Data(contentsOf: rebuilt) == bytes)
+  }
+
+
+  @Test func readOnlyFrontendListsWithoutCreatingCopies() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.remove() }
+    let artifact = try await fixture.save(Data())
+    let projection = try await WorkspaceDatabase(url: fixture.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+    let service = SavedArtifactLibraryService(database: projection)
+    #expect(try await service.items().map(\.id) == [artifact.id])
+    await #expect(throws: (any Error).self) { try await service.openURL(id: artifact.id, revision: artifact.revision) }
+    #expect(!FileManager.default.fileExists(atPath: fixture.root.appending(path: "saved-artifact-open").path))
+    let writer = SavedArtifactLibraryService(database: fixture.database)
+    #expect(try Data(contentsOf: await writer.openURL(id: artifact.id, revision: artifact.revision)).isEmpty)
+  }
+
   @Test func streamsCommittedChunksAndKeepsArtifactIdentitiesDistinct() async throws {
     let fixture = try await Fixture()
     defer { fixture.remove() }
@@ -23,22 +54,6 @@ struct SavedArtifactLibraryTests {
     #expect(url != other)
     #expect(try Data(contentsOf: url) == bytes)
     #expect((try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue == 0o400)
-  }
-
-  @Test func tamperedOpeningCopyIsRebuiltAndUnsafeNamesStayInsideCache() async throws {
-    let fixture = try await Fixture()
-    defer { fixture.remove() }
-    let bytes = Data("Saved output".utf8)
-    let artifact = try await fixture.save(bytes, title: "../../outside/\\report")
-    let service = SavedArtifactLibraryService(database: fixture.database)
-    let url = try await service.openURL(id: artifact.id, revision: artifact.revision)
-    #expect(url.path.hasPrefix(fixture.root.appending(path: "saved-artifact-open").path + "/"))
-    #expect(!url.lastPathComponent.contains("/"))
-    #expect(!url.lastPathComponent.contains("\\"))
-    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    try Data("Wrong output".utf8).write(to: url)
-    let rebuilt = try await service.openURL(id: artifact.id, revision: artifact.revision)
-    #expect(try Data(contentsOf: rebuilt) == bytes)
   }
 
   @Test func rejectsCorruptCommittedBytesAndRemovesPartialCopy() async throws {
@@ -78,19 +93,6 @@ struct SavedArtifactLibraryTests {
     _ = try await fixture.database.registerCompanionArtifact(.init(manifest: saved, expectedRevision: saved.revision), deviceID: fixture.deviceID)
     #expect(try await service.items().isEmpty)
     await #expect(throws: (any Error).self) { try await service.openURL(id: saved.id, revision: saved.revision) }
-  }
-
-  @Test func readOnlyFrontendListsWithoutCreatingCopies() async throws {
-    let fixture = try await Fixture()
-    defer { fixture.remove() }
-    let artifact = try await fixture.save(Data())
-    let projection = try await WorkspaceDatabase(url: fixture.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-    let service = SavedArtifactLibraryService(database: projection)
-    #expect(try await service.items().map(\.id) == [artifact.id])
-    await #expect(throws: (any Error).self) { try await service.openURL(id: artifact.id, revision: artifact.revision) }
-    #expect(!FileManager.default.fileExists(atPath: fixture.root.appending(path: "saved-artifact-open").path))
-    let writer = SavedArtifactLibraryService(database: fixture.database)
-    #expect(try Data(contentsOf: await writer.openURL(id: artifact.id, revision: artifact.revision)).isEmpty)
   }
 
   private struct Fixture {

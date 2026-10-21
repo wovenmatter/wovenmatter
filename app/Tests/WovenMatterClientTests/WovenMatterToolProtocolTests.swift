@@ -4,19 +4,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct WovenMatterToolProtocolTests {
-  @Test func automationJSONAndScreenshotExportKeepAuthorityOnTheCaller() throws {
-    let command = try WovenMatterToolCommand(["browser", "call", "--json", "--image", "--request-id", "fixture"])
-    #expect(command.options["json"] == "--image")
-    #expect(throws: (any Error).self) { try WovenMatterToolCommand(["computer", "call", "--json", "{}", "--session", "other"]) }
-    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: file) }
-    let bytes = Data("synthetic screenshot".utf8)
-    let response = WovenMatterToolResponse(result: .object(["content": .array([.object(["type": .string("image"), "mimeType": .string("image/jpeg"), "data": .string(bytes.base64EncodedString())])])]))
-    let exported = try WovenAutomationOutput.exportImage(response, to: file)
-    #expect(try Data(contentsOf: file) == bytes)
-    #expect(exported.result?.objectValue?["content"]?.arrayValue?.first?.objectValue?["type"]?.stringValue == "text")
-    #expect(throws: (any Error).self) { try WovenAutomationOutput.exportImage(response, to: file) }
-  }
 
   @Test func contextIsAReadWithoutCallerSelectedMessageOrNote() throws {
     let command = try WovenMatterToolCommand(["context"])
@@ -24,6 +11,7 @@ struct WovenMatterToolProtocolTests {
     #expect(WovenMatterToolCommand.help(for: try .init(["context", "--help"])) == WovenMatterToolCommand.contextHelp)
     #expect(throws: (any Error).self) { try WovenMatterToolCommand(["context", "--note-id", "other"]) }
   }
+
 
   @Test func nativeArchiveIdentitiesAreExactHistoryFilters() throws {
     let command = try WovenMatterToolCommand(["history", "events", "--harness", "defaultAgent",
@@ -35,11 +23,6 @@ struct WovenMatterToolProtocolTests {
       try WovenMatterToolCommand(["sessions", "list", "--native-session-id", "7"])
     }
   }
-  @Test func oversizedArgumentArraysAreRejectedBeforeParsing() {
-    #expect(throws: WorkspaceToolError.invalid("A tool command must contain at most 1,024 arguments.")) {
-      try WovenMatterToolCommand(["notes", "list"] + Array(repeating: "", count: 1_023))
-    }
-  }
 
   @Test func unsuccessfulNoteResponseRemainsAnUnsuccessfulCLIResponse() throws {
     let response = try WovenMatterToolResponse.note(.init(success: false, noteID: "note", error: "Revision conflict"))
@@ -49,21 +32,13 @@ struct WovenMatterToolProtocolTests {
     #expect(replay.success && replay.result?.objectValue?["replayed"]?.boolValue == true)
   }
 
+
   @Test func helpIsLazyForEveryGroup() throws {
     #expect(try WovenMatterToolCommand([]).wantsHelp)
     for group in WorkspaceToolGroup.allCases {
       #expect(try WovenMatterToolCommand([group.rawValue, "help"]).group == group)
       #expect(WovenMatterToolCommand.help(for: group).contains("wovenmatter " + group.rawValue))
     }
-  }
-
-  @Test func noteJSONAndCreationFlagsKeepTheirExactValues() throws {
-    let json = #"[{"type":"appendText","text":"literal --source-id"}]"#
-    let note = try WovenMatterToolCommand(["notes", "apply", "--note-id", "n", "--json", json])
-    #expect(note.options["json"] == json)
-    let session = try WovenMatterToolCommand(["sessions", "create", "--title", "A title", "--text", "Line one\nLine two", "--independent"])
-    #expect(session.options["text"] == "Line one\nLine two")
-    #expect(session.options["independent"] == "true")
   }
 
   @Test func retryIDsAndLiteralFlagValuesDoNotChangeTheOperation() throws {
@@ -82,14 +57,6 @@ struct WovenMatterToolProtocolTests {
     #expect(try WovenMatterToolCommand(["sessions", "receipts", "--before", id]).options["before"] == id)
     let response = WovenMatterToolResponse(requestID: id)
     #expect(try JSONDecoder().decode(WovenMatterToolResponse.self, from: JSONEncoder().encode(response)).requestID == id)
-  }
-
-  @Test func malformedCommandsAndAuthorityOverridesAreRejected() {
-    for arguments in [["unknown"], ["sessions", "delete-everything"],
-                      ["history", "search", "--caller", "another-session"],
-                      ["sessions", "send", "--text"], ["sessions", "send", "--text", "a", "--text", "b"]] {
-      #expect(throws: (any Error).self) { try WovenMatterToolCommand(arguments) }
-    }
   }
 
   @Test func actionSpecificOptionsContradictionsAndHelpAreExplicit() throws {
@@ -124,8 +91,39 @@ struct WovenMatterToolProtocolTests {
       from: JSONEncoder().encode(response))
     #expect(decoded.code == "busy" && decoded.requestID == uppercase.lowercased())
   }
-}
 
+  @Test func automationJSONAndScreenshotExportKeepAuthorityOnTheCaller() throws {
+    let command = try WovenMatterToolCommand(["browser", "call", "--json", "--image", "--request-id", "fixture"])
+    #expect(command.options["json"] == "--image")
+    #expect(throws: (any Error).self) { try WovenMatterToolCommand(["computer", "call", "--json", "{}", "--session", "other"]) }
+    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let bytes = Data("synthetic screenshot".utf8)
+    let response = WovenMatterToolResponse(result: .object(["content": .array([.object(["type": .string("image"), "mimeType": .string("image/jpeg"), "data": .string(bytes.base64EncodedString())])])]))
+    let exported = try WovenAutomationOutput.exportImage(response, to: file)
+    #expect(try Data(contentsOf: file) == bytes)
+    #expect(exported.result?.objectValue?["content"]?.arrayValue?.first?.objectValue?["type"]?.stringValue == "text")
+    #expect(throws: (any Error).self) { try WovenAutomationOutput.exportImage(response, to: file) }
+  }
+
+  @Test func noteJSONAndCreationFlagsKeepTheirExactValues() throws {
+    let json = #"[{"type":"appendText","text":"literal --source-id"}]"#
+    let note = try WovenMatterToolCommand(["notes", "apply", "--note-id", "n", "--json", json])
+    #expect(note.options["json"] == json)
+    let session = try WovenMatterToolCommand(["sessions", "create", "--title", "A title", "--text", "Line one\nLine two", "--independent"])
+    #expect(session.options["text"] == "Line one\nLine two")
+    #expect(session.options["independent"] == "true")
+  }
+
+  @Test func malformedCommandsAndAuthorityOverridesAreRejected() {
+    for arguments in [["unknown"], ["sessions", "delete-everything"],
+                      ["history", "search", "--caller", "another-session"],
+                      ["sessions", "send", "--text"], ["sessions", "send", "--text", "a", "--text", "b"]] {
+      #expect(throws: (any Error).self) { try WovenMatterToolCommand(arguments) }
+    }
+  }
+
+}
 
 extension WovenMatterToolProtocolTests {
   @Test func agentsCannotOverrideChildPermissionOrTools() {

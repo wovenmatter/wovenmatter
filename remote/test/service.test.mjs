@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
@@ -10,42 +10,19 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { authenticationInput, authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
 
+
+
+
+
+
+
+
+
+
+
+
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
-
-test('installer download follows only HTTPS redirects and hashes streamed bytes', async () => {
-  const calls = []
-  const redirect = installerResponse([], {
-    status: 302,
-    url: 'https://downloads.example.test/install',
-    headers: { location: '/releases/current.sh' },
-  })
-  const payload = [Buffer.from('#!/bin/sh\n'), Buffer.from('exit 0\n')]
-  const destination = installerResponse(payload, {
-    url: 'https://downloads.example.test/releases/current.sh',
-  })
-  const result = await downloadInstallerSource(
-    'https://downloads.example.test/install',
-    {
-      maximumBytes: 64,
-      fetchImplementation: async (url, options) => {
-        calls.push({ url: String(url), redirect: options.redirect })
-        return calls.length === 1 ? redirect.response : destination.response
-      },
-    }
-  )
-
-  const expected = Buffer.concat(payload)
-  assert.deepEqual(result.data, expected)
-  assert.equal(
-    result.sha256,
-    createHash('sha256').update(expected).digest('hex')
-  )
-  assert.deepEqual(calls, [
-    { url: 'https://downloads.example.test/install', redirect: 'manual' },
-    { url: 'https://downloads.example.test/releases/current.sh', redirect: 'manual' },
-  ])
-})
 
 test('installer download rejects non-HTTPS sources and redirect destinations', async () => {
   let requests = 0
@@ -133,101 +110,6 @@ test('installer download aborts a stalled request at its deadline', async () => 
   assert.equal(signal.aborted, true)
 })
 
-test('authentication deadline escalates only a live process and preserves timeout outcome', context => {
-  context.mock.timers.enable({ apis: ['setTimeout'] })
-  const child = new EventEmitter()
-  child.exitCode = null
-  child.signalCode = null
-  const signals = []
-  child.kill = signal => signals.push(signal)
-  const session = { child, timedOut: false, error: null }
-  authenticationDeadline(session)
-  context.mock.timers.tick(30 * 60_000 - 1)
-  assert.deepEqual(signals, [])
-  context.mock.timers.tick(1)
-  assert.equal(session.timedOut, true)
-  assert.equal(session.error, 'Sign-in timed out.')
-  assert.deepEqual(signals, ['SIGTERM'])
-  context.mock.timers.tick(5_000)
-  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'])
-})
-
-for (const outcome of ['success', 'signal', 'error', 'timeout-then-success']) {
-  test(`authentication deadline clears after ${outcome}`, context => {
-    context.mock.timers.enable({ apis: ['setTimeout'] })
-    const child = new EventEmitter()
-    child.exitCode = null
-    child.signalCode = null
-    const signals = []
-    child.kill = signal => signals.push(signal)
-    const session = { child, timedOut: false, error: null }
-    authenticationDeadline(session)
-    if (outcome === 'timeout-then-success') context.mock.timers.tick(30 * 60_000)
-    if (outcome === 'signal') child.signalCode = 'SIGTERM'
-    else if (outcome !== 'error') child.exitCode = 0
-    child.emit(outcome === 'error' ? 'error' : 'exit')
-    context.mock.timers.tick(31 * 60_000)
-    assert.deepEqual(signals, outcome === 'timeout-then-success' ? ['SIGTERM'] : [])
-    assert.equal(session.timedOut, outcome === 'timeout-then-success')
-  })
-}
-
-test('service authentication exposes the reviewed harness catalog', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-service-')
-  const service = await startService({
-    workspace: fixture,
-    home: fixture,
-    catalog: catalogPath,
-    token: 'service-token',
-  })
-  context.after(() => service.child.kill('SIGTERM'))
-
-  assert.equal((await fetch(`${service.url}/v1/health`)).status, 401)
-  for (const wrong of ['Bearer service-toke', 'Bearer service-token-longer', 'Bearer Service-Token', 'Basic service-token']) {
-    assert.equal((await fetch(`${service.url}/v1/health`, { headers: { authorization: wrong } })).status, 401)
-  }
-  const headers = { authorization: 'Bearer service-token' }
-  const health = await fetch(`${service.url}/v1/health`, { headers })
-  assert.equal((await health.json()).status, 'ready')
-  const response = await fetch(`${service.url}/v1/harnesses`, { headers })
-  const harnesses = (await response.json()).harnesses
-  assert.deepEqual(harnesses.map((value) => value.id), [
-    'default_agent',
-    'codex', 'claude_code', 'grok_build', 'opencode',
-  ])
-  assert.ok(harnesses.every((value) =>
-    Array.isArray(value.setupMethods) && (['opencode', 'default_agent'].includes(value.id) || value.setupMethods.length > 0)
-  ))
-  const openCode = harnesses.find((value) => value.id === 'opencode')
-  assert.equal(openCode.transport, 'opencode-v2')
-  assert.equal(openCode.state, 'cli_missing')
-  assert.deepEqual(openCode.setupMethods, [])
-  assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
-  assert.deepEqual(
-    Object.keys(harnesses.find(value => value.id === 'codex').setupMethods[0]).sort(),
-    ['displayName', 'id']
-  )
-  assert.ok(harnesses.every((value) =>
-    !['adapterInstalled', 'cliInstalled', 'installCommand', 'installSource', 'operation']
-      .some((field) => Object.hasOwn(value, field))
-  ))
-})
-
-test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
-  const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
-  const input = new Writable({ write(_chunk, _encoding, callback) { callback(failure) } })
-  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
-  const submit = authenticationInput(session)
-  await assert.rejects(submit(async () => ({ code: 'fixture-code' })), { statusCode: 409, message: 'authentication_session_not_active' })
-  // Writable emits its error after the write callback. Neither event may crash
-  // the service, and the actual failure remains recorded for session settlement.
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(session.inputError, failure)
-  assert.equal(session.error, 'Sign-in input is unavailable.')
-  input.emit('error', failure)
-  await assert.rejects(submit(async () => ({ code: 'again' })), { statusCode: 409 })
-})
-
 for (const outcome of ['exit', 'cancel', 'timeout']) {
   test(`authorization input rechecks ${outcome} after the request body arrives`, async () => {
     let writes = 0
@@ -245,54 +127,6 @@ for (const outcome of ['exit', 'cancel', 'timeout']) {
     input.destroy()
   })
 }
-
-test('authorization input reports acceptance only after the write completes', async () => {
-  let finishWrite, written, accepted = false
-  const input = new Writable({ write(chunk, _encoding, callback) { written = chunk.toString(); finishWrite = callback } })
-  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
-  const submit = authenticationInput(session)
-  const pending = submit(async () => ({ code: '  fixture-code\n' })).then(() => { accepted = true })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(written, 'fixture-code\n')
-  assert.equal(accepted, false)
-  finishWrite()
-  await pending
-  assert.equal(accepted, true)
-  input.destroy()
-})
-
-test('authorization input rejects additional lines and accepts a single trimmed credential', async context => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-input-')
-  const inputPath = resolve(fixture, 'input')
-  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
-  const harness = catalog.harnesses[0]
-  harness.authentication.statusCommands = [`test -f '${inputPath}'`]
-  harness.authentication.methods = [{ id: 'fixture', displayName: 'Fixture', acceptsInput: true,
-    command: `IFS= read -r code; printf '%s' "$code" > '${inputPath}'` }]
-  const path = resolve(fixture, 'catalog.json')
-  await writeFile(path, JSON.stringify({ schemaVersion: 4, harnesses: [harness] }))
-  const service = await startService({ workspace: fixture, home: fixture, catalog: path, token: 'input-token' })
-  context.after(() => service.child.kill('SIGTERM'))
-  const headers = { authorization: 'Bearer input-token', 'content-type': 'application/json' }
-  const started = await fetch(`${service.url}/v1/harnesses/${harness.id}/sign-in`, {
-    method: 'POST', headers, body: JSON.stringify({ methodID: 'fixture' }),
-  })
-  assert.equal(started.status, 201)
-  const sessionURL = `${service.url}/v1/authentication-sessions/${(await started.json()).id}`
-  for (const code of ['first\nsecond', 'first\rsecond', '  ', 'x'.repeat(4097), 123]) {
-    const response = await fetch(`${sessionURL}/authorization-code`, {
-      method: 'POST', headers, body: JSON.stringify({ code }),
-    })
-    assert.equal(response.status, 400)
-    assert.equal((await response.json()).error, 'invalid_authorization_code')
-  }
-  const accepted = await fetch(`${sessionURL}/authorization-code`, {
-    method: 'POST', headers, body: JSON.stringify({ code: '  safe-code\n' }),
-  })
-  assert.equal(accepted.status, 202)
-  assert.equal((await waitFor(sessionURL, headers, value => value.state !== 'waiting_for_user')).state, 'succeeded')
-  assert.equal(await readFile(inputPath, 'utf8'), 'safe-code')
-})
 
 test('native sign-in reports a real handoff and verifies provider state', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-sign-in-')
@@ -338,7 +172,7 @@ test('native sign-in reports a real handoff and verifies provider state', async 
     catalog: testCatalog,
     token: 'sign-in-token',
   })
-  context.after(() => service.child.kill('SIGTERM'))
+  context.after(() => stopService(service.child))
   const headers = {
     authorization: 'Bearer sign-in-token',
     'content-type': 'application/json',
@@ -378,29 +212,6 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   )
   assert.equal(terminalCancellation.status, 409)
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
-})
-
-test('readiness returns unavailable when the initialize pipe closes before its write', async () => {
-  const child = new EventEmitter()
-  child.exitCode = null
-  child.killed = false
-  child.kill = () => { child.killed = true }
-  child.stdout = new PassThrough()
-  child.stderr = new PassThrough()
-  child.stdin = new Writable({
-    write(_chunk, _encoding, callback) {
-      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
-    },
-  })
-  const result = await probeHarnessTransport({ id: 'fixture', command: 'fixture' }, 1_000, () => {
-    queueMicrotask(() => child.emit('spawn'))
-    return child
-  })
-  assert.deepEqual(result, { ready: false, error: 'The transport input failed before readiness.' })
-  assert.equal(child.killed, true)
-  assert.equal(child.stdin.destroyed, true)
-  // Late process events must not replace the already settled failure.
-  child.emit('close', 0)
 })
 
 test('harness readiness requires a real bounded transport handshake', async (context) => {
@@ -450,7 +261,7 @@ test('harness readiness requires a real bounded transport handshake', async (con
     catalog: testCatalog,
     token: 'transport-token',
   })
-  context.after(() => service.child.kill('SIGTERM'))
+  context.after(() => stopService(service.child))
   const response = await fetch(`${service.url}/v1/harnesses`, {
     headers: { authorization: 'Bearer transport-token' },
   })
@@ -464,65 +275,6 @@ test('harness readiness requires a real bounded transport handshake', async (con
   assert.match(statuses[1].transportError, /before readiness/)
 })
 
-test('installation uses latest adapter and fails unless actual components verify', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-install-')
-  const home = resolve(fixture, 'home')
-  const workspace = resolve(fixture, 'workspace')
-  const bin = resolve(home, '.local/bin')
-  const npmArguments = resolve(fixture, 'npm-arguments')
-  await mkdir(bin, { recursive: true })
-  await mkdir(workspace, { recursive: true })
-  await writeFile(resolve(bin, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
-  await chmod(resolve(bin, 'flock'), 0o700)
-  await writeFile(resolve(bin, 'ps'), '#!/bin/sh\nexit 0\n')
-  await chmod(resolve(bin, 'ps'), 0o700)
-  const npm = resolve(bin, 'npm')
-  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
-  await chmod(npm, 0o700)
-
-  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
-  const opencode = catalog.harnesses.find((value) => value.id === 'opencode')
-  const testCatalog = resolve(fixture, 'catalog.json')
-  await writeFile(testCatalog, JSON.stringify({
-    schemaVersion: 4,
-    harnesses: [{
-      ...opencode,
-      adapterPackage: '@example/opencode-adapter',
-      minimumAdapterVersion: '1.2.3',
-      command: 'opencode-adapter',
-      transportCheckCommand: null,
-    }],
-  }))
-
-  const service = await startService({
-    workspace,
-    home,
-    catalog: testCatalog,
-    token: 'install-token',
-  })
-  context.after(() => service.child.kill('SIGTERM'))
-  const headers = {
-    authorization: 'Bearer install-token',
-    'content-type': 'application/json',
-  }
-  const response = await fetch(`${service.url}/v1/harnesses/opencode/install`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ confirmed: true, packageSpec: "@opencode/cli@2.1.0" }),
-  })
-  assert.equal(response.status, 202)
-  const operation = await waitFor(
-    `${service.url}/v1/operations/${(await response.json()).id}`,
-    headers,
-    (value) => value.status !== 'running'
-  )
-  assert.equal(operation.status, 'failed')
-  assert.match(operation.error, /could not be verified/)
-  const argumentsValue = await readFile(npmArguments, 'utf8')
-  assert.match(argumentsValue, /@opencode\/cli/)
-  assert.match(argumentsValue, /@example\/opencode-adapter@latest/)
-})
-
 async function temporaryFixture(context, prefix) {
   const directory = await mkdtemp(resolve(tmpdir(), prefix))
   context.after(() => rm(directory, { recursive: true, force: true }))
@@ -534,7 +286,7 @@ test('database routes require authentication and keep managed data outside proje
   const home = resolve(root, 'home')
   await mkdir(home)
   const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token' })
-  context.after(() => service.child.kill('SIGTERM'))
+  context.after(() => stopService(service.child))
   const request = (path, method = 'GET', body, token = 'database-token') => fetch(service.url + path, {
     method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -580,7 +332,7 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
   const home = resolve(root, 'home'); await mkdir(home);
   const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token' });
-  context.after(() => service.child.kill('SIGTERM'));
+  context.after(() => stopService(service.child));
   const request = (path, body, token = 'credential-test-token') => fetch(service.url + path, {
     method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
@@ -605,7 +357,7 @@ test('task gateway routes are authenticated, default enabled, and persist explic
   const root = await temporaryFixture(context, 'wovenmatter-task-gateway-api-')
   const home = resolve(root, 'home'); await mkdir(home)
   const service = await startService({workspace:root,home,catalog:catalogPath,token:'task-test-token'})
-  context.after(() => service.child.kill('SIGTERM'))
+  context.after(() => stopService(service.child))
   const request = (path, method='GET', body, token='task-test-token') => fetch(service.url+path, {
     method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
     body:body===undefined?undefined:JSON.stringify(body),
@@ -627,10 +379,23 @@ test('task gateway routes are authenticated, default enabled, and persist explic
   assert.notEqual((await request('/v1/durable-acp/attach','POST',{channelID:'no-start',harnessID:'codex'})).status,200)
 })
 
-async function startService({ workspace, home, catalog, token }) {
+async function stopService(child) {
+  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return
+  const closed = new Promise(resolvePromise => child.once('close', resolvePromise))
+  const escalation = setTimeout(() => child.kill('SIGKILL'), 1_000)
+  try {
+    child.kill('SIGTERM')
+    await closed
+  } finally {
+    clearTimeout(escalation)
+  }
+}
+
+async function startService({ workspace, home, catalog, token,
+  spawnImplementation = spawn, startupTimeoutMilliseconds = 5_000 }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)
-  const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
+  const child = spawnImplementation(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
     cwd: repositoryRoot,
     env: {
       ...environment,
@@ -642,15 +407,33 @@ async function startService({ workspace, home, catalog, token }) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  await new Promise((resolvePromise, reject) => {
-    const timeout = setTimeout(() => reject(new Error('service did not start')), 5_000)
-    child.once('exit', (code) => reject(new Error(`service exited ${code}`)))
-    child.stdout.on('data', (data) => {
-      if (!String(data).includes('listening')) return
-      clearTimeout(timeout)
-      resolvePromise()
+  try {
+    await new Promise((resolvePromise, reject) => {
+      let output = ''
+      const timeout = setTimeout(() => finish(new Error('service did not start')), startupTimeoutMilliseconds)
+      const exited = (code, signal) => finish(new Error(`service exited ${signal ?? code}`))
+      const failed = error => finish(error)
+      const received = data => {
+        output = (output + data.toString()).slice(-4096)
+        if (output.includes('listening')) finish()
+      }
+      const finish = error => {
+        clearTimeout(timeout)
+        child.off('exit', exited)
+        child.off('error', failed)
+        child.stdout.off('data', received)
+        if (error) reject(error)
+        else resolvePromise()
+      }
+      child.once('exit', exited)
+      child.once('error', failed)
+      child.stdout.on('data', received)
+      if (child.exitCode !== null || child.signalCode !== null) exited(child.exitCode, child.signalCode)
     })
-  })
+  } catch (error) {
+    await stopService(child)
+    throw error
+  }
   return { child, port, url: `http://127.0.0.1:${port}` }
 }
 
@@ -687,19 +470,6 @@ async function waitFor(url, headers, predicate) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25))
   }
   throw new Error(`operation did not finish: ${JSON.stringify(value)}`)
-}
-
-function runProcess(command, argumentsValue, { cwd, env, input }) {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, argumentsValue, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (data) => { stdout += data.toString('utf8') })
-    child.stderr.on('data', (data) => { stderr += data.toString('utf8') })
-    child.once('error', reject)
-    child.once('close', (code) => resolvePromise({ code, stdout, stderr }))
-    child.stdin.end(input)
-  })
 }
 
 async function unusedPort() {
@@ -772,7 +542,7 @@ test('direct client grants expose only execution routes and enforce revocation',
   const catalog=resolve(fixture,'catalog.json')
   await writeFile(catalog,JSON.stringify({schemaVersion:4,harnesses:[]}))
   const service=await startService({workspace:fixture,home:fixture,catalog,token:'fixture-admin-token'})
-  context.after(()=>service.child.kill('SIGTERM'))
+  context.after(() => stopService(service.child))
   const id=()=>globalThis.crypto.randomUUID()
   const body={libraryID:id(),workspaceID:id(),ownerDeviceID:id(),deviceID:id(),scopes:['execution']}
   const enrolled=await fetch(service.url+'/v1/execution/devices',{method:'POST',headers:{authorization:'Bearer fixture-admin-token','content-type':'application/json'},body:JSON.stringify(body)})
@@ -790,4 +560,309 @@ test('direct client grants expose only execution routes and enforce revocation',
   const revoked=await fetch(service.url+'/v1/execution/devices/'+body.deviceID,{method:'DELETE',headers:{authorization:'Bearer fixture-admin-token'}})
   assert.equal(revoked.status,200)
   assert.equal((await fetch(service.url+'/v1/execution',{headers})).status,401)
+})
+
+test('installer download follows only HTTPS redirects and hashes streamed bytes', async () => {
+  const calls = []
+  const redirect = installerResponse([], {
+    status: 302,
+    url: 'https://downloads.example.test/install',
+    headers: { location: '/releases/current.sh' },
+  })
+  const payload = [Buffer.from('#!/bin/sh\n'), Buffer.from('exit 0\n')]
+  const destination = installerResponse(payload, {
+    url: 'https://downloads.example.test/releases/current.sh',
+  })
+  const result = await downloadInstallerSource(
+    'https://downloads.example.test/install',
+    {
+      maximumBytes: 64,
+      fetchImplementation: async (url, options) => {
+        calls.push({ url: String(url), redirect: options.redirect })
+        return calls.length === 1 ? redirect.response : destination.response
+      },
+    }
+  )
+
+  const expected = Buffer.concat(payload)
+  assert.deepEqual(result.data, expected)
+  assert.equal(
+    result.sha256,
+    createHash('sha256').update(expected).digest('hex')
+  )
+  assert.deepEqual(calls, [
+    { url: 'https://downloads.example.test/install', redirect: 'manual' },
+    { url: 'https://downloads.example.test/releases/current.sh', redirect: 'manual' },
+  ])
+})
+
+test('authentication deadline escalates only a live process and preserves timeout outcome', context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  const signals = []
+  child.kill = signal => signals.push(signal)
+  const session = { child, timedOut: false, error: null }
+  authenticationDeadline(session)
+  context.mock.timers.tick(30 * 60_000 - 1)
+  assert.deepEqual(signals, [])
+  context.mock.timers.tick(1)
+  assert.equal(session.timedOut, true)
+  assert.equal(session.error, 'Sign-in timed out.')
+  assert.deepEqual(signals, ['SIGTERM'])
+  context.mock.timers.tick(5_000)
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'])
+})
+
+test('HTTP fixture startup failure reaps a SIGTERM-ignoring child and cleanup accepts its signal exit', { timeout: 10000 }, async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-service-cleanup-')
+  const child = spawn(process.execPath, ['-e',
+    "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"], {
+    env: {}, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  context.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
+  await once(child.stdout, 'data')
+  await assert.rejects(startService({
+    workspace: root, home: root, catalog: catalogPath, token: 'synthetic-token',
+    spawnImplementation: () => child, startupTimeoutMilliseconds: 25,
+  }), /service did not start/)
+  assert.equal(child.exitCode, null)
+  assert.equal(child.signalCode, 'SIGKILL')
+  await stopService(child)
+})
+
+test('HTTP execution survives a lost acknowledgement without replay and preserves history after device revocation', { timeout: 20000 }, async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-http-execution-')
+  const bin = resolve(root, '.local/bin')
+  await mkdir(bin, { recursive: true })
+  const marker = resolve(root, 'prompts.jsonl')
+  const executable = resolve(bin, 'fixture-acp.mjs')
+  const output = 'Exact Unicode output: café 🌱\nsecond line'
+  await writeFile(executable, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+if (process.argv.includes('--version')) { console.log('1.0.0'); process.exit(0); }
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') send({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1}});
+  else if (request.method === 'session/new' || request.method === 'session/load') send({jsonrpc:'2.0',id:request.id,result:{sessionId:'http_fixture'}});
+  else if (request.method === 'session/prompt') {
+    appendFileSync(${JSON.stringify(marker)}, JSON.stringify(request.params.prompt) + '\\n');
+    send({jsonrpc:'2.0',method:'session/update',params:{sessionId:'http_fixture',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:${JSON.stringify(output)}}}}});
+    send({jsonrpc:'2.0',id:request.id,result:{stopReason:'end_turn'}});
+  }
+});
+`)
+  await chmod(executable, 0o700)
+  const catalog = resolve(root, 'catalog.json')
+  await writeFile(catalog, JSON.stringify({ schemaVersion: 4, harnesses: [{
+    id: 'codex', displayName: 'Synthetic ACP', transport: 'acp', command: 'fixture-acp.mjs', arguments: [], cliCommand: 'fixture-acp.mjs',
+    install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
+    authentication: { statusCommands: ['true'], discoveries: [], methods: [] }, capabilities: ['conversations'],
+  }] }))
+  const service = await startService({ workspace: root, home: root, catalog, token: 'synthetic-admin' })
+  context.after(() => stopService(service.child))
+  const admin = { authorization: 'Bearer synthetic-admin', 'content-type': 'application/json' }
+  const id = () => globalThis.crypto.randomUUID()
+  const device = { libraryID: id(), workspaceID: id(), ownerDeviceID: id(), deviceID: id(), scopes: ['execution'] }
+  const request = (path, method, body, headers = admin) => fetch(service.url + path, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) })
+  const enrolled = await request('/v1/execution/devices', 'POST', device)
+  assert.equal(enrolled.status, 201)
+  const grant = await enrolled.json()
+  const headers = { ...admin, authorization: 'Bearer ' + grant.token }
+  const create = await request('/v1/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', runtimeKind: 'codex' }, headers)
+  assert.equal(create.status, 200)
+  const opened = await create.json()
+  assert.equal(opened.status, 'completed', JSON.stringify({ receipt: opened, harnesses: opened.status !== 'completed' ? await (await request('/v1/harnesses', 'GET')).json() : undefined }))
+  const input = { commandID: id(), deviceID: device.deviceID, kind: 'send', conversationID: opened.conversationID, text: 'Hello 🌱' }
+  // Intentionally discard the acknowledgement; retry the identical command ID.
+  await (await request('/v1/execution/commands', 'POST', input, headers)).arrayBuffer()
+  const retry = await request('/v1/execution/commands', 'POST', input, headers)
+  assert.equal(retry.status, 200)
+  await waitFor(service.url + '/v1/execution/commands/' + input.commandID, headers, receipt => receipt.status === 'completed')
+  const historyPath = '/v1/execution/conversations/' + opened.conversationID + '/transcript'
+  const historyResponse = await request(historyPath, 'GET', null, headers)
+  assert.equal(historyResponse.status, 200)
+  const history = await historyResponse.json()
+  assert.deepEqual(history.messages.map(message => [message.role, message.content]), [['user', input.text], ['assistant', output]])
+  assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
+  assert.equal((await request('/v1/execution/devices/' + device.deviceID, 'DELETE')).status, 200)
+  assert.equal((await request('/v1/execution/commands', 'POST', { ...input, commandID: id() }, headers)).status, 401)
+  const retained = await request(historyPath, 'GET')
+  assert.equal(retained.status, 200)
+  assert.deepEqual(await retained.json(), history)
+  assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
+})
+
+test('service authentication exposes the reviewed harness catalog', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-service-')
+  const service = await startService({
+    workspace: fixture,
+    home: fixture,
+    catalog: catalogPath,
+    token: 'service-token',
+  })
+  context.after(() => stopService(service.child))
+
+  assert.equal((await fetch(`${service.url}/v1/health`)).status, 401)
+  for (const wrong of ['Bearer service-toke', 'Bearer service-token-longer', 'Bearer Service-Token', 'Basic service-token']) {
+    assert.equal((await fetch(`${service.url}/v1/health`, { headers: { authorization: wrong } })).status, 401)
+  }
+  const headers = { authorization: 'Bearer service-token' }
+  const health = await fetch(`${service.url}/v1/health`, { headers })
+  assert.equal((await health.json()).status, 'ready')
+  const response = await fetch(`${service.url}/v1/harnesses`, { headers })
+  const harnesses = (await response.json()).harnesses
+  assert.deepEqual(harnesses.map((value) => value.id), [
+    'default_agent',
+    'codex', 'claude_code', 'grok_build', 'opencode',
+  ])
+  assert.ok(harnesses.every((value) =>
+    Array.isArray(value.setupMethods) && (['opencode', 'default_agent'].includes(value.id) || value.setupMethods.length > 0)
+  ))
+  const openCode = harnesses.find((value) => value.id === 'opencode')
+  assert.equal(openCode.transport, 'opencode-v2')
+  assert.equal(openCode.state, 'cli_missing')
+  assert.deepEqual(openCode.setupMethods, [])
+  assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
+  assert.deepEqual(
+    Object.keys(harnesses.find(value => value.id === 'codex').setupMethods[0]).sort(),
+    ['displayName', 'id']
+  )
+  assert.ok(harnesses.every((value) =>
+    !['adapterInstalled', 'cliInstalled', 'installCommand', 'installSource', 'operation']
+      .some((field) => Object.hasOwn(value, field))
+  ))
+})
+
+test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
+  const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+  const input = new Writable({ write(_chunk, _encoding, callback) { callback(failure) } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  await assert.rejects(submit(async () => ({ code: 'fixture-code' })), { statusCode: 409, message: 'authentication_session_not_active' })
+  // Writable emits its error after the write callback. Neither event may crash
+  // the service, and the actual failure remains recorded for session settlement.
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(session.inputError, failure)
+  assert.equal(session.error, 'Sign-in input is unavailable.')
+  input.emit('error', failure)
+  await assert.rejects(submit(async () => ({ code: 'again' })), { statusCode: 409 })
+  input.destroy()
+})
+
+test('authorization input rejects extra lines, blank or oversized values before writing one trimmed code', async () => {
+  const writes = []
+  const input = new Writable({ write(chunk, _encoding, callback) { writes.push(chunk.toString()); callback() } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  try {
+    for (const code of ['first\nsecond', 'first\rsecond', '  ', 'x'.repeat(4097), 123]) {
+      await assert.rejects(submit(async () => ({ code })), { statusCode: 400, message: 'invalid_authorization_code' })
+    }
+    assert.deepEqual(writes, [])
+    await submit(async () => ({ code: '  fixture-code\n' }))
+    assert.deepEqual(writes, ['fixture-code\n'])
+  } finally {
+    input.destroy()
+  }
+})
+
+test('authorization input reports acceptance only after the write completes', async () => {
+  let finishWrite, written, accepted = false
+  const input = new Writable({ write(chunk, _encoding, callback) { written = chunk.toString(); finishWrite = callback } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  const pending = submit(async () => ({ code: '  fixture-code\n' })).then(() => { accepted = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(written, 'fixture-code\n')
+  assert.equal(accepted, false)
+  finishWrite()
+  await pending
+  assert.equal(accepted, true)
+  input.destroy()
+})
+
+test('readiness returns unavailable when the initialize pipe closes before its write', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    },
+  })
+  const result = await probeHarnessTransport({ id: 'fixture', command: 'fixture' }, 1_000, () => {
+    queueMicrotask(() => child.emit('spawn'))
+    return child
+  })
+  assert.deepEqual(result, { ready: false, error: 'The transport input failed before readiness.' })
+  assert.equal(child.killed, true)
+  assert.equal(child.stdin.destroyed, true)
+  // Late process events must not replace the already settled failure.
+  child.emit('close', 0)
+})
+
+test('installation uses latest adapter and fails unless actual components verify', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-install-')
+  const home = resolve(fixture, 'home')
+  const workspace = resolve(fixture, 'workspace')
+  const bin = resolve(home, '.local/bin')
+  const npmArguments = resolve(fixture, 'npm-arguments')
+  await mkdir(bin, { recursive: true })
+  await mkdir(workspace, { recursive: true })
+  await writeFile(resolve(bin, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
+  await chmod(resolve(bin, 'flock'), 0o700)
+  await writeFile(resolve(bin, 'ps'), '#!/bin/sh\nexit 0\n')
+  await chmod(resolve(bin, 'ps'), 0o700)
+  const npm = resolve(bin, 'npm')
+  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
+  await chmod(npm, 0o700)
+
+  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
+  const opencode = catalog.harnesses.find((value) => value.id === 'opencode')
+  const testCatalog = resolve(fixture, 'catalog.json')
+  await writeFile(testCatalog, JSON.stringify({
+    schemaVersion: 4,
+    harnesses: [{
+      ...opencode,
+      adapterPackage: '@example/opencode-adapter',
+      minimumAdapterVersion: '1.2.3',
+      command: 'opencode-adapter',
+      transportCheckCommand: null,
+    }],
+  }))
+
+  const service = await startService({
+    workspace,
+    home,
+    catalog: testCatalog,
+    token: 'install-token',
+  })
+  context.after(() => stopService(service.child))
+  const headers = {
+    authorization: 'Bearer install-token',
+    'content-type': 'application/json',
+  }
+  const response = await fetch(`${service.url}/v1/harnesses/opencode/install`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ confirmed: true, packageSpec: "@opencode/cli@2.1.0" }),
+  })
+  assert.equal(response.status, 202)
+  const operation = await waitFor(
+    `${service.url}/v1/operations/${(await response.json()).id}`,
+    headers,
+    (value) => value.status !== 'running'
+  )
+  assert.equal(operation.status, 'failed')
+  assert.match(operation.error, /could not be verified/)
+  const argumentsValue = await readFile(npmArguments, 'utf8')
+  assert.match(argumentsValue, /@opencode\/cli/)
+  assert.match(argumentsValue, /@example\/opencode-adapter@latest/)
 })

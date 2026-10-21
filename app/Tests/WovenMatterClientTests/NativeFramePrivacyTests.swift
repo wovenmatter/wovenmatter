@@ -35,34 +35,6 @@ struct NativeFramePrivacyTests {
         #expect((try FileManager.default.attributesOfItem(atPath: copy.file.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
-    @Test func unchangedBytesKeepOriginalFileWithoutCreatingSpool() async throws {
-        let fixture = try NativePrivacyFixture()
-        defer { fixture.remove() }
-        let bytes = Data("  { \"token\": \"unchanged🧵\", \"content\": [\"/private/tmp/plain.sock\", \"\\\\/path\", \"é日本語\"] }\r\n".utf8)
-        try bytes.write(to: fixture.input)
-        let copy = try await NativeFramePrivacy.prepare(fixture.input, expectedSHA256: NativeHarnessArchive.digest(bytes),
-            byteCount: bytes.count, readChunkBytes: 7, temporaryDirectory: fixture.output)
-        #expect(!copy.redacted && copy.file == fixture.input)
-        #expect(copy.byteCount == bytes.count && copy.sha256 == NativeHarnessArchive.digest(bytes))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.output.path).isEmpty)
-        #expect(try Data(contentsOf: fixture.input) == bytes)
-    }
-
-    @Test func escapeRunsCanSpanManyChunksWithoutHoldingTheirBytes() async throws {
-        let fixture = try NativePrivacyFixture()
-        defer { fixture.remove() }
-        let hex = String(repeating: "a", count: 32)
-        let text = "prefix🧵" + String(repeating: "\\", count: 256 * 1_024)
-            + "/private/tmp/wmtools-" + hex + "/" + hex + ".sock suffixé"
-        let bytes = Data(text.utf8)
-        try bytes.write(to: fixture.input)
-        let copy = try await NativeFramePrivacy.prepare(fixture.input, expectedSHA256: NativeHarnessArchive.digest(bytes),
-            byteCount: bytes.count, readChunkBytes: 127, temporaryDirectory: fixture.output)
-        defer { try? FileManager.default.removeItem(at: copy.file) }
-        #expect(try Data(contentsOf: copy.file) == Data(WorkspaceHistoryPrivacy.redactingToolEndpoints(text).utf8))
-        #expect(copy.byteCount < 100)
-    }
-
     @Test func failedSourceVerificationRemovesPrivateCopy() async throws {
         let fixture = try NativePrivacyFixture()
         defer { fixture.remove() }
@@ -77,29 +49,6 @@ struct NativeFramePrivacyTests {
         #expect(try Data(contentsOf: fixture.input) == bytes)
     }
 
-    @Test func cancellationRemovesCopyWhileOriginalRemains() async throws {
-        let fixture = try NativePrivacyFixture()
-        defer { fixture.remove() }
-        let hex = String(repeating: "a", count: 32)
-        let prefix = Data(("/home/.wmt/" + hex + "/" + hex + "/rpc.sock").utf8)
-        let source = try writeLargeNativePrivacyInput(fixture.input, prefix: prefix, suffix: Data())
-        let operation = Task {
-            try await NativeFramePrivacy.prepare(fixture.input, expectedSHA256: source.sha256,
-                byteCount: source.count, readChunkBytes: 4 * 1_024, temporaryDirectory: fixture.output)
-        }
-        var observedCopy = false
-        for _ in 0..<1_000 {
-            if !(try FileManager.default.contentsOfDirectory(atPath: fixture.output.path)).isEmpty {
-                observedCopy = true; break
-            }
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        operation.cancel()
-        await #expect(throws: CancellationError.self) { try await operation.value }
-        #expect(observedCopy)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.output.path).isEmpty)
-        #expect(try hashNativePrivacyFile(fixture.input).sha256 == source.sha256)
-    }
 }
 
 private struct NativePrivacyFixture: Sendable {

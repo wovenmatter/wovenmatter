@@ -6,26 +6,7 @@ import WovenMatterCore
 @Suite("Execution owner publication", .serialized)
 @MainActor
 struct CompanionPublisherTests {
-  private struct Fixture {
-    let directory: URL, database: WorkspaceDatabase, identity: CompanionLibraryIdentity, workspace: CompanionExecutionWorkspace, grant: CompanionWorkspacePublisherGrant
-    init() async throws {
-      directory = FileManager.default.temporaryDirectory.appending(path: "wm-publisher-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-      identity = try await database.companionLibraryIdentity()
-      workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
-        ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
-      grant = try await database.issueCompanionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-    }
-    func remove() { try? FileManager.default.removeItem(at: directory) }
-    func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> CompanionHTTPRequest {
-      .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
-    }
-    func batch() -> CompanionJournalBatch {
-      let id = UUID().uuidString.lowercased()
-      return .init(libraryID: identity.libraryID, entries: [.init(workspaceID: workspace.id, originSequence: 1, conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Owner history"))])
-    }
-  }
+
   @Test func observerAndCentralManagerCannotRelayEvenWithLegacyJournalGrants() async throws {
     let f = try await Fixture(); defer { f.remove() }; let batch = f.batch()
     for observer in [f.identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"] {
@@ -37,17 +18,8 @@ struct CompanionPublisherTests {
     #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, batch), path: path, database: f.database).status == 200)
     #expect(try await f.database.companionJournal(after: 0).entries.count == 1)
   }
-  @Test func publisherIsScopedAndCannotBecomePairedDeviceCredential() async throws {
-    let f = try await Fixture(); defer { f.remove() }; let path = "/v1/federation/publisher/journal"
-    var batch = f.batch(); batch.entries[0].workspaceID = UUID().uuidString.lowercased()
-    #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, batch), path: path, database: f.database).status == 403)
-    #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, f.batch(), libraryID: UUID().uuidString.lowercased()), path: path, database: f.database).status == 409)
-    let authentication = try CompanionAuthentication(fileURL: f.directory.appending(path: "paired.json"))
-    await #expect(throws: (any Error).self) { _ = try await authentication.authenticate(bearer: f.grant.token) }
-    for forbidden in ["/v1/federation/publisher/workspaces", "/v1/federation/publisher/mutations", "/v1/federation/publisher/commands"] {
-      #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(forbidden, [String:String]()), path: forbidden, database: f.database).status == 404)
-    }
-  }
+
+
   @Test func retainedOwnerCompletesOnlyItsExactStaleRunningLegacyRun() async throws {
     let f = try await Fixture(); defer { f.remove() }
     let conversationID = try await f.database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Legacy", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
@@ -76,21 +48,6 @@ struct CompanionPublisherTests {
     event.retainedExecution?.runID = nextRun
     #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, CompanionJournalBatch(libraryID: f.identity.libraryID, entries: [event])), path: path, database: f.database).status == 200)
     #expect(try await f.database.read { try $0.companionIDsUnlocked("SELECT workspace_id FROM companion_execution_runs WHERE id=?", bindings: [nextRun]).first } == f.workspace.id)
-  }
-  @Test func retainedOwnerCannotClaimLocalSessionOrConflictWithAnotherActiveRun() async throws {
-    let f = try await Fixture(); defer { f.remove() }
-    let conversationID = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Local", ownerDeviceID: UUID())
-    let run = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "Local work")
-    try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: run.runID, sessionID: "native")
-    let event = CompanionJournalEntry(workspaceID: f.workspace.id, originSequence: 1, conversationID: conversationID, runID: run.runID, kind: .conversation,
-      conversation: .init(id: conversationID, title: "Claim"), retainedExecution: .init(source: "task-gateway", nativeSessionID: "native", runtimeKind: "codex", runID: run.runID, status: "completed"))
-    await #expect(throws: (any Error).self) { _ = try await f.database.ingestCompanionJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == nil)
-    try await f.database.write { try $0.companionExecuteUnlocked("UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?", values: [f.workspace.id, conversationID]) }
-    let conflict = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.companionExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status) VALUES (?,?,'running')", values: [conflict, conversationID]) }
-    await #expect(throws: (any Error).self) { _ = try await f.database.ingestCompanionJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == nil)
   }
 
   @Test func retainedPreflightSettlesMultipleStaleRunsButNeverTransfersAnActualActiveRun() async throws {
@@ -125,6 +82,53 @@ struct CompanionPublisherTests {
     _ = try await f.database.ingestCompanionJournal(all, deviceID: f.workspace.executionDeviceID!)
     #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == f.workspace.id)
     #expect(try await f.database.companionJournal(after: 0).entries.map(\.eventID) == entries.map(\.eventID))
+  }
+
+  private struct Fixture {
+    let directory: URL, database: WorkspaceDatabase, identity: CompanionLibraryIdentity, workspace: CompanionExecutionWorkspace, grant: CompanionWorkspacePublisherGrant
+    init() async throws {
+      directory = FileManager.default.temporaryDirectory.appending(path: "wm-publisher-" + UUID().uuidString)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+      identity = try await database.companionLibraryIdentity()
+      workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
+        ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
+      grant = try await database.issueCompanionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+    }
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+    func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> CompanionHTTPRequest {
+      .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
+    }
+    func batch() -> CompanionJournalBatch {
+      let id = UUID().uuidString.lowercased()
+      return .init(libraryID: identity.libraryID, entries: [.init(workspaceID: workspace.id, originSequence: 1, conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Owner history"))])
+    }
+  }
+  @Test func publisherIsScopedAndCannotBecomePairedDeviceCredential() async throws {
+    let f = try await Fixture(); defer { f.remove() }; let path = "/v1/federation/publisher/journal"
+    var batch = f.batch(); batch.entries[0].workspaceID = UUID().uuidString.lowercased()
+    #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, batch), path: path, database: f.database).status == 403)
+    #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, f.batch(), libraryID: UUID().uuidString.lowercased()), path: path, database: f.database).status == 409)
+    let authentication = try CompanionAuthentication(fileURL: f.directory.appending(path: "paired.json"))
+    await #expect(throws: (any Error).self) { _ = try await authentication.authenticate(bearer: f.grant.token) }
+    for forbidden in ["/v1/federation/publisher/workspaces", "/v1/federation/publisher/mutations", "/v1/federation/publisher/commands"] {
+      #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(forbidden, [String:String]()), path: forbidden, database: f.database).status == 404)
+    }
+  }
+  @Test func retainedOwnerCannotClaimLocalSessionOrConflictWithAnotherActiveRun() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let conversationID = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Local", ownerDeviceID: UUID())
+    let run = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "Local work")
+    try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: run.runID, sessionID: "native")
+    let event = CompanionJournalEntry(workspaceID: f.workspace.id, originSequence: 1, conversationID: conversationID, runID: run.runID, kind: .conversation,
+      conversation: .init(id: conversationID, title: "Claim"), retainedExecution: .init(source: "task-gateway", nativeSessionID: "native", runtimeKind: "codex", runID: run.runID, status: "completed"))
+    await #expect(throws: (any Error).self) { _ = try await f.database.ingestCompanionJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!) }
+    #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == nil)
+    try await f.database.write { try $0.companionExecuteUnlocked("UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?", values: [f.workspace.id, conversationID]) }
+    let conflict = UUID().uuidString.lowercased()
+    try await f.database.write { try $0.companionExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status) VALUES (?,?,'running')", values: [conflict, conversationID]) }
+    await #expect(throws: (any Error).self) { _ = try await f.database.ingestCompanionJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!) }
+    #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == nil)
   }
 
   @Test func publisherDigestPersistsAndRotationRevokesOriginalScope() async throws {

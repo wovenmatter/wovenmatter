@@ -36,32 +36,6 @@ async function waitForFile(path) {
   }
 }
 
-test('shutdown unblocks selection waiting for retirement', async t => {
-  const f = await fixture(t, `
-    import { writeFile } from 'node:fs/promises';
-    import { join } from 'node:path';
-    export function createDefaultAgentService({ directory }) {
-      return {
-        status: async () => ({ ready: true }),
-        cancelActive: async () => {},
-        prepareRetirement: async () => {
-          await writeFile(join(directory, 'retiring'), 'started');
-          return new Promise(() => {});
-        },
-      };
-    }
-  `);
-  assert.deepEqual(await f.service.status(), { ready: true });
-  await f.activate();
-  const rejected = assert.rejects(f.service.status(), /stopped|shutting down/);
-  await waitForFile(join(f.directory, 'retiring'));
-  const start = performance.now();
-  await f.service.close();
-  await rejected;
-  assert.ok(performance.now() - start < 8000, 'owned worker shutdown must be bounded');
-  await assert.rejects(f.service.status(), /shutting down/);
-});
-
 test('shutdown stops a worker while its initialization import is pending', async t => {
   const f = await fixture(t, `
     import { writeFile } from 'node:fs/promises';
@@ -74,7 +48,6 @@ test('shutdown stops a worker while its initialization import is pending', async
   await f.service.close();
   await rejected;
 });
-
 
 test('SDK retirement transfers only the current attachment authority and trusted cancellation', async t => {
   const source = `

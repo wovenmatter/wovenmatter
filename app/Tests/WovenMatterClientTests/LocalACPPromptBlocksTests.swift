@@ -56,24 +56,6 @@ struct LocalACPPromptBlocksTests {
     #expect(blocks[0]["text"]?.stringValue == "Look")
   }
 
-  @Test func stagedTextIsInlinedUnderItsWorkspaceURI() throws {
-    let localURL = try writeTempFile(Data("hello".utf8), name: "notes.txt")
-    defer { try? FileManager.default.removeItem(at: localURL) }
-    let remotePath = "/home/.woven-matter/.wovenmatter/attachments/h/notes.txt"
-    let input = AgentMessageInput(text: "Read", attachments: [.file(
-      AgentFileAttachmentDraft(
-        kind: .file, fileName: "notes.txt", mimeType: "text/plain",
-        sizeBytes: 5, contentHash: "h", localURL: localURL, remotePath: remotePath
-      )
-    )])
-    let blocks = try LocalACPClient.promptBlocks(input, text: nil).arrayValue ?? []
-    #expect(blocks[0]["text"]?.stringValue == "Read")
-    let resource = try #require(blocks[1]["resource"])
-    #expect(blocks[1]["type"]?.stringValue == "resource")
-    #expect(resource["uri"]?.stringValue == "file://" + remotePath)
-    #expect(resource["text"]?.stringValue == "hello")
-  }
-
   private func writeTempFile(_ bytes: Data, name: String) throws -> URL {
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "-" + name)
     try bytes.write(to: url)

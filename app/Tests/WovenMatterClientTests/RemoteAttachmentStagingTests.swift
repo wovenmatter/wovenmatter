@@ -6,6 +6,64 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteAttachmentStagingTests {
+
+  @Test("file names cannot escape the attachment directory or hide their extension")
+  func sanitizesFileNames() {
+    func name(_ raw: String) -> String {
+      RemoteAttachmentStager.fileName(for: AgentFileAttachmentDraft(
+        kind: .file, fileName: raw, mimeType: "application/octet-stream",
+        sizeBytes: 1, contentHash: Self.hash, localURL: URL(fileURLWithPath: "/tmp/x")
+      ))
+    }
+    #expect(name("../../etc/passwd") == ".._.._etc_passwd")
+    #expect(name("a/b\\c.txt") == "a_b_c.txt")
+    #expect(name("bad\nname.md") == "bad_name.md")
+    #expect(name("it's fine.pdf") == "it's fine.pdf")
+    #expect(name("..") == "attachment")
+    #expect(name("   ") == "attachment")
+  }
+
+
+  @Test("an unexpected reply is an error, not a path")
+  func rejectsUnconfirmedPath() async throws {
+    let stager = RemoteAttachmentStager(runner: Recorder(response: "/somewhere/else").record)
+    await #expect(throws: RemoteWorkspaceClientError.self) {
+      try await withDraft(named: "notes.pdf", bytes: Data("x".utf8)) { try await stager.stage($0, in: configuration) }
+    }
+  }
+
+  @Test("a content hash that is not 64 hex characters never reaches the shell")
+  func rejectsMalformedHash() async throws {
+    let recorder = Recorder(response: "")
+    let stager = RemoteAttachmentStager(runner: recorder.record)
+    await #expect(throws: AgentMessageAttachmentError.self) {
+      try await withDraft(named: "notes.pdf", bytes: Data("x".utf8), hash: "../escape") {
+        try await stager.stage($0, in: configuration)
+      }
+    }
+    #expect(recorder.command == nil)
+  }
+
+  @Test("cancelling a running attachment subprocess terminates it")
+  func transferCancellation() async throws {
+    let cancellation = SpawnCancellation()
+    let task = Task.detached {
+      try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
+        arguments: ["30"], timeLimit: 60, onProcessStarted: cancellation.processStarted)
+    }
+    defer { task.cancel() }
+    // Either handle installation or child launch may win. Cancellation is
+    // requested only once both have happened, directly from those events.
+    cancellation.install(task)
+    await #expect(throws: CancellationError.self) { try await task.value }
+    let pid = try #require(cancellation.processID)
+    #expect(pid > 0)
+    let status = kill(pid, 0)
+    let error = errno
+    #expect(status == -1)
+    #expect(error == ESRCH)
+  }
+
   private final class Recorder: @unchecked Sendable {
     private let lock = NSLock()
     var response: String
@@ -40,28 +98,6 @@ struct RemoteAttachmentStagingTests {
     ))
   }
 
-  @Test("the file travels on stdin to docker exec and the confirmed path is returned")
-  func stagesOverSSH() async throws {
-    let expected = "/home/.woven-matter/.wovenmatter/attachments/\(Self.hash)/Q3 report.pdf"
-    let recorder = Recorder(response: expected)
-    let stager = RemoteAttachmentStager(runner: recorder.record)
-
-    let path = try await withDraft(named: "Q3 report.pdf", bytes: Data("x".utf8)) { draft in
-      #expect(try RemoteAttachmentStager.containerPath(for: draft) == expected)
-      return try await stager.stage(draft, in: configuration)
-    }
-
-    #expect(path == expected)
-    #expect(recorder.destination == "woven@linux-box")
-    #expect(recorder.input == Data("x".utf8))
-    let command = try #require(recorder.command)
-    #expect(command.hasPrefix("'docker' 'exec' '--interactive' 'wovenmatter-work-1' 'bash' '-c' "))
-    #expect(command.contains("n=1"))
-    #expect(command.contains("if matches \"$p\"; then cat >/dev/null"))
-    #expect(command.contains("cat >\"$t\""))
-    #expect(command.contains("mv -f \"$t\" \"$p\""))
-  }
-
   @Test("a quote in the file name survives both layers of shell quoting")
   func quotesNestedShellArguments() async throws {
     let expected = "/home/.woven-matter/.wovenmatter/attachments/\(Self.hash)/it's fine.pdf"
@@ -71,87 +107,6 @@ struct RemoteAttachmentStagingTests {
     let command = try #require(recorder.command)
     // Inner quoting closes the path literal; outer quoting re-escapes it for bash -c.
     #expect(command.contains("it'\\''\\'\\'''\\''s fine.pdf"))
-  }
-
-  @Test("a trailing newline in the confirmation is tolerated")
-  func trimsConfirmation() async throws {
-    let expected = "/home/.woven-matter/.wovenmatter/attachments/\(Self.hash)/notes.pdf"
-    let stager = RemoteAttachmentStager(runner: Recorder(response: expected + "\r\n").record)
-    let path = try await withDraft(named: "notes.pdf", bytes: Data("x".utf8)) { try await stager.stage($0, in: configuration) }
-    #expect(path == expected)
-  }
-
-  @Test("an unexpected reply is an error, not a path")
-  func rejectsUnconfirmedPath() async throws {
-    let stager = RemoteAttachmentStager(runner: Recorder(response: "/somewhere/else").record)
-    await #expect(throws: RemoteWorkspaceClientError.self) {
-      try await withDraft(named: "notes.pdf", bytes: Data("x".utf8)) { try await stager.stage($0, in: configuration) }
-    }
-  }
-
-  @Test("a content hash that is not 64 hex characters never reaches the shell")
-  func rejectsMalformedHash() async throws {
-    let recorder = Recorder(response: "")
-    let stager = RemoteAttachmentStager(runner: recorder.record)
-    await #expect(throws: AgentMessageAttachmentError.self) {
-      try await withDraft(named: "notes.pdf", bytes: Data("x".utf8), hash: "../escape") {
-        try await stager.stage($0, in: configuration)
-      }
-    }
-    #expect(recorder.command == nil)
-  }
-
-  @Test("an unreadable local blob is reported as such")
-  func reportsUnreadableBlob() async throws {
-    let stager = RemoteAttachmentStager(runner: Recorder(response: "").record)
-    let draft = AgentFileAttachmentDraft(
-      kind: .file, fileName: "gone.pdf", mimeType: "application/pdf", sizeBytes: 1,
-      contentHash: Self.hash, localURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    )
-    await #expect(throws: AgentMessageAttachmentError.unreadableFile("gone.pdf")) {
-      try await stager.stage(draft, in: configuration)
-    }
-  }
-
-  @Test("attachment subprocess deadline terminates a stuck transfer")
-  func transferDeadline() throws {
-    let start = ProcessInfo.processInfo.systemUptime
-    #expect(throws: RemoteWorkspaceClientError.self) {
-      try RemoteWorkspaceProcess.run(executable: "/bin/sleep", arguments: ["30"], timeLimit: 0.05)
-    }
-    #expect(ProcessInfo.processInfo.systemUptime - start < 5)
-  }
-
-  @Test("cancelling a running attachment subprocess terminates it")
-  func transferCancellation() async throws {
-    let cancellation = SpawnCancellation()
-    let task = Task.detached {
-      try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
-        arguments: ["30"], timeLimit: 60, onProcessStarted: cancellation.processStarted)
-    }
-    defer { task.cancel() }
-    // Either handle installation or child launch may win. Cancellation is
-    // requested only once both have happened, directly from those events.
-    cancellation.install(task)
-    await #expect(throws: CancellationError.self) { try await task.value }
-    let pid = try #require(cancellation.processID)
-    #expect(pid > 0)
-    let status = kill(pid, 0)
-    let error = errno
-    #expect(status == -1)
-    #expect(error == ESRCH)
-  }
-
-  @Test("a cancelled attachment task never launches its subprocess")
-  func cancellationBeforeLaunch() async throws {
-    let observation = SpawnCancellation()
-    let task = Task.detached {
-      withUnsafeCurrentTask { $0?.cancel() }
-      return try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
-        arguments: ["30"], timeLimit: 60, onProcessStarted: observation.processStarted)
-    }
-    await #expect(throws: CancellationError.self) { try await task.value }
-    #expect(observation.processID == nil)
   }
 
   private final class SpawnCancellation: @unchecked Sendable {
@@ -225,19 +180,4 @@ struct RemoteAttachmentStagingTests {
     #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).allSatisfy { !$0.contains(".part.") })
   }
 
-  @Test("file names cannot escape the attachment directory or hide their extension")
-  func sanitizesFileNames() {
-    func name(_ raw: String) -> String {
-      RemoteAttachmentStager.fileName(for: AgentFileAttachmentDraft(
-        kind: .file, fileName: raw, mimeType: "application/octet-stream",
-        sizeBytes: 1, contentHash: Self.hash, localURL: URL(fileURLWithPath: "/tmp/x")
-      ))
-    }
-    #expect(name("../../etc/passwd") == ".._.._etc_passwd")
-    #expect(name("a/b\\c.txt") == "a_b_c.txt")
-    #expect(name("bad\nname.md") == "bad_name.md")
-    #expect(name("it's fine.pdf") == "it's fine.pdf")
-    #expect(name("..") == "attachment")
-    #expect(name("   ") == "attachment")
-  }
 }

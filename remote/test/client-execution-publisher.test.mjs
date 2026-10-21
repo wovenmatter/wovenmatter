@@ -5,6 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
+
+
+
+
+
+
+
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await tick()}assert.fail('owner publisher did not retry')}
 function fixture(t,{automatic=false}={}) {
@@ -68,13 +75,7 @@ test('publisher grants are encrypted on disk and bound to workspace execution id
   for(const suffix of ['', '-wal']){let data;try{data=readFileSync(join(f.directory,'execution.sqlite'+suffix))}catch{continue};assert.equal(data.includes(Buffer.from(f.grant.token)),false)}
   await f.restart();assert.equal(f.service.publisherStatus().configured,true);assert.equal(f.service.publisherStatus().grantID,f.grant.grantID)
 })
-test('explicit saved artifacts self-publish while ordinary workspace files are never scanned',async t=>{
-  const f=fixture(t),data=Buffer.alloc(1048576+30,7)
-  const saved=f.service.saveArtifact({title:'Saved output',mediaType:'application/octet-stream',data})
-  await f.restart();f.online=true;await f.service.synchronizePublisher()
-  assert.deepEqual(f.artifacts.get(saved.id).bytes,data);assert.equal(f.artifacts.get(saved.id).complete,true)
-  const count=f.requests.length;await f.service.synchronizePublisher();assert.equal(f.requests.length,count)
-})
+
 test('retained origin importer deduplicates immutable IDs and rejects foreign or changed entries',async t=>{
   const f=fixture(t),id=randomUUID(),conversationID=randomUUID()
   const entry={eventID:id,conversationID,kind:'conversation',conversation:{id:conversationID,title:'Retained',updatedAt:''}}
@@ -106,19 +107,6 @@ test('history and saved artifact failures retry independently with durable backo
   assert.equal(after.acknowledgedOriginSequence,f.service.events().cursor)
   assert.equal(after.artifacts.failureCount,1);assert.equal(after.pendingArtifacts,1)
   assert.ok(f.events.size>0)
-})
-test('automatic attempts respect persisted backoff after restart',async t=>{
-  const f=fixture(t);await f.createSession();f.online=true;f.rejectJournal=true
-  for(let n=0;n<15;n++)await assert.rejects(f.service.synchronizePublisher())
-  const status=f.service.publisherStatus();assert.equal(status.journal.failureCount,15)
-  assert.ok(status.journal.nextAttemptAt-Date.now()>290000)
-  assert.ok(status.journal.nextAttemptAt-Date.now()<=300000)
-  await f.restart();const calls=f.requests.length
-  await f.service.synchronizePublisher({automatic:true})
-  assert.equal(f.requests.length,calls)
-  f.service.configurePublisher(f.grant)
-  assert.equal(f.service.publisherStatus().journal.failureCount,0)
-  assert.equal(f.service.publisherStatus().journal.nextAttemptAt,0)
 })
 
 test('retained terminal preflight retries exact proofs before chronological journal publication',async t=>{

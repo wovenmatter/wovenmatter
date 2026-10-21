@@ -70,14 +70,14 @@ import WovenMatterCompanion
         model.toggle(editor: target)
         try await settle { model.phase == .recording }
         model.stop(editor: target)
-        target.identity = "B"; view.string = "Other "
+        target.identity = "B" // Same text isolates the conversation-identity fence.
         speech.continuation.yield(.init(start: 0, end: 1, text: "retained", isFinal: true))
         try await settle { model.phase == .idle }
-        #expect(view.string == "Other ")
+        #expect(view.string == "Draft ")
         #expect(model.retainedTranscript == "retained")
         view.setSelectedRange(NSRange(location: 6, length: 0))
         model.insertRetained(into: target)
-        #expect(view.string == "Other retained")
+        #expect(view.string == "Draft retained")
         model.cancel()
     }
     @Test func rejectedNativeEditRetainsTheTranscript() async throws {

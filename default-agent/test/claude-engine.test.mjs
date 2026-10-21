@@ -3,13 +3,25 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, realpath, rm, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { ProviderCatalog } from '../src/provider-catalog.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { ClaudeRuntime } from '../src/claude-runtime.mjs';
-import { createDefaultAgentService } from '../src/service.mjs';
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 async function fixture(t, { credentials = {}, credentialAccounts = {}, config = {} } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-engine-'));
@@ -54,26 +66,7 @@ function syntheticAssistant(content, beforeRespond) {
   };
 }
 
-async function pollUntil(service, id, predicate) {
-  const deadline = Date.now() + 5000;
-  while (true) {
-    const page = await service.poll(id);
-    if (predicate(page)) return page;
-    if (Date.now() >= deadline) assert.fail('Timed out waiting for the synthetic remote run.');
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-}
 
-test('ordinary Claude submissions reuse the selected model without spawning native status checks', async t => {
-  const { engine, claude } = await fixture(t);
-  const record = await engine.create();
-  record.streamFunction = syntheticAssistant([{ type: 'text', text: 'Fixture reply' }]);
-  const beforeChecks = claude.checks;
-  await engine.prompt(record, 'First', () => {});
-  await engine.prompt(record, 'Second', () => {});
-  assert.equal(claude.checks, beforeChecks);
-  assert.equal(record.selected, 'claude-subscription/sonnet');
-});
 
 test('Durable fallback rebuilds canonical history without replaying the failed prompt', async t => {
   const { engine, options } = await fixture(t, {
@@ -111,21 +104,6 @@ test('Durable fallback rebuilds canonical history without replaying the failed p
   t.after(() => resumed.session.dispose());
   assert.equal(resumed.session.messages.filter(message => message.role === 'user').length, 2);
   assert.equal(resumed.session.messages.filter(message => message.role === 'assistant').length, 2);
-});
-
-test('handled Pi preflight cannot acknowledge steering as injected', async t => {
-  const { engine } = await fixture(t);
-  const record = await engine.create();
-  const started = Promise.withResolvers(), finish = Promise.withResolvers();
-  record.session.prompt = async (text, options) => {
-    options.preflightResult(text === 'start' ? 'started' : 'handled');
-    if (text === 'start') { started.resolve(); await finish.promise; }
-  };
-  const turn = engine.prompt(record, 'start', () => {});
-  await started.promise;
-  await assert.rejects(engine.steer(record, 'intercepted'), /without entering the model conversation/);
-  finish.resolve();
-  await turn;
 });
 
 test('real ModelRuntime uses ambient Claude auth while native profiles retain account routing', async t => {
@@ -175,51 +153,6 @@ test('real ModelRuntime uses ambient Claude auth while native profiles retain ac
   await assert.rejects(engine.runtime.getAuth(selected, { signal: controller.signal }), { name: 'AbortError' });
 });
 
-test('Claude profile adaptation preserves unrelated provider credentials and rejects unknown types', async t => {
-  const key = { type: 'api_key', key: 'fixture-key' };
-  const oauth = { type: 'oauth', access: 'fixture-access', refresh: 'fixture-refresh', expires: Date.now() + 3600000 };
-  const unknown = { type: 'native', accountId: 'not-an-openrouter-credential' };
-  const { engine } = await fixture(t, { credentials: {
-    'claude-subscription': { type: 'native', accountId: 'fixture-profile' },
-    openai: key, xai: oauth, openrouter: unknown,
-  } });
-  const store = engine.credentials.forModelRuntime();
-  assert.equal(await store.read('claude-subscription'), undefined);
-  assert.deepEqual(await store.read('openai'), key);
-  assert.deepEqual(await store.read('xai'), oauth);
-  assert.deepEqual(await store.read('openrouter'), unknown);
-  assert.equal((await engine.runtime.getAuth('openai')).auth.apiKey, key.key);
-  assert.equal(await engine.runtime.getAuth('openrouter'), undefined);
-  assert.equal((await store.list()).some(value => value.providerId === 'claude-subscription'), false);
-  assert.equal((await engine.credentials.list()).some(value => value.providerId === 'claude-subscription'), true);
-  await store.modify('openai', current => ({ ...current, key: 'fixture-replacement' }));
-  assert.equal((await engine.credentials.read('openai')).key, 'fixture-replacement');
-  await store.delete('openai');
-  assert.equal(await engine.credentials.read('openai'), undefined);
-  // A wrong credential type on Claude is not treated as native profile metadata.
-  await engine.apply({ credentials: { 'claude-subscription': oauth } });
-  assert.equal(await engine.runtime.getAuth('claude-subscription'), undefined);
-});
-
-test('an Exa key and disabled model credentials do not hide the native Claude default', async t => {
-  const { engine } = await fixture(t, {
-    config: { providers: ['openai', 'claude-subscription'], defaultModel: null },
-    credentials: { exa: { type: 'api_key', key: 'fixture-search' }, openrouter: { type: 'api_key', key: 'fixture-disabled' } },
-  });
-  assert.equal((await engine.create()).selected, 'claude-subscription/sonnet');
-});
-
-test('Built-in Durable exposes only native Full Access and never asks Woven file/command approvals', async t => {
-  const { engine, root } = await fixture(t);
-  const record = await engine.create();
-  const permission = engine.configuration(record).configOptions.find(o => o.id === 'permission_mode');
-  assert.deepEqual(permission.options.map(o => o.value), ['full']);
-  let calls = 0; record.streamFunction = syntheticAssistant(() => ++calls === 1 ? [{ type: 'toolCall', id: 'native-write', name: 'write', arguments: { path: 'note.txt', content: 'allowed' } }] : [{ type: 'text', text: 'Saved' }]);
-  await engine.prompt(record, 'Write the note', () => {});
-  assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), 'allowed');
-  await assert.rejects(engine.select(record, 'normal', 'permission_mode'), /Unknown permission mode/);
-});
-
 test('model, thinking, and permission choices survive an empty draft restart', async t => {
   const { engine, options } = await fixture(t);
   const record = await engine.create();
@@ -262,56 +195,6 @@ test('session working directories stay isolated and survive a service restart', 
   assert.equal(await readFile(join(first, 'restored.txt'), 'utf8'), 'same project');
   await assert.rejects(access(join(second, 'restored.txt')));
   assert.equal((await restarted.handle('session/load', { sessionId: opened.sessionId, cwd: first })).sessionId, opened.sessionId);
-});
-
-test('invalid or unavailable working directories fail before a Built-in session is created', async t => {
-  const { engine, root } = await fixture(t);
-  for (const cwd of ['relative/project', '', 'invalid\0directory', join(root, 'missing')]) {
-    await assert.rejects(engine.handle('session/new', { cwd }), /working directory/);
-  }
-  assert.equal(engine.sessions.size, 0);
-});
-
-test('remote Durable journals native records alongside current run output', async t => {
-  const { engine, root } = await fixture(t);
-  const service = createDefaultAgentService({ cwd: root, directory: root, engineFactory: () => engine });
-  const record = await engine.create();
-  let generation = 0;
-  record.streamFunction = syntheticAssistant(() => ++generation === 1
-    ? [{ type: 'toolCall', id: 'write-remote', name: 'write', arguments: { path: 'remote.txt', content: 'native' } }]
-    : [{ type: 'text', text: 'Done' }]);
-  const id = crypto.randomUUID();
-  await service.invoke({ method: 'session/prompt', operationID: id, params: { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Write fixture' }] } });
-  const page = await pollUntil(service, id, page => page.done);
-  assert.equal(page.error, null);
-  assert.ok(page.updates.some(u => u.sessionUpdate === 'woven_native_record'));
-  assert.equal(await readFile(join(root, 'remote.txt'), 'utf8'), 'native');
-});
-
-test('composer offers only the default and explicitly enabled models', async t => {
-  const { engine } = await fixture(t, { config: { providers: ['claude-subscription', 'openai'] } });
-  const catalog = engine.catalog();
-  const other = catalog.find(model => model.id !== engine.config.defaultModel);
-  assert.deepEqual(engine.modelOptions().map(model => model.id), [engine.config.defaultModel]);
-  assert.ok(other, 'Fixture must include another catalog model');
-  engine.config.models = [other.id];
-  assert.deepEqual(engine.modelOptions().map(model => model.id), [engine.config.defaultModel, other.id]);
-  engine.config.models = [];
-  assert.deepEqual(engine.modelOptions().map(model => model.id), [engine.config.defaultModel]);
-});
-
-
-test('a missing saved model never silently normalizes to another selection', async t => {
-  const { engine } = await fixture(t);
-  const record = await engine.create();
-  record.selected = 'openrouter/disabled';
-  record.selectedModel = undefined;
-  record.saveOptions({ selected: record.selected, selectedModel: null });
-  await engine.apply({ config: engine.config });
-  assert.equal(record.selected, 'openrouter/disabled');
-  engine.sessions.delete(record.session.sessionId);
-  await record.session.dispose();
-  await assert.rejects(engine.create(record.session.sessionId), /Choose an enabled provider/);
 });
 
 test('Built-in steering reaches the next model call inside the same native run', async t => {
@@ -401,4 +284,30 @@ test('an accepted continuation failure drains newer inputs before retiring the r
   second.resolve();
   await failed;
   assert.equal(record.busy, false);
+});
+
+test('Claude profile adaptation preserves unrelated provider credentials and rejects unknown types', async t => {
+  const key = { type: 'api_key', key: 'fixture-key' };
+  const oauth = { type: 'oauth', access: 'fixture-access', refresh: 'fixture-refresh', expires: Date.now() + 3600000 };
+  const unknown = { type: 'native', accountId: 'not-an-openrouter-credential' };
+  const { engine } = await fixture(t, { credentials: {
+    'claude-subscription': { type: 'native', accountId: 'fixture-profile' },
+    openai: key, xai: oauth, openrouter: unknown,
+  } });
+  const store = engine.credentials.forModelRuntime();
+  assert.equal(await store.read('claude-subscription'), undefined);
+  assert.deepEqual(await store.read('openai'), key);
+  assert.deepEqual(await store.read('xai'), oauth);
+  assert.deepEqual(await store.read('openrouter'), unknown);
+  assert.equal((await engine.runtime.getAuth('openai')).auth.apiKey, key.key);
+  assert.equal(await engine.runtime.getAuth('openrouter'), undefined);
+  assert.equal((await store.list()).some(value => value.providerId === 'claude-subscription'), false);
+  assert.equal((await engine.credentials.list()).some(value => value.providerId === 'claude-subscription'), true);
+  await store.modify('openai', current => ({ ...current, key: 'fixture-replacement' }));
+  assert.equal((await engine.credentials.read('openai')).key, 'fixture-replacement');
+  await store.delete('openai');
+  assert.equal(await engine.credentials.read('openai'), undefined);
+  // A wrong credential type on Claude is not treated as native profile metadata.
+  await engine.apply({ credentials: { 'claude-subscription': oauth } });
+  assert.equal(await engine.runtime.getAuth('claude-subscription'), undefined);
 });

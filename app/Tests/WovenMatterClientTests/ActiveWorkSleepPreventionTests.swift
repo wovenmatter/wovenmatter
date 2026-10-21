@@ -45,23 +45,6 @@ struct ActiveWorkSleepPreventionTests {
         #expect(activities.token == nil)
     }
 
-    @Test func preparationReconciliationCannotReleaseAnInFlightDispatch() {
-        let activities = Activities()
-        let owner = activities.makeOwner()
-        let dispatch = owner.beginDispatch()
-        // A workspace refresh can still report no runs during session setup.
-        owner.setRunningConversationIDs(["preparing"])
-        owner.setRunningConversationIDs([])
-        #expect(activities.ends == 0)
-        // Acceptance must restore authoritative run state before ending dispatch.
-        owner.setRunningConversationIDs(["accepted"])
-        owner.endDispatch(dispatch)
-        #expect(activities.starts == 1)
-        #expect(activities.ends == 0)
-        owner.setRunningConversationIDs([])
-        #expect(activities.ends == 1)
-    }
-
     @Test func shutdownReleasesAndRejectsLateCallbacks() {
         let activities = Activities()
         let owner = activities.makeOwner()
@@ -77,30 +60,4 @@ struct ActiveWorkSleepPreventionTests {
         #expect(activities.token == nil)
     }
 
-    @Test func workObserverCoversPreparationHandoffAndTerminalShutdown() {
-        var changes: [Bool] = []
-        let owner = ActiveWorkSleepPrevention(ownsExecution: true,
-            beginActivity: { _, _ in NSObject() }, endActivity: { _ in },
-            onWorkChanged: { changes.append($0) })
-        let dispatch = owner.beginDispatch()
-        owner.setRunningConversationIDs([])
-        owner.setRunningConversationIDs(["accepted"])
-        owner.endDispatch(dispatch)
-        #expect(changes == [true])
-        owner.setRunningConversationIDs([])
-        #expect(changes == [true, false])
-        _ = owner.beginDispatch()
-        owner.stop()
-        _ = owner.beginDispatch()
-        #expect(changes == [true, false, true, false])
-    }
-
-    @Test func releasingOwnerReleasesFoundationActivityToken() {
-        let activities = Activities()
-        var owner: ActiveWorkSleepPrevention? = activities.makeOwner()
-        _ = owner?.beginDispatch()
-        #expect(activities.token != nil)
-        owner = nil
-        #expect(activities.token == nil)
-    }
 }

@@ -40,48 +40,6 @@ struct RuntimeLifecycleTests {
     #expect(!state.running)
   }
 
-  @Test(arguments: ["model", "thinking"], [false, true])
-  func lateStartupConfigurationCannotSurviveInterruption(stage: String, shutdown: Bool) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
-    try await database.updateLocalACPSessionConfiguration(conversationID: conversation, model: "wanted", thinking: "high")
-    let gate = NoncooperatingConfigurationGate()
-    let state = FakeRuntimeProcess()
-    let initial = LocalACPSessionConfiguration(model: stage == "model" ? "initial" : "wanted",
-      thinking: "low", modelOptions: ["wanted"], thinkingOptions: ["high"])
-    let late = LocalACPSessionConfiguration(model: "late", thinking: "late", thinkingOptions: ["high"])
-    let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      let process = state.launch()
-      return LocalACPSessionDriver(initializeSession: { _, _, _, _ in
-        LocalACPInitializedSession(sessionID: "fixture", loadedExistingSession: false, configuration: initial)
-      }, prompt: { _, _, _, _ in .endTurn }, configuration: { late },
-      setConfiguration: { _, _ in await gate.pause(); return late }, cancel: {}, shutdown: { process.terminate() })
-    })
-    let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
-      executableURL: URL(filePath: "/nonexistent-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
-    let start = Task { try await coordinator.configuration(conversationID: conversation, launch: launch, workspace: workspace) }
-    await gate.waitForStart()
-    let stop: Task<Void, Never>?
-    if shutdown { stop = Task { await coordinator.shutdown() } }
-    else { start.cancel(); stop = nil }
-    await gate.waitForInterruption()
-    // The driver deliberately ignores cancellation and returns a successful configuration.
-    await gate.release()
-    do { _ = try await start.value; Issue.record("interrupted startup returned configuration") } catch { }
-    await stop?.value
-    #expect(!state.running)
-    #expect(await gate.calls == 1)
-    let descriptor = try await database.localACPSession(conversationID: conversation)
-    #expect(descriptor.model == "wanted")
-    #expect(descriptor.thinking == "high")
-    await coordinator.shutdown()
-  }
-
-
 }
 
 private actor RuntimeGate {

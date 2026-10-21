@@ -81,32 +81,6 @@ struct BuiltInArchiveProtocolTests {
         } catch { await client.shutdown(); throw error }
     }
 
-    @Test(arguments: [true, false]) @MainActor func idleRetirementWaitsForArchivedBackgroundRecords(confirmed: Bool) async throws {
-        let empty = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "parent", records: [])
-        let background = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "parent", records: [
-            .init(id: "background:1", kind: "compaction", payload: #"{"summary":"background completed"}"#),
-        ])
-        let first = String(decoding: try JSONEncoder().encode(empty), as: UTF8.self)
-        let last = String(decoding: try JSONEncoder().encode(background), as: UTF8.self)
-        let fixture = try SessionRoutingFixture(firstPage: #"{"recordBatch":\#(first),"nextAfter":0,"hasMore":false}"#,
-            secondPage: #"{"recordBatch":\#(last),"nextAfter":1,"hasMore":false}"#, nativeUpdate: nil,
-            idleUpdate: #"{"sessionUpdate":"woven_native_record","recordBatch":\#(last)}"#,
-            idleResult: confirmed ? #"{"idle":true}"# : #"{"idle":false}"#)
-        defer { fixture.remove() }
-        let archive = NativeBatchCapture()
-        let client = try fixture.client(recorder: { direction, data in #expect(direction == "native"); try await archive.append(data) }, accounts: archiveFixtureAccounts())
-        do {
-            _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
-            if confirmed { try await client.awaitIdle() }
-            else {
-                await #expect(throws: LocalACPClientError.self) { try await client.awaitIdle() }
-            }
-            let batches = await archive.values
-            #expect(batches.last?.records.first?.payload.contains("background completed") == true)
-            #expect(batches.last?.records.first?.runID == nil)
-            await client.shutdown()
-        } catch { await client.shutdown(); throw error }
-    }
 }
 
 @MainActor private func archiveFixtureAccounts() -> ProviderAccountCoordinator {

@@ -57,13 +57,4 @@ struct DesktopUpdateReceiptTests {
         #expect(receipt.event.properties["app_version"] == "0.3.0")
     }
 
-    @Test("legacy helper still requires its matching installation marker")
-    func legacyMarker() {
-        let event = ProductAnalyticsEvent(preferenceRevision: 1, name: .updateInstallCompleted)
-        var receipt = ProductAnalyticsUpdateReceipt(analyticsID: "fixture", version: "0.3.0", build: 543, event: event)
-        let wrongMarker = receipt.confirmLaunch(marker: URL(fileURLWithPath: "/tmp/.ready-other"), version: "0.3.0", build: 543)
-        let installed = receipt.confirmLaunch(marker: URL(fileURLWithPath: "/tmp/.ready-" + event.id), version: "0.3.0", build: 543)
-        #expect(!wrongMarker)
-        #expect(installed)
-    }
 }

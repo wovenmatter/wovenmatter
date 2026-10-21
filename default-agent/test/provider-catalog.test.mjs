@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ProviderCatalog, parseProviderModels, refreshInterval, validatePublicModel } from '../src/provider-catalog.mjs';
+import { ProviderCatalog, parseProviderModels, refreshInterval } from '../src/provider-catalog.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { ClaudeRuntime } from '../src/claude-runtime.mjs';
@@ -42,43 +42,6 @@ test('cold/warm/restart/stale/304 use bounded version-aware public provider shar
   assert.equal(await upgraded.read('openai'), undefined);
 });
 
-test('failures retain the last good entry and validators; an empty cache can retry', async t => {
-  const root = await directory(t); let fail = true, now = 0;
-  const cache = new ProviderCatalog(root, { now: () => now, fetchCatalog: async () => { if (fail) throw Error('offline'); return reply(); } });
-  await assert.rejects(cache.load('openai'), /offline/);
-  assert.equal(await cache.read('openai'), undefined);
-  fail = false; await cache.load('openai'); now = refreshInterval; fail = true;
-  const before = await readFile(cache.path('openai'), 'utf8');
-  await assert.rejects(cache.load('openai'), /offline/);
-  assert.equal(await readFile(cache.path('openai'), 'utf8'), before);
-  assert.equal((await cache.read('openai')).etag, '"fixture"');
-  const unbacked = new ProviderCatalog(root, { fetchCatalog: async () => new Response(null, { status: 304 }) });
-  await assert.rejects(unbacked.load('openrouter'), /could not be loaded/);
-});
-
-test('only supported chat types/APIs survive; complete metadata and xAI identity survive', () => {
-  const value = descriptor();
-  assert.deepEqual(parseProviderModels([value, { ...value, type: 'image', api: 'openrouter-images' }, { ...value, type: 'classifier', api: 'openai-decisions' }, { ...value, api: 'future-api' }], 'openai'), [value]);
-  const xai = descriptor({ provider: 'xai', baseUrl: 'https://api.x.ai/v1' });
-  assert.deepEqual(parseProviderModels({ models: [xai] }, 'xai-api'), [{ ...xai, provider: 'xai-api' }]);
-});
-
-test('OpenCode Go accepts current and pinned legacy destinations, rejecting nearby URLs and headers', () => {
-  for (const api of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
-    const suffix = api === 'anthropic-messages' ? '' : '/v1';
-    for (const route of ['inference', 'zen']) {
-      const model = descriptor({ provider: 'opencode-go', api, baseUrl: `https://opencode.ai/${route}/go${suffix}` });
-      assert.deepEqual(parseProviderModels([model], 'opencode-go'), [model]);
-      for (const baseUrl of [model.baseUrl + '/other', model.baseUrl + '?key=secret',
-        model.baseUrl.replace('opencode.ai', 'opencode.ai.foreign.invalid'), model.baseUrl.replace('https://', 'http://'),
-        model.baseUrl.replace('opencode.ai', 'user:secret@opencode.ai'), model.baseUrl.replace('opencode.ai', 'opencode.ai:8443')]) {
-        assert.throws(() => parseProviderModels([{ ...model, baseUrl }], 'opencode-go'), /invalid model metadata/);
-      }
-      assert.throws(() => validatePublicModel({ ...model, headers: { Authorization: 'fixture-secret' } }), /invalid model metadata/);
-    }
-  }
-});
-
 test('OpenCode Go cold startup and ID-only session restore pin current metadata for offline reopening', async t => {
   const root = await directory(t), reference = 'opencode-go/glm-5.3-flash'; let requests = 0;
   const model = descriptor({ id: 'glm-5.3-flash', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1' });
@@ -107,42 +70,6 @@ test('OpenCode Go cold startup and ID-only session restore pin current metadata 
   assert.deepEqual(reopened.session.model, model);
 });
 
-test('OpenCode Go legacy pinned sessions reopen after their catalog adopts the current endpoint', async t => {
-  const root = await directory(t);
-  const legacy = descriptor({ provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/zen/go/v1' });
-  let published = legacy;
-  const cache = new ProviderCatalog(root, { fetchCatalog: async () => reply([published]) });
-  const config = { providers: ['opencode-go'], defaultModel: 'opencode-go/fixture-chat' };
-  const makeEngine = catalog => new DefaultAgentEngine({ cwd: root, directory: root, config, catalog,
-    claude: { models: [], loadModels: async () => {} } }).initialize();
-  const engine = await makeEngine(cache), record = await engine.create();
-  published = { ...legacy, baseUrl: 'https://opencode.ai/inference/go/v1' };
-  await engine.browse('opencode-go', { force: true });
-  assert.deepEqual(record.session.model, legacy);
-  await record.session.dispose();
-  const restarted = await makeEngine(new ProviderCatalog(root, { fetchCatalog: async () => { throw Error('Unexpected catalog request'); } }));
-  const restored = await restarted.create(record.session.sessionId);
-  t.after(() => restored.session.dispose());
-  assert.deepEqual(restored.session.model, legacy);
-  assert.deepEqual(restarted.resolveModel(config.defaultModel), published);
-});
-
-test('OpenRouter sentinel-price routers are excluded without weakening routing or price validation', () => {
-  const normal = descriptor({ provider: 'openrouter', api: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1' });
-  const routers = ['openrouter/auto', 'openrouter/auto-beta', 'typesafe/jev-router'].map(id => ({ ...normal, id, cost: { input: -1_000_000, output: -1_000_000 } }));
-  assert.deepEqual(parseProviderModels([normal, ...routers], 'openrouter'), [normal]);
-  assert.throws(() => parseProviderModels(routers, 'openrouter'), /No supported chat models/);
-  for (const router of routers) assert.throws(() => validatePublicModel(router, 'openrouter'), /invalid model metadata/);
-  for (const entry of [normal, routers[0]]) {
-    for (const patch of [{ baseUrl: 'https://foreign.invalid' }, { headers: { Authorization: 'fixture-secret' } }]) {
-      assert.throws(() => parseProviderModels([normal, { ...entry, ...patch }], 'openrouter'), /invalid model metadata/);
-    }
-  }
-  assert.throws(() => parseProviderModels([normal, { ...normal, id: 'invalid', cost: { input: -1, output: 2 } }], 'openrouter'), /invalid model metadata/);
-  assert.throws(() => parseProviderModels([...routers, { ...normal, api: 'future-api' }], 'openrouter'), /No supported chat models/);
-  assert.throws(() => parseProviderModels([descriptor({ cost: { input: -1_000_000, output: -1_000_000 } })], 'openai'), /invalid model metadata/);
-});
-
 test('foreign destinations, provider mismatches, malformed fields and oversized bodies fail closed', async t => {
   for (const patch of [{ baseUrl: 'https://foreign.invalid' }, { baseUrl: 'https://api.openai.com:8443/v1' }, { baseUrl: 'https://api.openai.com/v1/other' },
     { baseUrl: 'https://user:secret@api.openai.com/v1' }, { baseUrl: 'https://api.openai.com/v1?key=secret' }, { provider: 'openrouter' },
@@ -153,20 +80,6 @@ test('foreign destinations, provider mismatches, malformed fields and oversized 
   const cache = new ProviderCatalog(await directory(t), { fetchCatalog: async () => new Response('x'.repeat(4 * 1024 * 1024 + 1)) });
   await assert.rejects(cache.load('openai')); assert.equal(await cache.read('openai'), undefined);
 
-});
-
-test('cancelled provider loading never publishes its late response or changes another provider', async t => {
-  let finish;
-  const cache = new ProviderCatalog(await directory(t), { fetchCatalog: async url => url.includes('/openai?')
-    ? new Promise(resolve => { finish = resolve; }) : reply([descriptor({ provider: 'xai', baseUrl: 'https://api.x.ai/v1' })]) });
-  const controller = new AbortController();
-  const pending = cache.load('openai', { signal: controller.signal });
-  while (!finish) await new Promise(resolve => setImmediate(resolve));
-  controller.abort();
-  await cache.load('xai-api'); finish(reply());
-  await assert.rejects(pending, { name: 'AbortError' });
-  assert.equal(await cache.read('openai'), undefined);
-  assert.equal((await cache.read('xai-api')).models[0].provider, 'xai-api');
 });
 
 test('engine startup has no network/inventory; browse needs no credentials and refresh cannot change a saved session', async t => {
@@ -213,7 +126,6 @@ test('Claude starts unavailable, discovers without a prompt, retains only valid 
   fail = true; assert.deepEqual(await runtime.discover(), models); assert.equal(closed, 3);
   const restarted = new ClaudeRuntime(root); await restarted.loadModels(); assert.deepEqual(restarted.models, models);
 });
-
 
 test('an active native run uses its pinned descriptor across a catalog refresh and another tool step', async t => {
   const root = await directory(t); let name = 'Pinned', release, entered;

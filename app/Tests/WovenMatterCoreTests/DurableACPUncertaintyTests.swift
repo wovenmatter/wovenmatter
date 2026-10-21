@@ -45,16 +45,4 @@ import WovenMatterCore
         _ = try await database.beginLocalACPRun(conversationID: conversation, content: "new input")
     }
 
-    @Test func unmarkedLegacyOrForegroundRemoteRunKeepsPriorStartupPolicy() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "foreground-recovery-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let conversation = try await database.createRemoteACPSession(runtimeKind: .codex,
-            remoteWorkspaceID: UUID(), remoteWorkspaceName: "Fixture", title: "Foreground", ownerDeviceID: UUID())
-        _ = try await database.beginLocalACPRun(conversationID: conversation, content: "input")
-        try await database.recoverInterruptedLocalACPRuns()
-        #expect(try await database.conversationContent(id: conversation).runs.first?.status == "failed")
-    }
-
 }

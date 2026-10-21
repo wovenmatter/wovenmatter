@@ -8,31 +8,28 @@ import WovenMatterCore
 
 @Suite("Provider credential probe policy")
 struct ProviderCredentialProbeTests {
-  private static let providers: [ProviderKind] = [.codex, .claude, .grok, .cursor]
-  private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-  @Test("passive refreshes never invoke a credential-reading child process",
-        arguments: Self.providers)
-  func passiveRefreshes(provider: ProviderKind) async {
+  @Test("canceling a direct probe cannot start a credential-reading fallback")
+  func canceledProbeDoesNotEscalate() async {
     let probe = ProbeRecorder()
-    for reason in [UsageRefreshReason.startup, .viewAppeared, .rangeChanged,
-                   .manual, .periodic, .runCompleted] {
-      let account = await collect(
-        provider: provider,
-        interaction: .resolve(
-          refreshReason: reason,
-          disclosureAcknowledged: true,
-          explicitUserAction: true
-        ),
-        selected: provider,
-        probe: probe
+    let now = now
+    let task = Task {
+      await ProviderLimitCollector.credentialSensitiveAccount(
+        provider: .codex,
+        keychainInteraction: .oneShotExplicit,
+        interactiveProvider: .codex,
+        now: now,
+        directRead: { _ in
+          withUnsafeCurrentTask { $0?.cancel() }
+          return nil
+        },
+        commandRead: { await probe.recordCommand(); return fixtureAccount(.codex) }
       )
-      #expect(account.status == .unavailable)
-      #expect(!account.detail.contains("Retry access"))
     }
-    #expect(await probe.interactions == Array(repeating: .noninteractive, count: 6))
+    #expect(await task.value.status == .unavailable)
     #expect(await probe.commandReads == 0)
   }
+
 
   @Test("one provider retry cannot enable another provider's direct or CLI prompt",
         arguments: Self.providers)
@@ -59,50 +56,6 @@ struct ProviderCredentialProbeTests {
     _ = await collect(provider: provider, interaction: .noninteractive, selected: nil, probe: probe)
     #expect(await probe.interactions.last == .noninteractive)
     #expect(await probe.commandReads == 1)
-  }
-
-  @Test("direct usage remains available without starting a child process",
-        arguments: Self.providers)
-  func successfulDirectReadWins(provider: ProviderKind) async {
-    let probe = ProbeRecorder()
-    let direct = fixtureAccount(provider, source: "Fixture direct API")
-    let result = await ProviderLimitCollector.credentialSensitiveAccount(
-      provider: provider,
-      keychainInteraction: .noninteractive,
-      interactiveProvider: nil,
-      now: now,
-      directRead: { interaction in
-        await probe.recordDirect(interaction)
-        return direct
-      },
-      commandRead: {
-        await probe.recordCommand()
-        return fixtureAccount(provider, source: "Fixture CLI")
-      }
-    )
-    #expect(result == direct)
-    #expect(await probe.commandReads == 0)
-  }
-
-  @Test("canceling a direct probe cannot start a credential-reading fallback")
-  func canceledProbeDoesNotEscalate() async {
-    let probe = ProbeRecorder()
-    let now = now
-    let task = Task {
-      await ProviderLimitCollector.credentialSensitiveAccount(
-        provider: .codex,
-        keychainInteraction: .oneShotExplicit,
-        interactiveProvider: .codex,
-        now: now,
-        directRead: { _ in
-          withUnsafeCurrentTask { $0?.cancel() }
-          return nil
-        },
-        commandRead: { await probe.recordCommand(); return fixtureAccount(.codex) }
-      )
-    }
-    #expect(await task.value.status == .unavailable)
-    #expect(await probe.commandReads == 0)
   }
 
   @Test("blocked probes retain workspace scope and can preserve last-good limits")
@@ -136,28 +89,28 @@ struct ProviderCredentialProbeTests {
     #expect(retained.refreshError == blocked.detail)
   }
 
-  @Test("Claude's default credential read suppresses legacy and modern Keychain UI")
-  func claudeDefaultReadSuppressesUI() {
-    let fixture = ClaudeKeychainFixture()
-    let token = ProviderLimitCollector.claudeOAuthToken(
-      credentialsURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString),
-      keychain: fixture.access
-    )
-    #expect(token == "fixture-token")
-    #expect(fixture.readCount == 1)
-    #expect(fixture.policyChanges == [false, true])
-    #expect(fixture.interactionAllowed)
-  }
 
-  @Test("denied Claude reads return once without changing the credential")
-  func claudeDeniedReadDoesNotRetry() {
-    let fixture = ClaudeKeychainFixture(status: errSecInteractionNotAllowed)
-    #expect(ProviderLimitCollector.claudeOAuthToken(
-      credentialsURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString),
-      keychain: fixture.access
-    ) == nil)
-    #expect(fixture.readCount == 1)
-    #expect(fixture.policyChanges == [false, true])
+  @Test("direct usage remains available without starting a child process",
+        arguments: Self.providers)
+  func successfulDirectReadWins(provider: ProviderKind) async {
+    let probe = ProbeRecorder()
+    let direct = fixtureAccount(provider, source: "Fixture direct API")
+    let result = await ProviderLimitCollector.credentialSensitiveAccount(
+      provider: provider,
+      keychainInteraction: .noninteractive,
+      interactiveProvider: nil,
+      now: now,
+      directRead: { interaction in
+        await probe.recordDirect(interaction)
+        return direct
+      },
+      commandRead: {
+        await probe.recordCommand()
+        return fixtureAccount(provider, source: "Fixture CLI")
+      }
+    )
+    #expect(result == direct)
+    #expect(await probe.commandReads == 0)
   }
 
   @Test("one explicit Claude Allow is reused by subsequent quiet refreshes")
@@ -255,6 +208,43 @@ struct ProviderCredentialProbeTests {
       credentialsURL: url, keychain: fixture.access, cache: cache
     ) == (rejected ? "externally-renewed-token" : "fixture-token"))
     #expect(fixture.readCount == (rejected ? 2 : 1))
+  }
+
+  private static let providers: [ProviderKind] = [.codex, .claude, .grok, .cursor]
+  private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+  @Test("passive refreshes never invoke a credential-reading child process",
+        arguments: Self.providers)
+  func passiveRefreshes(provider: ProviderKind) async {
+    let probe = ProbeRecorder()
+    for reason in [UsageRefreshReason.startup, .viewAppeared, .rangeChanged,
+                   .manual, .periodic, .runCompleted] {
+      let account = await collect(
+        provider: provider,
+        interaction: .resolve(
+          refreshReason: reason,
+          disclosureAcknowledged: true,
+          explicitUserAction: true
+        ),
+        selected: provider,
+        probe: probe
+      )
+      #expect(account.status == .unavailable)
+      #expect(!account.detail.contains("Retry access"))
+    }
+    #expect(await probe.interactions == Array(repeating: .noninteractive, count: 6))
+    #expect(await probe.commandReads == 0)
+  }
+
+  @Test("denied Claude reads return once without changing the credential")
+  func claudeDeniedReadDoesNotRetry() {
+    let fixture = ClaudeKeychainFixture(status: errSecInteractionNotAllowed)
+    #expect(ProviderLimitCollector.claudeOAuthToken(
+      credentialsURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString),
+      keychain: fixture.access
+    ) == nil)
+    #expect(fixture.readCount == 1)
+    #expect(fixture.policyChanges == [false, true])
   }
 
   @Test("late authentication failure cannot remove a replacement Claude token")

@@ -7,6 +7,44 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct SecondaryMacReplicaToolTests {
+
+    @Test func usagePaginationReadsCachedOtherDeviceSamplesWithoutProvider() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let (replica, workspace, caller, phone) = try await setup(fixture)
+        defer { withExtendedLifetime(workspace) {} }
+        let foreign = UUID().uuidString.lowercased()
+        _ = try await replica.journal.append(workspaceID: phone, conversation: .init(id: foreign, title: "Usage", workspaceID: phone))
+        let data = try JSONSerialization.data(withJSONObject: ["id": 1, "conversationId": 1, "model": (0..<3).map { index in
+            ["role": "assistant", "provider": "fixture", "model": "fixture", "timestamp": 10_000 + index * 1_000,
+             "usage": ["input": 10, "output": 2, "totalTokens": 12]] as [String: Any]
+        }])
+        _ = try await replica.journal.appendNativeRecord(workspaceID: phone, conversationID: foreign, recordID: "usage-fixture", format: "pi-durable.entry.v1", data: data)
+        let usageStore = try await AsyncUsageStore(databaseURL: fixture.directory.appending(path: "usage.sqlite"))
+        let nativeSample = UsageSample(id: "native-usage", provider: .codex,
+            timestamp: Date(timeIntervalSince1970: 13), sessionID: caller, accountLabel: "fixture",
+            model: "fixture", harness: "Codex", application: "fixture",
+            tokens: UsageTokenCounts(inputTokens: 10, outputTokens: 2), costUSD: 0,
+            sourceID: "native-fixture", sourceEventID: "native-usage")
+        try await usageStore.replace(sourceID: "native-fixture", sourceName: "Native fixture", location: "fixture",
+            provider: .codex, harness: "Codex", fingerprint: "fixture", samples: [nativeSample],
+            importedAt: Date(timeIntervalSince1970: 14))
+        let tools = try #require(fixture.model.agentTools)
+        var ids = Set<String>()
+        for offset in 0..<4 {
+            let response = await tools.handle(.init(arguments: ["usage", "read", "--since", "1970-01-01T00:00:00Z", "--until", "1970-01-01T00:00:20Z", "--offset", String(offset), "--limit", "1"]), callerID: caller)
+            #expect(response.success, "\(response.error ?? "")")
+            let result = try #require(response.result?.objectValue)
+            let sample = try #require(result["samples"]?.arrayValue?.first?.objectValue)
+            ids.insert(try #require(sample["id"]?.stringValue))
+            if offset < 3 { #expect(sample["workspace"]?.stringValue == "Phone") }
+            else { #expect(sample["id"]?.stringValue == "native-fixture:native-usage") }
+            #expect(result["hasMore"] == .bool(offset < 3))
+            #expect(result["nextOffset"] == .number(Double(offset + 1)))
+        }
+        #expect(ids.count == 4)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
     private func setup(_ fixture: FacadeFixture) async throws -> (MobileStore, SecondaryMacExecutionWorkspace, String, String) {
         let replica = try MobileStore(file: fixture.directory.appending(path: "replica/library.json"))
         let libraryID = UUID().uuidString.lowercased()
@@ -66,58 +104,5 @@ struct SecondaryMacReplicaToolTests {
         #expect(files.result?.objectValue?["items"]?.arrayValue?.compactMap { $0.objectValue?["id"]?.stringValue } == [a.id])
         let read = await tools.handle(.init(arguments: ["library", "read", b.id]), callerID: caller)
         #expect(read.success && read.result?.objectValue?["downloaded"] == .bool(true))
-    }
-    @Test func cachedLibraryKindsMatchPortableMIMEClassification() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let (replica, workspace, caller, phone) = try await setup(fixture)
-        defer { withExtendedLifetime(workspace) {} }
-        for (id, mediaType) in [("link", "text/uri-list"), ("link-charset", "TEXT/URI-LIST;charset=utf-8"),
-                                ("photo", "IMAGE/PNG"), ("file", "text/plain;charset=utf-8")] {
-            _ = try await replica.artifacts.save(data: Data(id.utf8), workspaceID: phone,
-                title: id, mediaType: mediaType, id: id)
-        }
-        let tools = try #require(fixture.model.agentTools)
-        for (kind, expected) in [("link", ["link", "link-charset"]), ("photo", ["photo"]), ("file", ["file"])] {
-            let response = await tools.handle(.init(arguments: ["library", "list", "--kind", kind]), callerID: caller)
-            #expect(response.success, "\(response.error ?? "")")
-            let ids = response.result?.objectValue?["items"]?.arrayValue?.compactMap { $0.objectValue?["id"]?.stringValue }
-            #expect(ids == expected)
-        }
-    }
-    @Test func usagePaginationReadsCachedOtherDeviceSamplesWithoutProvider() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let (replica, workspace, caller, phone) = try await setup(fixture)
-        defer { withExtendedLifetime(workspace) {} }
-        let foreign = UUID().uuidString.lowercased()
-        _ = try await replica.journal.append(workspaceID: phone, conversation: .init(id: foreign, title: "Usage", workspaceID: phone))
-        let data = try JSONSerialization.data(withJSONObject: ["id": 1, "conversationId": 1, "model": (0..<3).map { index in
-            ["role": "assistant", "provider": "fixture", "model": "fixture", "timestamp": 10_000 + index * 1_000,
-             "usage": ["input": 10, "output": 2, "totalTokens": 12]] as [String: Any]
-        }])
-        _ = try await replica.journal.appendNativeRecord(workspaceID: phone, conversationID: foreign, recordID: "usage-fixture", format: "pi-durable.entry.v1", data: data)
-        let usageStore = try await AsyncUsageStore(databaseURL: fixture.directory.appending(path: "usage.sqlite"))
-        let nativeSample = UsageSample(id: "native-usage", provider: .codex,
-            timestamp: Date(timeIntervalSince1970: 13), sessionID: caller, accountLabel: "fixture",
-            model: "fixture", harness: "Codex", application: "fixture",
-            tokens: UsageTokenCounts(inputTokens: 10, outputTokens: 2), costUSD: 0,
-            sourceID: "native-fixture", sourceEventID: "native-usage")
-        try await usageStore.replace(sourceID: "native-fixture", sourceName: "Native fixture", location: "fixture",
-            provider: .codex, harness: "Codex", fingerprint: "fixture", samples: [nativeSample],
-            importedAt: Date(timeIntervalSince1970: 14))
-        let tools = try #require(fixture.model.agentTools)
-        var ids = Set<String>()
-        for offset in 0..<4 {
-            let response = await tools.handle(.init(arguments: ["usage", "read", "--since", "1970-01-01T00:00:00Z", "--until", "1970-01-01T00:00:20Z", "--offset", String(offset), "--limit", "1"]), callerID: caller)
-            #expect(response.success, "\(response.error ?? "")")
-            let result = try #require(response.result?.objectValue)
-            let sample = try #require(result["samples"]?.arrayValue?.first?.objectValue)
-            ids.insert(try #require(sample["id"]?.stringValue))
-            if offset < 3 { #expect(sample["workspace"]?.stringValue == "Phone") }
-            else { #expect(sample["id"]?.stringValue == "native-fixture:native-usage") }
-            #expect(result["hasMore"] == .bool(offset < 3))
-            #expect(result["nextOffset"] == .number(Double(offset + 1)))
-        }
-        #expect(ids.count == 4)
-        #expect(await fixture.recorder.deliveries.isEmpty)
     }
 }

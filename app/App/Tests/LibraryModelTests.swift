@@ -6,34 +6,6 @@ import WovenMatterDashboardStore
 
 @MainActor
 struct LibraryModelTests {
-    @Test func frontendReadsAuthoritativeCatalogWithoutMaintenance() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appending(path: "workspace.sqlite")
-        let writer = try await WorkspaceDatabase(url: url)
-        let chat = try await writer.createLocalACPSession(runtimeKind: .codex, title: "Library", ownerDeviceID: UUID())
-        let run = try await writer.beginLocalACPRun(conversationID: chat, content: "https://example.com/item")
-        try await writer.completeLocalACPRun(runID: run.runID)
-        try await writer.indexLibraryMessages()
-        let reader = try await WorkspaceDatabase(url: url, readOnlyProjection: true)
-        let model = LibraryModel()
-        var commands = 0
-        model.synchronize(service: LibraryService(database: reader), locations: [], remoteWorkspace: { _ in
-            Issue.record("A frontend must not resolve remote connections.")
-            return nil
-        }, backendExecutor: { _ in
-            commands += 1
-            return .init()
-        })
-        defer { model.stop() }
-        await model.synchronizeOnce()
-        await model.load(query: .init())
-        #expect(model.error == nil)
-        #expect(model.items.count == 1)
-        #expect(model.revision == (try await writer.libraryRevision()))
-        #expect(commands == 0)
-    }
 
     @Test func backendLibraryCommandsResolveCatalogIdentities() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

@@ -5,6 +5,7 @@ import WovenMatterCore
 
 @Suite("Usage account selection")
 struct UsageConnectionSelectionTests {
+
     @Test("Explicit display account wins without changing the preferred account")
     func selectedAccount() {
         let first = UsageConnectionChoice(provider: .codex, connectionID: "openai-codex", accountID: "one", label: "First", preferred: true)
@@ -16,6 +17,7 @@ struct UsageConnectionSelectionTests {
         #expect(values[0].preferred)
         #expect(UsageConnectionChoice.resolve([], selectedID: first.id) == nil)
     }
+
 
     @Test("API key selections cannot show subscription quota or another account's identity")
     func apiKeyLimits() {

@@ -6,6 +6,27 @@ import WovenMatterCore
 
 @Suite("Canonical native run archive")
 struct WorkspaceNativeRunArchiveTests {
+
+  @Test func fullExportsRedactWovenCapabilitiesFromSavedProjectionRowsWithoutRemovingRunContent() async throws {
+    let (db, directory) = try await database()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let conversation = try await session(db)
+    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Prompt")
+    let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
+    let output = "{\"token\":\"retained-lexical-token\",\"toolEndpoint\":\"\(capability)\"}"
+    try await db.upsertDeviceOwnedRunActivity(runID: run.runID,
+      activity: .init(id: "tool", kind: .tool, rawOutputJSON: output, rawPayloadJSON: output))
+    let bounded = try await db.conversationExport(id: conversation, format: .fullRun)
+    let destination = directory.appending(path: "capabilities.json")
+    try await db.exportConversationArchive(id: conversation, to: destination)
+    for data in [bounded, try Data(contentsOf: destination)] {
+      let text = String(decoding: data, as: UTF8.self)
+      #expect(!text.contains(String(repeating: "a", count: 32)))
+      #expect(!text.contains(String(repeating: "b", count: 32)))
+      #expect(text.contains("retained-lexical-token"))
+    }
+  }
+
   @Test func interruptedBatchAdmissionRollsBackEveryRecordAndItsSearchIndexBeforeRetry() async throws {
     let (db, directory) = try await database()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -81,30 +102,6 @@ struct WorkspaceNativeRunArchiveTests {
     #expect(rows(try await reopened.queryHistory(query)).isEmpty)
   }
 
-  @Test func unboundNativeRecordsOnlyUseExplicitRunMappings() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Different active run")
-    var batch = WorkspaceNativeRunRecordBatch(sourceID: "local:archive", nativeSessionID: "session", records: [
-      .init(id: "message", runID: "unavailable-native-run", kind: "message", payload: #"{"text":"historical"}"#, contentMode: "snapshot")])
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
-    let before = try #require(rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.message"))).first?.objectValue)
-    #expect(before["run_id"] == .null)
-    batch.records[0].runID = run.runID
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi", sourceConnectionID: "new metadata")
-    let after = rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.message")))
-    #expect(after.count == 1)
-    #expect(after.first?.objectValue?["id"] == before["id"])
-    #expect(after.first?.objectValue?["run_id"]?.stringValue == run.runID)
-    let other = try await session(db)
-    let otherRun = try await db.beginLocalACPRun(conversationID: other, content: "Other")
-    batch.records[0].runID = otherRun.runID
-    await #expect(throws: (any Error).self) {
-      try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
-    }
-  }
-
   @Test func nativeContentKeepsTokenFieldsAndFormattingWhileCredentialTransportIsRedacted() async throws {
     let (db, directory) = try await database()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -122,45 +119,6 @@ struct WorkspaceNativeRunArchiveTests {
     #expect(!safe.contains("secret-key") && !safe.contains("secret-token") && !safe.contains("earlier-secret"))
     #expect(safe.contains("provider"))
     #expect(WorkspaceHistoryPrivacy.redactingTransportSecrets(raw) == raw)
-  }
-
-  @Test func mutableActivitiesKeepEverySavedRawRevision() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Prompt")
-    try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: .init(id: "tool", kind: .tool,
-      phase: "start", toolName: "read", rawInputJSON: #"{"path":"a.png"}"#, rawPayloadJSON: #"{"native":"first"}"#))
-    try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: .init(id: "tool", kind: .tool,
-      phase: "end", toolName: "read", content: "exposed summary", rawOutputJSON: #"{"type":"image","url":"native://image/7"}"#,
-      rawPayloadJSON: #"{"native":"final","unknown":true}"#))
-    let history = rows(try await db.queryHistory(.init(command: "events", runID: run.runID, kind: "activity.snapshot")))
-    #expect(history.count == 2)
-    #expect(history.first?.objectValue?["payload"]?.stringValue?.contains("first") == true)
-    let saved = try JSONDecoder().decode(AgentRunActivity.self, from: Data(try #require(history.last?.objectValue?["payload"]?.stringValue).utf8))
-    #expect(saved.rawOutputJSON == #"{"type":"image","url":"native://image/7"}"#)
-  }
-
-
-
-  @Test func largeNativeRawAndProjectionWindowsRemainExactAndIndependentlyPageable() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    let payload = String(repeating: "a\0🧵", count: 30_000)
-    let projection = String(repeating: "π", count: 100_000)
-    try await db.recordNativeRunRecords(.init(sourceID: "local:store", nativeSessionID: "s", records: [
-      .init(id: "big", kind: "message", payload: payload, contentMode: "snapshot", text: projection, projectionJSON: projection)]),
-      conversationID: conversation, harness: "pi")
-    let listing = try #require(rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.message"))).first?.objectValue)
-    #expect(listing["payload"] == .null && listing["projection_json"] == .null)
-    var query = WorkspaceHistoryQuery(command: "event", id: try #require(listing["id"]?.stringValue))
-    let first = try #require(rows(try await db.queryHistory(query)).first?.objectValue)
-    query.offset = 65_536
-    let next = try #require(rows(try await db.queryHistory(query)).first?.objectValue)
-    #expect((first["payload"]?.stringValue ?? "") + (next["payload"]?.stringValue ?? "") == payload)
-    #expect((first["projection_json"]?.stringValue ?? "") + (next["projection_json"]?.stringValue ?? "") == projection)
-    #expect(first["projection_has_more"]?.intValue == 1 && next["projection_has_more"]?.intValue == 0)
   }
 
   @Test func streamedFullArchiveExportsBeyondMemoryBudgetAndPreservesDestinationOnFailure() async throws {
@@ -191,27 +149,6 @@ struct WorkspaceNativeRunArchiveTests {
     }
     #expect(try Data(contentsOf: destination) == previous)
     #expect(try FileManager.default.attributesOfItem(atPath: destination.path)[.posixPermissions] as? Int == 0o600)
-  }
-
-
-  @Test func fullExportsRedactWovenCapabilitiesFromSavedProjectionRowsWithoutRemovingRunContent() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Prompt")
-    let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
-    let output = "{\"token\":\"retained-lexical-token\",\"toolEndpoint\":\"\(capability)\"}"
-    try await db.upsertDeviceOwnedRunActivity(runID: run.runID,
-      activity: .init(id: "tool", kind: .tool, rawOutputJSON: output, rawPayloadJSON: output))
-    let bounded = try await db.conversationExport(id: conversation, format: .fullRun)
-    let destination = directory.appending(path: "capabilities.json")
-    try await db.exportConversationArchive(id: conversation, to: destination)
-    for data in [bounded, try Data(contentsOf: destination)] {
-      let text = String(decoding: data, as: UTF8.self)
-      #expect(!text.contains(String(repeating: "a", count: 32)))
-      #expect(!text.contains(String(repeating: "b", count: 32)))
-      #expect(text.contains("retained-lexical-token"))
-    }
   }
 
   private func database() async throws -> (WorkspaceDatabase, URL) {

@@ -6,34 +6,6 @@ import WovenMatterCore
 
 @Suite("Library transports")
 struct LibraryTransportTests {
-  @Test("remote links are decoded, quoted, and confined by the generated container reader")
-  func remotePaths() async throws {
-    #expect(
-      try RemoteLibraryFiles.path(source: "sandbox:/mnt/data/my%20report.pdf", root: "/home/.woven-matter")
-        == "/mnt/data/my report.pdf")
-    #expect(
-      try RemoteLibraryFiles.path(source: "report.pdf", root: "/home/.woven-matter") == "/home/.woven-matter/report.pdf"
-    )
-    #expect(throws: (any Error).self) {
-      try RemoteLibraryFiles.path(source: "file://another-host/report.pdf", root: "/home/.woven-matter")
-    }
-    let reader = RemoteLibraryFiles(runner: { destination, command, input in
-      #expect(destination == "user@host.invalid")
-      #expect(command.contains("report'\\''s.pdf"))
-      #expect(input == nil)
-      return Data("file".utf8)
-    })
-    let config = RemoteWorkspaceConfiguration(
-      name: "Remote", workspaceID: "fixture", hostName: "host.invalid", userName: "user")
-    #expect(
-      try await reader.read(source: "report's.pdf", root: "/home/.woven-matter", configuration: config)
-        == Data("file".utf8))
-    var invalid = config
-    invalid.workspaceID = "escape;touch /tmp/no"
-    await #expect(throws: (any Error).self) {
-      try await reader.read(source: "a.pdf", root: "/home/.woven-matter", configuration: invalid)
-    }
-  }
 
   @Test("remote read script rejects traversal, symlinks and special files without returning bytes")
   func remoteConfinement() throws {

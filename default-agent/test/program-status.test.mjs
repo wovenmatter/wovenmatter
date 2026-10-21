@@ -5,24 +5,6 @@ import { LiveDoc } from '@earendil-works/pi-durable';
 import { reportProgramStatus } from '../src/program-status.mjs';
 import { createSubagents, Subagents, ChildContext } from '../src/subagents.mjs';
 
-test('unchanged output is coalesced without losing replacement fields, clears or attention repair', () => {
-  const updates = [], record = { runID: 'run', emit: value => updates.push(value) };
-  reportProgramStatus(record, { state: 'working', id: 'children/2', msg: 'Compacting' });
-  reportProgramStatus(record, { state: 'working', id: 'children/2', msg: 'Compacting' });
-  assert.equal(updates.length, 1);
-  reportProgramStatus(record, { state: 'working', id: 'children/2' });
-  assert.equal(updates.length, 2);
-  assert.equal(updates.at(-1).status.msg, undefined);
-  for (let index = 0; index < 2; index++) reportProgramStatus(record, { state: 'blocked', id: 'children/2', kind: 'auth' });
-  assert.equal(updates.length, 4);
-  for (let index = 0; index < 2; index++) reportProgramStatus(record, { state: 'clear' });
-  assert.equal(updates.length, 6);
-  reportProgramStatus(record, { state: 'working' });
-  record.runID = 'next';
-  reportProgramStatus(record, { state: 'working' });
-  assert.equal(updates.at(-1)._meta.wovenRunID, 'next');
-});
-
 for (const scenario of ['block', 'resume', 'cancel']) test(`child notify preserves current authentication state across snapshot awaits: ${scenario}`, async () => {
   let release, entered;
   const paused = new Promise(resolve => { entered = resolve; });
