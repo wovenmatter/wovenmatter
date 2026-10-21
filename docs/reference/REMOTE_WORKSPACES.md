@@ -55,8 +55,8 @@ start a measurement container or access Docker-managed volume contents directly.
 APT package index and upgrades the base OS packages before installing workspace
 tools. Builds use `--pull --no-cache`, so a repeated update does not reuse an old
 security-package layer. Both Linux image definitions use the same
-`node:<LTS major>-trixie-slim` multi-architecture base, so each rebuild takes the
-newest Node patch of that LTS line. Workspace agent dependencies install from
+`node:<current major>-trixie-slim` multi-architecture base, so each rebuild takes the
+newest Node patch of that stable major. Workspace agent dependencies install from
 the committed lockfile with `npm ci`, and the workspace Playwright CLI matches
 the locked `playwright-core`. The image stays read-only at runtime; OS updates
 happen in the replacement image, never inside a running workspace.
