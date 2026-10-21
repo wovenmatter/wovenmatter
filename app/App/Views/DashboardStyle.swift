@@ -6,7 +6,7 @@ import UIKit
 // Compiled by both apps. Keep icons, tokens and reusable controls here;
 // desktop window/sidebar behavior remains in DashboardDesign.swift.
 
-/// Lucide 1.60.0 template vectors. The suffix records the stroke width.
+/// Lucide 1.61.0 template vectors. The suffix records the stroke width.
 struct DashboardLucideGlyph: Hashable, Sendable {
     let rawValue: String
 
