@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode="${1:-run}"
+mode=run
+data_mode="${WOVENMATTER_DEV_MODE:-auto}"
+instance="${WOVENMATTER_DEV_INSTANCE:-${WOVENMATTER_DEV_VARIANT:-}}"
+source_directory="${WOVENMATTER_DEV_SNAPSHOT_SOURCE:-$HOME/Library/Application Support/Woven Matter}"
+plan_only=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    run|debug|logs|verify) mode="$1"; shift ;;
+    --mode|--instance|--source)
+      [ "$#" -ge 2 ] || { printf 'Missing value for %s\n' "$1" >&2; exit 64; }
+      case "$1" in --mode) data_mode="$2" ;; --instance) instance="$2" ;; --source) source_directory="$2" ;; esac
+      shift 2 ;;
+    --plan) plan_only=true; shift ;;
+    --help|-h)
+      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|client|snapshot|live] [--instance name] [--source directory] [--plan]'
+      exit 0 ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; exit 64 ;;
+  esac
+done
 case "$mode" in
   run|debug|logs|verify) ;;
   *) printf 'usage: %s [run|debug|logs|verify]\n' "$0" >&2; exit 64 ;;
@@ -9,21 +27,41 @@ esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_root="${repo_root}/app"
-cache_root="${WOVENMATTER_DEV_CACHE_DIR:-/private/tmp/wovenmatter-development}"
+profile_args=(profile --root "$repo_root" --mode "$data_mode")
+if [ -n "$instance" ]; then profile_args+=(--instance "$instance"); fi
+profile="$(python3 "$repo_root/scripts/dev-build.py" "${profile_args[@]}")"
+if "$plan_only"; then printf '%s\n' "$profile"; exit 0; fi
+instance="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["instance"])')"
+data_mode="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+support_directory="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["support"])')"
+cache_base="${WOVENMATTER_DEV_CACHE_DIR:-/private/tmp/wovenmatter-development}"
+cache_root="$cache_base/$instance/$data_mode"
 derived_data="${cache_root}/DerivedData"
 package_cache="${cache_root}/SourcePackages"
 host_arch="$(uname -m)"
-product_name="Woven Matter Dev"
-build_overrides=(CODE_SIGNING_ALLOWED=NO)
-variant="${WOVENMATTER_DEV_VARIANT:-}"
-if [ -n "$variant" ]; then
-  case "$variant" in *[!a-zA-Z0-9-]*) printf 'Invalid development variant\n' >&2; exit 64 ;; esac
-  variant_id="$(printf '%s' "$variant" | tr '[:upper:]' '[:lower:]')"
-  product_name="Woven Matter ${variant} Dev"
-  build_overrides+=("WOVENMATTER_DEV_PRODUCT_NAME=$product_name" "WOVENMATTER_DEV_BUNDLE_ID=wovenmatter.desktop.dev.$variant_id")
-fi
+product_name="Woven Matter $instance $data_mode Dev"
+build_overrides=(CODE_SIGNING_ALLOWED=NO "WOVENMATTER_DEV_PRODUCT_NAME=$product_name"
+  "WOVENMATTER_DEV_BUNDLE_ID=wovenmatter.desktop.dev.$instance.$data_mode"
+  "WOVENMATTER_DEV_MODE=$data_mode" "WOVENMATTER_DEV_INSTANCE=$instance")
 app="${derived_data}/Build/Products/Debug/${product_name}.app"
 executable="${app}/Contents/MacOS/${product_name}"
+printf 'Development instance: %s\nData mode: %s\nLocal storage: %s\n' "$instance" "$data_mode" "$support_directory"
+if [ "$data_mode" = live ]; then
+  printf '%s\n' 'Live host: uses production data directly. Stop the current host (including background execution) before launching; the app enforces exclusive ownership.'
+fi
+mkdir -p "$derived_data" "$package_cache"
+# Serialize both snapshot creation and builds of this exact profile.
+build_lock="$cache_root/build.lock"
+if ! mkdir "$build_lock" 2>/dev/null; then
+  printf 'This instance is already building. If no launcher is running, remove %s.\n' "$build_lock" >&2; exit 75
+fi
+trap 'rmdir "$build_lock" 2>/dev/null || true' EXIT
+if [ "$data_mode" = snapshot ] && [ ! -e "$support_directory" ]; then
+  python3 "$repo_root/scripts/dev-build.py" snapshot --source "$source_directory" --destination "$support_directory"
+fi
+if [ "$data_mode" = snapshot ] && [ ! -f "$support_directory/development-snapshot.json" ]; then
+  printf '%s\n' 'This snapshot is not initialized. Use a new instance name.' >&2; exit 65
+fi
 
 # Replacing the executable of an active execution owner can interrupt sessions.
 # Its lifetime is independent of the UI; disabling background execution performs
@@ -33,7 +71,6 @@ if pgrep -f "^${executable} --backend$" >/dev/null 2>&1; then
   exit 75
 fi
 
-mkdir -p "$derived_data" "$package_cache"
 # A stable certificate-backed identity lets macOS recognize subsequent Dev
 # builds. Linker/ad-hoc signatures change identity whenever the binary changes.
 # Keep the selected certificate pinned in this build cache; never silently
@@ -63,6 +100,11 @@ if [ -n "$signing_identity" ]; then
       ;;
   esac
 fi
+stop_dev_app() {
+  swift "$repo_root/scripts/stop-development.swift" "$executable"
+}
+# Stop before overwriting the executable, and respect graceful termination.
+stop_dev_app
 xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   -project "${app_root}/WovenMatter.xcodeproj" \
   -scheme WovenMatter \
@@ -78,20 +120,7 @@ if [ -n "$signing_identity" ] && [ "$signing_identity" != - ]; then
   printf '%s\n' "$signing_identity" > "$identity_file"
 fi
 
-stop_dev_app() {
-  pkill -TERM -x "$product_name" >/dev/null 2>&1 || true
-  # Launch Services can reject a relaunch while the old process is exiting.
-  local attempt
-  for attempt in {1..100}; do
-    if ! pgrep -x "$product_name" >/dev/null; then return 0; fi
-    sleep 0.1
-  done
-  printf 'The development app is still exiting; close it before relaunching.\n' >&2
-  return 1
-}
-
 launch_app() {
-  stop_dev_app
   /usr/bin/open -n "$app"
 }
 
@@ -105,7 +134,7 @@ case "$mode" in
   verify)
     launch_app
     sleep 1
-    pgrep -x "$product_name" >/dev/null
+    swift "$repo_root/scripts/stop-development.swift" "$executable" --check
     stop_dev_app
     ;;
 esac

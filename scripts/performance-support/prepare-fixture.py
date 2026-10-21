@@ -20,6 +20,9 @@ def replace_once(path, old, new):
 # No normal startup, workspace lease, runtime discovery, account restoration,
 # note socket, usage collection, or provider coordinator is started.
 app = staging / "app/App/WovenMatterApp.swift"
+# This separate offline fixture supplies its own inert storage and startup.
+replace_once(app, "if !isRunningUnitTests, CompanionTestWorkspace.supportDirectory == nil {",
+             "if false {")
 replace_once(app, "workspaceProcessLease = isRunningUnitTests\n", "workspaceProcessLease = true\n")
 replace_once(app, "_applicationModel = State(initialValue: ApplicationModel())", """
         precondition(Bundle.main.bundleIdentifier == "wovenmatter.desktop.dev.performance")

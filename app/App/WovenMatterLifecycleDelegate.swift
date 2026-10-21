@@ -164,7 +164,7 @@ final class LocalBackgroundExecution {
     private(set) var isChanging = false
     private(set) var errorMessage: String?
     var transitionHandler: ((Bool) async throws -> Void)?
-    var isAvailable: Bool { transitionHandler != nil }
+    var isAvailable: Bool { transitionHandler != nil && DevelopmentLaunch.mode == nil }
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -354,11 +354,14 @@ enum LocalExecutionRole: String {
     case standalone, frontend, backend, libraryClient
 
     nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
-    static let current = resolve(arguments: CommandLine.arguments,
+    static let current: LocalExecutionRole = resolve(arguments: CommandLine.arguments,
         backgroundEnabled: UserDefaults.standard.bool(forKey: LocalBackgroundExecution.preferenceKey),
-        libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey))
+        libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey),
+        developmentMode: DevelopmentLaunch.mode)
 
-    static func resolve(arguments: [String], backgroundEnabled: Bool, libraryClientEnabled: Bool = false) -> Self {
+    static func resolve(arguments: [String], backgroundEnabled: Bool, libraryClientEnabled: Bool = false,
+                        developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {
+        if let developmentMode { return developmentMode == .client ? .libraryClient : .standalone }
         if arguments.contains("--backend") { return .backend }
         if libraryClientEnabled { return .libraryClient }
         return backgroundEnabled ? .frontend : .standalone

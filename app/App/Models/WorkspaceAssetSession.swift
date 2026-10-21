@@ -117,7 +117,8 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         }
         try BrowserCredentialStore.shared.prepare(consented:
             UserDefaults.standard.bool(forKey: BrowserCredentialStore.consentKey))
-        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = (DevelopmentLaunch.isLiveHost ? nil : DevelopmentLaunch.supportDirectory)?.appending(path: "Browser", directoryHint: .isDirectory)
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Woven Matter/Browser", directoryHint: .isDirectory)
             .appending(path: Bundle.main.bundleIdentifier ?? "wovenmatter.desktop", directoryHint: .isDirectory)
         if !Self.preparedProfile {

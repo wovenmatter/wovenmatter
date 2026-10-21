@@ -146,6 +146,9 @@
 		9C717BDF5AA9D68422B42FCE /* ProductAnalyticsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */; };
 		6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */; };
 		E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */; };
+		66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */; };
+		7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */; };
+		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -286,6 +289,9 @@
 		F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ProductAnalyticsViews.swift; sourceTree = "<group>"; };
 		CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+Automation.swift"; sourceTree = SOURCE_ROOT; };
 		259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/WovenAutomationHost.swift"; sourceTree = SOURCE_ROOT; };
+		51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLaunch.swift"; sourceTree = SOURCE_ROOT; };
+		EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLibraryProjection.swift"; sourceTree = SOURCE_ROOT; };
+		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -343,6 +349,9 @@
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
 				AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */,
+				4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */,
+				EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */,
+				51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */,
 				D49100000000000000000004 /* Models */,
 				D50000000000000000000007 /* Resources */,
 				D50000000000000000000008 /* Services */,
@@ -755,6 +764,9 @@
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
 				A03000000000000000000001 /* DesktopUpdater.swift in Sources */,
 				AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */,
+				115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */,
+				7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */,
+				66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
