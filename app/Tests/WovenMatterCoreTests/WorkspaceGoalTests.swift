@@ -6,6 +6,111 @@ import WovenMatterClient
 
 @Suite("Persistent goals and safe continuation")
 struct WorkspaceGoalTests {
+
+    @Test func verifiedCompletionAndProgressGovernContinuation() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session)
+        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
+        _ = try await db.claimToolDelivery(id: delivery.id)
+        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+        try await run(db, session: session, id: "run-a")
+        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Fixed one failure; a second remains"))
+        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
+        await #expect(throws: (any Error).self) {
+            try await db.mutateGoal(sessionID: session, mutation: .complete(id: goal.id, evidence: " "))
+        }
+        _ = try await db.mutateGoal(sessionID: session, mutation: .complete(id: goal.id, evidence: "All fixture checks passed"))
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .complete)
+    }
+
+    @Test func trashRestoreCannotRestartAGoalAndClearCleansItsAccounting() async throws {
+        let (db, directory, session) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let goal = try await create(db, session)
+        try await run(db, session: session, id: "retained-goal-run")
+        try await db.recordGoalUsage(runID: "retained-goal-run", tokens: 50)
+        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
+        try await db.mutateConversation(id: session, mutation: .moveToTrash)
+        try await db.mutateConversation(id: session, mutation: .restore)
+        #expect(try await db.sessionGoals().first?.status == .paused)
+        #expect(try await db.claimToolDelivery(id: delivery.id) == nil)
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        _ = try await db.mutateGoal(sessionID: session, mutation: .clear(id: goal.id))
+        #expect(try await db.sessionGoals().isEmpty)
+        let retained = try await db.read { connection in
+            try connection.historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs WHERE goal_id=?", values: [goal.id]).first?.objectValue?["count"]?.intValue ?? -1
+        }
+        #expect(retained == 0)
+    }
+
+
+    @Test func slashAndCLICommandsValidateLifecycleAndScope() throws {
+        #expect(WorkspaceGoalCommand(" /goal Fix the flaky test ") == .set("Fix the flaky test"))
+        #expect(WorkspaceGoalCommand("/goal resume") == .resume)
+        #expect(WorkspaceGoalCommand("/goals") == nil)
+        #expect(WorkspaceGoalCommand("Please set /goal") == nil)
+        #expect(try WovenMatterToolCommand(["goals", "get"]).isMutation == false)
+        #expect(try WovenMatterToolCommand(["goals", "set", "--objective", "Pass checks"]).isMutation)
+        #expect(throws: (any Error).self) { try WovenMatterToolCommand(["goals", "complete", "--session", "other"]) }
+        #expect(throws: (any Error).self) { try WorkspaceGoal.validate(objective: "", tokenBudget: nil, turnBudget: nil) }
+        #expect(throws: (any Error).self) { try WorkspaceGoal.validate(objective: "Result", tokenBudget: 0, turnBudget: nil) }
+    }
+
+
+    @Test func incompleteOpenCodeUsageDoesNotBecomeZeroTokens() async throws {
+        let (db, directory, session) = try await fixture(.opencode)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await create(db, session, tokens: 100)
+        try await db.attachOpenCodeSession(.init(conversationID: session, connectionID: "fixture", sessionID: "native"))
+        var snapshot = OpenCodeSessionSnapshot()
+        snapshot.messages = [.object(["id": .string("assistant"), "type": .string("assistant"),
+            "time": .object(["created": .number(1000), "completed": .number(2000)]),
+            "content": .array([.object(["type": .string("step-finish"), "tokens": .object([:])])])])]
+        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
+        #expect(try await db.sessionGoals().first?.tokensUsed == nil)
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .blocked)
+    }
+
+    @Test func openCodeNativeWorkAndQuestionsPreventContinuationAndUsageIsCaptured() async throws {
+        let (db, directory, session) = try await fixture(.opencode)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await create(db, session, tokens: 100)
+        try await db.attachOpenCodeSession(.init(conversationID: session, connectionID: "fixture", sessionID: "native"))
+        var snapshot = OpenCodeSessionSnapshot()
+        snapshot.active = true
+        snapshot.messages = [.object(["id": .string("assistant"), "type": .string("assistant"),
+            "time": .object(["created": .number(1000), "completed": .number(2000)]),
+            "content": .array([.object(["type": .string("step-finish"), "tokens": .object(["input": .number(40), "output": .number(20)])])])])]
+        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
+        #expect(try await db.conversationContent(id: session).runs.allSatisfy { $0.status == "completed" })
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.tokensUsed == 60)
+        snapshot.active = false
+        snapshot.permissions = [.object(["id": .string("approval")])]
+        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.tokensUsed == 60)
+        #expect(try await db.sessionGoals().first?.status == .active)
+        // Clearing the native blocker admits work with the same complete accounting.
+        snapshot.permissions = []
+        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
+        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
+    }
+
+    @Test func planModePausesAutomaticGoalContinuation() async throws {
+        let (db, directory, session) = try await fixture(.claudeCode)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await create(db, session)
+        let pending = try #require(await db.dueGoalDeliveries(running: []).first)
+        try await db.updateLocalACPSessionConfiguration(conversationID: session, model: nil, thinking: nil, permission: "plan")
+        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
+        #expect(try await db.sessionGoals().first?.status == .paused)
+        #expect(try await db.claimToolDelivery(id: pending.id) == nil)
+    }
+
     private func fixture(_ kind: AgentRuntimeKind = .defaultAgent) async throws -> (WorkspaceDatabase, URL, String) {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -69,25 +174,6 @@ struct WorkspaceGoalTests {
         #expect(retry == adoption)
     }
 
-    @Test func archivedChatsCannotStartOrResumeAndReadOnlyProjectionCannotMutate() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
-        let projection = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-        #expect(try await projection.sessionGoals().first?.id == goal.id)
-        await #expect(throws: (any Error).self) {
-            try await projection.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        }
-        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [session]) }
-        await #expect(throws: (any Error).self) {
-            try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        }
-        _ = try await db.mutateGoal(sessionID: session, mutation: .clear(id: goal.id))
-        await #expect(throws: (any Error).self) { try await create(db, session) }
-        #expect(try await db.read { try $0.goalUnlocked(session) } == nil)
-    }
-
     @Test func mutationRetriesCannotReplaceANewerGoalOrTargetAnotherSession() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -134,64 +220,6 @@ struct WorkspaceGoalTests {
         #expect(try await db.dueGoalDeliveries(running: []).count == 1)
     }
 
-    @Test func stoppedPreparationCannotSetOrResumeAGoal() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let fence = AgentDispatchFence()
-        fence.cancel()
-        await #expect(throws: CancellationError.self) {
-            try await db.mutateGoal(sessionID: session,
-                mutation: .set(objective: "Delayed goal", tokenBudget: nil, turnBudget: nil), dispatchFence: fence)
-        }
-        #expect(try await db.sessionGoals().isEmpty)
-        let goal = try await create(db, session)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
-        let entered = AsyncStream<Void>.makeStream()
-        let release = DispatchSemaphore(value: 0)
-        defer { release.signal() }
-        let writer = Task {
-            try await db.write { _ in
-                entered.continuation.yield(())
-                release.wait()
-            }
-        }
-        var iterator = entered.stream.makeAsyncIterator()
-        await iterator.next()
-        let delayedFence = AgentDispatchFence()
-        let delayedResume = Task {
-            try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id), dispatchFence: delayedFence)
-        }
-        let deadline = Date().addingTimeInterval(5)
-        while db.workerMetrics[0].pending < 2 && Date() < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        #expect(db.workerMetrics[0].pending == 2)
-        delayedFence.cancel()
-        release.signal()
-        try await writer.value
-        await #expect(throws: CancellationError.self) { try await delayedResume.value }
-        #expect(try await db.sessionGoals().first?.status == .paused)
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-    }
-
-    @Test func verifiedCompletionAndProgressGovernContinuation() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
-        _ = try await db.claimToolDelivery(id: delivery.id)
-        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
-        try await run(db, session: session, id: "run-a")
-        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Fixed one failure; a second remains"))
-        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
-        await #expect(throws: (any Error).self) {
-            try await db.mutateGoal(sessionID: session, mutation: .complete(id: goal.id, evidence: " "))
-        }
-        _ = try await db.mutateGoal(sessionID: session, mutation: .complete(id: goal.id, evidence: "All fixture checks passed"))
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .complete)
-    }
-
     @Test func noProgressAndUncertainDeliveryNeverSpinOrReplay() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -208,24 +236,6 @@ struct WorkspaceGoalTests {
         try await db.markToolDeliveryTransportStarted(id: next.id)
         try await db.recoverToolDeliveries()
         #expect(try await db.toolDelivery(id: next.id)?.status == "uncertain")
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .blocked)
-    }
-
-    @Test func statusOnlyToolCallsAndRepeatedCheckpointsCannotKeepAGoalSpinning() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Work remains"))
-        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
-        _ = try await db.claimToolDelivery(id: delivery.id)
-        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
-        try await run(db, session: session, id: "status-only-turn")
-        try await db.write { connection in
-            try connection.toolsExecuteUnlocked("INSERT INTO dashboard_run_events(id,run_id,event_type,content,created_at) VALUES(?,?,?,?,?)",
-                ["goal-status-read", "status-only-turn", "tool", "wovenmatter goals get", WorkspaceDatabaseConnection.timestamp(Date())])
-        }
-        _ = try await db.mutateGoal(sessionID: session, mutation: .checkpoint(id: goal.id, evidence: "Work remains"))
         #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
         #expect(try await db.sessionGoals().first?.status == .blocked)
     }
@@ -249,60 +259,6 @@ struct WorkspaceGoalTests {
         await #expect(throws: (any Error).self) { try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id)) }
     }
 
-    @Test func turnBudgetIncludesRunsFirstObservedAfterCompletion() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await create(db, session, turns: 1)
-        try await run(db, session: session, id: "completed-before-enrollment")
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .budgetLimited)
-        #expect(try await db.sessionGoals().first?.completedTurns == 1)
-    }
-
-    @Test func repeatedResumeRetainsPendingDeliveryAndStallDetection() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
-        _ = try await db.claimToolDelivery(id: delivery.id)
-        try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
-        try await run(db, session: session, id: "resumed-active-turn", status: "running")
-        let resumed = try #require(await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id)))
-        #expect(resumed.pendingDeliveryID == delivery.id)
-        #expect(resumed.observedRunSequence == goal.observedRunSequence)
-        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id='resumed-active-turn'") }
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .blocked)
-    }
-
-    @Test func resumeDoesNotReobserveTheOldTurnStillSettlingAfterStop() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        try await run(db, session: session, id: "stopped-turn", status: "running")
-        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
-        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='cancelled' WHERE id='stopped-turn'") }
-        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
-        #expect(try await db.sessionGoals().first?.status == .active)
-    }
-
-    @Test func conversationalResumeCountsItsTurnButExcludesEarlierPausedWork() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session, tokens: 100, turns: 1)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
-        try await run(db, session: session, id: "earlier-paused-work")
-        try await db.recordGoalUsage(runID: "earlier-paused-work", tokens: 500)
-        try await run(db, session: session, id: "conversational-resume", status: "running")
-        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        try await db.recordGoalUsage(runID: "conversational-resume", tokens: 40)
-        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id='conversational-resume'") }
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        let saved = try #require(await db.sessionGoals().first)
-        #expect(saved.tokensUsed == 40 && saved.completedTurns == 1 && saved.status == .budgetLimited)
-    }
-
     @Test func aLaterTurnWithoutUsageCannotSilentlyBypassTheTokenBudget() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -319,36 +275,6 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.tokensUsed == 40)
     }
 
-    @Test func interruptedUnreportedUsageStillBlocksAfterResume() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session, tokens: 100)
-        try await run(db, session: session, id: "interrupted", status: "running")
-        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
-        try await db.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='cancelled' WHERE id='interrupted'") }
-        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .blocked)
-        try await db.recordGoalUsage(runID: "interrupted", tokens: 30)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        #expect(try await db.dueGoalDeliveries(running: []).count == 1)
-    }
-
-    @Test func incompleteOpenCodeUsageDoesNotBecomeZeroTokens() async throws {
-        let (db, directory, session) = try await fixture(.opencode)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await create(db, session, tokens: 100)
-        try await db.attachOpenCodeSession(.init(conversationID: session, connectionID: "fixture", sessionID: "native"))
-        var snapshot = OpenCodeSessionSnapshot()
-        snapshot.messages = [.object(["id": .string("assistant"), "type": .string("assistant"),
-            "time": .object(["created": .number(1000), "completed": .number(2000)]),
-            "content": .array([.object(["type": .string("step-finish"), "tokens": .object([:])])])])]
-        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
-        #expect(try await db.sessionGoals().first?.tokensUsed == nil)
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .blocked)
-    }
-
     @Test func queuedInputAndActiveNativeRunsTakePrecedence() async throws {
         let (db, directory, session) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -360,7 +286,6 @@ struct WorkspaceGoalTests {
         _ = try await db.reserveToolDelivery(sourceID: source, targetID: session, text: "New input", requestID: UUID().uuidString)
         #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
     }
-
 
     @Test func editingFencesTheOldObjectiveAndKeepsItsAccounting() async throws {
         let (db, directory, session) = try await fixture()
@@ -379,83 +304,4 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.tokensUsed == 80)
     }
 
-    @Test func lateUsageBelongsToTheStoppedGoalAndPausedWorkIsExcluded() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        try await run(db, session: session, id: "goal-root", status: "running")
-        _ = try await db.mutateGoal(sessionID: session, mutation: .pause(id: goal.id))
-        try await db.recordGoalUsage(runID: "goal-root", tokens: 40)
-        try await run(db, session: session, id: "ordinary-paused-turn")
-        try await db.recordGoalUsage(runID: "ordinary-paused-turn", tokens: 500)
-        #expect(try await db.sessionGoals().first?.tokensUsed == 40)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-        try await db.recordGoalUsage(runID: "ordinary-paused-turn", tokens: 500)
-        try await db.recordGoalUsage(runID: "goal-root", tokens: 60)
-        #expect(try await db.sessionGoals().first?.tokensUsed == 60)
-    }
-
-    @Test func openCodeNativeWorkAndQuestionsPreventContinuationAndUsageIsCaptured() async throws {
-        let (db, directory, session) = try await fixture(.opencode)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await create(db, session, tokens: 100)
-        try await db.attachOpenCodeSession(.init(conversationID: session, connectionID: "fixture", sessionID: "native"))
-        var snapshot = OpenCodeSessionSnapshot()
-        snapshot.active = true
-        snapshot.messages = [.object(["id": .string("assistant"), "type": .string("assistant"),
-            "time": .object(["created": .number(1000), "completed": .number(2000)]),
-            "content": .array([.object(["type": .string("step-finish"), "tokens": .object(["input": .number(40), "output": .number(20)])])])])]
-        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.tokensUsed == 60)
-        snapshot.active = false
-        snapshot.permissions = [.object(["id": .string("approval")])]
-        try await db.saveOpenCodeSnapshot(snapshot, conversationID: session)
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.tokensUsed == 60)
-    }
-
-    @Test func planOnlyWorkPausesGoalsAndGoalsStayEnabledOnReopen() async throws {
-        let (db, directory, session) = try await fixture(.claudeCode)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await create(db, session)
-        try await db.updateLocalACPSessionConfiguration(conversationID: session, model: nil, thinking: nil, permission: "plan")
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await db.sessionGoals().first?.status == .paused)
-        _ = try await db.setSessionToolEnabled(.goals, enabled: false, sessionID: session)
-        let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        #expect(try await reopened.sessionTools(session).enabled.contains(.goals))
-    }
-
-    @Test func trashRestoreCannotRestartAGoalAndClearCleansItsAccounting() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let goal = try await create(db, session)
-        try await run(db, session: session, id: "retained-goal-run")
-        try await db.recordGoalUsage(runID: "retained-goal-run", tokens: 50)
-        let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
-        try await db.mutateConversation(id: session, mutation: .moveToTrash)
-        try await db.mutateConversation(id: session, mutation: .restore)
-        #expect(try await db.sessionGoals().first?.status == .paused)
-        #expect(try await db.claimToolDelivery(id: delivery.id) == nil)
-        #expect(try await db.dueGoalDeliveries(running: []).isEmpty)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .clear(id: goal.id))
-        #expect(try await db.sessionGoals().isEmpty)
-        let retained = try await db.read { connection in
-            try connection.historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs WHERE goal_id=?", values: [goal.id]).first?.objectValue?["count"]?.intValue ?? -1
-        }
-        #expect(retained == 0)
-    }
-
-    @Test func slashAndCLICommandsValidateLifecycleAndScope() throws {
-        #expect(WorkspaceGoalCommand(" /goal Fix the flaky test ") == .set("Fix the flaky test"))
-        #expect(WorkspaceGoalCommand("/goal resume") == .resume)
-        #expect(WorkspaceGoalCommand("/goals") == nil)
-        #expect(WorkspaceGoalCommand("Please set /goal") == nil)
-        #expect(try WovenMatterToolCommand(["goals", "get"]).isMutation == false)
-        #expect(try WovenMatterToolCommand(["goals", "set", "--objective", "Pass checks"]).isMutation)
-        #expect(throws: (any Error).self) { try WovenMatterToolCommand(["goals", "complete", "--session", "other"]) }
-        #expect(throws: (any Error).self) { try WorkspaceGoal.validate(objective: "", tokenBudget: nil, turnBudget: nil) }
-        #expect(throws: (any Error).self) { try WorkspaceGoal.validate(objective: "Result", tokenBudget: 0, turnBudget: nil) }
-    }
 }

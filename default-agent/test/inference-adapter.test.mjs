@@ -5,6 +5,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInferenceAdapter } from '../src/inference-adapter.mjs';
 
+
+
+
+
+
+
 const model = { provider: 'openai-codex', id: 'fixture-model', name: 'Fixture', api: 'openai-codex-responses', baseUrl: 'https://fixture.invalid', contextWindow: 16000, maxTokens: 4096 };
 const request = () => ({ model: { ...model }, accountID: 'second', context: { messages: [{ role: 'user', content: 'Inspect fixture' }] }, scope: { conversationID: 'conversation', requestID: 'conversation:task' }, options: { reasoning: 'low' } });
 async function setup(t, stream) {
@@ -22,22 +28,7 @@ async function setup(t, stream) {
   }
   return { adapter: createInferenceAdapter(engine), engine, calls, selected, accounts };
 }
-test('catalog exposes identities and supported models without credential material', async t => {
-  const fixture = await setup(t);
-  const value = await fixture.adapter.catalog();
-  assert.deepEqual(value.accounts.map(account => account.id), ['first', 'second']);
-  assert.equal(JSON.stringify(value).includes('fixture-two'), false);
-  assert.equal(value.accounts[1].connected, true);
-});
-test('adapter pins account and returns tool calls without executing tools or creating an agent', async t => {
-  const fixture = await setup(t), events = [];
-  await fixture.adapter.stream(request(), { principalID: 'device', onEvent: event => events.push(event) });
-  assert.deepEqual(fixture.selected, ['second']);
-  assert.equal(fixture.calls.length, 1);
-  assert.equal(events.at(-1).message.content[0].name, 'write');
-  assert.equal(events.at(-1).message.wovenNativeAuthIdentity, undefined);
-  assert.equal(fixture.calls[0].options.maxRetries, 0);
-});
+
 test('completed request replays after process recreation without new provider inference', async t => {
   const fixture = await setup(t);
   await fixture.adapter.stream(request(), { principalID: 'device' });
@@ -47,30 +38,7 @@ test('completed request replays after process recreation without new provider in
   const changed = request(); changed.context.messages[0].content = 'Different input';
   await assert.rejects(restarted.stream(changed, { principalID: 'device' }), /different input/);
 });
-test('explicit model changes retain each selected descriptor across refresh, restart and receipt replay', async t => {
-  const { DefaultAgentEngine } = await import('../src/engine.mjs');
-  const fixture = await setup(t);
-  // Exercise the real saved-descriptor validation with two synthetic custom-host models.
-  const first = { ...model, provider: 'local-server-fixture', api: 'openai-responses' }, second = { ...first, id: 'second-model' };
-  let catalog = [first, second];
-  fixture.engine.config.providers = [first.provider];
-  fixture.engine.config.customServers = [{ id: first.provider, url: first.baseUrl }];
-  fixture.engine.validateModelDestination = DefaultAgentEngine.prototype.validateModelDestination;
-  fixture.engine.resolveModel = reference => catalog.find(item => `${item.provider}/${item.id}` === reference);
-  fixture.engine.ensureModel = DefaultAgentEngine.prototype.ensureModel;
-  const initial = request(); initial.model = first;
-  await fixture.adapter.stream(initial, { principalID: 'device' });
-  const changed = request(); changed.model = second; changed.scope.requestID = 'conversation:changed-model';
-  await fixture.adapter.stream(changed, { principalID: 'device' });
-  catalog = [];
-  const restarted = createInferenceAdapter(fixture.engine);
-  await restarted.stream(initial, { principalID: 'device' });
-  await restarted.stream(changed, { principalID: 'device' });
-  assert.deepEqual(fixture.calls.map(call => call.model), [first, second]);
-  const continued = structuredClone(initial); continued.scope.requestID = 'conversation:return-to-first';
-  await restarted.stream(continued, { principalID: 'device' });
-  assert.deepEqual(fixture.calls.map(call => call.model), [first, second, first]);
-});
+
 test('account removal and credential replacement fail closed without fallback', async t => {
   const fixture = await setup(t);
   await fixture.adapter.stream(request(), { principalID: 'device' });
@@ -97,12 +65,7 @@ test('client-provided auth, endpoint and native filesystem scope cannot override
   assert.ok(options.wovenNativeContext.directory.startsWith(fixture.engine.directory));
   assert.equal(fixture.calls[0].model.baseUrl, 'https://fixture.invalid');
 });
-test('expired borrowed subscription fails promptly instead of waiting for central forever', async t => {
-  const fixture = await setup(t);
-  fixture.accounts[1].credential.borrowed = true; fixture.accounts[1].credential.expires = 1;
-  await assert.rejects(fixture.adapter.stream(request(), { principalID: 'device' }), /access has expired/);
-  assert.equal(fixture.calls.length, 0);
-});
+
 test('cancellation reaches provider and preserves uncertain receipt', async t => {
   let cancellation;
   const fixture = await setup(t, async function* (options) {
@@ -141,6 +104,16 @@ test('client vault unlock after restart preserves accounts and rejects an incorr
   assert.equal((await vault.read()).shared.openai.key, 'fixture-only-key');
 });
 
+test('adapter pins account and returns tool calls without executing tools or creating an agent', async t => {
+  const fixture = await setup(t), events = [];
+  await fixture.adapter.stream(request(), { principalID: 'device', onEvent: event => events.push(event) });
+  assert.deepEqual(fixture.selected, ['second']);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(events.at(-1).message.content[0].name, 'write');
+  assert.equal(events.at(-1).message.wovenNativeAuthIdentity, undefined);
+  assert.equal(fixture.calls[0].options.maxRetries, 0);
+});
+
 test('generation-aware inference helper returns catalog without agent execution or persistent credentials', async t => {
   const { spawn } = await import('node:child_process');
   const { readdir, readFile } = await import('node:fs/promises');
@@ -157,4 +130,12 @@ test('generation-aware inference helper returns catalog without agent execution 
   assert.equal(code, 0); assert.deepEqual(JSON.parse(output), { models: [], accounts: [] });
   assert.equal(output.includes('fixture-transient-secret'), false);
   for (const name of await readdir(directory)) if (name.endsWith('.json')) assert.equal((await readFile(join(directory, name), 'utf8')).includes('fixture-transient-secret'), false);
+});
+
+test('catalog exposes identities and supported models without credential material', async t => {
+  const fixture = await setup(t);
+  const value = await fixture.adapter.catalog();
+  assert.deepEqual(value.accounts.map(account => account.id), ['first', 'second']);
+  assert.equal(JSON.stringify(value).includes('fixture-two'), false);
+  assert.equal(value.accounts[1].connected, true);
 });

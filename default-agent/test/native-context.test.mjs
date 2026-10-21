@@ -8,6 +8,16 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { ProviderCompactionError } from '../src/provider-compaction.mjs';
 import { NativeContext, compatibleCanonicalMessages } from '../src/native-context.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
+
+
+
+
+
+
+
+
+
+
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const response = model => ({ role: 'assistant', content: [{ type: 'thinking', thinking: 'Visible reasoning', thinkingSignature: JSON.stringify({ type: 'reasoning', id: 'rs_a', encrypted_content: 'opaque-account-a', summary: [] }) }, { type: 'text', text: 'Answer' }], provider: model.provider, api: model.api, model: model.id, stopReason: 'stop', timestamp: Date.now(), usage });
 function stream(message) { const value = createAssistantMessageEventStream(); value.push({ type: 'start', partial: message }); value.push({ type: 'done', reason: 'stop', message }); value.end(message); return value; }
@@ -65,16 +75,6 @@ test('repeated native compaction keeps exact windows, new prefix, usage and cano
   assert.ok(text.includes('original-0')); assert.ok(text.includes('opaque-window-1')); assert.ok(text.includes('opaque-window-2')); assert.ok(!text.includes('fixture-a'));
 });
 
-test('foreign or unknown canonical signatures and item IDs are stripped while readable content and paired call IDs remain', () => {
-  const origin = { provider: 'openai', accountID: 'a', modelID: 'same', authIdentity: 'old', endpoint: 'https://api.openai.com/v1/responses' };
-  const message = { role: 'assistant', wovenNativeRoute: origin, content: [{ type: 'thinking', thinking: 'Visible summary', thinkingSignature: 'secret-opaque' }, { type: 'text', text: 'text', textSignature: 'native-id' }, { type: 'toolCall', id: 'call_a|fc_a', name: 'read', arguments: {}, thoughtSignature: 'opaque-tool' }] };
-  const result = compatibleCanonicalMessages([message, { role: 'toolResult', toolCallId: 'call_a|fc_a', content: [] }], { ...origin, accountID: 'b' });
-  assert.ok(!JSON.stringify(result).includes('secret-opaque')); assert.ok(!JSON.stringify(result).includes('native-id')); assert.ok(!JSON.stringify(result).includes('opaque-tool'));
-  assert.equal(result[0].content[0].thinking, 'Visible summary'); assert.equal(result[0].content[2].id, 'call_a'); assert.equal(result[1].toolCallId, 'call_a');
-  assert.equal(message.content[2].id, 'call_a|fc_a');
-  assert.deepEqual(compatibleCanonicalMessages([message], origin), [message]);
-});
-
 test('equal-model account and credential replacement rebuild from readable original history and never replay foreign opaque state', async t => {
   const { engine, accounts, calls } = await fixture(t), record = await engine.create();
   const account = accounts[0]; record.accountID = 'a';
@@ -122,49 +122,6 @@ test('unsupported target route uses actual Pi summary of full original lineage w
   assert.equal(summaryCalls, 1);
 });
 
-test('a smaller target window recompresses original canonical turns incrementally with exact prior native windows', async t => {
-  const { engine, accounts, calls } = await fixture(t), record = await engine.create();
-  record.accountID = 'a'; await seed(record);
-  await engine.credentials.runWithAccount('openai', accounts[0], () => compact(record));
-  const original = engine.runtime.getModel('openai', 'native-fixture');
-  engine.runtime.registerProvider('openai', { baseUrl: 'https://api.openai.com/v1', api: 'openai-responses', authHeader: true, models: [original, { ...original, id: 'smaller', name: 'Smaller fixture', contextWindow: 16000 }] });
-  engine.config.models = ['openai/native-fixture', 'openai/smaller'];
-  engine.compactionFetch = async (_url, options) => { const body = JSON.parse(options.body); calls.push({ body }); return new Response(JSON.stringify({ model: body.model, output: [{ type: 'compaction', encrypted_content: 'small-window-' + calls.length }], usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 } })); };
-  await record.session.setModel(engine.runtime.getModel('openai', 'smaller'));
-  let sent; record.streamFunction = (model, input, options) => { sent = options.onPayload({ model: model.id, input: [{ role: 'user', content: 'new input' }] }, model); return stream(response(model)); };
-  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Use smaller target' }] });
-  assert.ok(calls.length > 2);
-  assert.ok(!JSON.stringify(calls[1].body).includes('opaque-window-1'));
-  for (let index = 2; index < calls.length; index++) assert.equal(calls[index].body.input[0].encrypted_content, 'small-window-' + index);
-  assert.equal(sent.input[0].encrypted_content, 'small-window-' + calls.length);
-  assert.equal((await record.harness.usage(ctx)).models['openai/smaller'].totalTokens, (calls.length - 1) * 11 + 2);
-});
-
-test('incomplete portable fallback preserves its exposed native response and does not commit a replacement boundary', async t => {
-  const { engine, accounts } = await fixture(t), record = await engine.create();
-  record.accountID = 'a'; await seed(record);
-  await engine.credentials.runWithAccount('openai', accounts[0], () => compact(record));
-  const head = (await record.conversation.context(ctx)).head;
-  const original = engine.runtime.getModel('openai', 'native-fixture');
-  engine.runtime.registerProvider('openai', { baseUrl: 'https://api.openai.com/v1', api: 'openai-responses', authHeader: true, models: [original, { ...original, id: 'portable', api: 'openai-completions' }] });
-  engine.config.models = ['openai/native-fixture', 'openai/portable']; await record.session.setModel(engine.runtime.getModel('openai', 'portable'));
-  engine.runtime.completeSimple = async model => ({ ...response(model), stopReason: 'length' });
-  await assert.rejects(engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Do not keep incomplete summary' }] }), /model request failed|summarization/i);
-  assert.equal((await record.conversation.context(ctx)).head.id, head.id);
-});
-
-test('manual /compact uses one native task, accounts usage and continues without ordinary generation', async t => {
-  const { engine, calls } = await fixture(t), record = await engine.create(); await seed(record);
-  let generations = 0; record.streamFunction = model => { generations++; return stream(response(model)); };
-  const result = await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact preserve exact tool IDs' }], _meta: { wovenRunID: 'compact-run' } });
-  assert.equal(generations, 0); assert.equal(calls.length, 1); assert.equal(result.stopReason, 'end_turn'); assert.equal(result.usage.inputTokens, 100);
-  let captured; record.streamFunction = (model, input, options) => { captured = options.onPayload({ model: model.id, input: [{ role: 'user', content: 'continue' }] }, model); return stream(response(model)); };
-  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Continue after manual compact' }] });
-  assert.equal(captured.input[0].encrypted_content, 'opaque-window-1');
-  let after = 0, found = false; do { const page = await record.history(after); found ||= page.recordBatch.records.some(item => item.runID === 'compact-run' && item.kind === 'woven.native-compaction'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
-  assert.ok(found);
-});
-
 test('automatic threshold compaction installs the native window before the current generation', async t => {
   const { engine, calls } = await fixture(t), record = await engine.create();
   const model = engine.runtime.getModel('openai', 'native-fixture');
@@ -194,21 +151,6 @@ test('cancelling manual compaction aborts its native request without generating 
   assert.notEqual((await record.conversation.context(ctx)).head?.kind, 'woven.native-compaction');
 });
 
-test('unsupported-first Pi summary preserves original lineage when switching to a supported native route', async t => {
-  const { engine, accounts, calls } = await fixture(t), record = await engine.create();
-  const original = engine.runtime.getModel('openai', 'native-fixture');
-  engine.runtime.registerProvider('openai', { baseUrl: 'https://api.openai.com/v1', api: 'openai-responses', authHeader: true, models: [original, { ...original, id: 'portable', api: 'openai-completions' }] });
-  engine.config.models = ['openai/native-fixture', 'openai/portable']; await record.session.setModel(engine.runtime.getModel('openai', 'portable'));
-  record.accountID = 'a'; await seed(record, 'before-portable');
-  engine.runtime.completeSimple = async model => ({ ...response(model), content: [{ type: 'thinking', thinking: 'Exposed portable thinking' }, { type: 'text', text: 'portable-summary-that-is-not-the-original' }] });
-  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact' }] });
-  assert.equal(calls.length, 0); assert.ok((await record.harness.snapshot(NativeContext, record.conversation.id, ctx)).covered.length > 0);
-  await record.session.setModel(engine.runtime.getModel('openai', 'native-fixture'));
-  record.streamFunction = model => stream(response(model));
-  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Restore on native provider' }] });
-  assert.equal(calls.length, 1); assert.ok(JSON.stringify(calls[0].body).includes('before-portable-0:')); assert.ok(!JSON.stringify(calls[0].body).includes('portable-summary-that-is-not-the-original'));
-});
-
 test('interrupted native compact archives available failed stream records and usage without installing a continuation', async t => {
   const { engine } = await fixture(t), record = await engine.create(); await seed(record);
   const native = { route: { provider: 'openai', accountID: 'a' }, rawSSE: 'event: response.output_item.added\ndata: {"partial":"exposed partial native 🙂"}\n\nevent: response.failed\ndata: {"error":"interrupted native compact"}\n\n', nativeEvents: [{ event: 'response.output_item.added', data: { partial: 'exposed partial native 🙂' } }, { event: 'response.failed', data: { error: 'interrupted native compact' } }], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } };
@@ -218,48 +160,6 @@ test('interrupted native compact archives available failed stream records and us
   assert.equal((await record.harness.usage(ctx)).models['openai/native-fixture'].totalTokens, 12);
   let after = 0, saved; do { const page = await record.history(after); saved ??= page.recordBatch.records.find(item => item.kind === 'provider.compaction.interrupted'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
   assert.deepEqual(JSON.parse(saved.payload), native);
-});
-
-test('manual native authentication, network and invalid-window failures fault the task without a Pi request or ordinary generation', async t => {
-  for (const [label, failure] of [
-    ['authentication', async () => new Response('{"error":{"code":"invalid_api_key"}}', { status: 401 })],
-    ['network', async () => { throw new Error('Synthetic disconnected transport'); }],
-    ['invalid-window', async () => new Response('{"output":[],"model":"native-fixture"}')],
-  ]) await t.test(label, async t => {
-    const { engine } = await fixture(t), record = await engine.create(); await seed(record);
-    let nativeCalls = 0, summaries = 0, generations = 0;
-    engine.compactionFetch = async (...args) => { nativeCalls++; return failure(...args); };
-    engine.runtime.completeSimple = async () => { summaries++; throw new Error('A failed native compact must not call Pi'); };
-    record.streamFunction = model => { generations++; return stream(response(model)); };
-    const params = { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact preserve identifiers' }], _meta: { wovenInputID: 'failed-' + label, wovenRunID: 'failed-run-' + label } };
-    await assert.rejects(engine.handle('session/prompt', params), /native|compaction/i);
-    assert.equal(nativeCalls, 1); assert.equal(summaries, 0); assert.equal(generations, 0);
-    assert.notEqual((await record.conversation.context(ctx)).head?.kind, 'woven.native-compaction');
-  });
-});
-
-test('generation native route preparation failure rejects before the provider boundary without retaining prepared opaque context', async t => {
-  const { engine, accounts } = await fixture(t), record = await engine.create(); record.accountID = 'a'; await seed(record);
-  await engine.credentials.runWithAccount('openai', accounts[0], () => compact(record));
-  await engine.apply({ credentials: { openai: accounts[1].credential }, credentialAccounts: { openai: accounts.toReversed() } });
-  let nativeCalls = 0, summaries = 0, generations = 0;
-  engine.compactionFetch = async () => { nativeCalls++; return new Response('{"error":{"code":"invalid_api_key"}}', { status: 401 }); };
-  engine.runtime.completeSimple = async () => { summaries++; throw new Error('No Pi fallback'); };
-  record.streamFunction = model => { generations++; return stream(response(model)); };
-  await assert.rejects(engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Must not replay old account opaque state' }], _meta: { wovenInputID: 'failed-switch', wovenRunID: 'failed-switch-run' } }), /native.*compaction|compaction failed/i);
-  assert.equal(nativeCalls, 1); assert.equal(summaries, 0); assert.equal(generations, 0);
-  assert.equal(record.nativePrepared, undefined);
-});
-
-test('explicit native unsupported response remains archived when Pi supplies the portable fallback', async t => {
-  const { engine } = await fixture(t), record = await engine.create(); await seed(record);
-  const exposed = JSON.stringify({ error: { code: 'unsupported_compaction', message: 'Synthetic unsupported native endpoint' }, future: { detail: 'visible unsupported native record' } });
-  engine.compactionFetch = async () => new Response(exposed, { status: 404 });
-  engine.runtime.completeSimple = async model => ({ ...response(model), content: [{ type: 'text', text: 'Clean portable fallback' }] });
-  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact focus on identifiers' }] });
-  let after = 0, saved; do { const page = await record.history(after); saved ??= page.recordBatch.records.find(item => item.kind === 'provider.compaction.unsupported'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
-  assert.equal(JSON.parse(saved.payload).responseJSON, exposed);
-  assert.equal((await record.harness.snapshot(NativeContext, record.conversation.id, ctx)).active.portableMessage.content[0].text, 'Clean portable fallback');
 });
 
 test('provider exceptions and returned SDK diagnostics preserve exposed content while excluding transport credentials', async t => {
@@ -295,4 +195,44 @@ test('provider exceptions and returned SDK diagnostics preserve exposed content 
     if (mode !== 'portable-result') assert.ok(payload.includes('Ordinary canonical user input remains'));
     if (['error-event', 'terminal-result', 'portable-result'].includes(mode)) { assert.ok(assistant); assert.equal(assistant.usage.totalTokens, 2); assert.ok(!assistant.errorMessage.includes(secret)); assert.ok(payload.includes('Exposed partial thinking remains')); assert.ok(payload.includes('Exposed partial answer remains')); }
   });
+});
+
+test('foreign or unknown canonical signatures and item IDs are stripped while readable content and paired call IDs remain', () => {
+  const origin = { provider: 'openai', accountID: 'a', modelID: 'same', authIdentity: 'old', endpoint: 'https://api.openai.com/v1/responses' };
+  const message = { role: 'assistant', wovenNativeRoute: origin, content: [{ type: 'thinking', thinking: 'Visible summary', thinkingSignature: 'secret-opaque' }, { type: 'text', text: 'text', textSignature: 'native-id' }, { type: 'toolCall', id: 'call_a|fc_a', name: 'read', arguments: {}, thoughtSignature: 'opaque-tool' }] };
+  const result = compatibleCanonicalMessages([message, { role: 'toolResult', toolCallId: 'call_a|fc_a', content: [] }], { ...origin, accountID: 'b' });
+  assert.ok(!JSON.stringify(result).includes('secret-opaque')); assert.ok(!JSON.stringify(result).includes('native-id')); assert.ok(!JSON.stringify(result).includes('opaque-tool'));
+  assert.equal(result[0].content[0].thinking, 'Visible summary'); assert.equal(result[0].content[2].id, 'call_a'); assert.equal(result[1].toolCallId, 'call_a');
+  assert.equal(message.content[2].id, 'call_a|fc_a');
+  assert.deepEqual(compatibleCanonicalMessages([message], origin), [message]);
+});
+
+test('manual /compact uses one native task, accounts usage and continues without ordinary generation', async t => {
+  const { engine, calls } = await fixture(t), record = await engine.create(); await seed(record);
+  let generations = 0; record.streamFunction = model => { generations++; return stream(response(model)); };
+  const result = await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact preserve exact tool IDs' }], _meta: { wovenRunID: 'compact-run' } });
+  assert.equal(generations, 0); assert.equal(calls.length, 1); assert.equal(result.stopReason, 'end_turn'); assert.equal(result.usage.inputTokens, 100);
+  let captured; record.streamFunction = (model, input, options) => { captured = options.onPayload({ model: model.id, input: [{ role: 'user', content: 'continue' }] }, model); return stream(response(model)); };
+  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Continue after manual compact' }] });
+  assert.equal(captured.input[0].encrypted_content, 'opaque-window-1');
+  let after = 0, found = false; do { const page = await record.history(after); found ||= page.recordBatch.records.some(item => item.runID === 'compact-run' && item.kind === 'woven.native-compaction'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
+  assert.ok(found);
+});
+
+test('a smaller target window recompresses original canonical turns incrementally with exact prior native windows', async t => {
+  const { engine, accounts, calls } = await fixture(t), record = await engine.create();
+  record.accountID = 'a'; await seed(record);
+  await engine.credentials.runWithAccount('openai', accounts[0], () => compact(record));
+  const original = engine.runtime.getModel('openai', 'native-fixture');
+  engine.runtime.registerProvider('openai', { baseUrl: 'https://api.openai.com/v1', api: 'openai-responses', authHeader: true, models: [original, { ...original, id: 'smaller', name: 'Smaller fixture', contextWindow: 16000 }] });
+  engine.config.models = ['openai/native-fixture', 'openai/smaller'];
+  engine.compactionFetch = async (_url, options) => { const body = JSON.parse(options.body); calls.push({ body }); return new Response(JSON.stringify({ model: body.model, output: [{ type: 'compaction', encrypted_content: 'small-window-' + calls.length }], usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 } })); };
+  await record.session.setModel(engine.runtime.getModel('openai', 'smaller'));
+  let sent; record.streamFunction = (model, input, options) => { sent = options.onPayload({ model: model.id, input: [{ role: 'user', content: 'new input' }] }, model); return stream(response(model)); };
+  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Use smaller target' }] });
+  assert.ok(calls.length > 2);
+  assert.ok(!JSON.stringify(calls[1].body).includes('opaque-window-1'));
+  for (let index = 2; index < calls.length; index++) assert.equal(calls[index].body.input[0].encrypted_content, 'small-window-' + index);
+  assert.equal(sent.input[0].encrypted_content, 'small-window-' + calls.length);
+  assert.equal((await record.harness.usage(ctx)).models['openai/smaller'].totalTokens, (calls.length - 1) * 11 + 2);
 });

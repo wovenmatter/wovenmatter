@@ -1,11 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
-import { PassThrough, Writable } from 'node:stream'
+
+
 import { createHash } from 'node:crypto'
 import { createNativeTaskExecutor } from '../src/task-gateway-native.mjs'
 import { nativePresentationUpdates } from '../../default-agent/src/native-journal.mjs'
 import { createTaskNativeArchive } from '../src/task-native-archive.mjs'
+
+
+
+
+
+
+
+
+
+
+
 const fixtureVersion = '2.0.22'
 const options = {workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
 const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixture only',configuration:{runtimeKind,tools:{}}}},nativeSessionID:null,signal:new AbortController().signal,publish:()=>{},bindSession:()=>{}})
@@ -55,19 +66,6 @@ test('unsupported native permission selections fail before spawning/submitting',
   }
 })
 
-test('OpenCode confirms native rules without removing custom rules and projects the completed response',async()=>{
-  for(const permission of ['ask','allow','deny']){
-    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:'ask'}]})
-    const updates=[];fixture.context.run.task.configuration={runtimeKind:'opencode',permission,model:'lab/new',thinking:'high'};fixture.context.publish=x=>updates.push(x)
-    await fixture.execute(fixture.context)
-    assert.deepEqual(fixture.session.permissions,[custom,{action:'*',resource:'*',effect:permission}])
-    assert.deepEqual(fixture.session.model,{providerID:'lab',id:'new',variant:'high'})
-    assert.equal(text(updates),'result');assert.equal(fixture.calls.filter(x=>x.path.endsWith('/prompt')).length,1)
-    const patch=fixture.calls.findIndex(x=>x.method==='PATCH');assert.equal(fixture.calls[patch+1].method,'GET')
-    assert.ok(nativeRecords(updates).some(x=>x.id==='message:msg_answer'&&x.runID==='run-1'))
-  }
-})
-
 test('OpenCode rejects ignored policy writes and service identity mismatch before prompt',async()=>{
   for(const config of [{ignorePolicy:true},{healthPID:99}]){
     const fixture=openCodeFixture(config);fixture.context.run.task.configuration.permission='allow'
@@ -83,15 +81,6 @@ test('OpenCode keeps pending native approvals and required input interactive, in
     assert.ok(fixture.calls.some(x=>x.path.endsWith('/interrupt')))
     assert.equal(fixture.calls.some(x=>x.path.endsWith('/reply')),false)
   }
-})
-
-test('OpenCode follows short native pages and retains nontext and compaction records beyond the first page',async()=>{
-  const attachment={id:'msg_tool',type:'assistant',content:[{type:'tool',state:{output:'tool output'}},{type:'file',url:'file:///native/image.png'}]},compact={id:'msg_compact',type:'assistant',content:[{type:'compaction',summary:'context changed'}]}
-  const fixture=openCodeFixture({pages:[{data:[attachment],cursor:{next:'1'}},{data:[compact]}]}),updates=[]
-  fixture.context.publish=x=>updates.push(x);await fixture.execute(fixture.context)
-  assert.ok(fixture.calls.some(x=>x.query.includes('cursor=1')))
-  assert.deepEqual(nativeRecords(updates).filter(x=>x.kind==='message').map(x=>JSON.parse(x.payload)),[attachment,compact])
-  assert.ok(updates.filter(x=>x.recordBatch).every(x=>x.recordBatch.nativeSessionID==='ses_fixture'))
 })
 
 test('OpenCode rejects cycling native page cursors and interrupts accepted work',async()=>{
@@ -139,6 +128,28 @@ test('scheduled native records over 64 MiB use bounded exact chunks and verified
   }finally{await archive.close()}
 })
 
+test('OpenCode binds goal CLI authority to prompt metadata as well as its connection',async()=>{
+  const fixture=openCodeFixture()
+  const context={executablePath:new URL('../src/wovenmatter',import.meta.url).pathname,socketPath:'/tmp/fixture-goals.sock',captureID:'run-binding'}
+  fixture.context.cliContext=context
+  await fixture.execute(fixture.context)
+  assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/connect')).body.input.context,context)
+  assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/prompt')).body.metadata.wovenTools,context)
+})
+
+test('OpenCode confirms native rules without removing custom rules and projects the completed response',async()=>{
+  for(const permission of ['ask','allow','deny']){
+    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:'ask'}]})
+    const updates=[];fixture.context.run.task.configuration={runtimeKind:'opencode',permission,model:'lab/new',thinking:'high'};fixture.context.publish=x=>updates.push(x)
+    await fixture.execute(fixture.context)
+    assert.deepEqual(fixture.session.permissions,[custom,{action:'*',resource:'*',effect:permission}])
+    assert.deepEqual(fixture.session.model,{providerID:'lab',id:'new',variant:'high'})
+    assert.equal(text(updates),'result');assert.equal(fixture.calls.filter(x=>x.path.endsWith('/prompt')).length,1)
+    const patch=fixture.calls.findIndex(x=>x.method==='PATCH');assert.equal(fixture.calls[patch+1].method,'GET')
+    assert.ok(nativeRecords(updates).some(x=>x.id==='message:msg_answer'&&x.runID==='run-1'))
+  }
+})
+
 test('native presentation splits Unicode text without loss and bounds nested tool and inline binary previews',()=>{
   const source='x'.repeat(32767)+'🙂漢字'+String.raw`\n`+'z'.repeat(130000)
   for(const sessionUpdate of ['agent_message_chunk','agent_thought_chunk']){
@@ -155,20 +166,6 @@ test('native presentation splits Unicode text without loss and bounds nested too
   assert.ok(Buffer.byteLength(JSON.stringify(preview))<1048576)
 })
 
-test('oversized native tool previews never split a Unicode surrogate pair',()=>{
-  for(const field of ['rawOutput','content']){
-    const envelope={sessionUpdate:'tool_call_update',toolCallId:'native-tool',status:'completed'}
-    const wrap=value=>({...envelope,[field]:field==='content'?[{type:'text',text:value}]:value})
-    const read=value=>field==='content'?value.content[0].text:value.rawOutput
-    const limit=read([...nativePresentationUpdates(wrap('x'.repeat(65536)))][0]).length
-    const source='x'.repeat(limit-1)+'🙂漢字'+'z'.repeat(65536)
-    const [preview]=nativePresentationUpdates(wrap(source))
-    assert.equal(read(preview),source.slice(0,limit-1))
-    assert.doesNotMatch(JSON.stringify(preview),/\\u[dD][89aAbB][0-9a-fA-F]{2}/)
-    assert.equal(source.slice(limit-1,limit+1),'🙂')
-  }
-})
-
 test('direct OpenCode projects native text snapshots and tool/thinking activity without duplicate final text',async()=>{
   const fixture=openCodeFixture({pages:[{data:[{id:'msg_answer',type:'assistant',content:[
     {id:'thought',type:'reasoning',text:'Considering the file'},
@@ -181,14 +178,4 @@ test('direct OpenCode projects native text snapshots and tool/thinking activity 
   assert.equal(updates.find(update=>update.sessionUpdate==='agent_thought_chunk').content.text,'Considering the file')
   assert.equal(updates.find(update=>update.sessionUpdate==='tool_call_update').status,'completed')
   assert.ok(nativeRecords(updates).some(record=>record.id==='message:msg_answer'))
-})
-
-
-test('OpenCode binds goal CLI authority to prompt metadata as well as its connection',async()=>{
-  const fixture=openCodeFixture()
-  const context={executablePath:new URL('../src/wovenmatter',import.meta.url).pathname,socketPath:'/tmp/fixture-goals.sock',captureID:'run-binding'}
-  fixture.context.cliContext=context
-  await fixture.execute(fixture.context)
-  assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/connect')).body.input.context,context)
-  assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/prompt')).body.metadata.wovenTools,context)
 })

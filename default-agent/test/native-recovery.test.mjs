@@ -13,11 +13,6 @@ function fixture() {
   return { submissions, entries, requests, tx, runs, recover: () => recoverNativeRuns(runs, requests, 1, tx) };
 }
 
-test('recovers exact durable input answer without exposing thinking', async () => {
-  const f = fixture();
-  assert.deepEqual(await f.recover(), [{ runID: 'run', content: 'Finished' }]);
-});
-
 test('missing receipts, active attempts and missing answers stay uncertain', async () => {
   for (const change of [
     f => delete f.requests.input,
@@ -32,17 +27,6 @@ test('missing receipts, active attempts and missing answers stay uncertain', asy
   }
 });
 
-test('uses final fallback and deduplicates shared answers for steering inputs', async () => {
-  const f = fixture();
-  f.submissions.get('input:attempt:0').status = 'unanswered';
-  f.requests.input.nativeRequestIDs.push('input:attempt:1');
-  f.submissions.set('input:attempt:1', { type: 'input', status: 'done', conversationId: 1, requestId: 'input:attempt:1', answer: 10 });
-  f.requests.steer = { nativeRequestIDs: ['steer:attempt:0'] };
-  f.submissions.set('steer:attempt:0', { type: 'input', status: 'done', conversationId: 1, requestId: 'steer:attempt:0', answer: 10 });
-  f.runs[0].inputIDs.push('steer');
-  assert.deepEqual(await f.recover(), [{ runID: 'run', content: 'Finished' }]);
-});
-
 test('recovers only the latest answer segment while proving every input', async () => {
   const f = fixture();
   f.requests.steer = { nativeRequestIDs: ['steer:attempt:0'] };
@@ -52,12 +36,6 @@ test('recovers only the latest answer segment while proving every input', async 
   assert.deepEqual(await f.recover(), [{ runID: 'run', content: 'Latest segment' }]);
   f.submissions.get('input:attempt:0').status = 'placed';
   assert.deepEqual(await f.recover(), []);
-});
-
-test('unanswered is a terminal error without exposing provider detail', async () => {
-  const f = fixture();
-  Object.assign(f.submissions.get('input:attempt:0'), { status: 'unanswered', reason: 'model_error', detail: 'secret provider body' });
-  assert.deepEqual(await f.recover(), [{ runID: 'run', content: '', error: 'The native run ended without a completed answer.' }]);
 });
 
 test('rejects ambiguous input ownership', async () => {

@@ -24,40 +24,6 @@ function fixture(t) {
   return {directory,runs,calls,runtime,enrollment,grant,principal,command,get service(){return service},async restart(){await service.close();service=create()},create}
 }
 
-test('client provider selection determines the exact native runtime and rejects invalid routes',async t=>{
-  const f=fixture(t),created=[]
-  f.runtime.providers=async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true},
-    {id:'codex',runtimeKind:'codex',available:true,canStart:true},{id:'disabled',runtimeKind:'pi',available:false,canStart:false}]
-  f.runtime.create=async request=>{created.push(request);return {sessionID:randomUUID()}}
-  // This is the providerID-only shape emitted by both the iOS and Mac clients.
-  const opened=await f.service.command(f.command('createSession',{providerID:'codex'}),f.principal)
-  assert.equal(opened.status,'completed')
-  assert.equal(created[0].runtimeKind,'codex')
-  assert.equal(f.service.conversations()[0].runtimeKind,'codex')
-  for(const route of [{providerID:'unknown'},{providerID:'disabled'},{providerID:'codex',runtimeKind:'default_agent'}]) {
-    const rejected=await f.service.command(f.command('createSession',route),f.principal)
-    assert.equal(rejected.status,'rejected')
-  }
-  assert.equal(created.length,1)
-});
-
-test('transcript pagination retains all tool activity even when there are few messages',async t=>{
-  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
-  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
-  for(let index=0;index<95;index++)f.runs[0].publish({sessionUpdate:'tool_call',toolCallId:String(index),title:'Tool '+index,status:'completed',content:[{text:'Result '+index}]})
-  f.runs[0].done.resolve();await turn()
-  let before,messages=[],activities=[]
-  do {
-    const page=f.service.transcript(opened.conversationID,before)
-    assert.ok(page.messages.length<=40 && page.activities.length<=40)
-    messages=[...page.messages,...messages];activities=[...page.activities,...activities];before=page.olderCursor
-  } while(before)
-  assert.equal(messages.length,2)
-  assert.deepEqual(activities.map(item=>item.detail),Array.from({length:95},(_,i)=>'Result '+i))
-  assert.equal(new Set(activities.map(item=>item.id)).size,95)
-  assert.throws(()=>f.service.transcript(opened.conversationID,'invalid'),{statusCode:400})
-});
-
 test('per-device bearer grants never expose administration or another device receipts',async t=>{
   const f=fixture(t)
   assert.equal(f.service.principal('Bearer '+f.grant.token,'inference'),null)
@@ -103,21 +69,6 @@ test('stale stop, old response and reused run identity cannot affect a newer run
   assert.equal((await f.service.command(f.command('send',{conversationID:opened.conversationID,runID:first.runID,text:'reuse'}),f.principal)).status,'rejected')
 })
 
-test('interaction response never overwrites streaming or completion while awaiting native acknowledgement',async t=>{
-  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
-  const sent=await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal)
-  await turn()
-  f.runs[0].interaction({id:'permission-1',kind:'approval',title:'Allow tool?',options:[{id:'once',label:'Allow'}],questions:[]})
-  const ack=deferred();f.runtime.respond=async()=>{await ack.promise}
-  const responding=f.service.command(f.command('respond',{conversationID:opened.conversationID,runID:sent.runID,interactionID:'permission-1',response:{optionID:'once',answers:{},cancelled:false}}),f.principal)
-  await turn();f.runs[0].publish({sessionUpdate:'agent_message_chunk',content:{text:'finished'}});f.runs[0].done.resolve();await turn()
-  ack.resolve();await responding
-  const transcript=f.service.transcript(opened.conversationID)
-  assert.equal(transcript.activeRunID,undefined)
-  assert.equal(transcript.messages.at(-1).content,'finished')
-  assert.equal(transcript.messages.at(-1).status,'completed')
-})
-
 test('large native output retains complete history in bounded transport entries',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
   await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
@@ -134,12 +85,6 @@ test('large native output retains complete history in bounded transport entries'
   let before, messages=[]
   do {const page=f.service.transcript(opened.conversationID,before);messages=[...page.messages,...messages];before=page.olderCursor}while(before)
   assert.equal(messages.filter(message=>message.role==='assistant').map(message=>message.content).join(''),content)
-})
-
-test('workspace enrollment refuses a different library and noncanonical identities',async t=>{
-  const f=fixture(t)
-  assert.throws(()=>f.service.provision({...f.enrollment,libraryID:randomUUID()}),{statusCode:409})
-  await assert.rejects(f.service.command(f.command('createSession',{commandID:'not-a-uuid'}),f.principal),{statusCode:400})
 })
 
 test('restart fences accepted unfinished commands without executing them again',async t=>{
@@ -198,6 +143,55 @@ test('native adoption has one conversation owner and retries preserve an active 
   assert.equal(f.service.transcript(id).messages.at(-1).status,'running')
 })
 
+test('interaction response never overwrites streaming or completion while awaiting native acknowledgement',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  const sent=await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal)
+  await turn()
+  f.runs[0].interaction({id:'permission-1',kind:'approval',title:'Allow tool?',options:[{id:'once',label:'Allow'}],questions:[]})
+  const ack=deferred();f.runtime.respond=async()=>{await ack.promise}
+  const responding=f.service.command(f.command('respond',{conversationID:opened.conversationID,runID:sent.runID,interactionID:'permission-1',response:{optionID:'once',answers:{},cancelled:false}}),f.principal)
+  await turn();f.runs[0].publish({sessionUpdate:'agent_message_chunk',content:{text:'finished'}});f.runs[0].done.resolve();await turn()
+  ack.resolve();await responding
+  const transcript=f.service.transcript(opened.conversationID)
+  assert.equal(transcript.activeRunID,undefined)
+  assert.equal(transcript.messages.at(-1).content,'finished')
+  assert.equal(transcript.messages.at(-1).status,'completed')
+})
+
+test('client provider selection determines the exact native runtime and rejects invalid routes',async t=>{
+  const f=fixture(t),created=[]
+  f.runtime.providers=async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true},
+    {id:'codex',runtimeKind:'codex',available:true,canStart:true},{id:'disabled',runtimeKind:'pi',available:false,canStart:false}]
+  f.runtime.create=async request=>{created.push(request);return {sessionID:randomUUID()}}
+  // This is the providerID-only shape emitted by both the iOS and Mac clients.
+  const opened=await f.service.command(f.command('createSession',{providerID:'codex'}),f.principal)
+  assert.equal(opened.status,'completed')
+  assert.equal(created[0].runtimeKind,'codex')
+  assert.equal(f.service.conversations()[0].runtimeKind,'codex')
+  for(const route of [{providerID:'unknown'},{providerID:'disabled'},{providerID:'codex',runtimeKind:'default_agent'}]) {
+    const rejected=await f.service.command(f.command('createSession',route),f.principal)
+    assert.equal(rejected.status,'rejected')
+  }
+  assert.equal(created.length,1)
+});
+
+test('transcript pagination retains all tool activity even when there are few messages',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
+  for(let index=0;index<95;index++)f.runs[0].publish({sessionUpdate:'tool_call',toolCallId:String(index),title:'Tool '+index,status:'completed',content:[{text:'Result '+index}]})
+  f.runs[0].done.resolve();await turn()
+  let before,messages=[],activities=[]
+  do {
+    const page=f.service.transcript(opened.conversationID,before)
+    assert.ok(page.messages.length<=40 && page.activities.length<=40)
+    messages=[...page.messages,...messages];activities=[...page.activities,...activities];before=page.olderCursor
+  } while(before)
+  assert.equal(messages.length,2)
+  assert.deepEqual(activities.map(item=>item.detail),Array.from({length:95},(_,i)=>'Result '+i))
+  assert.equal(new Set(activities.map(item=>item.id)).size,95)
+  assert.throws(()=>f.service.transcript(opened.conversationID,'invalid'),{statusCode:400})
+});
+
 test('identical native chunks keep distinct journal record identities within and across runs',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
   for(let index=0;index<2;index++) {
@@ -224,4 +218,44 @@ test('tool and thinking activities remain scoped to each run and settle with it'
   assert.equal(new Set(activities.map(item=>item.id)).size,4)
   assert.ok(activities.every(item=>item.status==='completed'))
   assert.deepEqual(activities.filter(item=>item.title==='Thinking').map(item=>item.detail),['Thinking 0','Thinking 1'])
+})
+
+test('workspace edits and live buffered output become durable before a turn finishes and survive restart', { timeout: 5000 }, async t => {
+  const f = fixture(t)
+  const opened = await f.service.command(f.command('createSession'), f.principal)
+  const conversationID = opened.conversationID, folderID = randomUUID()
+  for (const action of [{ action: 'move', folderID }, { action: 'pin' }]) {
+    const input = f.command('workspace', { conversationID, workspaceAction: { conversation: { id: conversationID, ...action } } })
+    assert.equal((await f.service.command(input, f.principal)).status, 'completed')
+    assert.equal((await f.service.command(input, f.principal)).status, 'completed')
+  }
+  const input = f.command('send', { conversationID, text: 'keep this exact input' })
+  await f.service.command(input, f.principal); await turn()
+  const cursor = f.service.events().cursor
+  f.runs[0].publish({ sessionUpdate: 'agent_message_chunk', content: { text: 'buffered 🌱 output' } })
+  const deadline = Date.now() + 3000
+  let journal
+  do {
+    journal = f.service.events(cursor)
+    if (journal.entries.some(entry => entry.transcript?.messages.some(message => message.content === 'buffered 🌱 output'))) break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  } while (Date.now() < deadline)
+  assert.ok(journal.entries.some(entry => entry.transcript?.messages.some(message => message.content === 'buffered 🌱 output')), 'live output must publish while the native turn is still running')
+  assert.equal(f.service.transcript(conversationID).activeRunID, f.runs[0].command.runID)
+  const busyRename = f.command('workspace', { conversationID, workspaceAction: { conversation: { id: conversationID, action: 'rename', title: 'Café 🌱' } } })
+  assert.equal((await f.service.command(busyRename, f.principal)).status, 'rejected')
+  assert.equal(f.service.conversations().find(value => value.id === conversationID).title, input.text)
+  f.runs[0].done.resolve(); await turn()
+  assert.equal((await f.service.command(busyRename, f.principal)).status, 'rejected', 'a failed request receipt cannot silently acquire authority after the turn ends')
+  const rename = { ...busyRename, commandID: randomUUID() }
+  assert.equal((await f.service.command(rename, f.principal)).status, 'completed')
+  assert.equal((await f.service.command(rename, f.principal)).status, 'completed')
+  await f.restart()
+  const conversation = f.service.conversations().find(value => value.id === conversationID)
+  assert.equal(conversation.title, 'Café 🌱')
+  assert.equal(conversation.folderID, folderID)
+  assert.equal(conversation.isPinned, true)
+  assert.deepEqual(f.service.transcript(conversationID).messages.map(message => message.content), [input.text, 'buffered 🌱 output'])
+  assert.equal((await f.service.command(input, f.principal)).status, 'completed')
+  assert.equal(f.calls.length, 1)
 })

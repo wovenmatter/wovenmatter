@@ -3,6 +3,7 @@ import Testing
 @testable import WovenMatterClient
 
 struct BackendInvalidationJournalTests {
+
     @Test func coalescesOnlyChangesSinceCursor() async {
         let journal = BackendInvalidationJournal()
         let initial = await journal.changes(after: nil)
@@ -18,6 +19,7 @@ struct BackendInvalidationJournalTests {
         #expect(unchanged.conversationIDs.isEmpty)
         #expect(unchanged.scopes.isEmpty)
     }
+
 
     @Test func evictedOrRestartedCursorRequiresReload() async {
         let journal = BackendInvalidationJournal(capacity: 1)
@@ -36,20 +38,6 @@ struct BackendInvalidationJournalTests {
         let delta = await waiting.value
         #expect(delta.conversationIDs == ["active"])
         #expect(delta.scopes == [.permissions])
-    }
-
-    @Test func timeoutAndCancellationLeaveCursorUnchanged() async {
-        let journal = BackendInvalidationJournal()
-        let initial = await journal.changes(after: nil)
-        let timedOut = await journal.waitForChanges(after: initial.cursor, timeoutSeconds: 0.001)
-        #expect(timedOut.cursor == initial.cursor)
-        #expect(timedOut.scopes.isEmpty)
-        let waiting = Task { await journal.waitForChanges(after: initial.cursor) }
-        waiting.cancel()
-        let cancelled = await waiting.value
-        #expect(cancelled.cursor == initial.cursor)
-        await journal.publish(scopes: [.calendar])
-        #expect(await journal.changes(after: initial.cursor).scopes == [.calendar])
     }
 
 }

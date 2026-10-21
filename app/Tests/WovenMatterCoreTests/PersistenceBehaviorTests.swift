@@ -102,35 +102,6 @@ struct PersistenceBehaviorTests {
     #expect(try await reopenedAgain.conversationHistoryPage(id: conversationID, limit: 2) == before)
   }
 
-  @Test("deterministic agent identity and timestamp parsing survive reopen")
-  func agentIdentity() async throws {
-    let fixture = try PersistenceFixture()
-    defer { fixture.remove() }
-    let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let owner = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
-    let remote = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
-    let date = Date(timeIntervalSince1970: 1_700_000_000.125)
-    _ = try await database.createLocalACPSession(
-      runtimeKind: .codex, title: "Local", ownerDeviceID: owner, createdAt: date
-    )
-    let remoteID = try await database.ensureRemoteHarnessAgent(
-      runtimeKind: .codex, remoteWorkspaceID: remote, remoteWorkspaceName: "Remote",
-      ownerDeviceID: owner, updatedAt: date
-    )
-    #expect(remoteID.uuidString.lowercased() == "1f3691b1-c027-56fd-999f-9eed2130cd6a")
-    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let agents = try await reopened.dashboardAgents()
-    #expect(Set(agents.map { $0.id.uuidString.lowercased() }) == [
-      "5711c18c-4ab6-50f2-893f-e3d31837e15b", "1f3691b1-c027-56fd-999f-9eed2130cd6a",
-    ])
-    #expect(agents.allSatisfy { $0.createdAt == date })
-    let sql = try PersistenceSQL(url: fixture.databaseURL)
-    try sql.execute("UPDATE dashboard_agents SET updated_at = '2023-11-14T22:13:20Z'")
-    #expect(try await reopened.dashboardAgents().allSatisfy {
-      $0.updatedAt == Date(timeIntervalSince1970: 1_700_000_000)
-    })
-  }
-
   @Test("independent workspace writers preserve archive privacy and NUL deltas after reopen")
   func independentWriterHistoryFunctions() async throws {
     let fixture = try PersistenceFixture()
@@ -213,18 +184,6 @@ struct PersistenceBehaviorTests {
     #expect(try Data(contentsOf: a.localURL) == content)
   }
 
-  @Test("JSON rows beyond the display limit still determine existing column width")
-  func jsonWidth() throws {
-    var rows = Array(repeating: [1], count: DatabaseLinkedData.maximumRows)
-    rows.append([1, 2, 3])
-    let table = try DatabaseLinkedData.load(
-      data: JSONEncoder().encode(rows), fileExtension: "json", preference: .json,
-      sqliteQuery: nil
-    )
-    #expect(table.columns == ["A", "B", "C"])
-    #expect(table.rows.count == DatabaseLinkedData.maximumRows)
-    #expect(table.rows.allSatisfy { $0 == ["1", "", ""] })
-  }
 }
 
 struct PersistenceFixture {

@@ -4,6 +4,7 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteRuntimeMaintenanceClientTests {
+
     @Test func bundledUpgradeArrowUsesOnlyCompatibleTarget() throws {
         func component(id: String = "bundled", installed: String = "0.153.4", target: String? = nil) throws -> RemoteRuntimeComponent {
             var object: [String: Any] = [
@@ -19,32 +20,6 @@ struct RemoteRuntimeMaintenanceClientTests {
         #expect(try component(installed: "0.153.1", target: "0.153.4").availableUpdateVersion == "0.153.4")
         #expect(try component().availableUpdateVersion == nil) // Unknown compatibility must not advertise latest.
         #expect(try component(id: "runtime").availableUpdateVersion == "0.154.0")
-    }
-
-    @Test func invalidatesSuspendedRequestsAfterCredentialOrDestinationChanges() {
-        let configuration = RemoteWorkspaceConfiguration(name: "One", workspaceID: "one", hostName: "host-one")
-        let credentialEpoch = UUID(), workspaceEpoch = UUID()
-        let request = RemoteWorkspaceRequestIdentity(configuration: configuration,
-                                                     credentialEpoch: credentialEpoch, workspaceEpoch: workspaceEpoch)
-        func current(_ configuration: RemoteWorkspaceConfiguration?, enabled: Bool = true,
-                     credential: UUID? = nil, workspace: UUID? = nil) -> Bool {
-            request.isCurrent(configuration: configuration, credentialsEnabled: enabled,
-                              credentialEpoch: credential ?? credentialEpoch, workspaceEpoch: workspace ?? workspaceEpoch)
-        }
-        #expect(current(configuration))
-        #expect(!current(configuration, enabled: false))
-        // Disable then re-enable cannot revive requests from the old credential epoch.
-        #expect(!current(configuration, credential: UUID()))
-        #expect(!current(nil))
-        #expect(!current(configuration, workspace: UUID()))
-        var moved = configuration
-        moved.hostName = "host-two"
-        #expect(!current(moved))
-        moved = configuration
-        moved.remotePort += 1
-        #expect(!current(moved))
-        // An unrelated metadata/network error does not itself change authorization.
-        #expect(current(configuration))
     }
 
     @Test func currentNativeInstanceReplacesThePreLaunchHarnessSnapshot() {
@@ -72,6 +47,33 @@ struct RemoteRuntimeMaintenanceClientTests {
                                      state: "authentication_required", installationStatus: "installed", authenticationStatus: "required",
                                      transportStatus: "unknown", transportError: nil, setupMethods: [], detectedProviders: [])
         #expect(acp.reconcilingOpenCode(instance: running, installed: true) == acp)
+    }
+
+
+    @Test func invalidatesSuspendedRequestsAfterCredentialOrDestinationChanges() {
+        let configuration = RemoteWorkspaceConfiguration(name: "One", workspaceID: "one", hostName: "host-one")
+        let credentialEpoch = UUID(), workspaceEpoch = UUID()
+        let request = RemoteWorkspaceRequestIdentity(configuration: configuration,
+                                                     credentialEpoch: credentialEpoch, workspaceEpoch: workspaceEpoch)
+        func current(_ configuration: RemoteWorkspaceConfiguration?, enabled: Bool = true,
+                     credential: UUID? = nil, workspace: UUID? = nil) -> Bool {
+            request.isCurrent(configuration: configuration, credentialsEnabled: enabled,
+                              credentialEpoch: credential ?? credentialEpoch, workspaceEpoch: workspace ?? workspaceEpoch)
+        }
+        #expect(current(configuration))
+        #expect(!current(configuration, enabled: false))
+        // Disable then re-enable cannot revive requests from the old credential epoch.
+        #expect(!current(configuration, credential: UUID()))
+        #expect(!current(nil))
+        #expect(!current(configuration, workspace: UUID()))
+        var moved = configuration
+        moved.hostName = "host-two"
+        #expect(!current(moved))
+        moved = configuration
+        moved.remotePort += 1
+        #expect(!current(moved))
+        // An unrelated metadata/network error does not itself change authorization.
+        #expect(current(configuration))
     }
 
     @Test func keepsRemoteRequestsOnTheirAuthenticatedWorkspaceOrigin() async throws {

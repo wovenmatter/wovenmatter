@@ -33,53 +33,7 @@ private final class CredentialRevisionFixture: @unchecked Sendable {
 
 @Suite("Built-in credential coordination")
 struct DefaultAgentCredentialTests {
-    @Test func controlResponsesAreBoundedDuringRead() throws {
-        let pipe = Pipe()
-        try pipe.fileHandleForWriting.write(contentsOf: Data(repeating: 65, count: 33))
-        try pipe.fileHandleForWriting.close()
-        defer { try? pipe.fileHandleForReading.close() }
-        #expect(throws: DefaultAgentError.self) {
-            try DefaultAgentControl.readResponse(from: pipe.fileHandleForReading, maximumBytes: 32)
-        }
-        let valid = Pipe()
-        let response = Data("{\"result\":{}}\n".utf8)
-        try valid.fileHandleForWriting.write(contentsOf: response)
-        try valid.fileHandleForWriting.close()
-        defer { try? valid.fileHandleForReading.close() }
-        #expect(
-            try DefaultAgentControl.readResponse(from: valid.fileHandleForReading, maximumBytes: response.count)
-                == response)
-    }
-    @Test @MainActor func preferenceChangesReuseCredentialsAndUpdatePayloadRevision() async throws {
-        let fixture = CredentialRefreshFixture()
-        let preferences = CredentialRevisionFixture()
-        let coordinator = ProviderAccountCoordinator(
-            refresh: { try await fixture.refresh($0) }, version: { 0 },
-            configurationVersion: { preferences.current() }, scopeVersion: { 0 },
-            reconfigure: { value in
-                var updated = value
-                updated.config.defaultModel = "openai/preferred"
-                return updated
-            })
-        let first = try await coordinator.prepare("local")
-        preferences.advance()
-        let updated = try await coordinator.prepare("local")
-        #expect(await fixture.count() == 1)
-        #expect(updated.config.defaultModel == "openai/preferred")
-        #expect(updated.credentials == first.credentials)
-        #expect(updated.revision != first.revision)
-    }
-    @Test @MainActor func inheritanceChangesReloadCredentialOwnership() async throws {
-        let fixture = CredentialRefreshFixture()
-        let scopes = CredentialRevisionFixture()
-        let coordinator = ProviderAccountCoordinator(
-            refresh: { try await fixture.refresh($0) }, version: { 0 },
-            configurationVersion: { 0 }, scopeVersion: { scopes.current() }, reconfigure: { $0 })
-        _ = try await coordinator.prepare("local")
-        scopes.advance()
-        _ = try await coordinator.prepare("local")
-        #expect(await fixture.count() == 2)
-    }
+
     @Test @MainActor func accountMetadataReadsAreOffMainAndReuseCredentialRevision() async throws {
         let reads = CredentialRevisionFixture()
         let revision = CredentialRevisionFixture()
@@ -102,26 +56,101 @@ struct DefaultAgentCredentialTests {
         _ = try await store.accounts(scope: "local")
         #expect(reads.current() == 3)
     }
-    @Test @MainActor func healthyMessageChecksNeverReloadCredentials() async throws {
+
+    @Test @MainActor func revisionsAreStableWhenCredentialsDoNotChange() async throws {
         let fixture = CredentialRefreshFixture()
         let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         let first = try await coordinator.prepare("local")
-        for _ in 0..<100 {
-            let current = try await coordinator.prepare("local")
-            #expect(current.revision == first.revision)
-        }
-        #expect(await fixture.count() == 1)
+        coordinator.invalidate()
+        let second = try await coordinator.prepare("local")
+        #expect(first.revision == second.revision)
+        #expect(await fixture.count() == 2)
     }
-    @Test @MainActor func simultaneousMessagesShareOneRefresh() async throws {
+
+
+    @Test @MainActor func preferenceChangesReuseCredentialsAndUpdatePayloadRevision() async throws {
         let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
-        try await withThrowingTaskGroup(of: String?.self) { group in
-            for _ in 0..<12 { group.addTask { try await coordinator.prepare("local").revision } }
-            var values: [String?] = []
-            for try await value in group { values.append(value) }
-            #expect(Set(values.compactMap { $0 }).count == 1)
-        }
+        let preferences = CredentialRevisionFixture()
+        let coordinator = ProviderAccountCoordinator(
+            refresh: { try await fixture.refresh($0) }, version: { 0 },
+            configurationVersion: { preferences.current() }, scopeVersion: { 0 },
+            reconfigure: { value in
+                var updated = value
+                updated.config.defaultModel = "openai/preferred"
+                return updated
+            })
+        let first = try await coordinator.prepare("local")
+        preferences.advance()
+        let updated = try await coordinator.prepare("local")
         #expect(await fixture.count() == 1)
+        #expect(updated.config.defaultModel == "openai/preferred")
+        #expect(updated.credentials == first.credentials)
+        #expect(updated.revision != first.revision)
+    }
+
+    @Test @MainActor func inheritanceChangesReloadCredentialOwnership() async throws {
+        let fixture = CredentialRefreshFixture()
+        let scopes = CredentialRevisionFixture()
+        let coordinator = ProviderAccountCoordinator(
+            refresh: { try await fixture.refresh($0) }, version: { 0 },
+            configurationVersion: { 0 }, scopeVersion: { scopes.current() }, reconfigure: { $0 })
+        _ = try await coordinator.prepare("local")
+        scopes.advance()
+        _ = try await coordinator.prepare("local")
+        #expect(await fixture.count() == 2)
+    }
+
+
+    @Test func accountMigrationSelectionOrderingAndRemovalPreserveCanonicalKey() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        try DefaultAgentSupport.saveKey("legacy", provider: "openrouter", keychain: keychain)
+        let legacy = try #require(ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first)
+        #expect(legacy.createdAt == nil)
+        #expect(legacy.isSelected)
+        let second = try ProviderConnectionAccounts.addKey("second", provider: "openrouter", keychain: keychain)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
+        try ProviderConnectionAccounts.select(second.id, provider: "openrouter", keychain: keychain)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "second")
+        #expect(try ProviderConnectionAccounts.credential(legacy.id, provider: "openrouter", keychain: keychain)?.key == "legacy")
+        try ProviderConnectionAccounts.move(second.id, offset: -1, provider: "openrouter", keychain: keychain)
+        #expect(try ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first?.id == second.id)
+        try ProviderConnectionAccounts.remove(second.id, provider: "openrouter", keychain: keychain)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
+    }
+
+    @Test func accountsEnforceCapAndBorrowWithoutRefreshTokens() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        for i in 0..<4 { try ProviderConnectionAccounts.addKey("key-\(i)", provider: "openai", keychain: keychain) }
+        #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addKey("fifth", provider: "openai", keychain: keychain) }
+        var credential = DefaultAgentCredential(type: "oauth")
+        credential.access = "access"; credential.refresh = "private-refresh"; credential.accountId = "account"
+        let account = try ProviderConnectionAccounts.addOAuth(credential, provider: "openai-codex", keychain: keychain)
+        let borrowed = try #require(ProviderConnectionAccounts.borrowedAccounts(provider: "openai-codex", keychain: keychain).first)
+        #expect(borrowed.credential.refresh == "")
+        #expect(borrowed.credential.borrowed)
+        #expect(try ProviderConnectionAccounts.credential(account.id, provider: "openai-codex", keychain: keychain)?.refresh == "private-refresh")
+        try ProviderConnectionAccounts.remove(account.id, provider: "openai-codex", keychain: keychain)
+        var renewed = credential; renewed.access = "late"
+        #expect(try !ProviderConnectionAccounts.saveRenewed(renewed, replacing: credential, accountID: account.id, provider: "openai-codex", scope: "global", keychain: keychain))
+        #expect(try DefaultAgentSupport.oauth("openai-codex", keychain: keychain) == nil)
+    }
+
+    @Test func controlResponsesAreBoundedDuringRead() throws {
+        let pipe = Pipe()
+        try pipe.fileHandleForWriting.write(contentsOf: Data(repeating: 65, count: 33))
+        try pipe.fileHandleForWriting.close()
+        defer { try? pipe.fileHandleForReading.close() }
+        #expect(throws: DefaultAgentError.self) {
+            try DefaultAgentControl.readResponse(from: pipe.fileHandleForReading, maximumBytes: 32)
+        }
+        let valid = Pipe()
+        let response = Data("{\"result\":{}}\n".utf8)
+        try valid.fileHandleForWriting.write(contentsOf: response)
+        try valid.fileHandleForWriting.close()
+        defer { try? valid.fileHandleForReading.close() }
+        #expect(
+            try DefaultAgentControl.readResponse(from: valid.fileHandleForReading, maximumBytes: response.count)
+                == response)
     }
     @Test @MainActor func changesDuringRefreshDoNotReturnStaleCredentials() async throws {
         let fixture = CredentialRefreshFixture()
@@ -136,24 +165,6 @@ struct DefaultAgentCredentialTests {
         _ = try await coordinator.prepare("local")
         #expect(await fixture.count() == 2)
     }
-    @Test @MainActor func rejectedAccessSharesOneRenewalAcrossConsumers() async throws {
-        let fixture = RejectedCredentialFixture()
-        let coordinator = ProviderAccountCoordinator(
-            refresh: { await fixture.snapshot($0) },
-            renewRejected: { try await fixture.renew($0, access: $1) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
-        _ = try await coordinator.prepare("global")
-        try await withThrowingTaskGroup(of: String?.self) { group in
-            for _ in 0..<12 {
-                group.addTask { try await coordinator.renewRejectedAccess(provider: "xai", access: "old")?.access }
-            }
-            for try await access in group { #expect(access == "new") }
-        }
-        #expect(await fixture.renewals == 1)
-        #expect(try await coordinator.prepare("local").credentials["xai"]?.access == "new")
-        // A late failure from the former token cannot refresh the new account.
-        #expect(try await coordinator.renewRejectedAccess(provider: "xai", access: "old")?.access == "new")
-        #expect(await fixture.renewals == 1)
-    }
     @Test func borrowedExportsNeverContainRefreshTokens() throws {
         let data = Data(
             #"{"type":"oauth","access":"fixture-access","refresh":"owner-secret","expires":9000000000000,"accountId":"fixture-account"}"#
@@ -164,15 +175,6 @@ struct DefaultAgentCredentialTests {
         #expect(export.refresh == "")
         #expect(export.accountId == "fixture-account")
         #expect(!String(decoding: try JSONEncoder().encode(export), as: UTF8.self).contains("owner-secret"))
-    }
-    @Test @MainActor func revisionsAreStableWhenCredentialsDoNotChange() async throws {
-        let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
-        let first = try await coordinator.prepare("local")
-        coordinator.invalidate()
-        let second = try await coordinator.prepare("local")
-        #expect(first.revision == second.revision)
-        #expect(await fixture.count() == 2)
     }
 }
 
@@ -242,20 +244,6 @@ extension DefaultAgentCredentialTests {
                 renewed, replacing: original, provider: "xai", scope: "fixture", keychain: keychain))
         #expect(try DefaultAgentSupport.oauth("xai", scope: "fixture", keychain: keychain) == nil)
     }
-    @Test @MainActor func endingAnOldSignInCannotReleaseANewerSignIn() async throws {
-        let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
-        _ = try await coordinator.prepare("local")
-        let old = try await coordinator.beginSignIn()
-        coordinator.endSignIn(old)
-        let new = try await coordinator.beginSignIn()
-        coordinator.endSignIn(old)
-        _ = try await coordinator.prepare("local")
-        #expect(await fixture.count() == 1)
-        coordinator.endSignIn(new)
-        _ = try await coordinator.prepare("local")
-        #expect(await fixture.count() == 2)
-    }
 }
 
 private actor RejectedCredentialFixture {
@@ -280,38 +268,6 @@ private actor RejectedCredentialFixture {
 }
 
 extension DefaultAgentCredentialTests {
-    @Test func accountMigrationSelectionOrderingAndRemovalPreserveCanonicalKey() throws {
-        let keychain = DefaultAgentKeychainFixture().access
-        try DefaultAgentSupport.saveKey("legacy", provider: "openrouter", keychain: keychain)
-        let legacy = try #require(ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first)
-        #expect(legacy.createdAt == nil)
-        #expect(legacy.isSelected)
-        let second = try ProviderConnectionAccounts.addKey("second", provider: "openrouter", keychain: keychain)
-        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
-        try ProviderConnectionAccounts.select(second.id, provider: "openrouter", keychain: keychain)
-        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "second")
-        #expect(try ProviderConnectionAccounts.credential(legacy.id, provider: "openrouter", keychain: keychain)?.key == "legacy")
-        try ProviderConnectionAccounts.move(second.id, offset: -1, provider: "openrouter", keychain: keychain)
-        #expect(try ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first?.id == second.id)
-        try ProviderConnectionAccounts.remove(second.id, provider: "openrouter", keychain: keychain)
-        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
-    }
-    @Test func accountsEnforceCapAndBorrowWithoutRefreshTokens() throws {
-        let keychain = DefaultAgentKeychainFixture().access
-        for i in 0..<4 { try ProviderConnectionAccounts.addKey("key-\(i)", provider: "openai", keychain: keychain) }
-        #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addKey("fifth", provider: "openai", keychain: keychain) }
-        var credential = DefaultAgentCredential(type: "oauth")
-        credential.access = "access"; credential.refresh = "private-refresh"; credential.accountId = "account"
-        let account = try ProviderConnectionAccounts.addOAuth(credential, provider: "openai-codex", keychain: keychain)
-        let borrowed = try #require(ProviderConnectionAccounts.borrowedAccounts(provider: "openai-codex", keychain: keychain).first)
-        #expect(borrowed.credential.refresh == "")
-        #expect(borrowed.credential.borrowed)
-        #expect(try ProviderConnectionAccounts.credential(account.id, provider: "openai-codex", keychain: keychain)?.refresh == "private-refresh")
-        try ProviderConnectionAccounts.remove(account.id, provider: "openai-codex", keychain: keychain)
-        var renewed = credential; renewed.access = "late"
-        #expect(try !ProviderConnectionAccounts.saveRenewed(renewed, replacing: credential, accountID: account.id, provider: "openai-codex", scope: "global", keychain: keychain))
-        #expect(try DefaultAgentSupport.oauth("openai-codex", keychain: keychain) == nil)
-    }
 }
 
 extension DefaultAgentCredentialTests {

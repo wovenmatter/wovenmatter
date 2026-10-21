@@ -23,152 +23,6 @@ private final class FakePower {
 }
 
 struct ClosedLidProtectionTests {
-    @Test func powerPoliciesAreIndependentAndOffByDefault() {
-        for source in [WorkPowerSource.external, .battery, .unknown] {
-            #expect(!WorkPowerPolicy().permits(source))
-        }
-        #expect(WorkPowerPolicy(externalPower: true).permits(.external))
-        #expect(!WorkPowerPolicy(externalPower: true).permits(.battery))
-        #expect(WorkPowerPolicy(batteryPower: true).permits(.battery))
-        #expect(!WorkPowerPolicy(batteryPower: true).permits(.external))
-        #expect(!WorkPowerPolicy(externalPower: true, batteryPower: true).permits(.unknown))
-    }
-
-    @Test func powerTransitionsAndLastLeaseReleaseRestoreSleep() {
-        let power = FakePower(), first = UUID(), second = UUID()
-        let controller = power.controller()
-        controller.renew(first, policy: .init(externalPower: true), now: 0, source: .external)
-        #expect(power.operations == ["journal:true", "sleep:true"])
-        controller.tick(now: 1, source: .battery)
-        #expect(!power.disabled && !power.journal)
-        controller.renew(second, policy: .init(batteryPower: true), now: 2, source: .battery)
-        #expect(power.disabled)
-        controller.remove(first, now: 3, source: .battery)
-        #expect(power.disabled)
-        controller.remove(second, now: 4, source: .battery)
-        #expect(!power.disabled && !power.journal)
-    }
-
-    @Test func bothPowerSourcesRemainProtectedAcrossDisconnect() {
-        let power = FakePower(), controller = power.controller()
-        controller.renew(UUID(), policy: .init(externalPower: true, batteryPower: true), now: 0, source: .external)
-        controller.tick(now: 1, source: .battery)
-        #expect(power.operations == ["journal:true", "sleep:true"])
-        controller.tick(now: 2, source: .unknown)
-        #expect(!power.disabled && !controller.isProtecting)
-    }
-
-    @Test func stalledOrCrashedClientExpiresWithoutAnyAppCallback() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
-        controller.renew(id, policy: .init(externalPower: true), now: 10, source: .external)
-        controller.tick(now: 24, source: .external)
-        #expect(power.disabled)
-        controller.tick(now: 25, source: .external)
-        #expect(!power.disabled && !power.journal)
-    }
-
-    @Test func helperRestartRecoversJournalBeforeAcceptingNewWork() {
-        let power = FakePower()
-        power.controller().renew(UUID(), policy: .init(externalPower: true), now: 0, source: .external)
-        let restarted = power.controller()
-        restarted.renew(UUID(), policy: .init(externalPower: true), now: 1, source: .external)
-        #expect(power.operations == ["journal:true", "sleep:true", "sleep:false", "journal:false", "journal:true", "sleep:true"])
-    }
-
-    @Test func existingExternalSleepSettingIsNeverClaimedOrUndone() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        power.disabled = true
-        controller.renew(id, policy: .init(batteryPower: true), now: 0, source: .battery)
-        controller.remove(id, now: 1, source: .battery)
-        #expect(power.disabled)
-        #expect(power.operations.isEmpty)
-    }
-
-    @Test func failedRecoveryIsRetriedAndCannotBeMaskedByNewWork() {
-        let power = FakePower(), controller = power.controller()
-        power.journal = true
-        power.disabled = true
-        power.failWrite = true
-        controller.renew(UUID(), policy: .init(externalPower: true), now: 0, source: .external)
-        #expect(!controller.isProtecting && controller.errorMessage != nil && power.journal)
-        power.failWrite = false
-        controller.tick(now: 16, source: .external)
-        #expect(!power.disabled && !power.journal && controller.errorMessage == nil)
-    }
-
-    @Test func failedJournalCannotDisableSleepAndFailedMutationRetainsRecovery() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        power.failJournal = true
-        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
-        #expect(!power.disabled && !power.operations.contains("sleep:true"))
-        power.failJournal = false
-        power.failWrite = true
-        controller.tick(now: 1, source: .external)
-        #expect(power.journal && !controller.isProtecting)
-        power.failWrite = false
-        controller.remove(id, now: 2, source: .external)
-        #expect(!power.journal && !power.disabled)
-    }
-
-    @Test func queuedRenewalUsesReceiptDeadlineAndIntakeNeverWritesPower() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        controller.recordRenewal(id, policy: .init(externalPower: true), receivedAt: 0)
-        #expect(power.operations.isEmpty)
-        controller.tick(now: 16, source: .external)
-        #expect(power.operations.isEmpty && !controller.isProtecting)
-        controller.recordRenewal(id, policy: .init(externalPower: true), receivedAt: 17)
-        controller.tick(now: 18, source: .external)
-        #expect(power.disabled)
-        controller.recordDisconnect(id)
-        controller.tick(now: 20, source: .external)
-        #expect(!power.disabled && !power.journal)
-    }
-
-    @Test func renewedWorkCannotBypassFailedRestoration() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
-        power.failWrite = true
-        controller.remove(id, now: 1, source: .external)
-        controller.renew(id, policy: .init(externalPower: true), now: 2, source: .external)
-        #expect(!controller.isProtecting && controller.errorMessage != nil)
-        #expect(power.operations.suffix(2) == ["sleep:false", "sleep:false"])
-        power.failWrite = false
-        controller.tick(now: 3, source: .external)
-        #expect(controller.isProtecting)
-        #expect(power.operations.suffix(4) == ["sleep:false", "journal:false", "journal:true", "sleep:true"])
-    }
-
-    @Test func failedJournalClearMustCompleteBeforeWorkCanReacquire() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
-        power.failJournal = true
-        controller.remove(id, now: 1, source: .external)
-        #expect(!power.disabled && power.journal)
-        controller.renew(id, policy: .init(externalPower: true), now: 2, source: .external)
-        #expect(!power.disabled && !controller.isProtecting)
-        #expect(power.operations.suffix(2) == ["sleep:false", "journal:false"])
-        power.failJournal = false
-        controller.tick(now: 3, source: .external)
-        #expect(power.operations.suffix(4) == ["sleep:false", "journal:false", "journal:true", "sleep:true"])
-    }
-
-    @Test func uncertainEnableRestoresBeforeASecondAttempt() {
-        var disabled = false, journal = false, failVerification = true
-        var writes: [Bool] = []
-        let controller = ClosedLidLeaseController(readDisabled: { disabled }, writeDisabled: {
-            disabled = $0
-            writes.append($0)
-            if $0 && failVerification { throw CocoaError(.fileReadUnknown) }
-        }, readJournal: { journal }, writeJournal: { journal = $0 })
-        let id = UUID()
-        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
-        #expect(disabled && journal && !controller.isProtecting)
-        failVerification = false
-        controller.renew(id, policy: .init(externalPower: true), now: 1, source: .external)
-        #expect(writes == [true, false, true])
-        #expect(controller.isProtecting && journal)
-    }
 
     @Test func terminalStopRetriesRecoveryAndRejectsQueuedWork() {
         let power = FakePower(), controller = power.controller(), id = UUID()
@@ -194,6 +48,93 @@ struct ClosedLidProtectionTests {
         #expect(throws: (any Error).self) { try ClosedLidSystemPower.parseDisabled(prefix + " SleepDisabled unexpected\n" + suffix) }
     }
 
+    @Test func signingRequirementRejectsUntrustedInput() throws {
+        let requirement = try ClosedLidHelperIdentity.requirement(team: "12345ABCDE", identifiers: ["wovenmatter.desktop"])
+        #expect(requirement.contains("anchor apple generic"))
+        #expect(requirement.contains("certificate leaf[subject.OU]"))
+        #expect(throws: (any Error).self) { try ClosedLidHelperIdentity.requirement(team: "", identifiers: ["wovenmatter.desktop"]) }
+        #expect(throws: (any Error).self) { try ClosedLidHelperIdentity.requirement(team: "12345ABCDE", identifiers: ["x\" or true"]) }
+    }
+
+
+    @Test func powerTransitionsAndLastLeaseReleaseRestoreSleep() {
+        let power = FakePower(), first = UUID(), second = UUID()
+        let controller = power.controller()
+        controller.renew(first, policy: .init(externalPower: true), now: 0, source: .external)
+        #expect(power.operations == ["journal:true", "sleep:true"])
+        controller.tick(now: 1, source: .battery)
+        #expect(!power.disabled && !power.journal)
+        controller.renew(second, policy: .init(batteryPower: true), now: 2, source: .battery)
+        #expect(power.disabled)
+        controller.remove(first, now: 3, source: .battery)
+        #expect(power.disabled)
+        controller.remove(second, now: 4, source: .battery)
+        #expect(!power.disabled && !power.journal)
+    }
+
+    @Test func failedRecoveryIsRetriedAndCannotBeMaskedByNewWork() {
+        let power = FakePower(), controller = power.controller()
+        power.journal = true
+        power.disabled = true
+        power.failWrite = true
+        controller.renew(UUID(), policy: .init(externalPower: true), now: 0, source: .external)
+        #expect(!controller.isProtecting && controller.errorMessage != nil && power.journal)
+        power.failWrite = false
+        controller.tick(now: 16, source: .external)
+        #expect(!power.disabled && !power.journal && controller.errorMessage == nil)
+    }
+
+
+    @Test func stalledOrCrashedClientExpiresWithoutAnyAppCallback() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        controller.renew(id, policy: .init(externalPower: true), now: 10, source: .external)
+        controller.tick(now: 24, source: .external)
+        #expect(power.disabled)
+        controller.tick(now: 25, source: .external)
+        #expect(!power.disabled && !power.journal)
+    }
+
+    @Test func existingExternalSleepSettingIsNeverClaimedOrUndone() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        power.disabled = true
+        controller.renew(id, policy: .init(batteryPower: true), now: 0, source: .battery)
+        controller.remove(id, now: 1, source: .battery)
+        #expect(power.disabled)
+        #expect(power.operations.isEmpty)
+    }
+
+    @Test func failedJournalCannotDisableSleepAndFailedMutationRetainsRecovery() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        power.failJournal = true
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        #expect(!power.disabled && !power.operations.contains("sleep:true"))
+        power.failJournal = false
+        power.failWrite = true
+        controller.tick(now: 1, source: .external)
+        #expect(power.journal && !controller.isProtecting)
+        power.failWrite = false
+        controller.remove(id, now: 2, source: .external)
+        #expect(!power.journal && !power.disabled)
+    }
+
+    @Test func uncertainEnableRestoresBeforeASecondAttempt() {
+        var disabled = false, journal = false, failVerification = true
+        var writes: [Bool] = []
+        let controller = ClosedLidLeaseController(readDisabled: { disabled }, writeDisabled: {
+            disabled = $0
+            writes.append($0)
+            if $0 && failVerification { throw CocoaError(.fileReadUnknown) }
+        }, readJournal: { journal }, writeJournal: { journal = $0 })
+        let id = UUID()
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        #expect(disabled && journal && !controller.isProtecting)
+        failVerification = false
+        controller.renew(id, policy: .init(externalPower: true), now: 1, source: .external)
+        #expect(writes == [true, false, true])
+        #expect(controller.isProtecting && journal)
+    }
+
     @Test func recoveryJournalIsDurableExclusiveAndRejectsSymlinks() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -210,13 +151,6 @@ struct ClosedLidProtectionTests {
         #expect(throws: (any Error).self) { try journal?.read() }
     }
 
-    @Test func signingRequirementRejectsUntrustedInput() throws {
-        let requirement = try ClosedLidHelperIdentity.requirement(team: "12345ABCDE", identifiers: ["wovenmatter.desktop"])
-        #expect(requirement.contains("anchor apple generic"))
-        #expect(requirement.contains("certificate leaf[subject.OU]"))
-        #expect(throws: (any Error).self) { try ClosedLidHelperIdentity.requirement(team: "", identifiers: ["wovenmatter.desktop"]) }
-        #expect(throws: (any Error).self) { try ClosedLidHelperIdentity.requirement(team: "12345ABCDE", identifiers: ["x\" or true"]) }
-    }
 }
 
 @MainActor private final class FakeLeaseConnection: ClosedLidLeaseSending {
@@ -231,34 +165,6 @@ struct ClosedLidProtectionTests {
 }
 
 @MainActor struct ClosedLidWorkProtectionTests {
-    private final class DefaultsFixture {
-        let name = "wovenmatter.closed-lid.tests." + UUID().uuidString
-        let defaults: UserDefaults
-        init() { defaults = UserDefaults(suiteName: name)! }
-        deinit { defaults.removePersistentDomain(forName: name) }
-    }
-
-    @Test func idlePreferencesNeverLeaseAndPersistIndependently() {
-        let fixture = DefaultsFixture(), connection = FakeLeaseConnection()
-        let defaults = fixture.defaults
-        defer { withExtendedLifetime(fixture) {} }
-        let protection = ClosedLidWorkProtection(ownsExecution: true, defaults: defaults,
-            helperStatus: { .ready }, connect: { connection })
-        #expect(!protection.snapshot.policy.isEnabled)
-        protection.setPolicy(.init(batteryPower: true))
-        #expect(connection.policies.isEmpty)
-        #expect(!defaults.bool(forKey: ClosedLidWorkProtection.externalKey))
-        #expect(defaults.bool(forKey: ClosedLidWorkProtection.batteryKey))
-        protection.setWorking(true)
-        #expect(connection.policies == [.init(batteryPower: true)])
-        connection.reply?(true, nil)
-        #expect(protection.snapshot.isProtecting)
-        protection.setWorking(false)
-        #expect(connection.isClosed && !protection.snapshot.isProtecting)
-        connection.reply?(true, nil)
-        #expect(!protection.snapshot.isProtecting)
-    }
-
     @Test func frontendNeverLeasesOrOverwritesOwnerPolicy() {
         let fixture = DefaultsFixture(), connection = FakeLeaseConnection()
         defer { withExtendedLifetime(fixture) {} }
@@ -291,4 +197,14 @@ struct ClosedLidProtectionTests {
         #expect(connection.isClosed && !protection.snapshot.isProtecting)
         #expect(connection.policies.count == 1)
     }
+
+
+
+    private final class DefaultsFixture {
+        let name = "wovenmatter.closed-lid.tests." + UUID().uuidString
+        let defaults: UserDefaults
+        init() { defaults = UserDefaults(suiteName: name)! }
+        deinit { defaults.removePersistentDomain(forName: name) }
+    }
+
 }

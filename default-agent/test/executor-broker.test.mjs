@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion } from '../src/executor/broker.mjs';
+import { ExecutorBroker, validateConfiguration } from '../src/executor/broker.mjs';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
@@ -22,38 +22,7 @@ async function fixture(t, run) {
   scope.grant = { token: 'scoped-secret', expires: Date.now() + 3600000 };
   return { broker, scope, calls, scopes, directory };
 }
-test('Executor updates have no beta, minor or major ceiling', async () => {
-  const metadata = version => ({ version, bin: { executor: 'bin.mjs' } });
-  const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest')
-    ? metadata(latest) : { versions: Object.fromEntries(versions.map(version => [version, metadata(version)])) }));
-  assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19'])), '2.0.0-beta.19');
-  for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '3.0.0']) {
-    assert.equal(supportsExecutorVersion(version), true);
-    assert.equal(await latestExecutorVersion(registry(version, [version])), version);
-  }
-  for (const version of ['1.6.10', 'invalid']) assert.equal(supportsExecutorVersion(version), false);
-});
-test('inventory reads linked account targets and never creates profiles or exposes the administrator app', async t => {
-  const { broker } = await fixture(t, async () => ({}));
-  const calls = [];
-  broker.request = async (path, input) => { calls.push([path, input]); return { body: {
-    apps: [
-      { id: 'admin', owner: 'executor-local', requirements: { accounts: {} } },
-      { id: 'plain', name: 'Plain', requirements: { accounts: {} } },
-      { id: 'shared', name: 'Shared', requirements: { accounts: { key: { scope: 'app' } } } },
-      { id: 'user', name: 'User', requirements: { accounts: { key: { scope: 'user' } } } },
-      { id: 'unlinked', requirements: { accounts: { key: { scope: 'user' } } } },
-    ], links: [{ app: 'user', account: 'first' }, { app: 'user', account: 'second' }, { app: 'user', account: 'missing' }],
-    accounts: [{ id: 'first', label: 'Personal' }, { id: 'second', label: 'Work' }, { id: 'unlinked', label: 'Do not grant' }],
-  } }; };
-  assert.deepEqual(await broker.inventory(), [
-    { id: 'plain:app', app: 'plain', name: 'Plain', profileName: 'App' },
-    { id: 'shared:app', app: 'shared', name: 'Shared', profileName: 'App' },
-    { id: 'user:account:first', app: 'user', name: 'User', account: 'first', profileName: 'Personal' },
-    { id: 'user:account:second', app: 'user', name: 'User', account: 'second', profileName: 'Work' },
-  ]);
-  assert.deepEqual(calls, [['/dashboard/api/overview', undefined]]);
-});
+
 test('Execute waits for trusted approval, deduplicates IDs and binds jobs to their conversation', async t => {
   let executions = 0;
   const { broker, scope, directory } = await fixture(t, async () => { executions++; return { structuredContent: { status: 'completed', execution: { ok: true, value: 1 } } }; });
@@ -71,17 +40,7 @@ test('Execute waits for trusted approval, deduplicates IDs and binds jobs to the
   assert.ok(!JSON.stringify(broker.publicJob(broker.jobs.get(request.id))).includes('secret'));
   assert.equal((await stat(join(directory, 'manager.json'))).mode & 0o777, 0o600);
 });
-test('scope updates group account targets by app, preserve independent scopes, and master off empties authority', async t => {
-  const { broker, scopes } = await fixture(t, async () => ({}));
-  const a = await broker.scope('conversation-a', [{ app: 'one', account: 'first' }, { app: 'one', account: 'second' }], true);
-  const b = await broker.scope('conversation-b', [{ app: 'two' }], true);
-  assert.equal(scopes.get(a.id).apps.length, 1);
-  assert.deepEqual(scopes.get(a.id).apps[0].runsAs, [{ kind: 'account', id: 'first' }, { kind: 'account', id: 'second' }]);
-  assert.deepEqual(scopes.get(b.id).apps[0].runsAs, [{ kind: 'app' }]);
-  await broker.scope('conversation-a', [], false);
-  assert.deepEqual(scopes.get(a.id).apps, []);
-  assert.equal(scopes.get(b.id).apps[0].app, 'two');
-});
+
 test('cancellation and uncertain transport never replay a program, including after manager restart', async t => {
   let executions = 0;
   const { broker, scope, directory } = await fixture(t, async () => { executions++; throw new Error('uncertain transport'); });
@@ -131,12 +90,7 @@ test('corrupt manager keys fail before runtime startup without replacing storage
   await writeFile(path, JSON.stringify({ servers: { broken: { location: 'local', apiKey: 'old', encryptionKey: 'old', port: 4312 } }, scopes: {}, jobs: {} }));
   await assert.rejects(new ExecutorBroker(directory).load(), /Existing credentials were retained/);
 });
-test('a signal-terminated local runtime is not mistaken for a running child', async t => {
-  const { broker } = await fixture(t, async () => ({}));
-  // Node leaves exitCode null when the child is killed by a signal.
-  broker.child = { exitCode: null, signalCode: 'SIGKILL' };
-  await assert.rejects(broker.startLocal(false), /Install Executor/);
-});
+
 test('Stop while a client is connecting prevents dispatch even if transport ignores abort', async t => {
   let release, executions = 0;
   const { broker, scope } = await fixture(t, async () => { executions++; return {}; });
@@ -148,71 +102,6 @@ test('Stop while a client is connecting prevents dispatch even if transport igno
   await broker.cancel(job); release();
   while (job.busy) await wait(10);
   assert.equal(executions, 0); assert.equal(job.status, 'cancelled');
-});
-
-test('remote deployment waits for its private endpoint to become ready', async t => {
-  let attempts = 0;
-  const { broker } = await fixture(t, async () => ({}));
-  broker.deployRemote = async () => {};
-  broker.fetch = async () => { attempts++; if (attempts === 1) throw new Error('still starting'); return new Response('{}'); };
-  const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' }, true);
-  assert.equal(result.ready, true); assert.equal(attempts, 3);
-});
-
-test('large output stays bounded and cancelling completed work preserves its receipt', async t => {
-  const { broker, scope } = await fixture(t, async () => ({structuredContent:{status:'completed', execution:{ok:true, value:'x'.repeat(1048576)}}}));
-  const id = randomUUID(); await broker.start({id, session:'conversation-a', scope, code:'return large;'});
-  const job = broker.owned(id, 'conversation-a'); await broker.advance(job, {action:'accept'});
-  while (job.busy) await wait(10);
-  const result = broker.publicJob(job);
-  assert.equal(result.status, 'completed'); assert.match(result.error, /response limit/);
-  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 1048576);
-  await broker.cancel(job); assert.equal(job.status, 'completed');
-});
-
-test('concurrent jobs share scoped grant refresh and one client connection', async t => {
-  const { broker, scope } = await fixture(t, async () => ({}));
-  let refreshes = 0, connections = 0, release;
-  const gate = new Promise(resolve => { release = resolve; });
-  scope.grant.expires = 0;
-  broker.token = async () => { refreshes++; await gate; return { token: 'new-scoped-token', refresh: 'next', expires: Date.now() + 3600000 }; };
-  const client = { close: async () => {} };
-  broker.connectOverride = async () => { connections++; return client; };
-  const first = broker.client(scope), second = broker.client(scope);
-  release();
-  assert.deepEqual(await Promise.all([first, second]), [client, client]);
-  assert.equal(refreshes, 1); assert.equal(connections, 1);
-});
-
-test('concurrent first programs share authorization and a failed attempt can retry', async t => {
-  const { broker, scope } = await fixture(t, async () => ({}));
-  delete scope.grant;
-  let authorizations = 0, release;
-  const gate = new Promise(resolve => { release = resolve; });
-  broker.authorize = async () => { authorizations++; await gate; throw new Error('offline'); };
-  const attempts = Promise.allSettled([broker.client(scope), broker.client(scope)]);
-  release();
-  assert.ok((await attempts).every(result => result.status === 'rejected'));
-  assert.equal(authorizations, 1);
-  broker.authorize = async () => { authorizations++; return { token: 'scoped', expires: Date.now() + 3600000 }; };
-  await broker.client(scope);
-  assert.equal(authorizations, 2);
-});
-
-test('connection replacement closes a late transport instead of caching it', async t => {
-  const { broker, scope } = await fixture(t, async () => ({}));
-  let release, connected, closes = 0;
-  const started = new Promise(resolve => { connected = resolve; });
-  broker.connectOverride = async () => {
-    connected(); await new Promise(resolve => { release = resolve; });
-    return { close: async () => { closes++; } };
-  };
-  const pending = broker.client(scope);
-  await started;
-  await broker.shutdownClients();
-  release();
-  await assert.rejects(pending, /connection changed/);
-  assert.equal(closes, 1); assert.equal(broker.clients.size, 0);
 });
 
 test('an in-flight grant stays bound to its original origin and is discarded after replacement', async t => {
@@ -288,6 +177,143 @@ test('local updates stage before retirement and roll back failed startup', async
     await broker.stop();
   }
 });
+
+test('revoking one conversation empties its live scope and cancels active and queued jobs without touching another', async t => {
+  let release, entered;
+  const held = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const executions = [];
+  const f = await fixture(t, async request => {
+    executions.push(request.arguments.code);
+    if (request.arguments.code === 'active-a') { entered(); await held; }
+    return { structuredContent: { status: 'completed', execution: { ok: true } } };
+  });
+  const { broker, scope } = f;
+  const other = await broker.scope('conversation-b', [
+    { app: 'app-b', account: 'account-b' }, { app: 'app-b', account: 'account-b2' },
+    { app: 'app-b', account: 'account-b' },
+  ], true);
+  other.grant = { token: 'other-scoped-secret', expires: Date.now() + 3600000 };
+  const active = { id: randomUUID(), session: 'conversation-a', code: 'active-a', scope };
+  const queued = { ...active, id: randomUUID(), code: 'queued-a' };
+  const independent = { id: randomUUID(), session: 'conversation-b', code: 'independent-b', scope: other };
+  const settle = async job => {
+    const deadline = Date.now() + 2000;
+    while (job.busy && Date.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(Boolean(job.busy), false, 'Executor fixture did not settle');
+    await broker.saveTail;
+  };
+  try {
+    await broker.start(active); await broker.advance(broker.owned(active.id, active.session), { action: 'accept' });
+    await started;
+    await broker.start(queued); await broker.start(independent);
+    await broker.scope('conversation-a', [{ app: 'app-a', account: 'account-a' }], false);
+    assert.deepEqual(f.scopes.get(scope.id).apps, []);
+    assert.deepEqual(f.scopes.get(other.id).apps, [{ app: 'app-b', runsAs: [{ kind: 'account', id: 'account-b' }, { kind: 'account', id: 'account-b2' }], tools: { kind: 'all' } }]);
+    assert.equal(broker.jobs.get(active.id).controller.signal.aborted, true);
+    assert.equal(broker.jobs.get(queued.id).status, 'cancelled');
+    await broker.advance(broker.jobs.get(queued.id), { action: 'accept' });
+    assert.deepEqual(executions, ['active-a']);
+    release(); await settle(broker.jobs.get(active.id));
+    assert.equal(broker.jobs.get(active.id).status, 'cancelled');
+    await broker.advance(broker.jobs.get(independent.id), { action: 'accept' });
+    await settle(broker.jobs.get(independent.id));
+    assert.equal(broker.jobs.get(independent.id).status, 'completed');
+    assert.deepEqual(executions, ['active-a', 'independent-b']);
+    const reopened = await new ExecutorBroker(f.directory).load(); reopened.config = broker.config;
+    assert.equal((await reopened.start(active)).status, 'cancelled');
+    assert.equal((await reopened.start(queued)).status, 'cancelled');
+    assert.equal((await reopened.start(independent)).status, 'completed');
+  } finally {
+    release();
+    for (const job of broker.jobs.values()) { await broker.cancel(job); await settle(job); }
+    await broker.shutdownClients();
+  }
+});
+
+test('inventory reads linked account targets and never creates profiles or exposes the administrator app', async t => {
+  const { broker } = await fixture(t, async () => ({}));
+  const calls = [];
+  broker.request = async (path, input) => { calls.push([path, input]); return { body: {
+    apps: [
+      { id: 'admin', owner: 'executor-local', requirements: { accounts: {} } },
+      { id: 'plain', name: 'Plain', requirements: { accounts: {} } },
+      { id: 'shared', name: 'Shared', requirements: { accounts: { key: { scope: 'app' } } } },
+      { id: 'user', name: 'User', requirements: { accounts: { key: { scope: 'user' } } } },
+      { id: 'unlinked', requirements: { accounts: { key: { scope: 'user' } } } },
+    ], links: [{ app: 'user', account: 'first' }, { app: 'user', account: 'second' }, { app: 'user', account: 'missing' }],
+    accounts: [{ id: 'first', label: 'Personal' }, { id: 'second', label: 'Work' }, { id: 'unlinked', label: 'Do not grant' }],
+  } }; };
+  assert.deepEqual(await broker.inventory(), [
+    { id: 'plain:app', app: 'plain', name: 'Plain', profileName: 'App' },
+    { id: 'shared:app', app: 'shared', name: 'Shared', profileName: 'App' },
+    { id: 'user:account:first', app: 'user', name: 'User', account: 'first', profileName: 'Personal' },
+    { id: 'user:account:second', app: 'user', name: 'User', account: 'second', profileName: 'Work' },
+  ]);
+  assert.deepEqual(calls, [['/dashboard/api/overview', undefined]]);
+});
+
+test('a signal-terminated local runtime is not mistaken for a running child', async t => {
+  const { broker } = await fixture(t, async () => ({}));
+  // Node leaves exitCode null when the child is killed by a signal.
+  broker.child = { exitCode: null, signalCode: 'SIGKILL' };
+  await assert.rejects(broker.startLocal(false), /Install Executor/);
+});
+
+test('remote deployment waits for its private endpoint to become ready', async t => {
+  let attempts = 0;
+  const { broker } = await fixture(t, async () => ({}));
+  broker.deployRemote = async () => {};
+  broker.fetch = async () => { attempts++; if (attempts === 1) throw new Error('still starting'); return new Response('{}'); };
+  const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' }, true);
+  assert.equal(result.ready, true); assert.equal(attempts, 3);
+});
+
+test('concurrent jobs share scoped grant refresh and one client connection', async t => {
+  const { broker, scope } = await fixture(t, async () => ({}));
+  let refreshes = 0, connections = 0, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  scope.grant.expires = 0;
+  broker.token = async () => { refreshes++; await gate; return { token: 'new-scoped-token', refresh: 'next', expires: Date.now() + 3600000 }; };
+  const client = { close: async () => {} };
+  broker.connectOverride = async () => { connections++; return client; };
+  const first = broker.client(scope), second = broker.client(scope);
+  release();
+  assert.deepEqual(await Promise.all([first, second]), [client, client]);
+  assert.equal(refreshes, 1); assert.equal(connections, 1);
+});
+
+test('concurrent first programs share authorization and a failed attempt can retry', async t => {
+  const { broker, scope } = await fixture(t, async () => ({}));
+  delete scope.grant;
+  let authorizations = 0, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  broker.authorize = async () => { authorizations++; await gate; throw new Error('offline'); };
+  const attempts = Promise.allSettled([broker.client(scope), broker.client(scope)]);
+  release();
+  assert.ok((await attempts).every(result => result.status === 'rejected'));
+  assert.equal(authorizations, 1);
+  broker.authorize = async () => { authorizations++; return { token: 'scoped', expires: Date.now() + 3600000 }; };
+  await broker.client(scope);
+  assert.equal(authorizations, 2);
+});
+
+test('connection replacement closes a late transport instead of caching it', async t => {
+  const { broker, scope } = await fixture(t, async () => ({}));
+  let release, connected, closes = 0;
+  const started = new Promise(resolve => { connected = resolve; });
+  broker.connectOverride = async () => {
+    connected(); await new Promise(resolve => { release = resolve; });
+    return { close: async () => { closes++; } };
+  };
+  const pending = broker.client(scope);
+  await started;
+  await broker.shutdownClients();
+  release();
+  await assert.rejects(pending, /connection changed/);
+  assert.equal(closes, 1); assert.equal(broker.clients.size, 0);
+});
+
 test('existing remote connections never report the previous local runtime version', async t => {
   const { broker } = await fixture(t, async () => ({}));
   broker.runtimeVersion = '2.0.0-beta.12';

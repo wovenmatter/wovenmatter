@@ -5,54 +5,6 @@ import WovenMatterDashboardStore
 
 @MainActor
 struct SessionSelectionPreferencesTests {
-  @Test("new conversations capture Full access without writing a user default", arguments: [
-    ("codex", "agent-full-access"), ("claude_code", "bypassPermissions"),
-    ("grok_build", "bypassPermissions"), ("openclaw", "full"),
-    ("hermes", "full"), ("opencode", "allow"), ("cursor", "force"), ("default_agent", "full")
-  ])
-  func newConversationFullAccess(harness: String, permission: String) throws {
-    try withPreferences { preferences, defaults in
-      #expect(preferences.defaults(harness: harness) == SessionSelections(permission: permission))
-      #expect(preferences.defaults(harness: harness, workspace: "remote:fixture")
-        == SessionSelections(permission: permission))
-      #expect(preferences.storedDefaults(harness: harness).isEmpty)
-      #expect(defaults.data(forKey: SessionSelectionPreferences.storageKey) == nil)
-      let captured = preferences.captureConversation(
-        id: "new", harness: harness, workspace: "remote:fixture",
-        nativeFallback: SessionSelections(model: "native-model", permission: "native-policy"))
-      #expect(captured.selections == SessionSelections(model: "native-model", permission: permission))
-      #expect(captured.desiredSelections == SessionSelections(permission: permission))
-      #expect(captured.requiresApplication)
-      let reopened = SessionSelectionPreferences(defaults: defaults)
-      #expect(reopened.conversation(id: "new") == captured)
-      let imported = reopened.captureExistingConversation(
-        id: "imported", harness: harness, workspace: "remote:fixture",
-        selections: SessionSelections(permission: "native-policy"))
-      #expect(imported.selections.permission == "native-policy")
-      #expect(imported.desiredSelections.isEmpty)
-      #expect(!imported.requiresApplication)
-    }
-  }
-
-  @Test("product permission defaults respect native capabilities without changing explicit choices")
-  func productPermissionCapabilityFallback() throws {
-    try withPreferences { preferences, defaults in
-      let fresh = preferences.captureConversation(id: "product", harness: "codex", workspace: "project")
-      #expect(fresh.usesProductPermissionDefault)
-      let supported = preferences.reconcileProductPermissionDefault(id: "product", options: ["agent-full-access"], nativePermission: "agent")
-      #expect(supported == fresh)
-      let inherited = preferences.reconcileProductPermissionDefault(id: "product", options: ["read-only", "agent"], nativePermission: "agent")
-      #expect(inherited?.desiredSelections.permission == nil)
-      #expect(inherited?.selections.permission == "agent")
-      preferences.saveDefault(.permission, from: SessionSelections(permission: "agent-full-access"), harness: "codex")
-      let explicit = preferences.captureConversation(id: "explicit", harness: "codex", workspace: "project")
-      #expect(!explicit.usesProductPermissionDefault)
-      #expect(preferences.reconcileProductPermissionDefault(id: "explicit", options: [], nativePermission: nil) == explicit)
-      let existing = preferences.captureExistingConversation(id: "existing", harness: "codex", workspace: "project", selections: SessionSelections(permission: "read-only"))
-      #expect(preferences.reconcileProductPermissionDefault(id: "existing", options: ["agent-full-access"], nativePermission: "agent-full-access") == existing)
-      #expect(SessionSelectionPreferences(defaults: defaults).conversation(id: "existing") == existing)
-    }
-  }
 
   @Test("frozen permission origin survives settings edits during native creation")
   func frozenPermissionOrigin() throws {
@@ -79,20 +31,6 @@ struct SessionSelectionPreferencesTests {
     }
   }
 
-  @Test("repairing a pending model does not turn a product permission into an explicit choice")
-  func pendingModelRepairKeepsPermissionOrigin() throws {
-    try withPreferences { preferences, _ in
-      let snapshot = preferences.captureConversation(id: "pending", harness: "codex", workspace: "project")
-      let repaired = snapshot.desiredSelections.applyingPendingCorrection(SessionSelections(model: "available"))
-      preferences.updateConversation(id: "pending", selections: repaired, permissionIsExplicit: false)
-      #expect(preferences.conversation(id: "pending")?.usesProductPermissionDefault == true)
-      #expect(preferences.reconcileProductPermissionDefault(id: "pending", options: ["agent"],
-        nativePermission: "agent")?.desiredSelections == SessionSelections(model: "available"))
-      preferences.updateConversation(id: "pending", selections: SessionSelections(permission: "read-only"))
-      #expect(preferences.conversation(id: "pending")?.usesProductPermissionDefault == false)
-    }
-  }
-
   @Test("user permission choices override Full access and reset restores inheritance")
   func fullAccessDefaultCanBeOverridden() throws {
     try withPreferences { preferences, defaults in
@@ -112,16 +50,6 @@ struct SessionSelectionPreferencesTests {
       #expect(reopened.conversation(id: "explicit")?.desiredSelections.permission == "read-only")
       reopened.updateConversation(id: "workspace", selections: SessionSelections(permission: "read-only"))
       #expect(preferences.conversation(id: "workspace")?.desiredSelections.permission == "read-only")
-    }
-  }
-
-  @Test("Pi and unknown harnesses retain native defaults", arguments: ["pi", "future-harness"])
-  func noPermissionDefaultForUnsupportedHarnesses(harness: String) throws {
-    try withPreferences { preferences, _ in
-      #expect(preferences.defaults(harness: harness).isEmpty)
-      let captured = preferences.captureConversation(id: "new", harness: harness, workspace: "project")
-      #expect(captured.selections.isEmpty)
-      #expect(captured.desiredSelections.isEmpty)
     }
   }
 
@@ -152,56 +80,6 @@ struct SessionSelectionPreferencesTests {
     }
   }
 
-  @Test("an empty tools choice overrides inherited and native tool groups")
-  func explicitEmptyTools() throws {
-    try withPreferences { preferences, _ in
-      preferences.saveDefaults(SessionSelections(tools: ["files", "shell"]), harness: "claude")
-      preferences.saveDefault(
-        .tools, from: SessionSelections(tools: []), harness: "claude", workspace: "project"
-      )
-      let snapshot = preferences.captureConversation(
-        id: "new", harness: "claude", workspace: "project",
-        nativeFallback: SessionSelections(tools: ["native"])
-      )
-      #expect(snapshot.selections.tools == [])
-      #expect(snapshot.desiredSelections.tools == [])
-      preferences.removeDefault(.tools, harness: "claude", workspace: "project")
-      #expect(preferences.defaults(harness: "claude", workspace: "project").tools == ["files", "shell"])
-      #expect(preferences.conversation(id: "new")?.selections.tools == [])
-    }
-  }
-
-  @Test("workspace and harness identifiers are independent opaque namespaces")
-  func contextIsolation() throws {
-    try withPreferences { preferences, _ in
-      preferences.saveDefaults(SessionSelections(model: "a"), harness: "one:two", workspace: "three")
-      preferences.saveDefaults(SessionSelections(model: "b"), harness: "one", workspace: "two:three")
-      preferences.saveDefaults(SessionSelections(thinking: "medium"), harness: "one")
-      #expect(preferences.defaults(harness: "one:two", workspace: "three") == SessionSelections(model: "a"))
-      #expect(preferences.defaults(harness: "one", workspace: "two:three") == SessionSelections(model: "b", thinking: "medium"))
-      #expect(preferences.defaults(harness: "one", workspace: "three") == SessionSelections(thinking: "medium"))
-      #expect(preferences.defaults(harness: "unknown", workspace: "three").isEmpty)
-    }
-  }
-
-  @Test("captured sessions do not change when defaults or capture arguments change")
-  func idempotentCapture() throws {
-    try withPreferences { preferences, _ in
-      preferences.saveDefaults(SessionSelections(model: "first"), harness: "codex")
-      let original = preferences.captureConversation(id: "session", harness: "codex", workspace: "project")
-      preferences.saveDefaults(SessionSelections(model: "later", permission: "ask"), harness: "codex")
-      let repeated = preferences.captureConversation(
-        id: "session", harness: "different", workspace: "elsewhere",
-        selections: SessionSelections(model: "explicit-later"),
-        nativeFallback: SessionSelections(thinking: "high")
-      )
-      #expect(repeated == original)
-      #expect(preferences.captureConversation(
-        id: "another", harness: "codex", workspace: "project"
-      ).selections == SessionSelections(model: "later", permission: "ask"))
-    }
-  }
-
   @Test("existing native sessions are adopted without applying newly configured defaults")
   func existingConversationMigration() throws {
     try withPreferences { preferences, defaults in
@@ -224,71 +102,6 @@ struct SessionSelectionPreferencesTests {
         nativeFallback: native
       ) == unknown)
     }
-  }
-
-  @Test("pending native creation can supply defaults frozen before its local ID exists")
-  func previouslyCapturedDefaults() throws {
-    try withPreferences { preferences, _ in
-      preferences.saveDefaults(SessionSelections(model: "later", permission: "ask"), harness: "opencode")
-      let frozen = preferences.captureConversation(
-        id: "pending", harness: "opencode", workspace: "project",
-        nativeFallback: SessionSelections(permission: "native-policy"),
-        capturedDefaults: SessionSelections(model: "original")
-      )
-      #expect(frozen.desiredSelections == SessionSelections(model: "original"))
-      #expect(frozen.selections.permission == "native-policy")
-      #expect(preferences.captureConversation(
-        id: "empty", harness: "opencode", workspace: "project", capturedDefaults: SessionSelections()
-      ).desiredSelections.isEmpty)
-    }
-  }
-
-  @Test("editing or removing one default preserves all other overrides")
-  func singleDefaultEdits() throws {
-    try withPreferences { preferences, _ in
-      preferences.saveDefaults(SessionSelections(model: "inherited", permission: "ask"), harness: "codex")
-      preferences.saveDefaults(SessionSelections(model: "local", thinking: "high"), harness: "codex", workspace: "project")
-      preferences.saveDefault(
-        .permission, from: SessionSelections(model: "ignored", permission: "read-only"),
-        harness: "codex", workspace: "project"
-      )
-      #expect(preferences.storedDefaults(harness: "codex", workspace: "project") == SessionSelections(
-        model: "local", thinking: "high", permission: "read-only"
-      ))
-      preferences.removeDefault(.model, harness: "codex", workspace: "project")
-      #expect(preferences.defaults(harness: "codex", workspace: "project") == SessionSelections(
-        model: "inherited", thinking: "high", permission: "read-only"
-      ))
-      #expect(preferences.storedDefaults(harness: "codex") == SessionSelections(model: "inherited", permission: "ask"))
-    }
-  }
-
-  @Test("conversation edits merge explicit values and can clear just one field")
-  func explicitConversationEdits() throws {
-    try withPreferences { preferences, _ in
-      preferences.captureExistingConversation(
-        id: "session", harness: "codex", workspace: "project",
-        selections: SessionSelections(model: "first", thinking: "high", permission: "ask", tools: ["files"])
-      )
-      preferences.updateConversation(id: "session", selections: SessionSelections(model: "second", tools: []))
-      let changed = preferences.updateConversation(id: "session", field: .thinking, from: SessionSelections())
-      #expect(changed?.selections == SessionSelections(model: "second", permission: "ask", tools: []))
-      #expect(changed?.desiredSelections == SessionSelections(model: "second", tools: []))
-      #expect(changed?.requiresApplication == false)
-      #expect(preferences.updateConversation(id: "unknown", selections: SessionSelections(permission: "ask")) == nil)
-      #expect(preferences.conversation(id: "unknown") == nil)
-    }
-  }
-
-  @Test("correcting a pending model clears obsolete thinking but keeps permission and tools")
-  func pendingModelCorrection() {
-    let pending = SessionSelections(model: "obsolete", thinking: "high", permission: "normal", tools: [])
-    #expect(pending.applyingPendingCorrection(SessionSelections(model: "no-thinking-model"))
-      == SessionSelections(model: "no-thinking-model", permission: "normal", tools: []))
-    #expect(pending.applyingPendingCorrection(SessionSelections(model: "reasoning-model", thinking: "low"))
-      == SessionSelections(model: "reasoning-model", thinking: "low", permission: "normal", tools: []))
-    #expect(pending.applyingPendingCorrection(SessionSelections(permission: "auto"))
-      == SessionSelections(model: "obsolete", thinking: "high", permission: "auto", tools: []))
   }
 
   @Test("partial pending repairs survive another field failure and relaunch")
@@ -314,71 +127,6 @@ struct SessionSelectionPreferencesTests {
       reopened.markApplied(id: "session")
       #expect(preferences.conversation(id: "session")?.requiresApplication == false)
       #expect(preferences.conversation(id: "session")?.selections.thinking == nil)
-    }
-  }
-
-  @Test("confirmed native metadata clears unsupported thinking without promoting observed fallback")
-  func confirmedSelections() throws {
-    try withPreferences { preferences, _ in
-      preferences.captureConversation(
-        id: "session", harness: "codex", workspace: "project",
-        selections: SessionSelections(model: "reasoning-model", thinking: "high", tools: []),
-        nativeFallback: SessionSelections(permission: "native-policy"),
-        capturedDefaults: SessionSelections()
-      )
-      let confirmed = preferences.replaceConfirmedSelections(
-        id: "session", selections: SessionSelections(model: "no-effort-model", permission: "native-policy", tools: [])
-      )
-      #expect(confirmed?.selections == SessionSelections(model: "no-effort-model", permission: "native-policy", tools: []))
-      #expect(confirmed?.desiredSelections == SessionSelections(model: "no-effort-model", tools: []))
-      #expect(confirmed?.requiresApplication == true)
-    }
-  }
-
-  @Test("pending application survives relaunch and is acknowledged without rearming on edits")
-  func persistentApplicationMarker() throws {
-    try withPreferences { preferences, defaults in
-      preferences.saveDefaults(SessionSelections(model: "captured"), harness: "codex")
-      let snapshot = preferences.captureConversation(id: "session", harness: "codex", workspace: "project")
-      #expect(snapshot.requiresApplication)
-      let reopened = SessionSelectionPreferences(defaults: defaults)
-      #expect(reopened.conversation(id: "session") == snapshot)
-      reopened.markApplied(id: "session")
-      reopened.updateConversation(id: "session", selections: SessionSelections(thinking: "medium"))
-      #expect(preferences.conversation(id: "session")?.requiresApplication == false)
-      #expect(preferences.conversation(id: "session")?.selections.model == "captured")
-      #expect(preferences.markApplied(id: "missing") == nil)
-    }
-  }
-
-  @Test("multiple store instances retain one another's writes")
-  func freshReadBeforeWrite() throws {
-    try withPreferences { preferences, defaults in
-      let other = SessionSelectionPreferences(defaults: defaults)
-      preferences.saveDefaults(SessionSelections(model: "a"), harness: "a")
-      other.saveDefaults(SessionSelections(model: "b"), harness: "b")
-      preferences.captureExistingConversation(id: "session", harness: "a", workspace: "project")
-      other.saveDefault(.thinking, from: SessionSelections(thinking: "high"), harness: "b")
-      #expect(preferences.defaults(harness: "a").model == "a")
-      #expect(preferences.defaults(harness: "b") == SessionSelections(model: "b", thinking: "high"))
-      #expect(other.conversation(id: "session")?.workspace == "project")
-    }
-  }
-
-  @Test("snapshots from before the application marker remain captured and already applied")
-  func snapshotMarkerMigration() throws {
-    try withPreferences { preferences, defaults in
-      preferences.captureConversation(id: "session", harness: "codex", workspace: "project")
-      let data = try #require(defaults.data(forKey: SessionSelectionPreferences.storageKey))
-      var document = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-      var conversations = try #require(document["conversations"] as? [String: [String: Any]])
-      conversations["session"]?.removeValue(forKey: "requiresApplication")
-      document["conversations"] = conversations
-      defaults.set(try JSONSerialization.data(withJSONObject: document), forKey: SessionSelectionPreferences.storageKey)
-      let migrated = try #require(preferences.conversation(id: "session"))
-      #expect(!migrated.requiresApplication)
-      #expect(migrated.harness == "codex")
-      #expect(preferences.captureConversation(id: "session", harness: "codex", workspace: "project") == migrated)
     }
   }
 

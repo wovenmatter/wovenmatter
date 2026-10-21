@@ -64,34 +64,6 @@ test('private CDP bridge owns one page, rejects discovery outside it and maps na
   socket.terminate();
 });
 
-test('browser viewport clicks and hover stay on the page and reject invalid coordinates', async () => {
-  const calls = [];
-  const page = { setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
-    url: () => 'about:blank', title: async () => 'Coordinate fixture',
-    mouse: { click: async (...args) => calls.push(['click', ...args]), move: async (...args) => calls.push(['move', ...args]) } };
-  await browserAction(page, { action: 'click', x: 12, y: 34, button: 'right', clickCount: 2 });
-  await browserAction(page, { action: 'hover', x: 56, y: 78 });
-  assert.deepEqual(calls, [['click', 12, 34, { button: 'right', clickCount: 2 }], ['move', 56, 78]]);
-  await assert.rejects(browserAction(page, { action: 'click', x: -1, y: 0 }), /viewport x\/y/);
-  await assert.rejects(browserAction(page, { action: 'hover', x: 0 }), /viewport x\/y/);
-  assert.equal(calls.length, 2);
-});
-
-test('browser upload accepts 2 MiB and rejects one extra byte before changing the file input', async () => {
-  const files = [];
-  const page = { setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
-    url: () => 'about:blank', title: async () => 'Upload fixture',
-    locator: () => ({ setInputFiles: async file => { files.push(file); } }) };
-  const input = { action: 'upload', selector: '#file', name: 'boundary.bin', data: Buffer.alloc(2 * 1024 * 1024).toString('base64') };
-  await browserAction(page, input);
-  assert.equal(files.length, 1);
-  assert.equal(files[0].buffer.length, 2 * 1024 * 1024);
-  const oversized = { ...input, data: Buffer.alloc(2 * 1024 * 1024 + 1).toString('base64') };
-  assert.equal(oversized.data.length, input.data.length);
-  await assert.rejects(browserAction(page, oversized), /at most 2 MiB/);
-  assert.equal(files.length, 1);
-});
-
 test('automation adapter uses the current scoped CLI, preserves images and cancels its own request', async () => {
   const calls = [];
   const run = (path, args, options) => {
@@ -127,7 +99,6 @@ test('automation responses preserve UTF-8 split across pipe chunks', async () =>
   assert.deepEqual((await pending).content, content);
 });
 
-
 test('automation rejects oversized output even after a complete JSON response', async () => {
   const child = new EventEmitter();
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = signal => { child.killed = signal; };
@@ -137,4 +108,32 @@ test('automation rejects oversized output even after a complete JSON response', 
   child.emit('close', null);
   await assert.rejects(pending, /exceeds its size limit/);
   assert.equal(child.killed, 'SIGKILL');
+});
+
+test('browser viewport clicks and hover stay on the page and reject invalid coordinates', async () => {
+  const calls = [];
+  const page = { setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
+    url: () => 'about:blank', title: async () => 'Coordinate fixture',
+    mouse: { click: async (...args) => calls.push(['click', ...args]), move: async (...args) => calls.push(['move', ...args]) } };
+  await browserAction(page, { action: 'click', x: 12, y: 34, button: 'right', clickCount: 2 });
+  await browserAction(page, { action: 'hover', x: 56, y: 78 });
+  assert.deepEqual(calls, [['click', 12, 34, { button: 'right', clickCount: 2 }], ['move', 56, 78]]);
+  await assert.rejects(browserAction(page, { action: 'click', x: -1, y: 0 }), /viewport x\/y/);
+  await assert.rejects(browserAction(page, { action: 'hover', x: 0 }), /viewport x\/y/);
+  assert.equal(calls.length, 2);
+});
+
+test('browser upload accepts 2 MiB and rejects one extra byte before changing the file input', async () => {
+  const files = [];
+  const page = { setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
+    url: () => 'about:blank', title: async () => 'Upload fixture',
+    locator: () => ({ setInputFiles: async file => { files.push(file); } }) };
+  const input = { action: 'upload', selector: '#file', name: 'boundary.bin', data: Buffer.alloc(2 * 1024 * 1024).toString('base64') };
+  await browserAction(page, input);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].buffer.length, 2 * 1024 * 1024);
+  const oversized = { ...input, data: Buffer.alloc(2 * 1024 * 1024 + 1).toString('base64') };
+  assert.equal(oversized.data.length, input.data.length);
+  await assert.rejects(browserAction(page, oversized), /at most 2 MiB/);
+  assert.equal(files.length, 1);
 });

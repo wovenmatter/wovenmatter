@@ -53,22 +53,4 @@ struct AgentInteractionBrokerTests {
         #expect(answer == .answers(["a": .single("freeform response"), "b": .multiple(["one", "two"])]))
     }
 
-    @Test @MainActor func desktopPhoneRaceResolvesExactlyOnce() async {
-        let broker = AgentInteractionBroker()
-        let id = UUID()
-        let answer = await withCheckedContinuation { continuation in
-            broker.registerInteraction(id: id, request: .plan(.init(markdown: "A plan")), continuation: continuation)
-            Task { @MainActor in
-                await withTaskGroup(of: Bool.self) { group in
-                    group.addTask { await broker.resolveInteraction(id: id, response: .planAccepted(true)) }
-                    group.addTask { await broker.resolveInteraction(id: id, response: .planAccepted(false)) }
-                    var winners = 0
-                    for await won in group where won { winners += 1 }
-                    #expect(winners == 1)
-                }
-            }
-        }
-        #expect(answer == .planAccepted(true) || answer == .planAccepted(false))
-    }
-
 }

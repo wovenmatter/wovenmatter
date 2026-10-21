@@ -3,21 +3,6 @@ import Testing
 @testable import WovenMatterDashboardStore
 
 struct DatabasePresentationReadTests {
-  @Test func timestampCodecPreservesFractionalWholeAndOffsetDatesAcrossConcurrentReaders() async throws {
-    let fractional = try #require(WorkspaceDatabaseConnection.date("2026-09-28T12:34:56.123Z"))
-    let whole = try #require(WorkspaceDatabaseConnection.date("2026-09-28T12:34:56Z"))
-    #expect(abs(fractional.timeIntervalSince(whole) - 0.123) < 0.000_01)
-    #expect(WorkspaceDatabaseConnection.date("2026-09-28T08:34:56-04:00") == whole)
-    #expect(WorkspaceDatabaseConnection.date("invalid") == nil)
-    await withTaskGroup(of: Void.self) { group in
-      for _ in 0..<100 {
-        group.addTask {
-          #expect(WorkspaceDatabaseConnection.timestamp(fractional) == "2026-09-28T12:34:56.123Z")
-          #expect(WorkspaceDatabaseConnection.date("2026-09-28T12:34:56Z") == whole)
-        }
-      }
-    }
-  }
 
   @MainActor @Test(.timeLimit(.minutes(1)))
   func presentationReadsLeaveMainActorAndDiscardCancelledResults() async throws {

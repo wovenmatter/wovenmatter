@@ -5,89 +5,6 @@ import WovenMatterCore
 
 @Suite("Usage refresh ownership")
 struct UsageRefreshOwnershipTests {
-  @Test("Non-cooperating superseded loads cannot return or replace cache", arguments: [false, true])
-  func supersededLoads(forceSameKey: Bool) async throws {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    let gate = UsageCompletionGate<Int>()
-    let old = Task { try await coordinator.value(for: "old", policy: .refresh) { await gate.load() } }
-    await gate.waitForStarts(1)
-    let key = forceSameKey ? "old" : "new"
-    let current = Task {
-      try await coordinator.value(for: key, policy: forceSameKey ? .force : .refresh) { await gate.load() }
-    }
-    await gate.waitForStarts(2)
-    await gate.release(2, value: 22)
-    #expect(try await current.value == 22)
-    await gate.release(1, value: 11)
-    await #expect(throws: CancellationError.self) { try await old.value }
-    #expect(try await coordinator.value(for: key, policy: .reuse) { -1 } == 22)
-    #expect(await coordinator.isRefreshing == false)
-  }
-
-  @Test("All coalesced consumers can receive one successful generation")
-  func coalescedConsumers() async throws {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    let gate = UsageCompletionGate<Int>()
-    let first = Task { try await coordinator.value(for: "shared", policy: .reuse) { await gate.load() } }
-    await gate.waitForStarts(1)
-    let registrations = UsageConsumerRegistrations(target: 20)
-    let consumers = (0..<20).map { _ in
-      Task { try await registeredConsumer(coordinator, registrations: registrations) }
-    }
-    await registrations.wait()
-    await gate.release(1, value: 42)
-    #expect(try await first.value == 42)
-    for consumer in consumers { #expect(try await consumer.value == 42) }
-    #expect(await gate.startCount == 1)
-  }
-
-  // Both registration and value entry execute on the coordinator actor without a hop.
-  // The synchronous signal therefore proves all consumers joined before releasing the load.
-  private func registeredConsumer(
-    _ coordinator: isolated UsageRefreshCoordinator<String, Int>,
-    registrations: UsageConsumerRegistrations
-  ) async throws -> Int {
-    registrations.arrive()
-    return try await coordinator.value(for: "shared", policy: .refresh) { -1 }
-  }
-
-  @Test("Returning another cached key supersedes pending work")
-  func cachedSelection() async throws {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    #expect(try await coordinator.value(for: "saved", policy: .reuse) { 7 } == 7)
-    let gate = UsageCompletionGate<Int>()
-    let pending = Task { try await coordinator.value(for: "other", policy: .refresh) { await gate.load() } }
-    await gate.waitForStarts(1)
-    #expect(try await coordinator.value(for: "saved", policy: .reuse) { -1 } == 7)
-    await gate.release(1, value: 99)
-    await #expect(throws: CancellationError.self) { try await pending.value }
-    #expect(try await coordinator.value(for: "saved", policy: .reuse) { -1 } == 7)
-  }
-
-  @Test("Explicit cancellation rejects a loader that ignores cancellation")
-  func explicitCancellation() async {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    let gate = UsageCompletionGate<Int>()
-    let pending = Task { try await coordinator.value(for: "key", policy: .refresh) { await gate.load() } }
-    await gate.waitForStarts(1)
-    await coordinator.cancelCurrent()
-    await gate.release(1, value: 8)
-    await #expect(throws: CancellationError.self) { try await pending.value }
-    #expect(await coordinator.isRefreshing == false)
-  }
-
-  @Test("Cancelling a consumer does not cancel another consumer's shared value")
-  func consumerCancellation() async throws {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    let gate = UsageCompletionGate<Int>()
-    let cancelled = Task { try await coordinator.value(for: "shared", policy: .reuse) { await gate.load() } }
-    await gate.waitForStarts(1)
-    let valid = Task { try await coordinator.value(for: "shared", policy: .reuse) { -1 } }
-    cancelled.cancel()
-    await gate.release(1, value: 42)
-    await #expect(throws: CancellationError.self) { try await cancelled.value }
-    #expect(try await valid.value == 42)
-  }
 
   @Test("Late provider limits cannot overwrite latest memory or persistent snapshot")
   func serviceLimitsOwnership() async throws {
@@ -130,51 +47,6 @@ struct UsageRefreshOwnershipTests {
     await #expect(throws: CancellationError.self) { try await pending.value }
     let store = try UsageStore(databaseURL: fixture.databaseURL)
     #expect(try store.usageLimitAccounts(providers: [.cursor]).isEmpty)
-  }
-
-  @Test("Shared connections never reuse a persisted previous account or harness quota")
-  func sharedLimitsDoNotInheritAnotherAccount() async throws {
-    let fixture = try UsageOwnershipDirectory()
-    let now = Date()
-    let prior = UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
-      accountLabel: "previous-account", status: .available, source: "fixture", detail: "", observedAt: now)
-    let store = try UsageStore(databaseURL: fixture.databaseURL)
-    try store.saveUsageLimitAccounts([prior], storedAt: now)
-    let service = LocalUsageService(
-      homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
-      usageDatabaseURL: fixture.databaseURL, usesSharedConnections: true,
-      sharedConnectionRevision: { 0 }, limitCollector: { _ in
-        [UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
-          accountLabel: "current-account", status: .unavailable, source: "fixture", detail: "", observedAt: now)]
-      })
-    let result = try await service.limitsSnapshot(refresh: true, enabledProviders: [.grok], allowCredentialAccess: false)
-    #expect(result.accounts.first?.accountLabel == "current-account")
-    #expect(result.accounts.first?.status == .unavailable)
-    #expect(result.codexWorkspaces.isEmpty)
-  }
-
-  @Test("shared account changes invalidate a suspended refresh without touching real accounts")
-  func changedSharedConnectionRejectsOldLimits() async throws {
-    final class Revision: @unchecked Sendable {
-      let lock = NSLock()
-      private var value: UInt64 = 0
-      func read() -> UInt64 { lock.withLock { value } }
-      func advance() { lock.withLock { value += 1 } }
-    }
-    let fixture = try UsageOwnershipDirectory()
-    let revision = Revision()
-    let gate = UsageCompletionGate<[UsageLimitAccount]>()
-    let service = LocalUsageService(homeDirectory: fixture.url, fileManager: .default,
-      credentialStore: UsageNoCredentials(), usageDatabaseURL: fixture.databaseURL,
-      usesSharedConnections: true, sharedConnectionRevision: { revision.read() },
-      limitCollector: { _ in await gate.load() })
-    let pending = Task { try await service.limitsSnapshot(refresh: true,
-      enabledProviders: [.cursor], allowCredentialAccess: false) }
-    await gate.waitForStarts(1)
-    revision.advance()
-    await gate.release(1, value: [account("old-account", now: Date())])
-    await #expect(throws: CancellationError.self) { try await pending.value }
-    #expect(try UsageStore(databaseURL: fixture.databaseURL).usageLimitAccounts(providers: [.cursor]).isEmpty)
   }
 
   @Test("Queued limits cannot persist after credential or shared-account invalidation", arguments: [false, true])
@@ -278,6 +150,86 @@ struct UsageRefreshOwnershipTests {
     }
     #expect(try await store.runtimeSyncState(endpoint: "wovenmatter://local")?.cursor == String(advancedCursor + 20))
     #expect(try await store.samples(in: DateInterval(start: now.addingTimeInterval(-1), duration: 2)).count == 21)
+  }
+
+  @Test("Non-cooperating superseded loads cannot return or replace cache", arguments: [false, true])
+  func supersededLoads(forceSameKey: Bool) async throws {
+    let coordinator = UsageRefreshCoordinator<String, Int>()
+    let gate = UsageCompletionGate<Int>()
+    let old = Task { try await coordinator.value(for: "old", policy: .refresh) { await gate.load() } }
+    await gate.waitForStarts(1)
+    let key = forceSameKey ? "old" : "new"
+    let current = Task {
+      try await coordinator.value(for: key, policy: forceSameKey ? .force : .refresh) { await gate.load() }
+    }
+    await gate.waitForStarts(2)
+    await gate.release(2, value: 22)
+    #expect(try await current.value == 22)
+    await gate.release(1, value: 11)
+    await #expect(throws: CancellationError.self) { try await old.value }
+    #expect(try await coordinator.value(for: key, policy: .reuse) { -1 } == 22)
+    #expect(await coordinator.isRefreshing == false)
+  }
+
+  @Test("All coalesced consumers can receive one successful generation")
+  func coalescedConsumers() async throws {
+    let coordinator = UsageRefreshCoordinator<String, Int>()
+    let gate = UsageCompletionGate<Int>()
+    let first = Task { try await coordinator.value(for: "shared", policy: .reuse) { await gate.load() } }
+    await gate.waitForStarts(1)
+    let registrations = UsageConsumerRegistrations(target: 20)
+    let consumers = (0..<20).map { _ in
+      Task { try await registeredConsumer(coordinator, registrations: registrations) }
+    }
+    await registrations.wait()
+    await gate.release(1, value: 42)
+    #expect(try await first.value == 42)
+    for consumer in consumers { #expect(try await consumer.value == 42) }
+    #expect(await gate.startCount == 1)
+  }
+
+  // Both registration and value entry execute on the coordinator actor without a hop.
+  // The synchronous signal therefore proves all consumers joined before releasing the load.
+  private func registeredConsumer(
+    _ coordinator: isolated UsageRefreshCoordinator<String, Int>,
+    registrations: UsageConsumerRegistrations
+  ) async throws -> Int {
+    registrations.arrive()
+    return try await coordinator.value(for: "shared", policy: .refresh) { -1 }
+  }
+
+  @Test("Cancelling a consumer does not cancel another consumer's shared value")
+  func consumerCancellation() async throws {
+    let coordinator = UsageRefreshCoordinator<String, Int>()
+    let gate = UsageCompletionGate<Int>()
+    let cancelled = Task { try await coordinator.value(for: "shared", policy: .reuse) { await gate.load() } }
+    await gate.waitForStarts(1)
+    let valid = Task { try await coordinator.value(for: "shared", policy: .reuse) { -1 } }
+    cancelled.cancel()
+    await gate.release(1, value: 42)
+    await #expect(throws: CancellationError.self) { try await cancelled.value }
+    #expect(try await valid.value == 42)
+  }
+
+  @Test("Shared connections never reuse a persisted previous account or harness quota")
+  func sharedLimitsDoNotInheritAnotherAccount() async throws {
+    let fixture = try UsageOwnershipDirectory()
+    let now = Date()
+    let prior = UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
+      accountLabel: "previous-account", status: .available, source: "fixture", detail: "", observedAt: now)
+    let store = try UsageStore(databaseURL: fixture.databaseURL)
+    try store.saveUsageLimitAccounts([prior], storedAt: now)
+    let service = LocalUsageService(
+      homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
+      usageDatabaseURL: fixture.databaseURL, usesSharedConnections: true,
+      sharedConnectionRevision: { 0 }, limitCollector: { _ in
+        [UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
+          accountLabel: "current-account", status: .unavailable, source: "fixture", detail: "", observedAt: now)]
+      })
+    let result = try await service.limitsSnapshot(refresh: true, enabledProviders: [.grok], allowCredentialAccess: false)
+    #expect(result.accounts.first?.accountLabel == "current-account")
+    #expect(result.accounts.first?.status == .unavailable)
+    #expect(result.codexWorkspaces.isEmpty)
   }
 
   private func waitForUsageJob(_ ready: () -> Bool) async throws {

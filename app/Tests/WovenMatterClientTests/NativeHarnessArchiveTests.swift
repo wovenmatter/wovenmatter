@@ -5,6 +5,7 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct NativeHarnessArchiveTests {
+
     @Test func nativeMessageMetadataCannotBeOverwrittenBySiblingDetails() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -13,6 +14,16 @@ struct NativeHarnessArchiveTests {
         #expect(metadata.messageScalars["role"] == "assistant")
         #expect(metadata.messageScalars["stopReason"] == "length")
     }
+
+    @Test func archivedHermesExportRetainsMetadata() throws {
+        let identity = HermesSessionArchive.identity(home: "/remote-workspaces/11111111-1111-1111-1111-111111111111/home/.hermes", storedID: "native-session", imported: true)
+        let message: HermesValue = ["id": .number(7), "role": "tool", "content": "full result", "tool_call_id": "call-1", "unknown_metadata": ["preserved": .bool(true)]]
+        let snapshot: HermesValue = ["id": "native-session", "messages": .array([message]), "compression_parent": "older-session"]
+        let batch = try HermesSessionImport(identity: identity, title: "Imported", createdAt: .now, messages: [message], nativeSnapshot: snapshot).nativeArchiveBatch()
+        #expect(batch.records.contains { $0.id == "message:7" && $0.payload.contains("unknown_metadata") })
+        #expect(batch.records.contains { $0.id == "session.export" && $0.payload.contains("compression_parent") })
+    }
+
 
     @Test(.timeLimit(.minutes(3)))
     func oversizedNativeRecordsRemainCompleteSearchableAndUseSanitizedOffsets() async throws {
@@ -71,14 +82,6 @@ struct NativeHarnessArchiveTests {
         #expect(try OpenCodeHTTPClient.nativeSnapshot(path: "/api/config", value: ["token": "private"], sourceID: "fixture") == nil)
     }
 
-    @Test func archivedHermesExportRetainsMetadata() throws {
-        let identity = HermesSessionArchive.identity(home: "/remote-workspaces/11111111-1111-1111-1111-111111111111/home/.hermes", storedID: "native-session", imported: true)
-        let message: HermesValue = ["id": .number(7), "role": "tool", "content": "full result", "tool_call_id": "call-1", "unknown_metadata": ["preserved": .bool(true)]]
-        let snapshot: HermesValue = ["id": "native-session", "messages": .array([message]), "compression_parent": "older-session"]
-        let batch = try HermesSessionImport(identity: identity, title: "Imported", createdAt: .now, messages: [message], nativeSnapshot: snapshot).nativeArchiveBatch()
-        #expect(batch.records.contains { $0.id == "message:7" && $0.payload.contains("unknown_metadata") })
-        #expect(batch.records.contains { $0.id == "session.export" && $0.payload.contains("compression_parent") })
-    }
 }
 
 /// Tests large copies using a disk sink and bounded metadata, rather than

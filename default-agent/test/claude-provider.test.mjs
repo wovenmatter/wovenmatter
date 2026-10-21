@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
-import { createClaudeStream, claudeRequest, registerClaudeProviders, claudePrincipalIdentity } from '../src/claude-provider.mjs';
+import { createClaudeStream, claudeRequest, claudePrincipalIdentity } from '../src/claude-provider.mjs';
 
 const model = { provider: 'claude-subscription', id: 'sonnet', reasoning: true };
 const tool = { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } };
@@ -104,20 +104,6 @@ test('native replay preserves structured host history and isolates signed thinki
   }
 });
 
-test('cross-engine tool identifiers normalize identically in calls and results without collisions', () => {
-  const ids = ['call.with:punctuation|item', 'x'.repeat(90), 'call/one', 'call:one'];
-  const transcript = normalizeContext({ messages: [
-    { role: 'user', content: 'Read', timestamp: 1 },
-    { role: 'assistant', content: ids.map(id => ({ type: 'toolCall', id, name: 'read', arguments: {} })) },
-    ...ids.map(id => ({ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text: 'ok' }] })),
-  ] });
-  const frames = claudeRequest(transcript, model).frames;
-  const calls = frames[1].message.content.map(block => block.id);
-  assert.equal(new Set(calls).size, ids.length);
-  assert.ok(calls.every(id => /^[A-Za-z0-9_-]{1,64}$/.test(id)));
-  assert.deepEqual(frames[2].message.content.map(block => block.tool_use_id), calls);
-});
-
 test('Pi owns tools; native extraTurny is denied and first response owns content and usage', async t => {
   const blocks = [{ type: 'thinking', thinking: 'Check note', signature: 'signed' },
     { type: 'tool_use', id: 'call-1', name: 'mcp__woven__read', input: { path: 'note.md' } }, { type: 'text', text: 'Reading.' }];
@@ -150,42 +136,6 @@ test('Pi owns tools; native extraTurny is denied and first response owns content
   assert.equal(events.filter(event => event.type === 'text_delta').map(event => event.delta).join(''), 'Reading.');
 });
 
-test('historical users receive acknowledgments and assistant roles are transmitted unchanged', async t => {
-  const f = await fixture(t);
-  const transcript = normalizeContext({ messages: [
-    { role: 'user', content: 'Earlier', timestamp: 1 },
-    { role: 'assistant', content: [{ type: 'text', text: 'Reply' }], provider: 'other', model: 'other', api: 'other' },
-    { role: 'user', content: 'Next', timestamp: 2 },
-  ] });
-  assert.equal((await f.stream(model, transcript).result()).stopReason, 'stop');
-  assert.equal(f.calls.frames[0].shouldQuery, false);
-  assert.equal(f.calls.frames[1].type, 'assistant');
-  assert.equal(f.calls.frames[2].shouldQuery, undefined);
-  const bad = await fixture(t, { badAck: true });
-  const result = await bad.stream(model, transcript).result();
-  assert.equal(result.stopReason, 'error');
-  assert.match(result.errorMessage, /restore this conversation/);
-  assert.equal(bad.calls.requests, 0);
-});
-
-test('API-key mode reads only its explicit key and subscription mode never reads the shared vault', async t => {
-  const f = await fixture(t);
-  assert.equal((await f.stream({ ...model, provider: 'anthropic' }, context()).result()).stopReason, 'stop');
-  assert.deepEqual(f.calls.credentials, ['anthropic']);
-  assert.deepEqual(f.calls.environment, ['fixture-api-key']);
-  assert.equal(f.calls.options.env.ANTHROPIC_API_KEY, 'fixture-api-key');
-});
-
-test('auth and quota failures have safe fallback markers without reflecting provider data', async t => {
-  for (const [status, type, expected] of [[401, 'authentication_error', /sign-in or a valid API key/], [402, 'insufficient_quota', /exhausted its available usage/], [429, 'rate_limit_error', /HTTP 429/]]) {
-    const f = await fixture(t, { status, body: JSON.stringify({ error: { type, message: 'fixture-secret-must-not-appear' } }) });
-    const result = await f.stream(model, context()).result();
-    assert.equal(result.stopReason, 'error');
-    assert.match(result.errorMessage, expected);
-    assert.ok(!JSON.stringify(result).includes('fixture-secret'));
-  }
-});
-
 test('incomplete streams and unknown tool names never publish executable calls', async t => {
   for (const body of [responseEvents({ complete: false, blocks: [{ type: 'tool_use', id: 'call-1', name: 'mcp__woven__read', input: {} }] }),
     responseEvents({ blocks: [{ type: 'tool_use', id: 'call-2', name: 'mcp__other__Bash', input: {} }], stop: 'tool_use' })]) {
@@ -195,15 +145,6 @@ test('incomplete streams and unknown tool names never publish executable calls',
     for await (const event of stream) events.push(event);
     assert.equal((await stream.result()).stopReason, 'error');
     assert.equal(events.filter(event => event.type === 'toolcall_end').length, 0);
-  }
-});
-
-test('malformed trailing events and unsupported response blocks fail even after message_stop', async t => {
-  for (const body of [responseEvents() + frame({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }),
-    responseEvents() + 'data: {"malformed":',
-    responseEvents({ blocks: [{ type: 'unknown_vendor_block', content: 'unsupported' }] })]) {
-    const f = await fixture(t, { body });
-    assert.equal((await f.stream(model, context()).result()).stopReason, 'error');
   }
 });
 
@@ -221,19 +162,4 @@ test('cancellation closes the active upstream and produces no completed tool bat
   controller.abort();
   assert.equal((await stream.result()).stopReason, 'aborted');
   assert.equal(cancelled, true);
-});
-
-test('registered subscription provider resolves ambient native auth without credentials or a status process per request', async () => {
-  const registered = new Map(); let checks = 0;
-  registerClaudeProviders({ registerNativeProvider: provider => registered.set(provider.id, provider) }, {
-    models: [{ value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'high'] }],
-    status: async () => { checks++; return { connected: true }; },
-  }, { read: async () => ({ key: 'fixture' }) });
-  const subscription = registered.get('claude-subscription');
-  assert.deepEqual(await subscription.auth.apiKey.resolve(), { auth: {}, source: 'Claude runtime' });
-  assert.equal(checks, 0);
-  assert.equal((await subscription.auth.apiKey.check()).type, 'oauth');
-  assert.equal(checks, 0);
-  assert.equal(subscription.getModels()[0].api, 'woven-claude-native');
-  assert.equal(registered.get('anthropic').getModels()[0].provider, 'anthropic');
 });

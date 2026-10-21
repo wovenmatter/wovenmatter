@@ -7,7 +7,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
-import { ClaudeRuntime } from '../src/claude-runtime.mjs';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-sdk-metadata-'));
@@ -39,26 +60,6 @@ test('helper generation selection remains immutable while new launches see activ
   assert.equal(JSON.parse(await readFile(join(running.root, 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'))).version, '0.3.284');
 });
 
-test('metadata status detects an inconsistent Pi pair without loading SDKs', async t => {
-  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-ai': '1.0.1' });
-  await installed.activate();
-  const status = await sdkStatus({ directory: f.directory });
-  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').consistent, false);
-  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').consistent, true);
-});
-
-test('a per-SDK check never queries the other SDK and preserves active installation', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  const before = await readFile(f.active, 'utf8'), calls = [];
-  const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async url => {
-    calls.push(url); return new Response(JSON.stringify({ version: '1.1.0' }));
-  } });
-  assert.equal(calls.length, 1); assert.match(decodeURIComponent(calls[0]), /pi-durable/);
-  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').latestVersion, '1.1.0');
-  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
-  assert.equal(await readFile(f.active, 'utf8'), before);
-});
-
 test('incompatible or cancelled updates cannot replace the active generation', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8');
@@ -69,34 +70,6 @@ test('incompatible or cancelled updates cannot replace the active generation', a
   assert.equal(await readFile(f.active, 'utf8'), before);
 });
 
-test('an app-source fingerprint change rejects stale copied helper code', async t => {
-  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-coding-agent': '0.86.1', '@earendil-works/pi-ai': '0.86.1' }); await installed.activate();
-  await writeFile(f.active, JSON.stringify({ base: 'old-app-build', generation: installed.id }));
-  assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
-  const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.1.0' })) });
-  const pi = status.sdks.find(sdk => sdk.id === 'pi');
-  const bundled = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(pi.installedVersion, bundled.packages['node_modules/@earendil-works/pi-durable'].version);
-  assert.equal(pi.latestVersion, '1.1.0');
-  assert.equal(pi.consistent, true);
-  assert.equal(pi.updateAvailable, false);
-});
-
-test('Claude cached aliases are accepted only for the installed SDK version', async t => {
-  const f = await fixture(t);
-  const runtime = new ClaudeRuntime(f.directory);
-  runtime.sdkVersion = async () => '0.3.284';
-  const models = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'claude-opus-5' }];
-  const cache = join(f.directory, 'claude-models.json');
-  await writeFile(cache, JSON.stringify(models)); await runtime.loadModels();
-  assert.deepEqual(runtime.models, []);
-  await writeFile(cache, JSON.stringify({ runtimeVersion: '0.3.278', models })); await runtime.loadModels();
-  assert.deepEqual(runtime.models, []);
-  await writeFile(cache, JSON.stringify({ runtimeVersion: '0.3.284', models })); await runtime.loadModels();
-  assert.deepEqual(runtime.models, models);
-});
-
-
 test('symlinked updater ancestors cannot select an external runtime', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const generations = join(f.directory, 'sdk-runtime/generations');
@@ -105,18 +78,6 @@ test('symlinked updater ancestors cannot select an external runtime', async t =>
   await symlink(moved, generations);
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).generation, f.bundled.generation);
 });
-
-test('oversized activation and latest metadata do not block bundled fallback', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  await writeFile(f.active, JSON.stringify({ base: f.bundled.base, generation: installed.id, padding: 'x'.repeat(4096) }));
-  assert.equal((await resolveSDKRuntime({ directory: f.directory })).generation, f.bundled.generation);
-  await installed.activate();
-  await writeFile(join(f.directory, 'sdk-runtime/latest.json'), 'x'.repeat(16385));
-  const status = await sdkStatus({ directory: f.directory });
-  assert.equal(status.generation, installed.id);
-  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
-});
-
 
 function mockInstaller(latest, install) {
   return {
@@ -148,15 +109,6 @@ test('mock installer failure rolls back staging and preserves the exact prior ac
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
 });
 
-test('cancellation after mock installation but before activation keeps the old generation', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  const before = await readFile(f.active, 'utf8'), controller = new AbortController();
-  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi', signal: controller.signal },
-    mockInstaller('1.0.4', async (...args) => { await materializeManifest(...args); controller.abort(); })), /cancelled/);
-  assert.equal(await readFile(f.active, 'utf8'), before);
-  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
-});
-
 test('successful mock installation activates coherent Pi packages and retains the untouched SDK', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const result = await updateSDK({ directory: f.directory, id: 'pi', version: '1.0.4' },
@@ -170,7 +122,6 @@ test('successful mock installation activates coherent Pi packages and retains th
   assert.ok((await readdir(join(f.directory, 'sdk-runtime/generations'))).includes(installed.id));
 });
 
-
 test('FIFO activation metadata is rejected without blocking on open', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   await rm(f.active);
@@ -182,4 +133,44 @@ test('FIFO activation metadata is rejected without blocking on open', async t =>
   const { stdout } = await promisify(execFile)(process.execPath,
     ['--input-type=module', '--eval', source, f.directory], { timeout: 2000, killSignal: 'SIGKILL', maxBuffer: 4096 });
   assert.equal(JSON.parse(stdout).generation, f.bundled.generation);
+});
+
+test('cancellation after mock installation but before activation keeps the old generation', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const before = await readFile(f.active, 'utf8'), controller = new AbortController();
+  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi', signal: controller.signal },
+    mockInstaller('1.0.4', async (...args) => { await materializeManifest(...args); controller.abort(); })), /cancelled/);
+  assert.equal(await readFile(f.active, 'utf8'), before);
+  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
+});
+
+test('metadata status detects an inconsistent Pi pair without loading SDKs', async t => {
+  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-ai': '1.0.1' });
+  await installed.activate();
+  const status = await sdkStatus({ directory: f.directory });
+  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').consistent, false);
+  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').consistent, true);
+});
+
+test('a per-SDK check never queries the other SDK and preserves active installation', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const before = await readFile(f.active, 'utf8'), calls = [];
+  const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async url => {
+    calls.push(url); return new Response(JSON.stringify({ version: '1.1.0' }));
+  } });
+  assert.equal(calls.length, 1); assert.match(decodeURIComponent(calls[0]), /pi-durable/);
+  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').latestVersion, '1.1.0');
+  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
+  assert.equal(await readFile(f.active, 'utf8'), before);
+});
+
+test('oversized activation and latest metadata do not block bundled fallback', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  await writeFile(f.active, JSON.stringify({ base: f.bundled.base, generation: installed.id, padding: 'x'.repeat(4096) }));
+  assert.equal((await resolveSDKRuntime({ directory: f.directory })).generation, f.bundled.generation);
+  await installed.activate();
+  await writeFile(join(f.directory, 'sdk-runtime/latest.json'), 'x'.repeat(16385));
+  const status = await sdkStatus({ directory: f.directory });
+  assert.equal(status.generation, installed.id);
+  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
 });

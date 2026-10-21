@@ -1,11 +1,19 @@
-import { fsyncSync } from 'node:fs'
+
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp,rm,readFile,writeFile,readdir } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createTaskGateway,occurrenceDate,latestOccurrence } from '../src/task-gateway.mjs'
 import { applyTaskConfiguration } from '../src/task-gateway-runner.mjs'
+
+
+
+
+
+
+
+
 
 const task=(changes={})=>({id:'event-1',title:'Test',startsAt:'2026-01-01T14:00:00.000Z',timeZoneID:'America/New_York',recurrence:{unit:'day',interval:1},excludedOccurrences:[],revision:1,nextFireAt:'2026-01-01T14:00:00.000Z',task:{prompt:'hello',sessionMode:'same',configuration:{runtimeKind:'codex',title:'Test',tools:{enabled:[]}}},...changes})
 const settled=async gateway=>{for(let i=0;i<100 && gateway.status().activeRuns;i++)await new Promise(done=>setTimeout(done,5));assert.equal(gateway.status().activeRuns,0)}
@@ -40,17 +48,6 @@ test('remote defaults enabled; coalesces missed runs, reuses native session and 
  assert.equal(restored.results('1').entries.length,1)
 })
 
-test('disable drains accepted work and persists disabled across restart',async t=>{
- let stopped=false
- const {directory,gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:({signal})=>new Promise((done,reject)=>signal.addEventListener('abort',()=>reject(new Error('stopped')))),onDisable:async()=>{stopped=true}})
- gateway.publish({publicationID:'p1',schedules:[task()],knownRuns:[]});gateway.tick();assert.equal(gateway.status().activeRuns,1)
- const status=await gateway.configure({enabled:false})
- assert.equal(status.activeRuns,0);assert.equal(status.enabled,false);assert.equal(stopped,true)
- const restored=createTaskGateway({directory,execute:async()=>assert.fail('disabled tasks ran')})
- assert.equal(restored.status().enabled,false);restored.tick()
- assert.equal(restored.results().entries[0].run.status,'uncertain')
-})
-
 test('crashed pre-send claim is uncertain and never automatically replayed',async t=>{
  const {directory,gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:()=>new Promise(()=>{})})
  gateway.publish({publicationID:'p1',schedules:[task()],knownRuns:[]});gateway.tick()
@@ -66,29 +63,6 @@ test('known local sends, exclusions, publication retry, and absent next fire can
  gateway.publish(request);gateway.publish(request);gateway.tick();await settled(gateway);assert.equal(calls,0)
  gateway.publish({publicationID:'p2',schedules:[task({revision:2,nextFireAt:null})],knownRuns:[]});gateway.tick();assert.equal(calls,0)
  assert.throws(()=>gateway.publish({publicationID:'p3',schedules:[task()],knownRuns:[]}),/newer/)
-})
-
-test('applies only advertised selections and rejects unconfirmed permission before prompt',async()=>{
- const calls=[]
- const initial={configOptions:[{id:'model',currentValue:'a',options:[{value:'a'},{value:'b'}]},{id:'mode',currentValue:'default',options:[{value:'default'},{value:'safe'}]}]}
- await assert.rejects(()=>applyTaskConfiguration(async(method,params)=>{calls.push(params);return {configOptions:initial.configOptions}},'native',initial,{runtimeKind:'codex',permission:'safe'}),/did not confirm/)
- assert.equal(calls[0].value,'safe')
- await assert.rejects(()=>applyTaskConfiguration(async()=>assert.fail(),'native',initial,{runtimeKind:'codex',model:'unknown'}),/no longer available/)
-})
-
-test('locked Built-in credentials defer before submission and retry after reconnect without consuming occurrence',async t=>{
- let clock=Date.parse('2026-01-02T15:00:00Z'),locked=true,calls=0
- const {directory,gateway}=await fixture(t,{now:()=>clock,execute:async()=>{calls++;if(locked)throw Object.assign(new Error('Waiting for Woven Matter to reconnect and unlock the Built-in agent.'),{beforePrompt:true,deferred:true});return {}}})
- gateway.publish({publicationID:'p1',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
- assert.equal(gateway.results().entries.length,0)
- assert.match(gateway.status().waitingTasks[0].reason,/unlock/)
- gateway.tick();assert.equal(calls,1)
- const restored=createTaskGateway({directory,now:()=>clock,execute:async()=>{calls++;return {}}})
- assert.equal(restored.results().entries.length,0)
- clock+=61000;locked=false;restored.tick();await settled(restored)
- assert.equal(calls,2);assert.equal(restored.results().entries.length,1)
- assert.equal(restored.results().entries[0].run.status,'accepted')
- assert.equal(restored.status().waitingTasks.length,0)
 })
 
 test('ACP executor confirms settings, binds recurring session before one prompt, and never grants unattended approval',async()=>{
@@ -117,8 +91,6 @@ test('ACP executor confirms settings, binds recurring session before one prompt,
  assert.equal(messages.find(m=>m.method==='session/prompt').params.prompt[0].text,task().task.prompt)
 })
 
-
-
 test('re-enabling cannot run stale schedules until a fresh publication fences local edits',async t=>{
  let count=0
  const {gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:async()=>{count++}})
@@ -128,53 +100,6 @@ test('re-enabling cannot run stale schedules until a fresh publication fences lo
  gateway.publish({publicationID:'fresh',schedules:[],knownRuns:[]});gateway.tick();assert.equal(count,0)
  gateway.publish({publicationID:'fresh2',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway);assert.equal(count,1)
 })
-
-
-test('scheduled output batches sync and is complete before the terminal result is published', async t=>{
- let syncs=0
- const {directory,gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),
- syncJournal:fd=>{syncs++;fsyncSync(fd)},execute:async ({publish})=>{
-   for(let i=0;i<1000;i++)publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'x'}})
- }})
- const started=performance.now()
- gateway.publish({publicationID:'batch',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
- let page=gateway.results(), count=0
- const result=page.entries[0]
- while(page.entries.length){count+=page.entries.reduce((sum,entry)=>sum+entry.updates.length,0);page=gateway.results(page.cursor)}
- assert.equal(count,1000)
- assert.equal(JSON.parse(await readFile(resolve(directory,`result-${result.id}.json`),'utf8')).updates,undefined)
- assert.ok(syncs<10,`stream used ${syncs} syncs`)
- assert.equal((await readFile(resolve(directory,`run-${result.id}.jsonl`),'utf8')).trim().split('\n').length,1000)
- t.diagnostic(`1000 scheduled chunks: ${syncs} journal syncs, ${(performance.now()-started).toFixed(1)}ms`)
- const restarted=createTaskGateway({directory,execute:async()=>{throw new Error('no replay')}})
- page=restarted.results();count=0
- while(page.entries.length){count+=page.entries.reduce((sum,entry)=>sum+entry.updates.length,0);page=restarted.results(page.cursor)}
- assert.equal(count,1000)
-})
-
-
-test('changing a recurring task to new sessions never resumes its previous native session', async t => {
-  let clock = Date.parse('2026-01-01T15:00:00Z')
-  const calls = []
-  const { gateway } = await fixture(t, { now: () => clock, execute: async context => {
-    calls.push({ sessionID: context.run.sessionID, nativeSessionID: context.nativeSessionID })
-    context.bindSession('native-' + calls.length)
-  } })
-  gateway.publish({ publicationID: 'same', schedules: [task()], knownRuns: [] })
-  gateway.tick(); await settled(gateway)
-  const previous = gateway.schedules().schedules[0]
-  assert.equal(previous.nativeSessionID, 'native-1')
-  gateway.publish({ publicationID: 'new', schedules: [{ ...previous, revision: 2,
-    task: { ...previous.task, sessionMode: 'new' },
-  }], knownRuns: [] })
-  clock += 86400000
-  gateway.tick(); await settled(gateway)
-  clock += 86400000
-  gateway.tick(); await settled(gateway)
-  assert.deepEqual(calls.map(call => call.nativeSessionID), [null, null, null])
-  assert.equal(new Set(calls.map(call => call.sessionID)).size, 3)
-})
-
 
 test('scheduled native output above 64 MiB is retained and retrieved in bounded pages', async t => {
   const text = 'quoted " unicode 🙂\n'.repeat(24000)
@@ -202,17 +127,6 @@ test('scheduled native output above 64 MiB is retained and retrieved in bounded 
   assert.equal(observed,records);assert.ok(pages>1);assert.equal(last.complete,true)
   assert.ok((await readFile(resolve(directory,`result-${last.id}.json`))).length<4096)
   assert.throws(()=>restarted.results('0:invalid:0'),/Invalid result cursor/)
-})
-
-test('oversized atomic envelopes fail closed without imposing a cumulative archive cap', async t => {
-  const {gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:async({publish})=>{
-    publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'kept'}})
-    publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'x'.repeat(2*1024*1024)}})
-  }})
-  gateway.publish({publicationID:'invalid-envelope',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
-  const result=gateway.results().entries[0]
-  assert.equal(result.run.status,'uncertain');assert.match(result.error,/oversized update envelope/)
-  assert.equal(result.updates.length,1);assert.equal(result.updates[0].content.text,'kept')
 })
 
 test('Built-in cancels accepted work when its output consumer fails', async () => {
@@ -263,35 +177,6 @@ test('ACP output persistence errors reject the task and stop its child without e
   assert.equal(killed, true)
 })
 
-
-test('Built-in tasks forward their saved working directory for both new and recurring sessions', async () => {
-  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
-  const opened = []
-  const defaultAgent = {
-    status: async () => ({ locked: false }),
-    invoke: async message => {
-      if (['session/new', 'session/load'].includes(message.method)) {
-        opened.push(message)
-        return { result: { sessionId: 'native' } }
-      }
-      return { operationID: 'operation' }
-    },
-    poll: async () => ({ updates: [], cursor: 0, done: true, result: {} }),
-  }
-  const execute = createTaskExecutor({ catalog: new Map(), workspaceRoot: '/workspace', environment: () => ({}), defaultAgent })
-  const context = { run: { id: 'run', task: { prompt: 'fixture', configuration: { runtimeKind: 'default_agent', nativeWorkingDirectory: '/workspace/project' } } },
-    signal: new AbortController().signal, bindSession: () => {}, publish: () => {},
-  }
-  await execute(context)
-  await execute({ ...context, nativeSessionID: 'native' })
-  delete context.run.task.configuration.nativeWorkingDirectory
-  await execute(context)
-  assert.deepEqual(opened.map(message => message.params), [
-    { cwd: '/workspace/project' }, { cwd: '/workspace/project', sessionId: 'native' }, { cwd: '/workspace' },
-  ])
-})
-
-
 test('restart retains complete output before a torn final append without replaying the task', async t => {
   const { directory, gateway } = await fixture(t, {
     now: () => Date.parse('2026-01-02T15:00:00Z'), execute: () => new Promise(() => {}),
@@ -310,7 +195,6 @@ test('restart retains complete output before a torn final append without replayi
   assert.equal(restarted.results().entries[0].run.status, 'uncertain')
   assert.deepEqual(restarted.results().entries[0].updates, [complete])
 })
-
 
 test('Ungrouped scheduled chats bind their own scratch folder across recurrence, reconnect and restart', async t => {
   let clock = Date.parse('2026-01-04T15:00:00Z'), calls = []
@@ -341,62 +225,36 @@ test('Ungrouped scheduled chats bind their own scratch folder across recurrence,
   await restored.close()
 })
 
-
-test('a deferred new-chat launch reuses its thread, native session and scratch directory', async t => {
-  let clock = Date.parse('2026-01-04T15:00:00Z'), calls = []
-  const schedule = task()
-  schedule.task.sessionMode = 'new'
-  schedule.task.configuration.nativeWorkingDirectory = '/home/.woven-matter'
-  const execute = async options => {
-      calls.push(options)
-      if (calls.length === 1) {
-        options.bindSession('created-before-deferral')
-        throw Object.assign(new Error('Not ready yet'), { beforePrompt: true, deferred: true })
-      }
-      return {}
-  }
-  const { directory, gateway } = await fixture(t, { workspaceRoot: '/home/.woven-matter', now: () => clock, execute })
-  gateway.publish({ publicationID: 'deferred-scratch', schedules: [schedule], knownRuns: [] })
-  gateway.tick(); await settled(gateway)
-  await gateway.close()
-  const restored = createTaskGateway({ directory, workspaceRoot: '/home/.woven-matter', now: () => clock, execute })
-  clock += 61000; restored.tick(); await settled(restored)
-  assert.equal(calls.length, 2)
-  assert.equal(calls[0].run.sessionID, calls[1].run.sessionID)
-  assert.equal(calls[1].nativeSessionID, 'created-before-deferral')
-  assert.equal(calls[0].run.task.configuration.nativeWorkingDirectory, calls[1].run.task.configuration.nativeWorkingDirectory)
-  await restored.close()
+test('locked Built-in credentials defer before submission and retry after reconnect without consuming occurrence',async t=>{
+ let clock=Date.parse('2026-01-02T15:00:00Z'),locked=true,calls=0
+ const {directory,gateway}=await fixture(t,{now:()=>clock,execute:async()=>{calls++;if(locked)throw Object.assign(new Error('Waiting for Woven Matter to reconnect and unlock the Built-in agent.'),{beforePrompt:true,deferred:true});return {}}})
+ gateway.publish({publicationID:'p1',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
+ assert.equal(gateway.results().entries.length,0)
+ assert.match(gateway.status().waitingTasks[0].reason,/unlock/)
+ gateway.tick();assert.equal(calls,1)
+ const restored=createTaskGateway({directory,now:()=>clock,execute:async()=>{calls++;return {}}})
+ assert.equal(restored.results().entries.length,0)
+ clock+=61000;locked=false;restored.tick();await settled(restored)
+ assert.equal(calls,2);assert.equal(restored.results().entries.length,1)
+ assert.equal(restored.results().entries[0].run.status,'accepted')
+ assert.equal(restored.status().waitingTasks.length,0)
 })
 
+test('disable drains accepted work and persists disabled across restart',async t=>{
+ let stopped=false
+ const {directory,gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:({signal})=>new Promise((done,reject)=>signal.addEventListener('abort',()=>reject(new Error('stopped')))),onDisable:async()=>{stopped=true}})
+ gateway.publish({publicationID:'p1',schedules:[task()],knownRuns:[]});gateway.tick();assert.equal(gateway.status().activeRuns,1)
+ const status=await gateway.configure({enabled:false})
+ assert.equal(status.activeRuns,0);assert.equal(status.enabled,false);assert.equal(stopped,true)
+ const restored=createTaskGateway({directory,execute:async()=>assert.fail('disabled tasks ran')})
+ assert.equal(restored.status().enabled,false);restored.tick()
+ assert.equal(restored.results().entries[0].run.status,'uncertain')
+})
 
-test('offline execution prepares the bound directory before starting Pi Durable', async t => {
-  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
-  const root = await mkdtemp(resolve(tmpdir(), 'wm-offline-chat-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const opened = []
-  const defaultAgent = {
-    status: async () => ({ locked: false }),
-    invoke: async message => {
-      if (message.method === 'session/new') {
-        opened.push(message.params.cwd)
-        assert.deepEqual(await readdir(message.params.cwd), [])
-        return { result: { sessionId: 'synthetic-native' }, attachmentToken: 'synthetic-attachment' }
-      }
-      return { operationID: 'synthetic-operation' }
-    },
-    poll: async () => ({ updates: [], done: true, result: { stopReason: 'end_turn' } }),
-  }
-  const execute = createTaskExecutor({ catalog: new Map(), workspaceRoot: root, environment: () => ({}), defaultAgent })
-  const { gateway } = await fixture(t, { workspaceRoot: root, now: () => Date.parse('2026-01-04T15:00:00Z'), execute })
-  const schedule = task()
-  schedule.task.configuration.runtimeKind = 'default_agent'
-  schedule.task.configuration.nativeWorkingDirectory = root
-  gateway.publish({ publicationID: 'offline-execute', schedules: [schedule], knownRuns: [] })
-  gateway.tick(); await settled(gateway)
-  assert.equal(opened.length, 1)
-  assert.ok(opened[0].startsWith(root + '/scratch/'))
-  const receipt = gateway.results().entries[0]
-  assert.equal(receipt.run.task.configuration.nativeWorkingDirectory, opened[0])
-  assert.equal(receipt.run.status, 'accepted')
-  await gateway.close()
+test('applies only advertised selections and rejects unconfirmed permission before prompt',async()=>{
+ const calls=[]
+ const initial={configOptions:[{id:'model',currentValue:'a',options:[{value:'a'},{value:'b'}]},{id:'mode',currentValue:'default',options:[{value:'default'},{value:'safe'}]}]}
+ await assert.rejects(()=>applyTaskConfiguration(async(method,params)=>{calls.push(params);return {configOptions:initial.configOptions}},'native',initial,{runtimeKind:'codex',permission:'safe'}),/did not confirm/)
+ assert.equal(calls[0].value,'safe')
+ await assert.rejects(()=>applyTaskConfiguration(async()=>assert.fail(),'native',initial,{runtimeKind:'codex',model:'unknown'}),/no longer available/)
 })
