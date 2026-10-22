@@ -100,6 +100,14 @@ def disconnect_snapshot(file):
         for name in tables:
             if name in transient or (name.startswith("companion_") and name not in retained_content):
                 db.execute("DELETE FROM " + quote(name))
+        # A new device identity seeds its own local harness catalog at startup.
+        # Keep copied agent rows for history references, but retire them from the
+        # active catalog so they cannot appear as duplicate runnable harnesses.
+        if "dashboard_agents" in tables:
+            db.execute("""UPDATE dashboard_agents
+                SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), status='offline'
+                WHERE governing_plane='wovenmatter_macos' AND authority_kind='device_owned'
+                  AND runtime_device_id IS NULL AND deleted_at IS NULL""")
         # A snapshot is a new library. Keep materialized foreign history, but
         # discard the old synchronization stream and all routes to its owners.
         library_id = str(uuid.uuid4())

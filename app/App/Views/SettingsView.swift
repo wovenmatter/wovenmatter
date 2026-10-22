@@ -33,7 +33,6 @@ private enum SettingsSection: Equatable {
 
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
-    @Environment(\.openWindow) private var openWindow
     var reservesRailControlSpace = false
     var executionOnly = false
     var clientContext: CentralLibraryClientModel?
@@ -162,12 +161,6 @@ struct SettingsView: View {
             reservesRailControlSpace: reservesRailControlSpace
         ) {
             VStack(spacing: 2) {
-                SettingsDestinationRow(
-                    title: "Set up harnesses",
-                    detail: "Install more harnesses or revisit Pi Durable setup.",
-                    icon: { DashboardLucideIcon(glyph: .plus, size: 15) },
-                    action: { openWindow(id: HarnessSetupPresentation.windowID) }
-                )
                 if !executionOnly {
                 SettingsDestinationRow(
                     title: "General",
