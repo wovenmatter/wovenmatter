@@ -141,6 +141,6 @@ enum DevelopmentLaunch {
             }
             try await pause()
         }
-        throw BackendRPCError.remote("The central Woven Matter app did not become ready for local Dev clients. Check that it includes local Dev client support.")
+        throw BackendRPCError.remote("The central Woven Matter app did not become ready. Install a version with local Dev client support and enable Allow local Dev clients in its Devices settings once.")
     }
 }

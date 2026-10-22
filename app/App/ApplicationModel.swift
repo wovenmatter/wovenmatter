@@ -704,8 +704,8 @@ final class ApplicationModel {
             startAgentToolRuntime()
             startDashboardStoreIfReady()
             await companionHost.startForCentralDatabase()
-            if LocalExecutionRole.current == .standalone, !DevelopmentLaunch.isSnapshot {
-                try startDevelopmentConnectionService()
+            if LocalExecutionRole.current == .standalone, companionHost.allowsLocalDevelopment {
+                await companionHost.setAllowsLocalDevelopment(true)
             }
             Task { [weak self] in
                 await self?.refreshDatabases()
@@ -4350,7 +4350,9 @@ extension ApplicationModel {
     /// the background service's control commands or starting another owner.
     func startDevelopmentConnectionService(socketURL: URL? = nil) throws {
         guard backendRPCServer == nil else { return }
-        let server = BackendRPCServer(socketURL: try socketURL ?? LocalExecutionRole.backendSocketURL(workspaceDirectory: Self.dashboardSupportDirectory()))
+        let socket = try socketURL ?? LocalExecutionRole.backendSocketURL(workspaceDirectory: Self.dashboardSupportDirectory())
+        try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(socket)
+        let server = BackendRPCServer(socketURL: socket)
         try server.start { [weak self] request in
             guard ["development.status", "development.connect"].contains(request.method) else {
                 return BackendRPCResponse(id: request.id, error: "This foreground host only accepts development connections.")
