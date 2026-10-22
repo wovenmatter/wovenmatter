@@ -298,6 +298,9 @@ struct SettingsHarnessRuntimeMaintenanceView: View {
                     }
                 }
             }
+            if workspaceID == nil, runtimeKind != .defaultAgent {
+                SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
+            }
 
             if let error = runtimeError {
                 SettingsError(error)
@@ -311,7 +314,7 @@ struct SettingsHarnessRuntimeMaintenanceView: View {
             return model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace)
         }
         if runtimeKind == .opencode {
-            return model.openCode?.isInstalled == true && model.openCode?.isEnabled == true
+            return model.openCode?.isInstalled == true
         }
         return !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
             && localAvailability?.isReady == true
@@ -343,13 +346,9 @@ struct SettingsHarnessRuntimeMaintenanceView: View {
         }
         if runtimeKind == .opencode {
             guard let openCode = model.openCode else { return "Checking" }
-            return openCode.isEnabled ? "Enabled" : "Not enabled"
+            return openCode.isInstalled ? "Installed" : "Not installed"
         }
         if model.checkingLocalACPRuntimeKinds.contains(runtimeKind) { return "Checking" }
-        if !model.isLocalACPRuntimeCredentialAccessEnabled(runtimeKind),
-           localAvailability?.executablePath != nil {
-            return "Not enabled"
-        }
         if localAvailability?.isReady == true,
            !model.isLocalACPAgentReady(runtimeKind) {
             return "Workspace unavailable"
@@ -441,9 +440,7 @@ struct SettingsLocalRuntimeUpdateButton: View {
         }
         .buttonStyle(SettingsQuietButtonStyle())
         .disabled(
-            checking || model.checkingRuntimeInventory
-                || !model.installingLocalACPRuntimeKinds.isEmpty
-                || model.openCode?.isInstalling == true
+            checking || model.runtimeMaintenanceBusy(runtimeKind)
                 || (hasUpdate && model.localRuntimeMaintenanceHasActiveConversation)
         )
         .accessibilityLabel(label + " for " + runtimeKind.displayName)
@@ -943,6 +940,50 @@ struct CredentialAccessDisclosureView: View {
             Text(text)
                 .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Shared native-harness account controls for setup and local settings.
+struct SettingsHarnessSignInControl: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+    var compact = false
+
+    private var signIn: HarnessSignInModel { model.harnessSignIn }
+    private var signedIn: Bool {
+        ["verified", "credentials_present"].contains(signIn.statuses[runtimeKind]?.state ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if signedIn {
+                    Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                } else {
+                    if !compact {
+                        Text(signIn.statuses[runtimeKind]?.label ?? "Checking sign-in…")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                        Spacer()
+                    }
+                    Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Sign in…") {
+                        signIn.signIn(runtimeKind)
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind)
+                        || signIn.statuses[runtimeKind]?.state == "not_installed")
+                    .help("Open \(runtimeKind.displayName)’s sign-in in Terminal. Return here when finished.")
+                    .accessibilityLabel("Sign in to \(runtimeKind.displayName)")
+                }
+            }
+            if let message = signIn.messages[runtimeKind], !compact { SettingsNote(message) }
+        }
+        .task { await signIn.refresh(runtimeKind) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await signIn.refresh(runtimeKind) }
         }
     }
 }

@@ -249,6 +249,7 @@ final class ApplicationModel {
     private(set) var titleGenerationCapabilities: CodexTitleGenerationCapabilities?
     private(set) var titleGenerationStatus = "Waiting for Codex"
     private(set) var isRefreshingTitleGenerationCapabilities = false
+    let harnessSignIn = HarnessSignInModel()
     private(set) var runtimeInventories: [AgentRuntimeKind: RuntimeInventory] = [:]
     private(set) var runtimeFailures: [AgentRuntimeKind: Int] = [:]
     private(set) var runtimeFailureDetails: [AgentRuntimeKind: String] = [:]
@@ -257,8 +258,9 @@ final class ApplicationModel {
     private(set) var checkedRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var updatingRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var failedRuntimeUpdateKinds: Set<AgentRuntimeKind> = []
-    private var runtimeInventoryGeneration: UInt64 = 0
+    private var runtimeInventoryGeneration: [AgentRuntimeKind: UInt64] = [:]
     private(set) var installingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    private var preparingLocalACPRuntimeKind: AgentRuntimeKind?
     private(set) var preparedLocalACPRuntimeInstall:
         PreparedLocalACPRuntimeInstall?
     private(set) var pendingLocalACPPermissions: [PendingLocalACPPermission] = []
@@ -490,6 +492,8 @@ final class ApplicationModel {
     }
 
     #if COMPANION_FACADE_TESTS
+    var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
+
     /// Installs explicit inert provider metadata while preserving real routing,
     /// session preferences, tools, persistence and note recovery.
     func configureCompanionFixture(directory: URL) async throws {
@@ -3314,29 +3318,30 @@ final class ApplicationModel {
         )
     }
 
+    func runtimeMaintenanceBusy(_ kind: AgentRuntimeKind) -> Bool {
+        installingLocalACPRuntimeKinds.contains(kind)
+            || (kind == .opencode && openCode?.isInstalling == true)
+            || preparedLocalACPRuntimeInstall?.definition.runtimeKind == kind
+    }
+
     func refreshRuntimeInventory() {
         if isBackendFrontend { sendBackendRuntimeCommand(.refreshInventory); return }
-        guard !checkingRuntimeInventory, checkingRuntimeKinds.isEmpty, installingLocalACPRuntimeKinds.isEmpty,
-              preparedLocalACPRuntimeInstall == nil else { return }
+        guard !checkingRuntimeInventory else { return }
         checkingRuntimeInventory = true
-        runtimeInventoryGeneration &+= 1
-        let generation = runtimeInventoryGeneration
-        let enabled = enabledLocalACPRuntimeKinds
-        let openCodeEnabled = openCode?.isEnabled == true
         Task {
             defer { checkingRuntimeInventory = false }
             await openCode?.resolveExecutable()
             let selectedOpenCode = openCode?.runtimeExecutable
             for definition in LocalACPRuntimeCatalog.definitions {
-                guard installingLocalACPRuntimeKinds.isEmpty else { return }
                 let kind = definition.runtimeKind
-                checkingRuntimeKinds.insert(kind)
-                let checkLatest = kind == .opencode ? openCodeEnabled : enabled.contains(kind)
+                guard !runtimeMaintenanceBusy(kind), checkingRuntimeKinds.insert(kind).inserted else { continue }
+                let generation = runtimeInventoryGeneration[kind, default: 0]
+                let checkLatest = true
                 let inventory = await Task.detached(priority: .utility) {
                     await RuntimeMaintenance.inspect(kind, checkLatest: checkLatest, selectedOpenCode: selectedOpenCode)
                 }.value
                 checkingRuntimeKinds.remove(kind)
-                guard installingLocalACPRuntimeKinds.isEmpty, generation == runtimeInventoryGeneration else { return }
+                guard !runtimeMaintenanceBusy(kind), generation == runtimeInventoryGeneration[kind, default: 0] else { continue }
                 runtimeInventories[kind] = inventory
                 if checkLatest { checkedRuntimeKinds.insert(kind) }
             }
@@ -3345,12 +3350,8 @@ final class ApplicationModel {
 
     func checkRuntimeUpdate(_ kind: AgentRuntimeKind) {
         if isBackendFrontend { sendBackendRuntimeCommand(.checkUpdate(kind)); return }
-        guard !checkingRuntimeInventory, checkingRuntimeKinds.insert(kind).inserted else { return }
-        guard installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true else {
-            checkingRuntimeKinds.remove(kind)
-            return
-        }
-        let generation = runtimeInventoryGeneration
+        guard !runtimeMaintenanceBusy(kind), checkingRuntimeKinds.insert(kind).inserted else { return }
+        let generation = runtimeInventoryGeneration[kind, default: 0]
         Task {
             defer { checkingRuntimeKinds.remove(kind) }
             if kind == .opencode { await openCode?.resolveExecutable() }
@@ -3358,7 +3359,7 @@ final class ApplicationModel {
             let inventory = await Task.detached(priority: .utility) {
                 await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
             }.value
-            guard installingLocalACPRuntimeKinds.isEmpty, generation == runtimeInventoryGeneration else { return }
+            guard !runtimeMaintenanceBusy(kind), generation == runtimeInventoryGeneration[kind, default: 0] else { return }
             runtimeInventories[kind] = inventory
             checkedRuntimeKinds.insert(kind)
         }
@@ -3401,22 +3402,29 @@ final class ApplicationModel {
 
     func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
         if isBackendFrontend { sendBackendRuntimeCommand(.install(runtimeKind)); return }
-        // Finish the initial inventory before an install invalidates its generation.
-        // Otherwise the remaining runtime rows can be left without an inventory.
-        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true, preparedLocalACPRuntimeInstall == nil,
+        guard !checkingRuntimeKinds.contains(runtimeKind), !runtimeMaintenanceBusy(runtimeKind),
               !localRuntimeMaintenanceHasActiveConversation,
               let definition = LocalACPRuntimeCatalog.definition(for: runtimeKind) else { return }
+        if runtimeKind == .opencode {
+            performRuntimeMaintenance(definition, update: false)
+            return
+        }
         let inventory = runtimeInventories[runtimeKind]
         let cliMissing = definition.underlyingCLIName.map { name in
             inventory?.components.contains { $0.name == name + " (sign-in CLI)" && !$0.present } == true
         } ?? false
         let needsCLI = cliMissing || (definition.adapterPackage == nil && inventory?.isInstalled != true)
         if needsCLI {
-            runtimeInventoryGeneration &+= 1
+            guard preparedLocalACPRuntimeInstall == nil, preparingLocalACPRuntimeKind == nil else { return }
+            preparingLocalACPRuntimeKind = runtimeKind
+            runtimeInventoryGeneration[runtimeKind, default: 0] &+= 1
             installingLocalACPRuntimeKinds.insert(runtimeKind)
             localRunError = nil
             Task {
-                defer { installingLocalACPRuntimeKinds.remove(runtimeKind) }
+                defer {
+                    installingLocalACPRuntimeKinds.remove(runtimeKind)
+                    preparingLocalACPRuntimeKind = nil
+                }
                 do {
                     let preview = try await localACPRuntimeInstaller.prepareCLIInstall(definition)
                     preparedLocalACPRuntimeInstall = PreparedLocalACPRuntimeInstall(definition: definition, preview: preview)
@@ -3446,9 +3454,9 @@ final class ApplicationModel {
     private func performRuntimeMaintenance(_ definition: LocalACPRuntimeDefinition, update: Bool,
                                           preview: LocalACPInstallerPreview? = nil) {
         let kind = definition.runtimeKind
-        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true,
-              preparedLocalACPRuntimeInstall == nil, !localRuntimeMaintenanceHasActiveConversation else { return }
-        runtimeInventoryGeneration &+= 1
+        guard !runtimeMaintenanceBusy(kind), !checkingRuntimeKinds.contains(kind),
+              !localRuntimeMaintenanceHasActiveConversation else { return }
+        runtimeInventoryGeneration[kind, default: 0] &+= 1
         installingLocalACPRuntimeKinds.insert(kind)
         if update { updatingRuntimeKinds.insert(kind) }
         localRunError = nil
@@ -3457,7 +3465,19 @@ final class ApplicationModel {
         Task {
             defer { installingLocalACPRuntimeKinds.remove(kind); updatingRuntimeKinds.remove(kind) }
             do {
-                if let preview {
+                #if COMPANION_FACADE_TESTS
+                if let operation = runtimeMaintenanceFixture {
+                    runtimeInventories[kind] = try await operation(kind)
+                    checkedRuntimeKinds.insert(kind)
+                    failedRuntimeUpdateKinds.remove(kind)
+                    runtimeFailureDetails[kind] = nil
+                    return
+                }
+                #endif
+                if kind == .opencode {
+                    guard let openCode else { throw RuntimeMaintenanceError.unavailable }
+                    try await openCode.download()
+                } else if let preview {
                     _ = try await installer.install(definition, component: .cli,
                         expectedSourceSHA256: preview.sha256, expectedPackageSpec: preview.packageSpec)
                 }
@@ -3468,15 +3488,16 @@ final class ApplicationModel {
                         throw RuntimeMaintenanceError.unavailable
                     }
                     _ = try await installer.installPackage(package, version: version, executableName: definition.commandName)
-                } else if update {
+                } else if update, kind != .opencode {
                     try await RuntimeMaintenance.updateNative(kind, executable: before?.components.first?.executable)
                 }
                 if update, definition.adapterPackage != nil,
                    let cli = before?.components.first(where: { $0.name.hasSuffix("(sign-in CLI)") && $0.outdated }) {
                     try await RuntimeMaintenance.updateNative(kind, executable: cli.executable)
                 }
+                let selectedOpenCode = openCode?.runtimeExecutable
                 let inventory = await Task.detached(priority: .utility) {
-                    await RuntimeMaintenance.inspect(kind, checkLatest: true)
+                    await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
                 }.value
                 runtimeInventories[kind] = inventory
                 checkedRuntimeKinds.insert(kind)
@@ -3757,11 +3778,9 @@ final class ApplicationModel {
     private func refreshLocalACPRuntimes(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) async {
         localACPRuntimeRefreshGeneration &+= 1
         let generation = localACPRuntimeRefreshGeneration
-        let enabledRuntimeKinds = enabledLocalACPRuntimeKinds
         checkingLocalACPRuntimeKinds = Set(
             LocalACPRuntimeCatalog.definitions.compactMap {
-                enabledRuntimeKinds.contains($0.runtimeKind)
-                    && runtimeKinds.contains($0.runtimeKind)
+                runtimeKinds.contains($0.runtimeKind)
                     ? $0.runtimeKind : nil
             }
         )
@@ -3787,25 +3806,6 @@ final class ApplicationModel {
                 let discovered = resolver.resolve(
                     runtimeKind: definition.runtimeKind
                 )
-                guard enabledRuntimeKinds.contains(definition.runtimeKind)
-                else {
-                    if let executablePath = discovered.availability.executablePath,
-                       discovered.launchConfiguration != nil {
-                        resolutions.append(LocalACPRuntimeResolution(
-                            availability: LocalACPRuntimeAvailability(
-                                runtimeKind: definition.runtimeKind,
-                                displayName: definition.displayName,
-                                state: .authenticationRequired,
-                                detail: "Enable \(definition.displayName) before Woven Matter starts it or checks its account credentials.",
-                                executablePath: executablePath
-                            ),
-                            launchConfiguration: nil
-                        ))
-                    } else {
-                        resolutions.append(discovered)
-                    }
-                    continue
-                }
                 resolutions.append(await LocalACPRuntimeVerifier.refresh(
                     definition: definition,
                     resolution: discovered,
@@ -3821,6 +3821,12 @@ final class ApplicationModel {
             return
         }
         localACPRuntimeAvailability = resolutions.map(\.availability)
+        let installed = Set(resolutions.compactMap { resolution in
+            resolution.availability.executablePath == nil ? nil : resolution.availability.runtimeKind
+        })
+        let preferences = localACPRuntimePreferences.adoptInstalled(installed)
+        enabledLocalACPRuntimeKinds = preferences.enabledRuntimeKinds
+        shownLocalACPRuntimeKinds = preferences.shownRuntimeKinds
         localACPLaunchConfigurations = resolutions.reduce(into: [:]) {
             configurations, resolution in
             if let launchConfiguration = resolution.launchConfiguration {

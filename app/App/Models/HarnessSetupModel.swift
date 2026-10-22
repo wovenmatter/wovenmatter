@@ -36,9 +36,7 @@ final class HarnessSetupModel {
     var selected: Set<AgentRuntimeKind> = []
     private(set) var checking = false
     private(set) var activeInstall: AgentRuntimeKind?
-    private(set) var updating = false
     private(set) var resolvingInstaller = false
-    private(set) var signInStatuses: [AgentRuntimeKind: AgentSignInStatus] = [:]
     var errors: [AgentRuntimeKind: String] = [:]
     var notice: String?
     private var work: Task<Void, Never>?
@@ -67,11 +65,6 @@ final class HarnessSetupModel {
             do {
                 try await application.requestSetupRuntimeCommand(.refreshInventory)
                 try await waitForMaintenance()
-                for kind in HarnessOnboarding.runtimes {
-                    try Task.checkCancellation()
-                    try await application.requestSetupRuntimeCommand(.checkUpdate(kind))
-                }
-                try await waitForMaintenance()
                 await refreshSignIns()
             } catch is CancellationError { }
             catch { notice = "Could not finish checking this Mac. Choose Check again to retry." }
@@ -79,19 +72,7 @@ final class HarnessSetupModel {
     }
 
     func refreshSignIns() async {
-        await withTaskGroup(of: (AgentRuntimeKind, AgentSignInStatus).self) { group in
-            for kind in HarnessOnboarding.runtimes {
-                let inventory = application.runtimeInventories[kind]
-                let executable = inventory?.components.first(where: { $0.name.hasSuffix("(sign-in CLI)") })?.executable
-                    ?? (LocalACPRuntimeCatalog.definition(for: kind)?.underlyingCLIName == nil
-                        ? inventory?.components.first?.executable : nil)
-                group.addTask { (kind, await HarnessOnboarding.checkSignIn(kind, executable: executable)) }
-            }
-            for await (kind, status) in group {
-                guard !Task.isCancelled else { group.cancelAll(); return }
-                signInStatuses[kind] = status
-            }
-        }
+        for kind in HarnessOnboarding.runtimes { await application.harnessSignIn.refresh(kind) }
     }
 
     func installSelected() {
@@ -107,14 +88,8 @@ final class HarnessSetupModel {
                 activeInstall = kind
                 errors[kind] = nil
                 do {
-                    if kind == .opencode {
-                        guard let openCode = application.openCode else { throw RuntimeMaintenanceError.unavailable }
-                        try await openCode.download()
-                        try await application.requestSetupRuntimeCommand(.checkUpdate(kind))
-                    } else {
-                        try await application.requestSetupRuntimeCommand(.install(kind))
-                    }
-                    try await waitForMaintenance()
+                    try await application.requestSetupRuntimeCommand(.install(kind))
+                    try await waitForMaintenance(kind)
                     if application.runtimeInventories[kind]?.isInstalled == true {
                         selected.remove(kind)
                     } else if selected.contains(kind) {
@@ -138,28 +113,6 @@ final class HarnessSetupModel {
                 try await application.requestSetupRuntimeCommand(install ? .confirmInstall : .cancelInstall)
                 if !install { selected.remove(kind) }
             } catch { errors[kind] = "Could not confirm the installer. Try again." }
-        }
-    }
-
-    func update(_ kind: AgentRuntimeKind) {
-        guard !busy, !maintenanceBusy, !application.localRuntimeMaintenanceHasActiveConversation else { return }
-        activeInstall = kind
-        updating = true
-        errors[kind] = nil
-        work = Task {
-            defer { activeInstall = nil; updating = false }
-            do {
-                if kind == .opencode {
-                    guard let openCode = application.openCode else { throw RuntimeMaintenanceError.unavailable }
-                    try await openCode.download()
-                    try await application.requestSetupRuntimeCommand(.checkUpdate(kind))
-                } else {
-                    try await application.requestSetupRuntimeCommand(.update(kind))
-                }
-                try await waitForMaintenance()
-                await refreshSignIns()
-            } catch is CancellationError { }
-            catch { errors[kind] = "The update could not finish. Try again later." }
         }
     }
 
@@ -187,9 +140,9 @@ final class HarnessSetupModel {
         HarnessSetupPresentation.shared.dismiss()
     }
 
-    private func waitForMaintenance() async throws {
+    private func waitForMaintenance(_ kind: AgentRuntimeKind? = nil) async throws {
         let deadline = Date().addingTimeInterval(15 * 60)
-        while maintenanceBusy {
+        while kind.map({ application.runtimeMaintenanceBusy($0) || application.checkingRuntimeKinds.contains($0) }) ?? maintenanceBusy {
             try Task.checkCancellation()
             guard Date() < deadline else { throw RuntimeMaintenanceError.timeout }
             try await Task.sleep(for: .milliseconds(200))
@@ -209,5 +162,57 @@ extension ApplicationModel {
         } else {
             _ = try await handleBackendRuntimeRequest(payload: payload)
         }
+    }
+}
+
+/// Native CLI accounts are distinct from Pi Durable's provider connections.
+/// Authentication starts only when the user presses a Sign in button.
+@MainActor @Observable
+final class HarnessSignInModel {
+    private(set) var statuses: [AgentRuntimeKind: AgentSignInStatus] = [:]
+    private(set) var checking: Set<AgentRuntimeKind> = []
+    private(set) var opening: Set<AgentRuntimeKind> = []
+    private(set) var messages: [AgentRuntimeKind: String] = [:]
+
+    func refresh(_ kind: AgentRuntimeKind) async {
+        guard checking.insert(kind).inserted else { return }
+        defer { checking.remove(kind) }
+        let executable = await Self.executable(kind)
+        statuses[kind] = await HarnessOnboarding.checkSignIn(kind, executable: executable)
+        if statuses[kind]?.state == "verified" || statuses[kind]?.state == "credentials_present" {
+            messages[kind] = nil
+        }
+    }
+
+    func signIn(_ kind: AgentRuntimeKind) {
+        guard opening.insert(kind).inserted else { return }
+        Task {
+            defer { opening.remove(kind) }
+            do {
+                guard let executable = await Self.executable(kind),
+                      let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+                else { throw RuntimeMaintenanceError.unavailable }
+                let searchPath = await Task.detached { LocalACPRuntimeResolver.executableSearchPath }.value
+                guard let script = HarnessOnboarding.signInScript(kind, executable: executable, searchPath: searchPath)
+                else { throw RuntimeMaintenanceError.unavailable }
+                let directory = try ApplicationModel.dashboardSupportDirectory().appending(path: "Sign-in", directoryHint: .isDirectory)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+                let file = directory.appending(path: kind.rawValue + ".command")
+                try Data(script.utf8).write(to: file, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+                _ = try await NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: .init())
+                messages[kind] = "Finish signing in in Terminal, then return here."
+            } catch {
+                messages[kind] = "Could not open sign-in. Check that this harness and Terminal are installed, then try again."
+            }
+        }
+    }
+
+    private nonisolated static func executable(_ kind: AgentRuntimeKind) async -> URL? {
+        await Task.detached(priority: .utility) {
+            guard let definition = LocalACPRuntimeCatalog.definition(for: kind) else { return nil }
+            return LocalACPRuntimeResolver.resolveExecutable(named: definition.underlyingCLIName ?? definition.commandName)
+        }.value
     }
 }

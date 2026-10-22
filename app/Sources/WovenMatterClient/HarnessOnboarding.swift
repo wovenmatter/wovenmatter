@@ -32,7 +32,7 @@ public enum HarnessOnboarding {
                 ]) { _, new in new }
                 let result = try LocalACPProcessRunner.run(executableURL: executable, arguments: arguments,
                     environment: environment, timeout: 10)
-                return parseSignIn(kind, output: result.stdout, succeeded: result.succeeded)
+                return parseSignIn(kind, output: result.combinedOutput, succeeded: result.succeeded)
             } catch { return status(kind, state: "check_failed") }
         }.value
     }
@@ -58,6 +58,22 @@ public enum HarnessOnboarding {
             return status(kind, state: "verified")
         }
         return status(kind, state: succeeded ? "not_checked" : "check_failed")
+    }
+
+    /// A script for the user's explicit Sign in action. Building this value
+    /// performs no authentication and contains no credentials.
+    public static func signInScript(_ kind: AgentRuntimeKind, executable: URL, searchPath: String) -> String? {
+        let arguments: [String]
+        switch kind {
+        case .codex: arguments = ["login"]
+        case .claudeCode: arguments = ["auth", "login"]
+        case .grokBuild: arguments = ["login", "--oauth"]
+        case .opencode: arguments = ["auth", "login"]
+        default: return nil
+        }
+        func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        return "#!/bin/zsh\nexport PATH=" + quote(searchPath) + "\n"
+            + ([executable.path] + arguments).map(quote).joined(separator: " ") + "\n"
     }
 
     private static func status(_ kind: AgentRuntimeKind, state: String) -> AgentSignInStatus {
