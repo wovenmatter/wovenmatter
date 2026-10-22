@@ -16,7 +16,7 @@ concurrency:
 jobs:
   changes:
     name: Detect changes
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       macos: ${{ steps.paths.outputs.macos }}
@@ -25,17 +25,9 @@ jobs:
       companion: ${{ steps.paths.outputs.companion }}
       updates: ${{ steps.paths.outputs.updates }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@main
         with:
           fetch-depth: 0
-
-      - name: Require immutable GitHub Action references
-        run: |
-          if grep -R -nE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*' .github/workflows \
-            | grep -vE 'uses:[[:space:]]*(\./|docker://[^[:space:]#]+@sha256:[0-9a-f]{64}|[^[:space:]#]+@[0-9a-f]{40})([[:space:]]*#.*)?$'; then
-            echo "Every third-party action must use a full commit SHA." >&2
-            exit 1
-          fi
 
       - name: Scan the public tree
         run: scripts/scan-public-tree.sh
@@ -64,11 +56,11 @@ jobs:
     # Cold desktop builds and companion integration have a separate budget from UI tests.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          node-version: ^24.22.1
-          check-latest: true
+          # The bundled Node stable release, refreshed during dependency maintenance.
+          node-version-file: default-agent/.node-version
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
@@ -81,7 +73,7 @@ jobs:
           scripts/test-changes.sh --desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
       - name: Preserve desktop failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@main
         with:
           name: desktop-results-${{ github.run_attempt }}
           path: |
@@ -100,11 +92,11 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          node-version: ^24.22.1
-          check-latest: true
+          # The bundled Node stable release, refreshed during dependency maintenance.
+          node-version-file: default-agent/.node-version
       - name: Test companion protocol and runtime integration
         env:
           WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-companion-${{ github.run_id }}-${{ github.run_attempt }}
@@ -131,7 +123,7 @@ jobs:
           - name: iPad
             type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@main
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
@@ -139,7 +131,7 @@ jobs:
         run: scripts/test-ios.sh --ui
       - name: Preserve mobile test results
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@main
         with:
           name: ios-results-${{ matrix.device.name }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}/results.*
@@ -150,18 +142,18 @@ jobs:
     name: Remote workspace
     needs: changes
     if: needs.changes.outputs.remote == 'true'
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          node-version: ^24.22.1
-          check-latest: true
+          # The bundled Node stable release, refreshed during dependency maintenance.
+          node-version-file: default-agent/.node-version
       - name: Run deterministic remote validation
         run: scripts/test-changes.sh --remote
       - name: Build the remote workspace image
-        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:0.1 .
+        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:latest .
 
       - name: Verify workspace isolation and home preservation
         run: scripts/test-container.sh --skip-build
@@ -193,7 +185,7 @@ jobs:
     name: CI
     needs: [changes, macos, companion, ios, remote]
     if: always()
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require relevant validation

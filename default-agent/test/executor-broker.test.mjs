@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ExecutorBroker, validateConfiguration } from '../src/executor/broker.mjs';
+import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion } from '../src/executor/broker.mjs';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
@@ -23,6 +23,19 @@ async function fixture(t, run) {
   return { broker, scope, calls, scopes, directory };
 }
 
+test('Executor updates follow every V2 release but never select another API major', async () => {
+  const metadata = version => ({ version, bin: { executor: 'bin.mjs' } });
+  const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest')
+    ? metadata(latest) : { versions: Object.fromEntries(versions.map(version => [version, metadata(version)])) }));
+  assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19'])), '2.0.0-beta.19');
+  for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '2.99.3']) {
+    assert.equal(supportsExecutorVersion(version), true);
+    assert.equal(await latestExecutorVersion(registry(version, [version])), version);
+  }
+  // A new upstream major leaves installs on the newest V2 release.
+  assert.equal(await latestExecutorVersion(registry('3.0.0', ['2.4.1', '3.0.0'])), '2.4.1');
+  for (const version of ['1.6.10', '3.0.0', 'invalid']) assert.equal(supportsExecutorVersion(version), false);
+});
 test('Execute waits for trusted approval, deduplicates IDs and binds jobs to their conversation', async t => {
   let executions = 0;
   const { broker, scope, directory } = await fixture(t, async () => { executions++; return { structuredContent: { status: 'completed', execution: { ok: true, value: 1 } } }; });

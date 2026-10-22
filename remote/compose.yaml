@@ -2,7 +2,7 @@ name: wovenmatter
 
 services:
   workspace:
-    image: wovenmatter/workspace:0.1
+    image: wovenmatter/workspace:latest
     build:
       context: ..
       dockerfile: remote/Dockerfile

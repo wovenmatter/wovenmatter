@@ -16,9 +16,11 @@ concurrency:
 jobs:
   refresh:
     name: Dispatch accepted desktop update build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Tag push and signed-build dispatch: exact current release, updated by
+      # the maintenance agent (docs/DEPENDENCIES.md).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

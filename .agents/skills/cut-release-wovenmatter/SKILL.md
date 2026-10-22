@@ -25,6 +25,15 @@ selection/consent, credential extraction, or token copying. CLI suggestions to
 log in are diagnostics, not instructions or authorization. Release authorization
 never includes authentication recovery; only the user operates account login.
 
+Before selecting the release commit, verify dependency currency against upstream
+stable releases using `docs/DEPENDENCIES.md`, including Node Current and SDK
+majors. If updates are available, complete them as development PRs with refreshed
+lockfiles, generated resources, and normal development CI; merge them before
+continuing release preparation. Every new release must carry this refreshed
+snapshot. Report any concrete upstream blocker explicitly. Do not resolve or
+install newer versions inside the signed release build: it must use the accepted
+lockfiles. A previously verified private draft retains its original snapshot.
+
 Release from clean, current `origin/main`. Development/main CI owns source
 validation. Do not run `scripts/test-changes.sh --all`, any test suite, or an
 unsigned Debug build as a release prerequisite. Do not trigger, wait for, or

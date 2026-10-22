@@ -37,7 +37,7 @@ def scopes(paths):
         companion=infrastructure or shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|app/App/(Services/Companion|Models/.*Companion)|app/Sources/|app/Package\.(swift|resolved)$|scripts/(test-companion|test-ios|build-ios))'),
         ios=infrastructure or shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|scripts/(test-ios|build-ios))'),
         remote=infrastructure or changed(r'^(remote/|default-agent/|harnesses/|\.dockerignore$|scripts/(remote-workspace|scan-public-tree|test-container|test-remote-workspace)\.sh$)'),
-        updates=changed(r'^(scripts/.*(release|update|sparkle|delta)|app/App/Services/DesktopUpdater\.swift|\.github/(release-refresh\.json|workflows/(refresh-release|release)\.yml))'),
+        updates=changed(r'^(scripts/.*(release|update|sparkle|delta)|app/Updater/|app/App/Services/DesktopUpdater\.swift|\.github/(release-refresh\.json|workflows/(refresh-release|release)\.yml))'),
     )
 
 if __name__ == '__main__':

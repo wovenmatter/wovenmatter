@@ -37,3 +37,36 @@
   description to Trey and wait for his explicit approval before publication.
   Version confirmation alone does not authorize publication.
   For releases, use `.agents/skills/cut-release-wovenmatter/SKILL.md`.
+
+## Dependencies
+
+Follow [the dependency policy](docs/DEPENDENCIES.md).
+
+- Stay current. Declare ordinary npm dependencies with minimum-only ranges
+  (`>=version`) whose floor is the tested release; newer stable majors remain
+  eligible. Never leave a dependency on an old version or major without a reason.
+- An exact or narrowed selection needs a concrete security or core-function
+  reason, documented beside it and in `docs/DEPENDENCIES.md`. It also needs
+  a documented maintenance process and a stated validation boundary.
+- Lockfiles, `app/Package.resolved`, and the Node, CEF, and Sparkle records are
+  required. Builds and tests consume the committed package graphs (`npm ci`)
+  and native runtime records. Linux base images intentionally follow their
+  current stable Node major, as documented in the policy. Change recorded
+  selections through maintenance refresh and regenerate dependent provenance
+  in the same change. Never hand-edit
+  `app/Package.resolved`; use package-manager tooling to generate the combined
+  SwiftPM/Xcode graph. Normal builds consume it with resolution frozen.
+- Keep checksums, signatures, updater keys, and provenance. Keep every copy of
+  one selection in sync and verify that the records agree before proposing updates.
+- Read-only workflow helpers may track `@main`. Workflows with write tokens or
+  signing material use exact current release SHAs, reviewed during maintenance.
+- Do not add Dependabot or GitHub-hosted dependency-proposal jobs. Scheduled
+  dependency upkeep belongs in Codex or on an owned machine, configured
+  separately from repository CI.
+- Installed apps update SDKs through explicit Settings actions at or above the
+  bundled minimum version; agent CLIs follow the documented API requirements.
+  Bundled signed or offline components reach users only through app delivery.
+- Before each new release, refresh dependency selections to current stable
+  releases, including Node Current, in development PRs. Validate and merge the
+  updated lockfiles and generated resources before selecting the release commit.
+  Release builds consume that accepted snapshot without resolving fresh versions.

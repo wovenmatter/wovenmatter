@@ -98,7 +98,8 @@ async def execute(argv, stdin=""):
         elif command == "wovenmatter":
             print(json.dumps(await wovenmatter(args), ensure_ascii=False))
         elif command == "help":
-            print(json.dumps({"runtime": "CPython " + sys.version.split()[0] + " / Pyodide 314.0.7", "commands": COMMANDS,
+            import pyodide
+            print(json.dumps({"runtime": "CPython " + sys.version.split()[0] + " / Pyodide " + pyodide.__version__, "commands": COMMANDS,
               "modules": ["json", "csv", "sqlite3", "re", "statistics", "decimal", "pathlib", "zipfile", "tarfile", "unittest", "asyncio"],
               "limits": "No OS processes, sockets, package downloads, or native extension installs. Files persist only under /workspace. Native CLI uses awaited wovenmatter(arguments)."}, indent=2))
         elif command == "pwd":

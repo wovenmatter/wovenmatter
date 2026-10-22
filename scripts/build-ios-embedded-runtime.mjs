@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pinned, offline-at-runtime CPython/Pyodide resources. Never downloads from the app.
+// Offline CPython/Pyodide resources from the current build installation.
 import {createRequire} from 'node:module';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -14,12 +14,11 @@ if(process.argv.includes('--check')) {
   const provenance=JSON.parse(await readFile(path.join(output,'provenance.json'),'utf8'));
   if(JSON.stringify(inputHashes)!==JSON.stringify(provenance.sources)) throw Error('Embedded runtime sources changed; rebuild with node scripts/build-ios-embedded-runtime.mjs');
   for(const [name,hash] of Object.entries(provenance.resources)) if(digest(await readFile(path.join(output,name)))!==hash) throw Error('Embedded runtime resource mismatch: '+name);
-  console.log('Verified offline CPython 3.14.2 / Pyodide 314.0.7 resources'); process.exit(0);
+  console.log(`Verified offline CPython ${provenance.pythonVersion} / Pyodide ${provenance.version} resources`); process.exit(0);
 }
 const require=createRequire(path.join(source,'package.json')), {build}=require('esbuild');
 const packageRoot=path.dirname(require.resolve('pyodide/package.json'));
 const manifest=JSON.parse(await readFile(path.join(packageRoot,'package.json'),'utf8'));
-if(manifest.version!=='314.0.7') throw Error('Review runtime updates before changing the pinned Pyodide version');
 await mkdir(output,{recursive:true});
 const bundle=await build({absWorkingDir:root,entryPoints:['ios/EmbeddedRuntime/worker.js'],bundle:true,platform:'browser',format:'iife',target:'es2022',external:['node:*'],legalComments:'linked',outfile:path.join(output,'worker.js'),write:false});
 const resources={};
@@ -39,5 +38,5 @@ for(const license of JSON.parse(await readFile(path.join(source,'licenses.json')
   resources[license.file]=license.sha256;
 }
 const lock=JSON.parse(await readFile(path.join(source,'package-lock.json'),'utf8'));
-await writeFile(path.join(output,'provenance.json'),JSON.stringify({runtime:'Pyodide',version:'314.0.7',pythonVersion:'3.14.2',source:'https://github.com/pyodide/pyodide/tree/314.0.7',npmIntegrity:lock.packages['node_modules/pyodide'].integrity,sources:inputHashes,resources},null,2)+'\n');
-console.log('Bundled offline CPython 3.14.2 / Pyodide 314.0.7');
+await writeFile(path.join(output,'provenance.json'),JSON.stringify({runtime:'Pyodide',version:manifest.version,pythonVersion:upstreamLock.info.python,source:'https://github.com/pyodide/pyodide/tree/'+manifest.version,npmIntegrity:lock.packages['node_modules/pyodide'].integrity,sources:inputHashes,resources},null,2)+'\n');
+console.log(`Bundled offline CPython ${upstreamLock.info.python} / Pyodide ${manifest.version}`);

@@ -47,8 +47,9 @@ retains caller ownership and works after capability or execution-access revocati
 Automation receipts retain completion metadata, without page or desktop captures;
 retries after completion inspect fresh state instead of replaying input.
 
-Computer Use is an independent, default-off capability. Peekaboo's pinned Swift
-libraries run inside the signed GUI process, so macOS grants apply to Woven Matter.
+Computer Use is an independent, default-off capability. Peekaboo's Swift
+libraries, selected by the shared native lockfile within a compatible release
+range, run inside the signed GUI process, so macOS grants apply to Woven Matter.
 MCP and CLI route local and remote harnesses to this host. Screen capture returns
 a bounded image and a single-use, chat-scoped frame for coordinate input; Stop or
 capability revocation cancels work. Cua and cross-platform desktop hosts are deferred.
@@ -65,7 +66,7 @@ Clear Browser Data deletes the selected profile before its first use after the
 next restart, with no open Chromium database handles. Saved website passwords
 and Connections credentials are separate and remain intact.
 
-The pinned CEF uses Chromium Safe Storage for encryption. Startup requires a
+CEF uses Chromium Safe Storage for encryption. Startup requires a
 consent-gated, noninteractive preflight. Preserve the existing shared secret;
 never replace a denied read or disable encryption. This stable SDK does not
 support a custom Safe Storage service name; do not patch its binary ABI.
@@ -84,15 +85,19 @@ outside this implementation. There is no Chrome/Safari password import.
 
 ## Build and maintenance
 
-`app/Browser/cef-version.json` pins official CEF archives per Mac architecture.
+`app/Browser/cef-version.json` records the exact official CEF build and archive
+SHA-1 for each Mac architecture. Builds use only that record.
 `scripts/prepare-browser.sh` verifies checksums, builds the wrapper/adapter, and
 bundles/signs Chromium, sandboxed helpers, and license notices. CMake 3.21+ is
 required; select it with `WOVENMATTER_CMAKE` if needed. Downloads use
 `~/Library/Caches/WovenMatter/CEF` or `WOVENMATTER_CEF_CACHE_DIR`.
 Use the normal `scripts/build_and_run.sh` and `scripts/test-changes.sh --all`.
 
-CEF security updates require repinning, rebuilding both architectures, and
-checking lifecycle, profile recovery, and UI behavior. Chromium does not include
+Dependency maintenance proposes the newest stable CEF build through a PR,
+because Chromium security fixes ship only on its current major
+(see [the dependency policy](../DEPENDENCIES.md)). Accepting one requires
+building both architectures and checking lifecycle, profile recovery, and UI
+behavior. Installed apps receive it only in a signed app or refresh build. Chromium does not include
 all proprietary Chrome services, codecs, or DRM. Sources:
 [CEF](https://github.com/chromiumembedded/cef) and
 [official binary distributions](https://cef-builds.spotifycdn.com/index.html).
