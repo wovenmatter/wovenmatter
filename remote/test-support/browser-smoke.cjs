@@ -33,6 +33,7 @@ async function main() {
     await once(server, 'listening');
     const url = `http://127.0.0.1:${server.address().port}/`;
     // No executable override or download: the ordinary launch must work.
+    console.log('Checking default headless Chromium launch.');
     browser = await chromium.launch({ timeout: 15000 });
     const page = await browser.newPage();
     page.setDefaultTimeout(10000);
@@ -46,16 +47,19 @@ async function main() {
     await browser.close();
     browser = undefined;
     // CLI screenshots use the full Chromium build, not just the headless shell.
+    console.log('Checking full Chromium through the Playwright CLI.');
     const output = join(directory, 'cli.png');
     await exec('playwright', ['screenshot', '--channel', 'chromium', url, output], { timeout: 30000 });
     assert.equal((await readFile(output)).subarray(1, 4).toString(), 'PNG');
     // The app's bundled playwright-core resolves the same browser installation.
+    console.log('Checking bundled playwright-core launch.');
     browser = await core.chromium.launch({ timeout: 15000 });
     await browser.close();
     browser = undefined;
     console.log('Workspace Chromium: navigation, forms, screenshots, CLI and bundled core passed.');
   } finally {
     await browser?.close();
+    server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
     process.chdir('/home');
     await rm(directory, { recursive: true, force: true });

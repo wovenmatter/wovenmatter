@@ -63,7 +63,7 @@ wait_for_health() {
 verify_browser() {
   # Exercise the actual non-root, read-only workspace from its mounted home.
   # Feeding stdin avoids installing test files or dependencies in the image.
-  docker exec -i --workdir /home "$1" node --input-type=commonjs \
+  docker exec -i --workdir /home "$1" timeout --kill-after=5s 90s node --input-type=commonjs \
     < remote/test-support/browser-smoke.cjs
 }
 
