@@ -6,8 +6,7 @@ import WovenMatterCore
 struct HarnessSetupView: View {
     @State private var setup: HarnessSetupModel
     @State private var step = 0
-    @State private var showsConnections = false
-    @State private var showsWebSearchFirst = false
+    @State private var connectionFocus: ConnectionSettingsFocus?
     @Environment(\.dismissWindow) private var dismissWindow
     @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
 
@@ -18,19 +17,20 @@ struct HarnessSetupView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if showsConnections {
-                SettingsConnectionsView(model: model, initialScope: "global", backTitle: "Setup",
-                    webSearchFirst: showsWebSearchFirst, onBack: { showsConnections = false })
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if step == 0 { harnesses } else { piDurable }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let connectionFocus {
+                        SettingsConnectionsView(model: model, focus: connectionFocus, onBack: { self.connectionFocus = nil })
+                    } else if step == 0 {
+                        harnesses
+                    } else {
+                        piDurable
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 16)
                 }
-                .scrollIndicators(.never)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
             }
+            .scrollIndicators(.never)
             footer
         }
         .frame(width: 760, height: 650)
@@ -39,23 +39,23 @@ struct HarnessSetupView: View {
         .environment(\.dashboardTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .toggleStyle(DashboardSwitchToggleStyle())
-        .task { step = 0; showsConnections = false; setup.open() }
+        .task { step = 0; connectionFocus = nil; setup.open() }
         .onDisappear { setup.close() }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(step == 0 ? "Set up your harnesses" : "Make Pi Durable your own")
+                Text(connectionFocus?.title ?? (step == 0 ? "Setup Your Harnesses" : "Setup Pi Durable"))
                     .font(.system(size: 22, weight: .semibold)).tracking(-0.35)
                 Spacer()
                 Text("\(step + 1) of 2")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            Text(step == 0
+            Text(connectionFocus?.detail ?? (step == 0
                  ? "Use the tools already on your Mac, or choose more to install."
-                 : "Already included. Connect a provider and add web search whenever you’re ready.")
+                 : "Pi Durable is included with Woven Matter. Add connections whenever you’re ready."))
                 .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
         }
         .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 8)
@@ -150,28 +150,48 @@ struct HarnessSetupView: View {
     }
 
     private var piDurable: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: .defaultAgent), size: 28)
-                Text("Pi Durable").font(.system(size: 14, weight: .semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                DashboardHarnessLogoIcon(logo: .defaultAgent, size: 20)
+                Text("Pi Durable").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                SettingsPill("Included", tone: .neutral)
-            }.padding(.bottom, 4)
-            VStack(alignment: .leading, spacing: 12) {
-                SettingsCard(title: "Connect a model provider", detail: "Sign in to a subscription or add an API key. You can connect more than one provider.") {
-                    Button("Open provider settings") { openConnections(webSearch: false) }.buttonStyle(SettingsQuietButtonStyle())
-                }
-                SettingsCard(title: "Add web search", detail: "Add an Exa API key so Pi Durable can search the web.") {
-                    Button("Open web search settings") { openConnections(webSearch: true) }.buttonStyle(SettingsQuietButtonStyle())
-                }
+                Text("Included").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
             }
-            SettingsNote("Both steps are optional. Reopen this guide from Settings → General → Set up harnesses.")
+            .frame(minHeight: 28)
+            VStack(spacing: 0) {
+                piSetupRow(.providers, action: "Open provider settings")
+                Rectangle().fill(theme.palette.border).frame(height: 1).padding(.horizontal, 16)
+                piSetupRow(.webSearch, action: "Open web search settings")
+            }
+            .background(theme.palette.themeWhisper)
+            .clipShape(DashboardShapes.card)
+            SettingsNote("Both steps are optional. Reopen this guide from Settings → General → Set up harnesses. Provider connections and web search are also available in Settings → Pi Durable.")
         }
+    }
+
+    private func piSetupRow(_ destination: ConnectionSettingsFocus, action: String) -> some View {
+        HStack(spacing: 12) {
+            DashboardLucideIcon(glyph: destination == .providers ? .plug : .searchControl, size: 22)
+                .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(destination.title).font(.system(size: 13, weight: .medium))
+                Text(destination.detail)
+                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button(action) { connectionFocus = destination }
+                .buttonStyle(SettingsQuietButtonStyle())
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Button(step == 0 ? "Set up later" : "Skip and finish") { finish() }
+            Button(connectionFocus != nil ? "Skip for now" : step == 0 ? "Set up later" : "Skip and finish") {
+                if connectionFocus != nil { connectionFocus = nil } else { finish() }
+            }
                 .buttonStyle(SettingsQuietButtonStyle()).keyboardShortcut(.cancelAction)
             Spacer()
             if step == 0 {
@@ -187,13 +207,14 @@ struct HarnessSetupView: View {
                 }
             } else {
                 Button("Back") {
-                    if showsConnections { showsConnections = false } else { step = 0 }
+                    if connectionFocus != nil { connectionFocus = nil } else { step = 0 }
                 }.buttonStyle(SettingsQuietButtonStyle())
-                Button("Finish") { finish() }.buttonStyle(DashboardPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                Button(connectionFocus != nil ? "Done" : "Finish") {
+                    if connectionFocus != nil { connectionFocus = nil } else { finish() }
+                }.buttonStyle(DashboardPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
             }
         }.padding(.horizontal, 24).padding(.vertical, 16)
     }
 
-    private func openConnections(webSearch: Bool) { showsWebSearchFirst = webSearch; showsConnections = true }
     private func finish() { setup.close(); dismissWindow(id: HarnessSetupPresentation.windowID) }
 }

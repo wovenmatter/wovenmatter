@@ -3,11 +3,29 @@ import AppKit
 import WovenMatterClient
 import WovenMatterCore
 
+enum ConnectionSettingsFocus {
+    case providers, webSearch
+
+    var title: String {
+        switch self {
+        case .providers: "Connect Model Providers"
+        case .webSearch: "Add Web Search"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .providers: "Sign in or add API keys for one or more providers."
+        case .webSearch: "Add an Exa API key so Pi Durable can search the web."
+        }
+    }
+}
+
 struct SettingsConnectionsView: View {
     @Bindable var model: ApplicationModel
     var initialScope = "global"
     var backTitle = "Settings"
-    var webSearchFirst = false
+    var focus: ConnectionSettingsFocus?
     var reservesRailControlSpace = false
     let onBack: () -> Void
     @State private var keyDrafts: [String: String] = [:]
@@ -15,12 +33,31 @@ struct SettingsConnectionsView: View {
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
     @State private var showsExa = false
+    @Environment(\.dashboardTheme) private var theme
     private var agent: DefaultAgentSettingsModel { model.connections }
     private var editable: Bool { !agent.inherits }
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     var body: some View {
+        Group {
+            if let focus {
+                focusedContent(focus)
+            } else {
+                fullSettings
+            }
+        }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+        .task { agent.changeScope(initialScope); agent.loadAccounts() }
+        .onDisappear { agent.cancel() }
+        .confirmationDialog("Reset Pi Durable credentials in this workspace?", isPresented: $confirmingCredentialReset) {
+            Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
+        } message: {
+            Text("Encrypted workspace credentials will be reset and shared connections restored. Claude’s separate native sign-in, files, and conversations are kept.")
+        }
+    }
+
+    private var fullSettings: some View {
         SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable and Usage.", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
                 keyDrafts.removeAll()
@@ -40,19 +77,16 @@ struct SettingsConnectionsView: View {
                 }))
                 Text("App-wide Usage uses the shared accounts. Workspace overrides apply to Pi Durable.").font(.callout).foregroundStyle(.secondary)
             }
-            if webSearchFirst { searchSection }
             connectionsSection
                 .transaction { transaction in
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
-            if !webSearchFirst {
-                searchSection
-                    .transaction { transaction in
-                        transaction.animation = nil
-                        transaction.disablesAnimations = true
-                    }
-            }
+            searchSection
+                .transaction { transaction in
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
             if agent.signInProvider == nil, let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
             if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
             HStack {
@@ -66,32 +100,78 @@ struct SettingsConnectionsView: View {
             LocalModelServerConnections(agent: agent)
             if let tools = model.agentTools { ExecutorConnectionsCard(model: model, tools: tools) }
         }
-        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .task { showsExa = webSearchFirst; agent.changeScope(initialScope); agent.loadAccounts() }
-        .onDisappear { agent.cancel() }
-        .confirmationDialog("Reset Pi Durable credentials in this workspace?", isPresented: $confirmingCredentialReset) {
-            Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
-        } message: {
-            Text("Encrypted workspace credentials will be reset and shared connections restored. Claude’s separate native sign-in, files, and conversations are kept.")
-        }
     }
+
     private var connectionsSection: some View {
         SettingsCard(title: "Model providers", detail: "Connect accounts for Pi Durable and Usage. Choose a preferred account and arrange backups for sign-in or usage exhaustion.") {
-            DisclosureGroup("OpenAI") {
+            providerRows
+        }
+    }
+
+    private func focusedContent(_ focus: ConnectionSettingsFocus) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if focus == .providers {
+                VStack(spacing: 0) { providerRows }
+                    .background(theme.palette.themeWhisper)
+                    .clipShape(DashboardShapes.card)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Exa API key").font(.system(size: 13, weight: .medium))
+                    if agent.searchConfigured || !(agent.accounts["exa"] ?? []).isEmpty {
+                        SettingsNote("An Exa API key is already saved.")
+                    }
+                    keyEntry("exa")
+                }
+                .padding(16)
+                .background(theme.palette.themeWhisper)
+                .clipShape(DashboardShapes.card)
+            }
+            if agent.signInProvider == nil, let notice = agent.notice { SettingsNote(notice) }
+            if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
+            if agent.busy && agent.signInProvider == nil {
+                ProgressView().controlSize(.small)
+            }
+        }
+    }
+
+    private var providerRows: some View {
+        Group {
+            providerRow("OpenAI", detail: "ChatGPT subscriptions or API keys") {
                 connectionGroup("openai-codex", title: "ChatGPT subscriptions", subscription: true)
                 connectionGroup("openai", title: "API keys")
             }
-            DisclosureGroup("Anthropic") {
+            providerDivider
+            providerRow("Anthropic", detail: "Claude subscriptions or API keys") {
                 connectionGroup("claude-subscription", title: "Claude subscriptions", subscription: true)
                 connectionGroup("anthropic", title: "API keys")
             }
-            DisclosureGroup("Grok · xAI") {
+            providerDivider
+            providerRow("Grok · xAI", detail: "Grok subscriptions or xAI API keys") {
                 connectionGroup("xai", title: "Grok subscriptions", subscription: true)
                 connectionGroup("xai-api", title: "xAI API keys")
             }
-            DisclosureGroup("OpenRouter") { connectionContent("openrouter").padding(.leading, 12) }
-            DisclosureGroup("OpenCode") { connectionContent("opencode-go").padding(.leading, 12) }
+            providerDivider
+            providerRow("OpenRouter", detail: "API keys") { connectionContent("openrouter").padding(.leading, 12) }
+            providerDivider
+            providerRow("OpenCode", detail: "API keys") { connectionContent("opencode-go").padding(.leading, 12) }
         }
+    }
+
+    @ViewBuilder private var providerDivider: some View {
+        if focus != nil { Rectangle().fill(theme.palette.border).frame(height: 1).padding(.horizontal, 16) }
+    }
+
+    private func providerRow<Content: View>(_ title: String, detail: String, @ViewBuilder content: @escaping () -> Content) -> some View {
+        DisclosureGroup(content: content) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                if focus != nil {
+                    Text(detail).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
+            }.frame(minHeight: focus == nil ? 30 : 44, alignment: .leading)
+        }
+        .padding(.horizontal, focus == nil ? 0 : 16)
+        .padding(.vertical, focus == nil ? 0 : 12)
     }
     private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {
         DisclosureGroup(title) {
@@ -149,8 +229,10 @@ struct SettingsConnectionsView: View {
     }
     private func keyEntry(_ id: String) -> some View {
         HStack {
-            TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).settingsInput().frame(maxWidth: 180)
-            SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
+            if focus != .webSearch {
+                TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).settingsInput().frame(maxWidth: 180)
+            }
+            SecureField(id == "exa" ? "Enter Exa API key" : "Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .settingsInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in

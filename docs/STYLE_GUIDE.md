@@ -34,6 +34,11 @@ when an intentional design change is accepted.
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
   stable across model and provider changes.
+- **Harness setup:** use compact rows grouped on the theme-whisper surface for
+  both harness installation and Pi Durable setup, with the same typography,
+  padding, inset dividers, and quiet actions. Keep provider setup limited to
+  OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; web-search setup shows only
+  the Exa key form. Both are optional and also accessible from Pi Durable settings.
 - **Pi Durable SDK settings:** place SDK management directly below the workspace
   scope controls. The local workspace uses a fixed heading with Pi Durable SDK and Claude
   SDK versions and explicit check/update actions always visible. Remote workspaces

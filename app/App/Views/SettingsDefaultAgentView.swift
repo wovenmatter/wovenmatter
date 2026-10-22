@@ -10,6 +10,9 @@ struct SettingsDefaultAgentView: View {
     private var agent: DefaultAgentSettingsModel { model.connections }
     @State private var syncError: String?
     @State private var browsingAllModels = false
+    @State private var connectionFocus: ConnectionSettingsFocus?
+    @State private var connectionScope = "global"
+    @State private var returnScope: String?
     @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
         DashboardPiDurableLogoStyle.defaultStyle.rawValue
@@ -23,6 +26,24 @@ struct SettingsDefaultAgentView: View {
     }
     private var editable: Bool { !agent.inherits }
     var body: some View {
+        Group {
+            if let connectionFocus {
+                SettingsPage(title: connectionFocus.title, detail: connectionFocus.detail,
+                    reservesRailControlSpace: reservesRailControlSpace, backTitle: "Pi Durable",
+                    onBack: { self.connectionFocus = nil }) {
+                    SettingsConnectionsView(model: model, initialScope: connectionScope,
+                        focus: connectionFocus, onBack: { self.connectionFocus = nil })
+                }
+            } else {
+                settingsPage
+                    .task { selectScope(returnScope ?? initialScope) }
+            }
+        }
+        .onChange(of: agent.scope) { _, _ in browsingAllModels = false }
+        .onDisappear { agent.cancel() }
+    }
+
+    private var settingsPage: some View {
         SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             scopeSection
             SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
@@ -74,9 +95,6 @@ struct SettingsDefaultAgentView: View {
             SettingsAgentModelsView(agent: agent, editable: editable,
                                     browsingAllModels: browsingAllModels, setBrowsingAllModels: showCatalog)
         }
-        .task { selectScope(initialScope) }
-        .onChange(of: agent.scope) { _, _ in browsingAllModels = false }
-        .onDisappear { agent.cancel() }
     }
     private var piDurableIconCard: some View {
         HStack(alignment: .center, spacing: 16) {
@@ -132,7 +150,8 @@ struct SettingsDefaultAgentView: View {
                         agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
                     })).disabled(!editable)
                     Spacer()
-                    ConnectionsLink(title: agent.connectionLabel(provider.id), scope: agent.scope)
+                    Button(agent.connectionLabel(provider.id)) { openConnections(.providers) }
+                        .buttonStyle(SettingsQuietButtonStyle())
                 }
             }
             ForEach(agent.localServers) { server in
@@ -150,9 +169,20 @@ struct SettingsDefaultAgentView: View {
     }
     private var searchSection: some View {
         SettingsCard(title: "Web search") {
-            HStack { Text("Exa"); Spacer(); ConnectionsLink(title: agent.searchConfigured ? "Key configured" : "Connect Exa", scope: agent.scope) }
+            HStack {
+                Text("Exa")
+                Spacer()
+                Button(agent.searchConfigured ? "Key configured" : "Connect Exa") { openConnections(.webSearch) }
+                    .buttonStyle(SettingsQuietButtonStyle())
+            }
         }
     }
+    private func openConnections(_ focus: ConnectionSettingsFocus) {
+        returnScope = agent.scope
+        connectionScope = agent.inherits ? "global" : agent.scope
+        connectionFocus = focus
+    }
+
     private func selectScope(_ scope: String) {
         browsingAllModels = false
         agent.changeScope(scope)
