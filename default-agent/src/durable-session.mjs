@@ -26,8 +26,8 @@ import { automationTools } from './automation-tools.mjs';
 import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 
 const context = BACKGROUND_CONTEXT;
-const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
-const Options = defineDoc({ kind: 'woven.options', version: 1, scope: 'conversation', history: 'latest', fork: 'current', initial: () => ({ permission: 'full' }) });
+const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
+const Options = defineDoc({ kind: 'woven.options', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'current', initial: () => ({ permission: 'full' }) });
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])])) : value;
 const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const textOf = messages => (messages ?? []).flatMap(m => typeof m.content === 'string' ? [m.content] : (m.content ?? []).flatMap(b => b.type === 'text' ? [b.text] : b.type === 'thinking' ? [b.thinking] : [])).join('\n');

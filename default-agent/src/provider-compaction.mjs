@@ -1,4 +1,4 @@
-import { convertResponsesMessages, convertResponsesTools } from '@earendil-works/pi-ai/api/openai-responses-shared';
+import { convertResponsesMessages, convertResponsesTools, getResponsesToolSupport } from '@earendil-works/pi-ai/api/openai-responses-shared';
 import { createGrammarToolInputProperties } from '@earendil-works/pi-ai/api/constrained-sampling';
 import { getDeclaredTools, getInitialSystemMessage, resolveTranscript, resolveTranscriptTools } from '@earendil-works/pi-ai/utils/transcript';
 import { getSystemMessageText } from '@earendil-works/pi-ai/utils/text';
@@ -194,7 +194,7 @@ function compactInput(model, context, isCodex = model.api === 'openai-codex-resp
   if (isCodex) {
     const system = getInitialSystemMessage(transcript.messages);
     if (system) body.instructions = getSystemMessageText(system);
-    const tools = resolveTranscriptTools(transcript.messages, model.compat?.supportsAdditionalTools || model.compat?.supportsToolSearch).requestTools;
+    const tools = resolveTranscriptTools(transcript.messages, getResponsesToolSupport(model.compat ?? {})).requestTools;
     if (tools.length) body.tools = convertResponsesTools(tools, { strict: null, supportsStrictMode: model.compat?.supportsStrictMode ?? true, supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false });
   }
   return body;
