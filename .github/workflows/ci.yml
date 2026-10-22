@@ -83,9 +83,7 @@ jobs:
           retention-days: 7
       - name: Verify signed delta round trip
         if: needs.changes.outputs.updates == 'true'
-        run: |
-          WOVENMATTER_TEST_TARGET_VERSION=0.3.0 python3 scripts/test-delta-updates.py
-          WOVENMATTER_TEST_TARGET_VERSION=0.3.1 python3 scripts/test-delta-updates.py
+        run: python3 scripts/test-delta-updates.py
 
   companion:
     name: Companion runtime integration

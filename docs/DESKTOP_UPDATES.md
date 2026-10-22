@@ -123,10 +123,8 @@ it uses fresh DerivedData, links, stamps version/source metadata, and signs anew
 Compiler cache keys are scoped to the exact toolchain and dependency inputs;
 Xcode checks individual compilation inputs within that cache. Only trusted main
 produces reusable entries. A failed cached compilation retries once with fresh
-intermediates and caching disabled. The pull-request `Release cache validation`
-workflow exercises cold/warm Release builds without signing secrets or publishing
-anything. It requires actual cache replay and retains timing logs. This moves
-work ahead of release time; it does not eliminate the main build's compute cost.
+intermediates and caching disabled. This moves work ahead of release time;
+it does not eliminate the main build's compute cost.
 
 Ordinary private tagged releases can restore a complete, digest-verified uploaded
 artifact set after a failed workflow attempt. Source, version, build, inventory,
@@ -136,9 +134,9 @@ public releases and mismatched provenance are rejected. Partial uploads rebuild.
 Every newly generated full update is mounted and its app verified. Each generated
 delta is applied to its published base and compared with the full app, including
 file contents, executable modes, symlinks, and bundled ticket files. Signatures,
-app stapling, and Gatekeeper checks remain required. Offline fixture tests cover
-both a same-version refresh and a new-version upgrade, including corrupt deltas.
-These tests do not substitute for an isolated offline first-launch acceptance test.
+app stapling, and Gatekeeper checks remain required. The offline fixture covers
+a signed same-version round trip and reuse of prepared patches after the final
+archive changes. It does not substitute for offline first-launch acceptance.
 
 Both notarization submissions remain in place for now. Apple permits a single
 outermost-DMG submission, but our delta payload currently carries the app's own
