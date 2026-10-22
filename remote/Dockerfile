@@ -22,13 +22,18 @@ ENV HOME=/home \
     WOVENMATTER_WORKSPACE=/home/.woven-matter \
     WOVENMATTER_LISTEN_HOST=0.0.0.0 \
     WOVENMATTER_LISTEN_PORT=7337 \
-    PLAYWRIGHT_BROWSERS_PATH=/home/.cache/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    NODE_PATH=/usr/local/lib/node_modules
 
 WORKDIR /opt/wovenmatter
 COPY --chown=woven:woven default-agent/package*.json ./default-agent/
-# The workspace Playwright CLI matches playwright-core in the tested lockfile.
+# The CLI, JavaScript library and bundled Chromium match the tested lockfile.
+# Keep browsers outside /home so persistent volumes cannot hide image updates.
 RUN npm install --global --ignore-scripts --no-audit --no-fund \
       "playwright@$(node -p 'require("./default-agent/package-lock.json").packages["node_modules/playwright-core"].version')" \
+    && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/* \
     && cd default-agent && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY --chown=woven:woven default-agent/src ./default-agent/src
 COPY --chown=woven:woven remote/package.json ./package.json

@@ -30,6 +30,39 @@ If preparation is blocked, resolve the reported requirement on the host and
 inspect again. The app does not remove conflicting container packages or change
 your SSH account's Docker group membership for you.
 
+## Browse inside a workspace
+
+Every workspace image includes Chromium, the Playwright CLI, and the Playwright
+JavaScript library. Agents can run headless browsing from their shell without
+installing packages or downloading a browser. For example:
+
+```sh
+playwright screenshot https://example.com /home/example.png
+node -e 'const { chromium } = require("playwright"); (async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto("https://example.com");
+    console.log(await page.title());
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });'
+```
+
+CommonJS scripts can use `require("playwright")` from any workspace directory.
+ES modules can import from `/usr/local/lib/node_modules/playwright/index.mjs`.
+Project-installed Playwright versions should install their own matching browsers
+or use the embedded version above. Only Chromium is preinstalled; interactive
+headed browsing requires a display server.
+
+The matching Playwright browsers live in the image at `/opt/ms-playwright`, so
+an existing persistent home cannot hide the browser supplied by an image update.
+Use the workspace's **Update** control to apply this support to an existing
+workspace. System Chromium also remains available as `chromium`.
+
+This browser runs on the remote host. The agent's **Browser Use** tool controls
+the embedded browser on your Mac; use shell commands for browsing within the
+remote workspace, including access to its local development servers.
+
 ## Manage ongoing work
 
 Use the workspace's controls to start, stop, and update it, maintain its
