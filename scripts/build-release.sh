@@ -56,7 +56,7 @@ release_status() {
 
 release_status 'Compiling production Release app'
 compile_release() {
-xcodebuild -quiet -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
+  xcodebuild -quiet -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
   -configuration Release \
@@ -149,6 +149,24 @@ rm -f "$dmg"
 scripts/create-release-dmg.sh "$staging" "$dmg"
 codesign --force --timestamp --sign "$signing_identity" "$dmg"
 codesign --verify --verbose=2 "$dmg"
+# The app is already signed, notarized and stapled. Generate its deltas while
+# Apple processes the outer image; regenerate/sign the feed after DMG stapling.
+update_archives="$release_root/update-archives"
+delta_source="$release_root/delta-source.dmg"
+cp "$dmg" "$delta_source"
+delta_pid=""
+cleanup_delta() {
+  if [ -n "$delta_pid" ]; then
+    kill "$delta_pid" 2>/dev/null || true
+    wait "$delta_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup_delta EXIT
+trap 'exit 130' INT TERM
+WOVENMATTER_UPDATE_ARCHIVES="$update_archives" WOVENMATTER_UPDATE_PREPARE_ONLY=1 \
+  scripts/generate-update-feed.sh "$version" "$build_number" "$delta_source" "$output_dir" \
+  "${WOVENMATTER_UPDATE_HISTORY:?Published update history directory is required}" &
+delta_pid=$!
 release_status 'Submitting disk image to Apple; waiting for notarization'
 notarize "$dmg"
 release_status 'Disk image accepted; stapling and assessing image'
@@ -162,8 +180,9 @@ test "$(stat -f %z "$dmg")" -le 536870912 \
 release_status 'Generating updater manifest and checksums'
 scripts/generate-release-manifest.sh \
   "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"
-release_status 'Generating signed delta updates from published app bundles'
-scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir" \
+release_status 'Finalizing signed delta updates after disk image notarization'
+if wait "$delta_pid"; then delta_pid=""; else status=$?; delta_pid=""; exit "$status"; fi
+WOVENMATTER_UPDATE_ARCHIVES="$update_archives" scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir" \
   "${WOVENMATTER_UPDATE_HISTORY:?Published update history directory is required}"
 release_status 'Distribution artifacts ready'
 printf 'Release artifacts ready in %s\n' "$output_dir"

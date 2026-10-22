@@ -40,15 +40,17 @@ build="${DERIVED_FILE_DIR:?}/cef-$architecture"
 products="${BUILT_PRODUCTS_DIR:?}"
 mkdir -p "$DERIVED_FILE_DIR" "$products"
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+export MACOSX_DEPLOYMENT_TARGET=26.0
 browser_key="$(python3 "$repo_root/scripts/browser-build-cache.py" key "$architecture" "$cmake")"
 browser_cache="${WOVENMATTER_BROWSER_CACHE:-$HOME/Library/Caches/WovenMatter/BrowserBuilds}/$browser_key"
 if python3 "$repo_root/scripts/browser-build-cache.py" restore "$browser_cache" "$build"; then
   echo "Reused unsigned browser products: $browser_key"
 else
-"$cmake" -S "$repo_root/app/Browser" -B "$build" -G 'Unix Makefiles' \
-  -DCEF_ROOT="$sdk" -DPROJECT_ARCH="$architecture" -DCMAKE_OSX_ARCHITECTURES="$architecture" \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DUSE_SANDBOX=ON > "$build-config.log"
-"$cmake" --build "$build" --parallel 6 > "$build-build.log" 2>&1 || { tail -100 "$build-build.log"; exit 1; }
+  "$cmake" -S "$repo_root/app/Browser" -B "$build" -G 'Unix Makefiles' \
+    -DCEF_ROOT="$sdk" -DPROJECT_ARCH="$architecture" -DCMAKE_OSX_ARCHITECTURES="$architecture" \
+    -DCMAKE_C_COMPILER="$(xcrun --find clang)" -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DUSE_SANDBOX=ON > "$build-config.log"
+  "$cmake" --build "$build" --parallel 6 > "$build-build.log" 2>&1 || { tail -100 "$build-build.log"; exit 1; }
   python3 "$repo_root/scripts/browser-build-cache.py" save "$browser_cache" "$build"
 fi
 if [ "${WOVENMATTER_BROWSER_BUILD_ONLY:-0}" = 1 ]; then exit 0; fi

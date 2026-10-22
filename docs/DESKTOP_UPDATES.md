@@ -151,3 +151,10 @@ LZMA mode. This preserves signed deltas and reconstruction checks while avoiding
 LZMA's high compression cost. Full DMGs use zlib level 6; if the image approaches
 the legacy 512 MiB limit, packaging retries at level 9 before signing/notarizing.
 The final signed-image size limit remains enforced.
+
+Delta generation overlaps the outer DMG notarization wait. It starts only after
+the enclosed app is signed, notarized and stapled. After the final DMG is stapled,
+the feed is regenerated and signed from its final bytes while reusing the exact
+prepared patches. Full/delta verification then proves reconstruction of that
+same app. A failed notarization or delta process stops the release and terminates
+its owned background process; no provisional feed or archive is uploaded.

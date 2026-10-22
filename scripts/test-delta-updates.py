@@ -64,6 +64,19 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-delta-test-') as temp:
     run(tools / 'bin/generate_appcast', '--ed-key-file', keyfile,
         '--download-url-prefix', f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/',
         '--versions', '2', '--maximum-versions', '1', '--delta-compression', 'lzfse', '-o', archives / 'appcast.xml', archives)
+    # An early delta pass may overlap outer-container notarization. Rebuild the
+    # feed against changed final archive bytes while preserving the delta file.
+    prepared = next(archives.glob('*.delta'))
+    prepared_inode, prepared_bytes = prepared.stat().st_ino, prepared.read_bytes()
+    final_archive = archives / f'WovenMatter_{VERSION}_2_arm64.dmg'
+    final_archive.unlink()
+    run('hdiutil', 'create', '-quiet', '-srcfolder', new.parent, '-format', 'UDZO',
+        '-volname', 'Final image', '-imagekey', 'zlib-level=1', final_archive)
+    (archives / 'appcast.xml').unlink()
+    run(tools / 'bin/generate_appcast', '--ed-key-file', keyfile,
+        '--download-url-prefix', f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/',
+        '--versions', '2', '--maximum-versions', '1', '--delta-compression', 'lzfse', '-o', archives / 'appcast.xml', archives)
+    assert prepared.stat().st_ino == prepared_inode and prepared.read_bytes() == prepared_bytes
     run('python3', ROOT / 'scripts/normalize-update-feed.py', archives, VERSION, '2')
     run(tools / 'bin/sign_update', '--ed-key-file', keyfile, archives / 'appcast.xml')
     run(tools / 'bin/sign_update', '--verify', '--ed-key-file', keyfile, archives / 'appcast.xml')

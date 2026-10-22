@@ -26,7 +26,7 @@ def key(architecture, cmake):
     for command in (['xcodebuild', '-version'], ['xcrun', '--sdk', 'macosx', '--show-sdk-version'],
                     ['xcrun', 'clang', '--version'], [cmake, '--version']):
         h.update(subprocess.check_output(command))
-    for variable in ('CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'SDKROOT', 'MACOSX_DEPLOYMENT_TARGET'):
+    for variable in ('CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'SDKROOT', 'MACOSX_DEPLOYMENT_TARGET'):
         h.update(variable.encode() + b'=' + os.environ.get(variable, '').encode())
     h.update(architecture.encode())
     return h.hexdigest()
