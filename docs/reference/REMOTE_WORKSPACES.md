@@ -22,7 +22,8 @@ Each container runs as a non-root user with a read-only root filesystem,
 dropped capabilities, bounded temporary filesystems, and a dedicated persistent
 Docker named volume mounted at `/home`. The container user's home is `/home`,
 and the Woven Matter workspace is `/home/.woven-matter`; installed harnesses,
-configuration, credentials, and caches also persist under `/home`. Its base image is pinned by a multi-architecture manifest digest, and its
+configuration, credentials, and caches also persist under `/home`. Its base image
+follows the official Node slim image for the app's bundled Node stable major, and its
 local log driver rotates bounded files. Container updates use a rollback
 container and preserve the prior running state if the replacement does not
 become healthy.
@@ -53,10 +54,12 @@ start a measurement container or access Docker-managed volume contents directly.
 **Update container** rebuilds the app's bundled image definition with a fresh
 APT package index and upgrades the base OS packages before installing workspace
 tools. Builds use `--pull --no-cache`, so a repeated update does not reuse an old
-security-package layer. Both Linux image definitions use the same pinned Node
-24 LTS / Debian 13 (Trixie) multi-architecture base. The image stays read-only at
-runtime; OS updates happen in the replacement image, never inside a running
-workspace.
+security-package layer. Both Linux image definitions use the same
+`node:<current major>-trixie-slim` multi-architecture base, so each rebuild takes the
+newest Node patch of that stable major. Workspace agent dependencies install from
+the committed lockfile with `npm ci`, and the workspace Playwright CLI matches
+the locked `playwright-core`. The image stays read-only at runtime; OS updates
+happen in the replacement image, never inside a running workspace.
 
 Container removal and data removal remain separate actions. Restarting,
 updating, or recreating a workspace preserves its named volume. Woven Matter
@@ -71,31 +74,19 @@ several independently named workspaces.
 
 ## Maintaining runtime dependencies
 
-From a dedicated branch based on current `main`, run:
+Dependency maintenance runs manually or through an owner-run agent task; see
+[the dependency policy](../DEPENDENCIES.md). The former monolithic refresh
+script has been removed. External maintenance jobs are configured separately
+from repository CI.
 
-```sh
-node scripts/update-runtime-dependencies.mjs --check
-node scripts/update-runtime-dependencies.mjs --write
-scripts/test-changes.sh --all
-```
-
-`--check` reads official Node release/checksum metadata, Docker Hub manifest
-metadata, and npm package releases without changing files. `--write` updates
-both Linux base-image pins, the matching macOS Node archives/checksums, image
-npm and Playwright pins, and the agent package manifest/lockfile. It installs
-the reviewed build dependencies and regenerates the mobile Pi bundle, version
-constant, provenance, and notices from that same lockfile. It never deploys or
-updates a remote host. Review the complete diff, upstream release notes and
-licenses, then open a PR. Do not treat source refresh as a deployed update.
-Review the pinned checkout/setup-node action releases in the CI workflow during
-the same maintenance pass; retain full commit SHA references.
-
-The command retains the supported Node major and Debian codename, the supported
-agent-package majors, and the minor line of pre-1.0 packages. New runtime or OS
-majors require a deliberate compatibility review. Missing archive checksums,
-missing amd64/arm64 images, unaligned Pi releases, or diverged image pins stop
-the refresh before source files change. The macOS npm installer comes from the
-verified Node archive; Linux npm has its own explicit image pin.
+Prepare updates on a dedicated branch based on current `main`. Review current
+upstream releases, update package declarations and lockfiles through their
+package managers, and keep runtime version records and archive checksums in
+sync. A coordinated Pi update requires every Pi package and Chord to be
+published at the same version. Regenerate affected mobile bundles and
+provenance with their resource-generation scripts. Review integration changes
+and record focused checks and any pending native validation in the PR.
+Dependency maintenance does not deploy a host or update a running workspace.
 
 CI verifies the generated resources and builds both images on Linux. Its
 workspace smoke test verifies authenticated access, per-workspace volumes,

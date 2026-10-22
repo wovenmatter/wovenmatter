@@ -32,20 +32,23 @@ public struct LocalACPManagedNodeArtifact: Equatable, Sendable {
         )!
     }
 
+    /// The same tested Node stable release the app bundles (default-agent/.node-version).
+    /// Installed offline from this record; dependency maintenance must update
+    /// the version and checksums together with the bundled Node record.
     public static var current: LocalACPManagedNodeArtifact {
         #if arch(arm64)
         LocalACPManagedNodeArtifact(
-            version: "v24.22.1",
+            version: "v26.12.1",
             platform: "darwin-arm64",
-            archiveFileName: "node-v24.22.1-darwin-arm64.tar.gz",
-            sha256: "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7"
+            archiveFileName: "node-v26.12.1-darwin-arm64.tar.gz",
+            sha256: "1901d539912c02afa10d1cc126943a8855a7eedebe830119463470db5e6c59e8"
         )
         #elseif arch(x86_64)
         LocalACPManagedNodeArtifact(
-            version: "v24.22.1",
+            version: "v26.12.1",
             platform: "darwin-x64",
-            archiveFileName: "node-v24.22.1-darwin-x64.tar.gz",
-            sha256: "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035"
+            archiveFileName: "node-v26.12.1-darwin-x64.tar.gz",
+            sha256: "b85c2ea4420ad0bc4abf2dc6cf1f55130ed681f1cabf60cf3f526e4c9e2712ff"
         )
         #else
         #error("Woven Matter's managed Node runtime supports macOS arm64 and x86_64.")

@@ -11,6 +11,8 @@ import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.m
 
 
 
+const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
+
 const opencode = {id:'opencode',displayName:'OpenCode',command:'opencode',cliCommand:'opencode',install:{kind:'npm-global',package:'@opencode/cli@2'}}
 async function fixture(t, overrides = {}) {
   const root = await mkdtemp(resolve(tmpdir(),'wm-maintenance-'))
@@ -25,7 +27,7 @@ async function fixture(t, overrides = {}) {
       if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
       if(command.startsWith('npm install')) { executions++; installed=true; return {code:0,output:'installed'} }
       throw Error('Unexpected command: '+command)
-    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>({version:'2.1.1'})}},...overrides}
+    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>registryMetadata('2.1.1')}},...overrides}
   return {root,service:createRuntimeMaintenance(options),options,calls,install:()=>{installed=true},get executions(){return executions},get requests(){return requests}}
 }
 async function finished(service) {
@@ -91,7 +93,7 @@ test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releas
   await finished(f.service)
   assert.ok(f.calls.some(c => c.includes("'@opencode/cli@2.1.1'")))
   const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
-  const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => ({ version: '2.1.0' }) }) })
+  const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => registryMetadata('2.1.0') }) })
   const preview = await other.service.npmPreview(h)
   assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
   await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@1.18.29' })
@@ -138,7 +140,7 @@ test('bundled Codex latest is checked separately and refresh respects adapter ra
     verifiedInstaller: async () => ({ path: resolve(root, 'fixture-installer.sh') }),
     fetchImplementation: async url => {
       requests.push(decodeURIComponent(url))
-      return { ok: true, json: async () => ({ version: String(url).includes('codex-acp') ? '1.11.0' : '0.154.0' }) }
+      return { ok: true, json: async () => registryMetadata(String(url).includes('codex-acp') ? '1.11.0' : '0.154.0') }
     },
     execute: async command => {
       calls.push(command)
@@ -164,7 +166,7 @@ test('bundled Codex latest is checked separately and refresh respects adapter ra
   assert.equal(bundled.updateTargetVersion, '0.153.4')
   assert.equal(initial.updateAvailable, true)
   assert.match(initial.notice, /declared compatibility/)
-  assert.ok(requests.includes('https://registry.npmjs.org/@openai/codex/latest'))
+  assert.ok(requests.includes('https://registry.npmjs.org/@openai/codex'))
   assert.ok(calls.some(c => c.includes("'@openai/codex@~0.153.0'")))
   // A successful installer exit is insufficient if its compatible bundled target is unchanged.
   refresh = false
@@ -195,7 +197,7 @@ test('OpenCode latest previews and updates accept newer v2 releases independentl
   let installed = '2.0.22', latest = '2.1.7'
   const service = createRuntimeMaintenance({ catalog: new Map([['opencode', harness]]), workspaceRoot: root,
     environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    fetchImplementation: async url => { assert.ok(url.endsWith('/latest')); return { ok: true, json: async () => ({ version: latest }) } },
+    fetchImplementation: async url => { assert.equal(decodeURIComponent(url), 'https://registry.npmjs.org/@opencode/cli'); return { ok: true, json: async () => registryMetadata(latest) } },
     execute: async command => {
       if (command.startsWith('command -v')) return { code: 0, output: '/fixture/opencode' }
       if (command.endsWith('--version')) return { code: 0, output: installed }

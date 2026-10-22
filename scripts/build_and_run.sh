@@ -105,7 +105,7 @@ stop_dev_app() {
 }
 # Stop before overwriting the executable, and respect graceful termination.
 stop_dev_app
-xcodebuild -quiet \
+xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   -project "${app_root}/WovenMatter.xcodeproj" \
   -scheme WovenMatter \
   -configuration Debug \

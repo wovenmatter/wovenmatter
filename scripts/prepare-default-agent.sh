@@ -2,12 +2,14 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 agent_root="$repo_root/default-agent"
-version=24.22.1
+# One tested Node stable record for this bundle, CI, and the managed adapter runtime.
+# Dependency maintenance must update it and the checksums below together.
+version="$(tr -d '[:space:]' < "$agent_root/.node-version")"
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi
 case "$arch" in
-  arm64) node_arch=arm64; checksum=89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7 ;;
-  x86_64) node_arch=x64; checksum=d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035 ;;
+  arm64) node_arch=arm64; checksum=1901d539912c02afa10d1cc126943a8855a7eedebe830119463470db5e6c59e8 ;;
+  x86_64) node_arch=x64; checksum=b85c2ea4420ad0bc4abf2dc6cf1f55130ed681f1cabf60cf3f526e4c9e2712ff ;;
   *) printf 'Unsupported Built-in architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 cache="${TMPDIR:-/tmp}/wovenmatter-node-$version-$node_arch"
@@ -20,7 +22,7 @@ if [ ! -x "$cache/bin/node" ]; then
   tar -xzf "$stage/node.tar.gz" --strip-components=1 -C "$cache"
 fi
 export PATH="$cache/bin:$PATH"
-lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-darwin-$node_arch"
+lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch"
 # Keep reproducible dependencies outside a possibly cloud-synced checkout.
 # Copying node_modules from Desktop can block on File Provider hydration (and
 # include conflict copies) even when every package version is already locked.
@@ -39,7 +41,7 @@ fi
 output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
-  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
+  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=/.node-version --exclude=.DS_Store "$agent_root/" "$output/"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"

@@ -4,7 +4,8 @@ Thank you for helping improve WovenMatter.
 
 ## Build from source
 
-Development requires macOS 26, Xcode 26, Node.js 24, and `jq` for the validation
+Development requires macOS 26, Xcode 26, the current Node.js release recorded in
+`default-agent/.node-version`, and `jq` for the validation
 scripts. The Xcode project is `app/WovenMatter.xcodeproj`; the Swift package is
 rooted at `app/`. No provider credentials are needed to build or test.
 

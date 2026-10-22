@@ -46,7 +46,7 @@ Browser startup requires app consent and readable Chromium Safe Storage. A denie
 read blocks initialization and points to General rather than falling back to an
 unencrypted profile or prompting from the browser. The existing shared Chromium
 secret is preserved. A missing secret is generated in the format expected by the
-pinned Chromium build. Website passwords use a separate Keychain item under
+bundled Chromium build. Website passwords use a separate Keychain item under
 `wovenmatter.browser.passwords`, scoped by app bundle ID, and never enter agent
 context, snapshots, diagnostics, defaults or plaintext files. Dev and production
 have separate password vaults as well as separate Chromium profiles.

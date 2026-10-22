@@ -12,10 +12,13 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { writePrivateJSON } from '../config.mjs';
 
-// V1 does not expose the managed app API. V2 and later have no upper version limit.
-export const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) >= 2;
+// The broker implements Executor's V2 managed app API; V1 lacks it and a later
+// major is an unverified API. Newer V2 releases install without an app update;
+// Dependency maintenance reviews new upstream majors before changing this API line.
+export const EXECUTOR_API_MAJOR = 2;
+export const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) === EXECUTOR_API_MAJOR;
 export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {
-  minimum: '2.0.0-0', prerelease: true, executable: 'executor', fetchImplementation });
+  major: EXECUTOR_API_MAJOR, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 export function validateConfiguration(config) {
@@ -175,7 +178,7 @@ export class ExecutorBroker {
     const version = await latestExecutorVersion(this.fetch);
     const dockerfile = (await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/Executor.Dockerfile'), 'utf8'))
       .replace('ARG EXECUTOR_VERSION', `ARG EXECUTOR_VERSION=${version}`);
-    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, version, dockerfile });
+    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, version, dockerfile, generation: randomUUID() });
     const command = `set -eu\numask 077\nwm_payload=$(mktemp)\ntrap 'rm -f "$wm_payload"' EXIT\ncat > "$wm_payload" <<'WOVEN_EXECUTOR_SETUP_JSON'\n${payload}\nWOVEN_EXECUTOR_SETUP_JSON\n${script}\n`;
     await this.run('/usr/bin/ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
     this.runtimeVersion = version;
