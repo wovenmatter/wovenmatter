@@ -2,12 +2,19 @@ name: Prepare release dependencies
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'shared/**'
+      - 'ios/**'
+      - 'default-agent/**'
+      - 'scripts/**'
+      - '.github/workflows/release*.yml'
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: release-cache-main
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   prepare:
     if: github.ref == 'refs/heads/main'

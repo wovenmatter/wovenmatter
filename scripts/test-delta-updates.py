@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A real same-version delta round trip, with no provider, Apple, or production access."""
+"""Real full/delta refresh and upgrade round trips, without provider or production access."""
 import importlib.util
 import json
 import os

@@ -3,7 +3,7 @@
 set -euo pipefail
 staging="${1:?STAGING OUTPUT}"
 dmg="${2:?STAGING OUTPUT}"
-[ ! -e "$dmg" ] || { echo 'Refusing to overwrite an existing disk image.' >&2; exit 65; }
+[ ! -e "$dmg" ] && [ ! -L "$dmg" ] || { echo 'Refusing to overwrite an existing disk image.' >&2; exit 65; }
 for level in 6 9; do
   started=$SECONDS
   hdiutil create -volname 'Woven Matter' -srcfolder "$staging" -format UDZO \

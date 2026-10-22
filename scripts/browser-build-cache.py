@@ -51,7 +51,7 @@ def transfer(mode, entry, build):
             return False
     if os.environ.get('WOVENMATTER_WRITE_BROWSER_CACHE') != '1':
         return True
-    # Never save a signed helper or an assembled app; preparation signs copies.
+    # Never save a distribution-signed helper or an assembled app; preparation signs copies.
     entry.mkdir(parents=True, exist_ok=True)
     manifest = {}
     for name in PRODUCTS:
