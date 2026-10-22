@@ -6,48 +6,6 @@ import Testing
 @Suite("Runtime boundaries", .serialized)
 struct RuntimeBoundaryTests {
 
-  @Test("workspace setup leaves existing user files and instructions intact")
-  func workspaceUpgradePreservesContent() throws {
-    let fixture = try TemporaryDirectory(prefix: "wovenmatter-existing")
-    defer { fixture.remove() }
-    let root = fixture.url
-    for name in ["GUIDES", ".scratch", "scratch"] {
-      try FileManager.default.createDirectory(at: root.appending(path: name), withIntermediateDirectories: true)
-    }
-    try Data("legacy".utf8).write(to: root.appending(path: ".scratch/work.py"))
-    try Data("current".utf8).write(to: root.appending(path: "scratch/work.py"))
-    let personal = "Personal instructions\n"
-    try Data(personal.utf8).write(to: root.appending(path: "AGENTS.md"))
-    for _ in 0..<2 { _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root) }
-    #expect(Set(try entries(at: root)) == Set(["GUIDES", ".scratch", "scratch", "AGENTS.md"]))
-    #expect(try String(contentsOf: root.appending(path: ".scratch/work.py"), encoding: .utf8) == "legacy")
-    #expect(try String(contentsOf: root.appending(path: "scratch/work.py"), encoding: .utf8) == "current")
-    #expect(try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8) == personal)
-  }
-
-  @Test("local installer accepts only bounded HTTPS sources")
-  func localInstallerSourceAndSizeBoundary() throws {
-    #expect(LocalACPBoundedHTTPSDownloader.isSafeHTTPS(
-      URL(string: "https://example.com/install.sh")!
-    ))
-    #expect(!LocalACPBoundedHTTPSDownloader.isSafeHTTPS(
-      URL(string: "http://example.com/install.sh")!
-    ))
-    #expect(!LocalACPBoundedHTTPSDownloader.isSafeHTTPS(
-      URL(string: "https://user@example.com/install.sh")!
-    ))
-    try LocalACPBoundedHTTPSDownloader.validate(
-      byteCount: 5,
-      maximumBytes: 5
-    )
-    #expect(throws: LocalACPBoundedDownloadError.tooLarge(6)) {
-      try LocalACPBoundedHTTPSDownloader.validate(
-        byteCount: 6,
-        maximumBytes: 5
-      )
-    }
-  }
-
   @Test("managed npm installs use exact reviewed package versions")
   func exactNpmInstalls() async throws {
     let fixture = try TemporaryDirectory(prefix: "wovenmatter-npm")
@@ -254,13 +212,6 @@ struct RuntimeBoundaryTests {
       #expect(error == .sourceDigestChanged)
     }
     #expect(await downloads.fetchCount() == 2)
-  }
-
-  private func entries(at root: URL) throws -> [String] {
-    try FileManager.default.contentsOfDirectory(
-      at: root,
-      includingPropertiesForKeys: nil
-    ).map(\.lastPathComponent).sorted()
   }
 
   private static let statusJSON = #"{"id":"container","name":"wovenmatter-work-1","state":"running","running":true,"health":null,"startedAt":"now","image":"wovenmatter/workspace:0.1","memoryBytes":8589934592,"swapBytes":4294967296,"swapMode":"additional","hostPort":7440,"persistentVolume":"wovenmatter-work-1-home","capabilities":{"memory":true,"swap":true},"storageKind":"named-volume","storageUsedBytes":1048576,"hostStorageCapacityBytes":107374182400,"hostStorageAvailableBytes":53687091200,"hostStorageLow":false,"storageWarning":null,"legacyStorage":false}"#

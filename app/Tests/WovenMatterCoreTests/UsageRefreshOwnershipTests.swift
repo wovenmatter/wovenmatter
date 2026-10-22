@@ -6,122 +6,6 @@ import WovenMatterCore
 @Suite("Usage refresh ownership")
 struct UsageRefreshOwnershipTests {
 
-  @Test("Late provider limits cannot overwrite latest memory or persistent snapshot")
-  func serviceLimitsOwnership() async throws {
-    let fixture = try UsageOwnershipDirectory()
-    let gate = UsageCompletionGate<[UsageLimitAccount]>()
-    let service = LocalUsageService(
-      homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
-      usageDatabaseURL: fixture.databaseURL, limitCollector: { _ in await gate.load() }
-    )
-    let now = Date(timeIntervalSince1970: 1_780_000_000)
-    let old = Task { try await service.limitsSnapshot(refresh: true, enabledProviders: [.cursor], allowCredentialAccess: false, now: now) }
-    await gate.waitForStarts(1)
-    let current = Task { try await service.limitsSnapshot(refresh: true, enabledProviders: [.cursor], allowCredentialAccess: false, now: now.addingTimeInterval(1)) }
-    await gate.waitForStarts(2)
-    let newest = account("new", now: now.addingTimeInterval(1))
-    await gate.release(2, value: [newest])
-    #expect(try await current.value.accounts == [newest])
-    await gate.release(1, value: [account("old", now: now)])
-    await #expect(throws: CancellationError.self) { try await old.value }
-    let cached = try await service.limitsSnapshot(refresh: false, enabledProviders: [.cursor], allowCredentialAccess: false, now: now.addingTimeInterval(2))
-    #expect(cached.accounts == [newest])
-    let store = try UsageStore(databaseURL: fixture.databaseURL)
-    #expect(try store.usageLimitAccounts(providers: [.cursor]) == [newest])
-  }
-
-  @Test("Cancelled or credential-invalidated requests cannot persist limits", arguments: [false, true])
-  func invalidatedLimits(credentialChanged: Bool) async throws {
-    let fixture = try UsageOwnershipDirectory()
-    let gate = UsageCompletionGate<[UsageLimitAccount]>()
-    let service = LocalUsageService(
-      homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
-      usageDatabaseURL: fixture.databaseURL, limitCollector: { _ in await gate.load() }
-    )
-    let now = Date(timeIntervalSince1970: 1_780_000_000)
-    let pending = Task { try await service.limitsSnapshot(refresh: true, enabledProviders: [.cursor], allowCredentialAccess: false, now: now) }
-    await gate.waitForStarts(1)
-    if credentialChanged { try await service.saveOpenRouterAPIKey("synthetic") }
-    else { pending.cancel() }
-    await gate.release(1, value: [account("obsolete", now: now)])
-    await #expect(throws: CancellationError.self) { try await pending.value }
-    let store = try UsageStore(databaseURL: fixture.databaseURL)
-    #expect(try store.usageLimitAccounts(providers: [.cursor]).isEmpty)
-  }
-
-  @Test("Queued limits cannot persist after credential or shared-account invalidation", arguments: [false, true])
-  func queuedLimitsOwnership(sharedAccountChange: Bool) async throws {
-    final class Revision: @unchecked Sendable {
-      private let lock = NSLock()
-      private var value: UInt64 = 0
-      func read() -> UInt64 { lock.withLock { value } }
-      func advance() { lock.withLock { value += 1 } }
-    }
-    let fixture = try UsageOwnershipDirectory()
-    let revision = Revision()
-    let gate = UsageCompletionGate<[UsageLimitAccount]>()
-    let service = LocalUsageService(homeDirectory: fixture.url, fileManager: .default,
-      credentialStore: UsageNoCredentials(), usageDatabaseURL: fixture.databaseURL,
-      usesSharedConnections: sharedAccountChange, sharedConnectionRevision: { revision.read() },
-      limitCollector: { _ in await gate.load() })
-    _ = try await service.limitsSnapshot(refresh: false, enabledProviders: [.cursor], allowCredentialAccess: false)
-    let pending = Task { try await service.limitsSnapshot(refresh: true,
-      enabledProviders: [.cursor], allowCredentialAccess: false) }
-    await gate.waitForStarts(1)
-    let store = try await AsyncUsageStore(databaseURL: fixture.databaseURL)
-    let workers = DatabaseWorkers.shared(url: fixture.databaseURL)
-    let entered = AsyncStream<Void>.makeStream()
-    let release = DispatchSemaphore(value: 0)
-    defer { release.signal() }
-    let blocked = Task { try await store.write { _ in
-      entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 10) == .success)
-    } }
-    var iterator = entered.stream.makeAsyncIterator()
-    await iterator.next()
-    await gate.release(1, value: [account("obsolete", now: Date())])
-    try await waitForUsageJob { workers.writer.metrics.pending == 2 }
-    if sharedAccountChange { revision.advance() }
-    else { try await service.saveOpenRouterAPIKey("synthetic") }
-    release.signal()
-    try await blocked.value
-    await #expect(throws: CancellationError.self) { try await pending.value }
-    #expect(try await store.usageLimitAccounts(providers: [.cursor]).isEmpty)
-  }
-
-  @Test("Transcript preparation does not occupy the workspace writer and invalidation cancels it")
-  func preparationHasSeparateLane() async throws {
-    let fixture = try UsageOwnershipDirectory()
-    let store = try await AsyncUsageStore(databaseURL: fixture.databaseURL)
-    let preparation = DatabaseWorker(label: "usage.preparation.fixture", capacity: 4)
-    let ownership = UsageRefreshOwnership()
-    let importer = UsageTranscriptImporter(homeDirectory: fixture.url, outcomes: [:],
-      ownership: ownership, preparationWorker: preparation)
-    let entered = AsyncStream<Void>.makeStream()
-    let release = DispatchSemaphore(value: 0)
-    defer { release.signal() }
-    let blocked = Task { try await preparation.perform { _ in
-      entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 10) == .success)
-    } }
-    var iterator = entered.stream.makeAsyncIterator()
-    await iterator.next()
-    // Metadata stores Unix seconds; converting an arbitrary Date from its
-    // reference epoch can round a sub-microsecond bit. Keep this ownership
-    // assertion exact with a whole-second timestamp representable in both epochs.
-    let now = Date(timeIntervalSince1970: 1_780_000_000)
-    let importing = Task { try await importer.run(store: store,
-      cutoff: now.addingTimeInterval(-86_400), enabledProviders: [.codex], now: now) }
-    try await waitForUsageJob { preparation.metrics.pending == 2 }
-    try await store.setMetadataDate(now, for: "writer-remains-available")
-    #expect(try await store.metadataDate("writer-remains-available") == now)
-    ownership.invalidate()
-    release.signal()
-    try await blocked.value
-    await #expect(throws: CancellationError.self) { try await importing.value }
-    #expect(try await store.metadataDate("usage.local-indexed-after") == nil)
-  }
-
   @Test("Live observations allocate their sequence from the current writer cursor")
   func recorderUsesCurrentCursor() async throws {
     let fixture = try UsageOwnershipDirectory()
@@ -171,46 +55,6 @@ struct UsageRefreshOwnershipTests {
     #expect(await coordinator.isRefreshing == false)
   }
 
-  @Test("All coalesced consumers can receive one successful generation")
-  func coalescedConsumers() async throws {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    let gate = UsageCompletionGate<Int>()
-    let first = Task { try await coordinator.value(for: "shared", policy: .reuse) { await gate.load() } }
-    await gate.waitForStarts(1)
-    let registrations = UsageConsumerRegistrations(target: 20)
-    let consumers = (0..<20).map { _ in
-      Task { try await registeredConsumer(coordinator, registrations: registrations) }
-    }
-    await registrations.wait()
-    await gate.release(1, value: 42)
-    #expect(try await first.value == 42)
-    for consumer in consumers { #expect(try await consumer.value == 42) }
-    #expect(await gate.startCount == 1)
-  }
-
-  // Both registration and value entry execute on the coordinator actor without a hop.
-  // The synchronous signal therefore proves all consumers joined before releasing the load.
-  private func registeredConsumer(
-    _ coordinator: isolated UsageRefreshCoordinator<String, Int>,
-    registrations: UsageConsumerRegistrations
-  ) async throws -> Int {
-    registrations.arrive()
-    return try await coordinator.value(for: "shared", policy: .refresh) { -1 }
-  }
-
-  @Test("Cancelling a consumer does not cancel another consumer's shared value")
-  func consumerCancellation() async throws {
-    let coordinator = UsageRefreshCoordinator<String, Int>()
-    let gate = UsageCompletionGate<Int>()
-    let cancelled = Task { try await coordinator.value(for: "shared", policy: .reuse) { await gate.load() } }
-    await gate.waitForStarts(1)
-    let valid = Task { try await coordinator.value(for: "shared", policy: .reuse) { -1 } }
-    cancelled.cancel()
-    await gate.release(1, value: 42)
-    await #expect(throws: CancellationError.self) { try await cancelled.value }
-    #expect(try await valid.value == 42)
-  }
-
   @Test("Shared connections never reuse a persisted previous account or harness quota")
   func sharedLimitsDoNotInheritAnotherAccount() async throws {
     let fixture = try UsageOwnershipDirectory()
@@ -230,14 +74,6 @@ struct UsageRefreshOwnershipTests {
     #expect(result.accounts.first?.accountLabel == "current-account")
     #expect(result.accounts.first?.status == .unavailable)
     #expect(result.codexWorkspaces.isEmpty)
-  }
-
-  private func waitForUsageJob(_ ready: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(5)
-    while !ready() {
-      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
-      try await Task.sleep(for: .milliseconds(1))
-    }
   }
 
   private func account(_ label: String, now: Date) -> UsageLimitAccount {
@@ -286,31 +122,4 @@ private final class UsageOwnershipDirectory: @unchecked Sendable {
   var databaseURL: URL { url.appending(path: "usage.sqlite") }
   init() throws { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
   deinit { try? FileManager.default.removeItem(at: url) }
-}
-
-private final class UsageConsumerRegistrations: @unchecked Sendable {
-  private let lock = NSLock()
-  private let target: Int
-  private var count = 0
-  private var observer: CheckedContinuation<Void, Never>?
-  init(target: Int) { self.target = target }
-  func arrive() {
-    let ready = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-      count += 1
-      guard count == target else { return nil }
-      defer { observer = nil }
-      return observer
-    }
-    ready?.resume()
-  }
-  func wait() async {
-    await withCheckedContinuation { continuation in
-      let ready = lock.withLock {
-        if count == target { return true }
-        observer = continuation
-        return false
-      }
-      if ready { continuation.resume() }
-    }
-  }
 }

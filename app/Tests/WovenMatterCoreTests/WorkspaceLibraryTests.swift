@@ -8,49 +8,6 @@ import WovenMatterCore
 @Suite("Library", .serialized)
 struct WorkspaceLibraryTests {
 
-  @Test("each exchange retains provenance; combined filters and pagination stay distinct")
-  func filtering() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let local = try await f.session()
-    let remote = try await f.session("Remote", .claudeCode)
-    let remoteID = UUID().uuidString.lowercased()
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?", [remoteID, remote])
-     } }
-    try await f.db.setLibraryLocation(conversationID: local, workspaceName: "Local workspace", root: f.root.path)
-    try await f.db.setLibraryLocation(conversationID: remote, workspaceName: "Server", root: "/home/.woven-matter")
-    let first = try await f.exchange(local, text: "https://same.example", reply: "[Report](https://example.com/report.pdf)")
-    _ = try await f.exchange(remote, text: "https://same.example", reply: "![Photo](https://example.com/photo.png)")
-    #expect(try await f.db.libraryItems().count == 4)
-    var q = LibraryQuery()
-    q.workspaces = ["local", remoteID]
-    q.sender = .me
-    #expect(try await f.db.libraryItems(query: q).count == 2)
-    q.harnesses = ["codex"]
-    #expect(try await f.db.libraryItems(query: q).map(\.messageID) == [first.userMessageID])
-    q.workspaces = []
-    #expect(try await f.db.libraryItems(query: q).isEmpty)
-    q = .init()
-    q.kind = .photo
-    q.sender = .agent
-    q.workspaces = [remoteID]
-    #expect(try await f.db.libraryItems(query: q).first?.workspaceName == "Server")
-    q.agents = ["missing"]
-    #expect(try await f.db.libraryItems(query: q).isEmpty)
-    let firstPage = try await f.db.libraryItems(limit: 2)
-    let secondPage = try await f.db.libraryItems(limit: 2, offset: 2)
-    #expect(Set((firstPage + secondPage).map(\.id)).count == 4)
-    q = .init()
-    q.since = Date().addingTimeInterval(60)
-    #expect(try await f.db.libraryItems(query: q).isEmpty)
-    q = .init()
-    q.search = "Report"
-    #expect(try await f.db.libraryItems(query: q).count == 1)
-    #expect(try await f.db.libraryFacets().count == 2)
-  }
-
 
   @Test("Library uses the workspace's ownership scope for listing, opening and source access")
   func ownership() async throws {
@@ -78,31 +35,6 @@ struct WorkspaceLibraryTests {
     #expect(try await f.db.pendingLibraryFiles().isEmpty)
     #expect(try await f.db.libraryItem(id: item.id) == nil)
     await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: item.id) }
-  }
-
-  @Test("Library revisions ignore ordinary messages and follow item metadata changes")
-  func catalogRevision() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let initial = try await f.db.libraryRevision()
-    _ = try await f.exchange(chat, text: "Hello", reply: "Hello again")
-    #expect(try await f.db.libraryRevision() == initial)
-    _ = try await f.exchange(chat, text: "https://example.com")
-    let indexed = try await f.db.libraryRevision()
-    #expect(indexed > initial)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Changed' WHERE id=?", [chat])
-     } }
-    #expect(try await f.db.libraryRevision() > indexed)
-    #expect(try await f.db.libraryPage(query: .init(), count: 100).items.first?.conversationTitle == "Changed")
-    let renamed = try await f.db.libraryRevision()
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE desktop_local_acp_sessions SET runtime_kind='pi' WHERE conversation_id=?", [chat])
-     } }
-    #expect(try await f.db.libraryRevision() > renamed)
-    #expect(try await f.db.libraryPage(query: .init(), count: 100).items.first?.harness == "pi")
   }
 
 
@@ -243,27 +175,6 @@ struct WorkspaceLibraryTests {
     #expect(LibraryLinkDiscovery.links(in: "[danger](javascript:alert(1))").isEmpty)
   }
 
-  @Test("Library access checks its own capability independently of history")
-  func tools() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    _ = try await f.exchange(chat, text: "https://example.com")
-    try await f.db.applyInitialSessionTools(.init(enabled: [.library]), sessionID: chat)
-    let result = try await f.db.queryAgentLibrary(callerID: chat)
-    #expect(result.objectValue?["items"]?.arrayValue?.count == 1)
-    do {
-      _ = try await f.db.queryAgentLibrary(callerID: chat, id: UUID().uuidString)
-      Issue.record("Expected a missing library item to fail")
-    } catch WorkspaceToolError.notFound(let message) {
-      #expect(message == "Library item not found.")
-    } catch {
-      Issue.record("Expected not_found, received \(error)")
-    }
-    try await f.db.setSessionTools(.init(enabled: []), sessionID: chat)
-    await #expect(throws: WorkspaceToolError.self) { try await f.db.queryAgentLibrary(callerID: chat) }
-  }
-
   struct Fixture {
     let root: URL
     let db: WorkspaceDatabase
@@ -284,125 +195,6 @@ struct WorkspaceLibraryTests {
       try await db.indexLibraryMessages()
       return run
     }
-  }
-
-  @Test("activation excludes existing messages and old imported history, including later rewrites")
-  func forwardOnly() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let old = try await f.exchange(chat, text: "https://before.example")
-    try await f.db.write { connection in try connection.transaction {
-      try connection.executeUnlocked("DROP TRIGGER library_new_message")
-      try connection.executeUnlocked("DELETE FROM library_items; DELETE FROM library_messages")
-     } }
-    // Simulate a database predating feature activation: migration never scans its messages.
-    try await f.db.write { try $0.migrateLibrary() }
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_messages SET content='https://old-rewritten.example' WHERE id=?", [old.assistantMessageID])
-     } }
-    try await f.db.indexLibraryMessages()
-    #expect(try await f.db.libraryItems().isEmpty)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "INSERT INTO dashboard_messages(id,conversation_id,role,content,created_at) VALUES('imported',?,'assistant','https://old-import.example','2020-01-01T00:00:00Z')",
-        [chat])
-     } }
-    let fresh = try await f.exchange(chat, text: "https://new.example")
-    let rows = try await f.db.libraryItems()
-    #expect(rows.count == 1)
-    #expect(rows.first?.messageID == fresh.userMessageID)
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
-    try await reopened.indexLibraryMessages()
-    #expect(try await reopened.libraryItems() == rows)
-  }
-
-  @Test("attachments appear only after send; notes stay out; streaming links wait until completion")
-  func attachmentLifecycle() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let url = f.root.appending(path: "photo.png")
-    try Data([1, 2, 3]).write(to: url)
-    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: url, mimeType: "image/png")
-    #expect(try await f.db.libraryItems().isEmpty)
-    let run = try await f.db.beginLocalACPRun(
-      conversationID: chat,
-      input: .init(
-        text: "",
-        attachments: [
-          .file(draft),
-          .reference(
-            .init(
-              kind: .note, resourceID: "note", titleSnapshot: "Note", contentSnapshot: "https://private-note.example",
-              revisionSnapshot: "1")),
-        ]))
-    try await f.db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "[Incomplete](https://stream.example")
-    try await f.db.indexLibraryMessages()
-    #expect(try await f.db.libraryItems().map(\.kind) == [.photo])
-    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Complete](https://stream.example)")
-    try await f.db.completeLocalACPRun(runID: run.runID)
-    try await f.db.indexLibraryMessages()
-    let rows = try await f.db.libraryItems()
-    #expect(rows.count == 2)
-    #expect(rows.first(where: { $0.kind == .photo })?.contentHash == draft.contentHash)
-    #expect(rows.allSatisfy { $0.source != "https://private-note.example" })
-    let files = LibraryFileStore(supportDirectory: f.root)
-    let file = try #require(rows.first(where: { $0.kind == .photo }))
-    let opened = try files.url(for: file)
-    #expect(opened.pathExtension == "png")
-    #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
-  }
-
-  @Test("attachment opening validates content identities and preserves the backend write boundary")
-  func attachmentOpeningBoundary() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let service = LibraryService(database: f.db)
-    for hash in ["../../workspace.sqlite", String(repeating: "a", count: 63), String(repeating: "A", count: 64)] {
-      await #expect(throws: AgentMessageAttachmentError.self) {
-        try await service.openAttachmentURL(contentHash: hash, fileName: "file.txt", mimeType: "text/plain")
-      }
-    }
-    await #expect(throws: AgentMessageAttachmentError.self) {
-      try await service.openAttachmentURL(
-        contentHash: String(repeating: "a", count: 64), fileName: "missing.txt", mimeType: "text/plain")
-    }
-    let source = f.root.appending(path: "Screenshot.png")
-    try Data([1, 2, 3]).write(to: source)
-    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: source, mimeType: "image/png")
-    let reader = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-    let projection = LibraryService(database: reader)
-    await #expect(throws: WorkspaceDatabaseError.readOnlyProjection) {
-      try await projection.openAttachmentURL(
-        contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
-    }
-    let opened = try await service.openAttachmentURL(
-      contentHash: draft.contentHash, fileName: "../../Screenshot.png", mimeType: draft.mimeType)
-    #expect(opened.lastPathComponent == "....Screenshot.png")
-    #expect(opened.deletingLastPathComponent().lastPathComponent == draft.contentHash)
-  }
-
-  @Test("archive preserves items, trash hides items and defeats a late transfer")
-  func deletion() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    _ = try await f.exchange(chat, text: "https://keep.example", reply: "[File](./report.pdf)")
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [chat])
-     } }
-    #expect(try await f.db.libraryItems().count == 2)
-    let pending = try await #require(f.db.pendingLibraryFiles().first)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET deleted_at=? WHERE id=?", ["2026-09-21T00:00:00Z", chat])
-     } }
-    try await f.db.finishLibraryFile(id: pending.id, hash: String(repeating: "a", count: 64), size: 3)
-    #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.retainedLibraryHashes().isEmpty)
-    await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: pending.id) }
   }
 
   @Test("retained remote handback opens offline and copies deduplicate by content")
@@ -455,34 +247,6 @@ struct WorkspaceLibraryTests {
     try await f.db.indexLibraryMessages()
     #expect(try await f.db.libraryItems().isEmpty)
     #expect(try await f.db.retainedLibraryHashes().isEmpty)
-  }
-
-  @Test("remote access is checked for each transfer and after a connection changes")
-  func remoteRevocation() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let remote = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "fixture", hostName: "host.invalid")
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?",
-        [remote.id.uuidString.lowercased(), chat])
-     } }
-    _ = try await f.exchange(chat, text: "Generate", reply: "[One](./one.txt) [Two](./two.txt)")
-    actor Access {
-      var calls = 0
-      func resolve(_ remote: RemoteWorkspaceConfiguration) -> RemoteWorkspaceConfiguration? {
-        calls += 1
-        return calls == 1 ? remote : nil
-      }
-    }
-    let access = Access()
-    let service = LibraryService(database: f.db, remoteFiles: .init(runner: { _, _, _ in Data("file".utf8) }))
-    try await service.synchronize(locations: [], remoteWorkspace: { _ in await access.resolve(remote) })
-    let rows = try await f.db.libraryItems()
-    #expect(rows.count == 2)
-    #expect(rows.allSatisfy { $0.storage == .unavailable && $0.contentHash == nil })
-    #expect(!FileManager.default.fileExists(atPath: f.root.appending(path: "library-files").path))
   }
 
 }

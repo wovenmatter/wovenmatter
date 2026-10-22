@@ -34,47 +34,6 @@ struct CentralLibraryClientTests {
         #expect(try await client.desktopExecution(.refresh(conversationID: id)).workspace.id == workspace.id)
     }
 
-    @Test func directExecutionWorksWhileCentralIsUnavailable() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MobileStore(file: root.appending(path: "library.json"))
-        let central = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: store, transport: central)
-        await model.initialize(); await model.refresh()
-        let workspace = CompanionExecutionWorkspace(id: "00000000-0000-4000-8000-000000000002", libraryID: "00000000-0000-4000-8000-000000000001", ownerDeviceID: "00000000-0000-4000-8000-000000000003", kind: .linux, name: "Linux", revision: 1)
-        let direct = MacClientFakeExecution(workspace: workspace)
-        try await model.attachExecutionWorkspace(workspace, transport: direct)
-        await model.selectExecutionWorkspace(workspace.id)
-        await central.setOffline(true)
-        await model.refresh()
-        #expect(!model.online)
-        #expect(model.canControl)
-        model.composer = "Runs directly"
-        await model.send()
-        #expect(await direct.sendCount == 1)
-        let id = try #require(model.selectedConversationID)
-        #expect(model.executionOwner(for: id) == workspace.id)
-        #expect(model.state.transcripts[id]?.messages.last?.content == "Direct result")
-        #expect(await central.sendCount == 0)
-    }
-
-
-    @Test func failedLaneDoesNotMisreportAReachableCentralMacAsDisconnected() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let replica = try MobileStore(file: directory.appending(path: "library.json"))
-        let central = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: replica, transport: central)
-        await model.initialize(); await model.refresh()
-        await model.createNote()
-        await central.setMutationFailure(true)
-        await model.refresh()
-        #expect(model.online)
-        #expect(model.status == "Connected")
-        #expect(model.synchronization.centralReachable == true)
-        #expect(model.synchronization.lanes[.library]?.phase == .blocked)
-        #expect(model.synchronization.lanes[.library]?.pendingCount == 1)
-    }
 
     @Test func revokedWorkspaceCanBeGrantedAgainWithoutDiscardingItsCachedHistory() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)

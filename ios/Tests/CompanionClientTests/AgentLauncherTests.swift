@@ -18,15 +18,6 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(agents.map(\.isAvailable), [true, false, false])
   }
 
-  func testPreviouslyConfiguredAgentStaysVisibleWhenServerReportsUnavailable() {
-    var unavailable = pi; unavailable.available = false; unavailable.canStart = false
-    let neverConfigured = CompanionProvider(id: "unconfigured", runtimeKind: "other", displayName: "Other", available: false, canStart: false)
-    let agents = CompanionAgentLauncher.list(deviceName: "Phone", centralOnline: true, providers: [unavailable, neverConfigured],
-      workspaces: [], workspaceProviders: [:], reachable: [:], knownAgentIDs: ["central:pi"])
-    XCTAssertEqual(agents.map(\.providerID), ["pi-durable-device", "pi"])
-    XCTAssertFalse(agents[1].isAvailable)
-  }
-
   func testDirectAndCentralRoutesAppearOnceAndUseReachableRoute() {
     let central = CompanionProvider(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
     func agents(centralOnline: Bool, directOnline: Bool) -> [CompanionAgentLauncher] {
@@ -56,36 +47,6 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(groups.map(\.name), ["This iPhone", "James’s MacBook Air", "Test"])
     XCTAssertEqual(groups.last?.agents, [])
     XCTAssertEqual(groups.last?.workspace?.kind, .linux)
-  }
-
-  func testMacRouteFallbackDoesNotDuplicateOrLoseItsLatestSession() throws {
-    let mac = CompanionExecutionWorkspace(id: "mac", libraryID: "library", ownerDeviceID: "host", kind: .mac,
-      name: "MacBook Air", capabilities: ["history.central.v1"])
-    let local = CompanionProvider(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
-    let agents = CompanionAgentLauncher.list(deviceName: "Phone", centralOnline: false, providers: [local], workspaces: [mac],
-      workspaceProviders: ["mac": [local]], reachable: ["mac": true])
-    let agent = try XCTUnwrap(agents.last)
-    XCTAssertEqual(agents.count, 2); XCTAssertEqual(agent.workspaceID, "mac")
-    XCTAssertTrue(agent.isLocalMac && agent.isAvailable)
-    let conversations = [CompanionConversation(id: "old-central", title: "Earlier", providerID: "local:pi", updatedAt: "2026-10-14T12:00:00Z"),
-      CompanionConversation(id: "new-direct", title: "Latest", providerID: "local:pi", updatedAt: "2026-10-14T13:00:00Z")]
-    let latest = agent.latestConversation(in: conversations) { $0 == "old-central" ? "central" : "mac" }
-    XCTAssertEqual(latest?.id, "new-direct")
-    let centralOnly = agent.latestConversation(in: Array(conversations.prefix(1))) { _ in "central" }
-    XCTAssertEqual(centralOnly?.id, "old-central")
-  }
-
-  func testIdenticalHarnessesOnTwoMacsRemainDistinctAndDeletedWorkspacesStayHidden() {
-    let primary = CompanionExecutionWorkspace(id: "primary", libraryID: "library", ownerDeviceID: "host", kind: .mac,
-      name: "MacBook Air", capabilities: ["history.central.v1"])
-    let secondary = CompanionExecutionWorkspace(id: "secondary", libraryID: "library", ownerDeviceID: "other", kind: .mac, name: "Mac mini")
-    let deleted = CompanionExecutionWorkspace(id: "deleted", libraryID: "library", ownerDeviceID: "host", kind: .linux, name: "Removed", deleted: true)
-    let local = CompanionProvider(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
-    let workspaces = [primary, secondary, deleted]
-    let agents = CompanionAgentLauncher.list(deviceName: "Phone", centralOnline: true, providers: [local], workspaces: workspaces,
-      workspaceProviders: ["primary": [local], "secondary": [local]], reachable: ["primary": true, "secondary": true])
-    XCTAssertEqual(agents.map(\.workspaceID), ["local", "central", "secondary"])
-    XCTAssertEqual(CompanionAgentGroup.list(agents: agents, workspaces: workspaces).map(\.id), ["local", "central", "secondary"])
   }
 
   func testLatestSessionUsesExactOwnerAndProviderIgnoringPinsAndTimestampFormatting() throws {

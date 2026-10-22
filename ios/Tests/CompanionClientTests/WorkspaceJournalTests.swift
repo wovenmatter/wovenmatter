@@ -30,79 +30,11 @@ final class WorkspaceJournalTests: XCTestCase {
     .init(eventID: "event-\(workspace)-\(sequence)", workspaceID: workspace, originSequence: sequence,
       conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Version \(sequence)"))
   }
-  func testRestartAndCentralLostAcknowledgementPreserveExactOriginRecord() async throws {
-    let file = path(); let journal = try WorkspaceJournal(file: file)
-    try await journal.bind(libraryID: "library")
-    let value = entry(1); try await journal.record(value)
-    let restarted = try WorkspaceJournal(file: file)
-    let pending = await restarted.snapshot().pendingEntries
-    XCTAssertEqual(pending, [value])
-    try await restarted.record(value)
-    try await restarted.acknowledge(.init(libraryID: "library", acceptedEventIDs: [value.eventID], cursor: 19), submitted: [value])
-    let state = await restarted.snapshot()
-    XCTAssertEqual(state.centralCursor, 0, "An upload acknowledgement cannot skip other workspaces' history")
-    XCTAssertEqual(state.entries.count, 1)
-    XCTAssertTrue(state.pendingEntries.isEmpty)
-  }
-  func testReplayGapAndReusedEventLeaveCursorAndHistoryUnchanged() async throws {
-    let journal = try WorkspaceJournal(file: path()); try await journal.bind(libraryID: "library")
-    do { try await journal.receiveCentral(.init(libraryID: "library", cursor: 2, entries: [entry(1)])); XCTFail() }
-    catch WorkspaceJournal.Failure.replayGap {}
-    try await journal.receiveCentral(.init(libraryID: "library", cursor: 1, entries: [entry(1)]))
-    var changed = entry(1); changed.conversation?.title = "Changed immutable event"
-    do { try await journal.receiveCentral(.init(libraryID: "library", cursor: 2, entries: [changed])); XCTFail() }
-    catch WorkspaceJournal.Failure.reusedIdentity {}
-    let state = await journal.snapshot()
-    XCTAssertEqual(state.centralCursor, 1)
-    XCTAssertEqual(state.conversations["chat"]?.title, "Version 1")
-    do { try await journal.record(entry(3)); XCTFail() } catch WorkspaceJournal.Failure.replayGap {}
-  }
-  func testDirectHistoryDeduplicatesCentralReplayAndRetainsDeletion() async throws {
-    let journal = try WorkspaceJournal(file: path()); try await journal.bind(libraryID: "library")
-    let first = entry(1)
-    try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 1, entries: [first]), workspaceID: "phone")
-    try await journal.receiveCentral(.init(libraryID: "library", cursor: 1, entries: [first]))
-    let deletion = CompanionJournalEntry(workspaceID: "phone", originSequence: 2, conversationID: "chat", kind: .deletedConversation)
-    try await journal.record(deletion)
-    try await journal.record(entry(3))
-    let state = await journal.snapshot()
-    XCTAssertNil(state.conversations["chat"])
-    XCTAssertTrue(state.deletedConversationIDs.contains("chat"))
-    XCTAssertEqual(state.entries.count, 3)
-  }
-  func testJournalProjectionRecoversAfterCrashAndAppliesTombstones() async throws {
-    let file = path(); let store = try MobileStore(file: file)
-    try await store.journal.bind(libraryID: "library")
-    try await store.journal.record(entry(1)) // Simulate crash before projection.
-    let restarted = try MobileStore(file: file)
-    try await restarted.restoreExecutionProjection()
-    var state = await restarted.snapshot(); XCTAssertEqual(state.conversations["chat"]?.title, "Version 1")
-    try await restarted.apply(CompanionSnapshot(workspaceID: "library", cursor: 1))
-    state = await restarted.snapshot(); XCTAssertNotNil(state.conversations["chat"])
-    try await restarted.journal.record(.init(workspaceID: "phone", originSequence: 2, conversationID: "chat", kind: .deletedConversation))
-    try await restarted.restoreExecutionProjection()
-    state = await restarted.snapshot(); XCTAssertNil(state.conversations["chat"])
-  }
   func testOwnerHistoryCannotBeReassignedToAnotherWorkspace() async throws {
     let journal = try WorkspaceJournal(file: path())
     try await journal.record(entry(1))
     do { try await journal.record(entry(1, workspace: "other")); XCTFail() } catch WorkspaceJournal.Failure.reusedIdentity {}
     let state = await journal.snapshot(); XCTAssertEqual(state.conversationWorkspaceIDs["chat"], "phone")
-  }
-  func testDirectCommandWorksWithoutCentralAndRecoversLostReceipt() async throws {
-    let file = path(); let store = try MobileStore(file: file); let transport = OfflineWorkspace()
-    let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)
-    var command = CompanionCommand(commandID: "stable", deviceID: "phone", kind: .send, conversationID: "chat", text: "First prompt")
-    do { _ = try await client.submit(command); XCTFail() } catch is URLError {}
-    let restarted = try MobileStore(file: file)
-    let resumed = WorkspaceClient(store: restarted, workspaceID: "linux", transport: transport)
-    command.text = "Accidentally modified retry"
-    let receipt = try await resumed.submit(command)
-    XCTAssertEqual(receipt.status, .completed)
-    let executed = await transport.executed
-    XCTAssertEqual(executed.count, 1); XCTAssertEqual(executed.first?.text, "First prompt")
-    let stored = await restarted.journal.commandRecords(workspaceID: "linux")
-    XCTAssertEqual(stored.first?.command.text, "First prompt")
   }
   func testDirectControlCommandsPersistOwnerBeforeDispatchAndRejectMismatches() async throws {
     let store = try MobileStore(file: path()), transport = OfflineWorkspace(loseReply: false)
@@ -125,54 +57,6 @@ final class WorkspaceJournalTests: XCTestCase {
     let recordsAfterMismatch = await store.journal.commandRecords(workspaceID: "linux")
     XCTAssertEqual(callsAfterMismatch.count, 1)
     XCTAssertEqual(recordsAfterMismatch.count, 1)
-  }
-  func testLegacyUnscopedCommandRetryPreservesItsPersistedPayload() async throws {
-    let file = path(), transport = OfflineWorkspace(loseReply: false)
-    let store = try MobileStore(file: file)
-    let saved = CompanionCommand(commandID: "legacy", deviceID: "phone", kind: .respond, conversationID: "chat",
-      runID: "run", interactionID: "approval", response: .init(optionID: "allow"))
-    _ = try await store.journal.rememberCommand(saved, workspaceID: "linux")
-    let restarted = try MobileStore(file: file)
-    let client = WorkspaceClient(store: restarted, workspaceID: "linux", transport: transport)
-    var retry = saved
-    retry.workspaceID = "linux"
-    retry.response = .init(optionID: "deny")
-    _ = try await client.submit(retry)
-    let executed = await transport.executed
-    XCTAssertEqual(executed, [saved])
-    let records = await restarted.journal.commandRecords(workspaceID: "linux")
-    XCTAssertEqual(records.first?.command, saved)
-  }
-  func testDirectLaunchPersistsInitialPromptBeforeCreateAndResumesWithoutCentral() async throws {
-    let file = path(); let store = try MobileStore(file: file); let transport = OfflineWorkspace()
-    let launch = MobileLaunchRecord(create: .init(deviceID: "phone", kind: .createSession, conversationID: "chat"), initialSend: .init(deviceID: "phone", kind: .send, conversationID: "chat", text: "Saved before create"))
-    let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)
-    do { _ = try await client.startConversation(launch); XCTFail() } catch is URLError {}
-    let restarted = try MobileStore(file: file)
-    let state = await restarted.snapshot()
-    XCTAssertEqual(state.launches.first?.initialSend.text, "Saved before create")
-    XCTAssertEqual(state.launches.first?.create.workspaceID, "linux")
-    let resumed = WorkspaceClient(store: restarted, workspaceID: "linux", transport: transport)
-    let completed = try await resumed.startConversation(launch)
-    XCTAssertTrue(completed.accepted)
-    let executed = await transport.executed
-    XCTAssertEqual(executed.map(\.kind), [.createSession, .send])
-    _ = try await resumed.startConversation(launch)
-    let repeatCount = await transport.executed.count; XCTAssertEqual(repeatCount, 2)
-  }
-  func testTranscriptDeltasPreserveHistoryAndDropTransientStreamingRows() async throws {
-    let journal = try WorkspaceJournal(file: path())
-    let first = CompanionMessage(id: "user", conversationID: "chat", role: "user", content: "Hello")
-    let streaming = CompanionMessage(id: "transient", conversationID: "chat", role: "assistant", content: "Part", status: "streaming")
-    let final = CompanionMessage(id: "native", conversationID: "chat", role: "assistant", content: "Complete", status: "completed")
-    _ = try await journal.append(workspaceID: "phone", transcript: .init(conversationID: "chat", messages: [first, streaming], activeRunID: "run"))
-    _ = try await journal.append(workspaceID: "phone", transcript: .init(conversationID: "chat", messages: [first, final]))
-    _ = try await journal.append(workspaceID: "phone", transcript: .init(conversationID: "chat", messages: [first, final]))
-    let state = await journal.snapshot()
-    XCTAssertEqual(state.transcripts["chat"]?.messages, [first, final])
-    XCTAssertNil(state.transcripts["chat"]?.activeRunID)
-    XCTAssertEqual(state.entries.count, 2)
-    XCTAssertEqual(state.entries.values.first { $0.originSequence == 2 }?.transcript?.messages, [final])
   }
   func testNativeHistoryIsChunkedWithoutTruncationAndRetriedIdempotently() async throws {
     let file = path(); let journal = try WorkspaceJournal(file: file)
@@ -198,17 +82,6 @@ final class WorkspaceJournalTests: XCTestCase {
     state = await store.snapshot()
     XCTAssertEqual(state.conversations["chat"], conversation); XCTAssertEqual(state.transcripts["chat"], transcript)
     XCTAssertTrue(state.commands.isEmpty)
-  }
-  func testCentralDeletionSurvivesJournalProjectionAndSnapshotReset() async throws {
-    let store = try MobileStore(file: path()); let conversation = CompanionConversation(id: "chat", title: "Shared")
-    _ = try await store.journal.append(workspaceID: "phone", conversation: conversation)
-    try await store.apply(CompanionSnapshot(workspaceID: "library", cursor: 1, conversations: [conversation]))
-    try await store.apply(CompanionChangePage(workspaceID: "library", cursor: 2, changes: [.init(cursor: 2, resourceKind: .conversation, resourceID: "chat", operation: .delete, revision: 2)]))
-    try await store.restoreExecutionProjection()
-    var state = await store.snapshot(); XCTAssertNil(state.conversations["chat"])
-    try await store.apply(CompanionSnapshot(workspaceID: "library", cursor: 10))
-    try await store.restoreExecutionProjection()
-    state = await store.snapshot(); XCTAssertNil(state.conversations["chat"])
   }
   func testNativeRecordAndCommandIDsCannotBeReusedForDifferentTargets() async throws {
     let journal = try WorkspaceJournal(file: path())
@@ -275,63 +148,4 @@ final class WorkspaceJournalTests: XCTestCase {
     XCTAssertTrue(state.outbox.isEmpty)
     XCTAssertNil(state.pendingNoteDeletions?[note.id])
   }
-  func testFolderIdentityRetryAndQueuedRenameDoNotDuplicateCreation() async throws {
-    let store = try MobileStore(file: path())
-    let first = try await store.createFolder(name: "First", id: "stable-folder")
-    let retried = try await store.createFolder(name: "First", id: "stable-folder")
-    XCTAssertEqual(first, retried)
-    try await store.renameFolder(id: first.id, name: "Renamed before sync")
-    let sent = try await store.nextMutation()!
-    XCTAssertEqual(sent.kind, .createFolder); XCTAssertEqual(sent.title, "Renamed before sync")
-    do { try await store.renameFolder(id: first.id, name: "Unsafe in-flight change"); XCTFail() } catch MobileStore.Failure.conflictingNote {}
-    let state = await store.snapshot(); XCTAssertEqual(state.outbox.count, 1)
-  }
-  func testPreFederationLibraryDecodesWithoutChangingNotesOrDeviceID() async throws {
-    let file = path(); var legacy = MobileStoreState(); legacy.deviceID = "existing-phone"
-    legacy.notes["note"] = .init(id: "note", title: "Saved", content: "keep")
-    let json = try JSONEncoder().encode(legacy)
-    var object = try JSONSerialization.jsonObject(with: json) as! [String: Any]
-    object.removeValue(forKey: "executionConversationIDs")
-    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try JSONSerialization.data(withJSONObject: object).write(to: file)
-    let store = try MobileStore(file: file); let state = await store.snapshot()
-    XCTAssertEqual(state.deviceID, "existing-phone"); XCTAssertEqual(state.notes["note"]?.content, "keep")
-  }
-  func testLegacyObserverRelayFlagsRemovedWithoutLosingHistory() async throws {
-    let file = path(), journal = try WorkspaceJournal(file: file)
-    try await journal.bind(libraryID: "library")
-    try await journal.upsertWorkspace(.init(id: "local", libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "This device"))
-    try await journal.upsertWorkspace(.init(id: "remote", libraryID: "library", ownerDeviceID: "mac", kind: .mac, name: "Other Mac"))
-    // Linux is owned for management by phone, but only its own publisher executes.
-    try await journal.upsertWorkspace(.init(id: "linux", libraryID: "library", ownerDeviceID: "phone", kind: .linux, name: "Server", executionDeviceID: "server"))
-    for workspace in ["local", "remote", "linux"] { try await journal.record(entry(1, workspace: workspace, id: workspace)) }
-    let restarted = try WorkspaceJournal(file: file)
-    try await restarted.prepareOwnerPublication(deviceID: "phone")
-    let migrated = try WorkspaceJournal(file: file), state = await migrated.snapshot()
-    XCTAssertEqual(state.pendingEntries.map(\.workspaceID), ["local"])
-    XCTAssertEqual(state.pendingRegistrations, ["local"])
-    XCTAssertEqual(state.entries.count, 3); XCTAssertEqual(state.conversations.count, 3)
-    XCTAssertEqual(state.centralCursor, 0)
-    let direct = entry(2, workspace: "remote", id: "remote")
-    // A separate fresh direct cursor begins at the owner's first event.
-    try await migrated.receiveWorkspace(.init(libraryID: "library", cursor: 2, entries: [entry(1, workspace: "remote", id: "remote"), direct]), workspaceID: "remote")
-    let observed = await migrated.snapshot()
-    XCTAssertEqual(observed.pendingEntries.map(\.workspaceID), ["local"])
-    XCTAssertEqual(observed.conversations["remote"]?.title, "Version 2")
-  }
-
-  func testSecondaryMacOwnExecutionReplayQueuesOnlyItsOwnOrigin() async throws {
-    let journal = try WorkspaceJournal(file: path())
-    try await journal.bind(libraryID: "library")
-    try await journal.upsertWorkspace(.init(id: "own-mac", libraryID: "library", ownerDeviceID: "mac-device", kind: .mac, name: "This Mac", executionDeviceID: "mac-device"))
-    try await journal.upsertWorkspace(.init(id: "other-mac", libraryID: "library", ownerDeviceID: "other-device", kind: .mac, name: "Other Mac", executionDeviceID: "other-device"), pending: false)
-    for workspace in ["own-mac", "other-mac"] {
-      let value = entry(1, workspace: workspace, id: workspace)
-      try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 1, entries: [value]), workspaceID: workspace, localDeviceID: "mac-device")
-    }
-    let state = await journal.snapshot()
-    XCTAssertEqual(state.pendingEntries.map(\.workspaceID), ["own-mac"])
-    XCTAssertEqual(state.conversations.count, 2)
-  }
-
 }

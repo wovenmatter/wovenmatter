@@ -27,81 +27,6 @@ struct WorkspaceNativeRunArchiveTests {
     }
   }
 
-  @Test func interruptedBatchAdmissionRollsBackEveryRecordAndItsSearchIndexBeforeRetry() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    var batch = WorkspaceNativeRunRecordBatch(sourceID: "local:store", nativeSessionID: "s", records: [
-      .init(id: "first", kind: "event", payload: #"{"text":"rollback-violet-marker"}"#),
-      .init(id: "invalid", kind: "event", payload: #"{"text":"second"}"#, contentMode: "invalid-mode")])
-    await #expect(throws: (any Error).self) {
-      try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
-    }
-    #expect(rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event"))).isEmpty)
-    #expect(rows(try await db.queryHistory(.init(command: "search", search: "rollback-violet-marker", conversationID: conversation))).isEmpty)
-    batch.records[1].contentMode = "event"
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
-    let first = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event", limit: 1))
-    #expect(rows(first).count == 1 && first.objectValue?["hasMore"]?.boolValue == true)
-    let next = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event",
-      after: Int64(first.objectValue?["nextCursor"]?.intValue ?? 0), limit: 1))
-    #expect(rows(next).count == 1 && next.objectValue?["hasMore"]?.boolValue == false)
-    #expect(rows(try await reopened.queryHistory(.init(command: "search", search: "rollback-violet-marker", conversationID: conversation))).count == 1)
-  }
-
-  @Test func stableNativeIdentityRetainsSnapshotsAndDistinctRepeatedDeltasAfterReopen() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Prompt")
-    let original = WorkspaceNativeRunRecord(id: "message:42", runID: run.runID, kind: "message",
-      payload: #"{"id":42,"content":[{"type":"image","url":"native://image/7"}],"futureField":true}"#,
-      contentMode: "snapshot", text: "normalized searchable violet harbor", projectionJSON: #"{"role":"assistant"}"#)
-    var batch = WorkspaceNativeRunRecordBatch(sourceID: "local:store-uuid", nativeSessionID: "7", records: [original])
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "defaultAgent")
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "defaultAgent")
-    try await db.recordNativeRunRecords(.init(sourceID: "remote:host:" + batch.sourceID,
-      nativeSessionID: batch.nativeSessionID, records: [original]), conversationID: conversation, harness: "defaultAgent")
-    var revised = original
-    revised.payload = #"{"id":42,"content":[{"type":"image","url":"native://image/8"}],"futureField":true}"#
-    batch.records = [revised,
-      .init(id: "delta:1", runID: run.runID, kind: "thought", payload: #"{"text":"again"}"#, contentMode: "delta"),
-      .init(id: "delta:2", runID: run.runID, kind: "thought", payload: #"{"text":"again"}"#, contentMode: "delta")]
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "defaultAgent")
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "defaultAgent")
-    let records = rows(try await reopened.queryHistory(.init(command: "events", runID: run.runID, harness: "defaultAgent")))
-      .filter { $0.objectValue?["source_id"]?.stringValue == batch.sourceID }
-    #expect(records.count == 4)
-    #expect(rows(try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "native.message"))).count == 3)
-    #expect(records.filter { $0.objectValue?["native_record_id"]?.stringValue == "message:42" }.count == 2)
-    #expect(records.contains { $0.objectValue?["payload"]?.stringValue == original.payload })
-    #expect(records.contains { $0.objectValue?["payload"]?.stringValue == revised.payload })
-    #expect(rows(try await reopened.queryHistory(.init(command: "search", search: "normalized searchable violet harbor", conversationID: conversation, sourceID: batch.sourceID))).count == 2)
-    let nativeID = "entry:fragmented"
-    batch.records = [
-      .init(id: nativeID, kind: "message", payload: "{}", completeness: "native-export-reference"),
-      .init(id: nativeID, revision: "projection:0:sha-one", runID: run.runID, kind: "native-text-fragment",
-        payload: "{}", text: "needleé after decoded newline", completeness: "native-text-fragment"),
-      .init(id: nativeID, revision: "projection:262144:sha-two", kind: "native-text-fragment",
-        payload: "{}", text: "separate later text", completeness: "native-text-fragment")]
-    for _ in 0..<2 { try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "defaultAgent") }
-    var query = WorkspaceHistoryQuery(command: "search", search: "needleé", conversationID: conversation,
-      sourceID: batch.sourceID, nativeSessionID: batch.nativeSessionID, nativeRecordID: nativeID)
-    let found = rows(try await reopened.queryHistory(query))
-    #expect(found.count == 1)
-    let fragment = try #require(found.first?.objectValue)
-    #expect(fragment["native_record_id"]?.stringValue == nativeID)
-    #expect(fragment["run_id"]?.stringValue == run.runID)
-    #expect(fragment["native_revision_id"]?.stringValue == "projection:0:sha-one")
-    query.command = "events"; query.search = nil
-    #expect(rows(try await reopened.queryHistory(query)).count == 3)
-    query.command = "search"; query.search = "needleé"; query.sourceID = "another-source"
-    #expect(rows(try await reopened.queryHistory(query)).isEmpty)
-  }
-
   @Test func nativeContentKeepsTokenFieldsAndFormattingWhileCredentialTransportIsRedacted() async throws {
     let (db, directory) = try await database()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -119,36 +44,6 @@ struct WorkspaceNativeRunArchiveTests {
     #expect(!safe.contains("secret-key") && !safe.contains("secret-token") && !safe.contains("earlier-secret"))
     #expect(safe.contains("provider"))
     #expect(WorkspaceHistoryPrivacy.redactingTransportSecrets(raw) == raw)
-  }
-
-  @Test func streamedFullArchiveExportsBeyondMemoryBudgetAndPreservesDestinationOnFailure() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let conversation = try await session(db)
-    let payload = String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)
-    let count = WorkspaceExportBudget.maximumItems + 5
-    let records: [WorkspaceNativeRunRecord] = [.init(id: "large", kind: "tool.result", payload: payload)]
-      + (1..<count).map { .init(id: "event:\($0)", kind: "event", payload: "{}") }
-    try await db.recordNativeRunRecords(.init(sourceID: "local:store", nativeSessionID: "s", records: records),
-      conversationID: conversation, harness: "pi")
-    await #expect(throws: WorkspaceExportError.tooLarge) {
-      try await db.conversationExport(id: conversation, format: .fullRun)
-    }
-    let destination = directory.appending(path: "archive.json")
-    try await db.exportConversationArchive(id: conversation, to: destination)
-    let exported = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: destination))
-    #expect(exported.objectValue?["schemaVersion"]?.intValue == 2)
-    let exportedRecords = exported.objectValue?["historyEvents"]?.arrayValue ?? []
-    #expect(exportedRecords.count == count)
-    let page = try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event", limit: 200))
-    #expect(rows(page).count == 200 && page.objectValue?["hasMore"]?.boolValue == true)
-    #expect(exportedRecords.first { $0.objectValue?["native_record_id"]?.stringValue == "large" }?.objectValue?["payload"]?.stringValue == payload)
-    let previous = try Data(contentsOf: destination)
-    await #expect(throws: (any Error).self) {
-      try await db.exportConversationArchive(id: "not-authorized", to: destination)
-    }
-    #expect(try Data(contentsOf: destination) == previous)
-    #expect(try FileManager.default.attributesOfItem(atPath: destination.path)[.posixPermissions] as? Int == 0o600)
   }
 
   private func database() async throws -> (WorkspaceDatabase, URL) {

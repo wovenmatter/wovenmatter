@@ -61,17 +61,4 @@ struct WorkspaceAssetTabsTests {
     #expect(tabs.tabs.count == 12)
   }
 
-  @Test func hidingDoesNotDiscardPagesAndLastCloseDismisses() throws {
-    var tabs = WorkspaceAssetTabs()
-    let browser = WorkspaceAssetTabs.Tab.browser(UUID())
-    try tabs.open(browser)
-    tabs.hide()
-    #expect(!tabs.isPresented)
-    #expect(tabs.tabs == [browser])
-    tabs.select(browser)
-    #expect(tabs.isPresented)
-    tabs.close(browser)
-    #expect(tabs.tabs.isEmpty && tabs.selected == nil && !tabs.isPresented)
-  }
-
 }

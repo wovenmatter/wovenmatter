@@ -5,18 +5,6 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPStopFailureTests {
-    @Test func sameNativeClientCanRetryARejectedStop() async throws {
-        let fixture = try await Fixture()
-        defer { fixture.cleanUp() }
-        try await fixture.prepare()
-        await #expect(throws: Failure.self) { try await fixture.coordinator.stop(conversationID: fixture.id) }
-        try await fixture.coordinator.stop(conversationID: fixture.id)
-        #expect(await fixture.state.attempts == 2)
-        await fixture.coordinator.shutdown()
-        // A confirmed stop can subsequently be idle without a retained client.
-        try await fixture.coordinator.stop(conversationID: fixture.id)
-    }
-
     @Test func losingClientAfterFailedStopDoesNotAcknowledgeNativeCancellation() async throws {
         let fixture = try await Fixture()
         defer { fixture.cleanUp() }

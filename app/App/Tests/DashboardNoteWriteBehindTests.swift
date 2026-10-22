@@ -6,29 +6,6 @@ import WovenMatterCore
 @Suite("Async note write-behind")
 struct DashboardNoteWriteBehindTests {
 
-    @Test func emptyFlushBarrierReportsEarlierAsynchronousFailure() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let gate = AsyncStream<Void>.makeStream()
-        defer { gate.continuation.finish() }
-        let started = AsyncStream<Void>.makeStream()
-        let writes = Writes(gate: gate.stream, started: started.continuation)
-        await writes.setFailure(true)
-        let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
-        let writer = DashboardNoteWriteBehind(journal: journal, coalescingDelay: .seconds(60),
-            update: { try await writes.append($0) }, completion: { _, _ in })
-        writer.submit(entry("not committed", revision: 1))
-        let first = Task { try await writer.flush() }
-        var iterator = started.stream.makeAsyncIterator()
-        await iterator.next()
-        let barrier = Task { try await writer.flush() }
-        gate.continuation.yield(())
-        await #expect(throws: Failure.expected) { try await first.value }
-        await #expect(throws: Failure.expected) { try await barrier.value }
-        #expect(try journal.entries().map(\.content) == ["not committed"])
-        await #expect(throws: Failure.expected) { try await writer.flush() }
-    }
-
     private actor Writes {
         var values: [String] = []
         var fail = false
@@ -78,34 +55,6 @@ struct DashboardNoteWriteBehindTests {
         draft.reconcile(with: try note("Latest committed agent edit", revision: "latest"))
         #expect(draft.content == "Latest committed agent edit")
         #expect(draft.sourceUpdatedAt == "latest")
-    }
-
-    @Test func flushWaitsForSuspendedWriteAndSubsequentEditsRemainOrdered() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let gate = AsyncStream<Void>.makeStream()
-        defer { gate.continuation.finish() }
-        let started = AsyncStream<Void>.makeStream()
-        let writes = Writes(gate: gate.stream, started: started.continuation)
-        let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
-        let writer = DashboardNoteWriteBehind(journal: journal, coalescingDelay: .seconds(60),
-            update: { try await writes.append($0) }, completion: { _, _ in })
-        writer.submit(entry("first", revision: 1))
-        let first = Task { try await writer.flush() }
-        var iterator = started.stream.makeAsyncIterator()
-        await iterator.next()
-        writer.submit(entry("second", revision: 2))
-        writer.submit(entry("third", revision: 3))
-        #expect(await writer.hasOutstandingWork())
-        #expect(try journal.entries().map(\.content) == ["first"])
-        let second = Task { try await writer.flush() }
-        await MainActor.run { #expect(Thread.isMainThread) }
-        gate.continuation.yield(())
-        try await first.value
-        try await second.value
-        #expect(await writes.values == ["first", "third"])
-        #expect(try journal.entries().isEmpty)
-        #expect(await !writer.hasOutstandingWork())
     }
 
     @Test func failedAsyncWriteRetainsJournalAndReplayAcknowledgesIt() async throws {

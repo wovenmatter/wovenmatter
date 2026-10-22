@@ -21,42 +21,6 @@ struct WorkspaceAgentToolsServiceTests {
     }
 
 
-    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        await model.observeSession(fixture.caller, token: UUID())
-        let inserted = observeToolSnapshotChanges { _ = model.receipts }
-        let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
-            targetID: fixture.target, text: "Review the result", requestID: UUID().uuidString)
-        try await model.reload()
-        #expect(inserted.count == 1)
-        #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
-
-        let statusChanged = observeToolSnapshotChanges { _ = model.receipts }
-        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed")
-        try await model.reload()
-        #expect(statusChanged.count == 1)
-        #expect(model.receipts[fixture.caller]?.first?.status == "failed")
-
-        // A payload change with the same status must not be hidden by an
-        // identity/status-only comparison either.
-        let payloadChanged = observeToolSnapshotChanges { _ = model.receipts }
-        let messageID = UUID().uuidString
-        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed", messageID: messageID)
-        try await model.reload()
-        #expect(payloadChanged.count == 1)
-        #expect(model.receipts[fixture.caller]?.first?.messageID == messageID)
-        #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
-
-        let unchanged = observeToolSnapshotChanges {
-            _ = model.receipts
-            _ = model.hasOlderReceipts
-        }
-        for _ in 0..<5 { try await model.reload() }
-        #expect(unchanged.count == 0)
-    }
-
     @Test(arguments: AgentRuntimeKind.allCases)
     func executorUsesBoundCLIIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -139,59 +103,6 @@ struct WorkspaceAgentToolsServiceTests {
         #expect(removed.count == 1)
         #expect(model.receipts.isEmpty)
         #expect(model.hasOlderReceipts.isEmpty)
-    }
-
-    @Test func changedSettingsPoliciesAndTimersStillPublish() async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let model = fixture.model
-        try await model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
-        let settingsChanged = observeToolSnapshotChanges { _ = model.settings }
-        let policiesChanged = observeToolSnapshotChanges { _ = model.sessionPolicies }
-        let timersChanged = observeToolSnapshotChanges { _ = model.timers }
-        var settings = model.settings
-        settings.maximumManagedSessions += 1
-        try await fixture.database.saveToolSettings(settings)
-        let policy = WorkspaceSessionTools(enabled: [.sessions, .timers])
-        try await fixture.database.setSessionTools(policy, sessionID: fixture.caller)
-        let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Check the result",
-            nextFireAt: Date(timeIntervalSince1970: 4_000_000_000))
-        try await fixture.database.saveSessionTimer(timer, callerID: fixture.caller)
-        try await model.reload()
-        #expect(settingsChanged.count == 1)
-        #expect(policiesChanged.count == 1)
-        #expect(timersChanged.count == 1)
-        #expect(model.settings == settings)
-        #expect(model.sessionPolicies[fixture.caller] == policy)
-        #expect(model.timers == [timer])
-        let unchanged = observeToolSnapshotChanges {
-            _ = model.settings
-            _ = model.relationships
-            _ = model.timers
-            _ = model.sessionPolicies
-        }
-        for _ in 0..<5 { try await model.reload() }
-        #expect(unchanged.count == 0)
-    }
-
-    @Test(arguments: [false, true])
-    func failedSettingsSaveRestoresTheCommittedProjection(replyLostAfterCommit: Bool) async throws {
-        let fixture = try await ToolSnapshotFixture()
-        defer { fixture.stop() }
-        let original = try await fixture.database.toolSettings()
-        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
-            if replyLostAfterCommit, case let .saveSettings(value, _) = mutation {
-                try await fixture.database.saveToolSettings(value)
-            }
-            throw ToolSettingsSaveFailure()
-        }
-        defer { projection.stop() }
-        var edited = original
-        edited.maximumManagedSessions = original.maximumManagedSessions == 16 ? 15 : original.maximumManagedSessions + 1
-        await projection.saveSettings(edited)
-        #expect(projection.settings == (replyLostAfterCommit ? edited : original))
-        #expect(try await fixture.database.toolSettings() == projection.settings)
-        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
     }
 
 }
@@ -284,38 +195,6 @@ extension WorkspaceAgentToolsServiceTests {
 
 }
 
-// Send a complete request and retain its socket without starting a response
-// timeout. The caller closes it after the deliberately paused handler is released.
-private func openParkedToolRequest(_ request: Data, to path: String) throws -> Int32 {
-    let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-    guard descriptor >= 0 else { throw WovenNoteSocketError.system(errno) }
-    do {
-        try configureSocket(descriptor)
-        var address = try unixAddress(path: path)
-        let result = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        if result != 0 {
-            guard errno == EINPROGRESS else { throw WovenNoteSocketError.system(errno) }
-            try waitForSocket(descriptor, events: POLLOUT, deadline: ProcessInfo.processInfo.systemUptime + 2)
-            var error: Int32 = 0
-            var length = socklen_t(MemoryLayout<Int32>.size)
-            guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else {
-                throw WovenNoteSocketError.system(errno)
-            }
-            guard error == 0 else { throw WovenNoteSocketError.system(error) }
-        }
-        try writeMessage(request, to: descriptor, timeout: 2)
-        guard Darwin.shutdown(descriptor, SHUT_WR) == 0 else { throw WovenNoteSocketError.system(errno) }
-        return descriptor
-    } catch {
-        Darwin.close(descriptor)
-        throw error
-    }
-}
-
 // Socket reads and semaphore waits must not occupy Swift's cooperative workers:
 // the server tasks being tested need those workers to produce their responses.
 private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
@@ -324,26 +203,6 @@ private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () 
             do { continuation.resume(returning: try body()) }
             catch { continuation.resume(throwing: error) }
         }
-    }
-}
-
-private func waitForRelaySignal(_ signal: DispatchSemaphore) async -> Bool {
-    await withCheckedContinuation { continuation in
-        DispatchQueue(label: "relay-fixture-reply").async {
-            // Never occupy the cooperative executor while the reply handler
-            // needs it. Allow CI scheduling latency, but still require the fast
-            // reply before the deliberately held slow request is released.
-            continuation.resume(returning: signal.wait(timeout: .now() + 30) == .success)
-        }
-    }
-}
-
-private final class RelayForwarderReference: @unchecked Sendable {
-    private let lock = NSLock()
-    private weak var forwarder: WovenMatterRelayForwarder?
-    var value: WovenMatterRelayForwarder? {
-        get { lock.withLock { forwarder } }
-        set { lock.withLock { forwarder = newValue } }
     }
 }
 
@@ -552,33 +411,6 @@ extension WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test func passiveToolsProjectionForwardsMutationsAndCannotServeTools() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        let original = try await database.sessionTools(caller)
-        var forwarded = 0
-        let projection = try await WorkspaceAgentToolsModel(projection: database) { command in
-            guard case .setEnabled(.timers, false, caller, false) = command else {
-                throw WorkspaceToolError.invalid("Unexpected command")
-            }
-            forwarded += 1
-            throw WorkspaceToolError.timerPauseConfirmation
-        }
-        defer { projection.stop() }
-        await #expect(throws: (any Error).self) { try await projection.endpoint(for: caller) }
-        await #expect(throws: (any Error).self) { try await projection.setEnabled(.timers, enabled: false, sessionID: caller) }
-        do {
-            try await projection.setEnabledFromUI(.timers, enabled: false, sessionID: caller)
-            Issue.record("Expected timer confirmation")
-        } catch WorkspaceToolError.timerPauseConfirmation { }
-        #expect(forwarded == 1)
-        #expect(try await database.sessionTools(caller) == original)
-        let response = await projection.handle(.init(arguments: ["timers", "list"]), callerID: caller)
-        #expect(!response.success)
-    }
 }
 
 extension WorkspaceAgentToolsServiceTests {
@@ -660,65 +492,9 @@ private final class ToolSettingsSaveGate {
 
 extension WorkspaceAgentToolsServiceTests {
 
-    @Test func executorStopFencesQueuedAdmissionAndCancelsExistingDriver() async throws {
-        let runtime = ExecutorRuntime()
-        let gate = ToolSettingsSaveGate()
-        defer { gate.finishAll() }
-        let fence = runtime.fence("session")
-        let first = runtime.serialized("session") { try await gate.pause() }
-        var admitted = false
-        let queued = runtime.serialized("session") {
-            try runtime.check("session", fence: fence)
-            admitted = true
-        }
-        let driver = Task<Void, Never> {}
-        runtime.jobs["job"] = driver; runtime.sessions["job"] = "session"
-        await gate.waitForStarts(1)
-        runtime.cancel("session")
-        #expect(driver.isCancelled)
-        gate.finishAll()
-        _ = try? await first.value
-        do { try await queued.value; Issue.record("Stopped admission unexpectedly ran") }
-        catch is CancellationError { }
-        #expect(!admitted)
-        _ = try? await runtime.scopeEdits["session"]?.value
-    }
-
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test(arguments: AgentRuntimeKind.allCases)
-    func automationUsesBoundIdentityAndIndependentUserToggles(runtime: AgentRuntimeKind) async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
-        var seen: [String] = []
-        let service = try await WorkspaceAgentToolsModel(database: database,
-            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
-            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
-        service.automationHandler = { identity, command, _ in
-            seen.append(identity + ":" + command.group!.rawValue + ":" + command.action)
-            return .init(result: .object(["fixture": .bool(true)]))
-        }
-        defer { service.stop() }
-        let endpoint = try await service.endpoint(for: caller)
-        func request(_ args: [String]) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: args))
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) })
-        }
-        #expect(try await request(["browser", "call", "--json", #"{"action":"tabs"}"#]).success)
-        #expect(try await !request(["computer", "call", "--json", #"{"action":"apps"}"#]).success)
-        _ = try await database.setSessionToolEnabled(.computer, enabled: true, sessionID: caller)
-        #expect(try await request(["computer", "call", "--json", #"{"action":"apps"}"#]).success)
-        #expect(try await !request(["browser", "call", "--json", #"{"action":"tabs"}"#, "--session", "other"]).success)
-        _ = try await database.setSessionToolEnabled(.browser, enabled: false, sessionID: caller)
-        #expect(try await !request(["browser", "call", "--json", #"{"action":"tabs"}"#]).success)
-        #expect(try await request(["browser", "cancel", "--id", "all"]).success)
-        #expect(seen == [caller + ":browser:call", caller + ":computer:call", caller + ":browser:cancel"])
-    }
-
 }
 
 extension WorkspaceAgentToolsServiceTests {

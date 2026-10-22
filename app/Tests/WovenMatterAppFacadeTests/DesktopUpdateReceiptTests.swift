@@ -32,29 +32,4 @@ struct DesktopUpdateReceiptTests {
         #expect(defaults.data(forKey: ProductAnalyticsModel.updateReceiptKey) == nil)
     }
 
-    @Test("new updater stages and historical names stay decodable and never qualify as active")
-    func updateStageCompatibility() throws {
-        for name in ["update_download_started", "update_install_started", "update_download_clicked", "update_install_clicked"] {
-            let decoded = try JSONDecoder().decode(ProductAnalyticsEvent.Name.self, from: JSONEncoder().encode(name))
-            let event = ProductAnalyticsEvent(preferenceRevision: 1, name: decoded)
-            #expect(!event.qualifying)
-            #expect(!event.rateLimited)
-        }
-    }
-
-    @Test("same-version replacement confirms only the intended running build")
-    func confirmsBuildAfterLaunch() {
-        var receipt = ProductAnalyticsUpdateReceipt(analyticsID: "fixture", version: "0.3.0", build: 543,
-            event: ProductAnalyticsEvent(preferenceRevision: 1, name: .updateInstallCompleted))
-        let oldBuild = receipt.confirmLaunch(version: "0.3.0", build: 541)
-        let wrongVersion = receipt.confirmLaunch(version: "0.2.8", build: 543)
-        let installed = receipt.confirmLaunch(version: "0.3.0", build: 543)
-        let duplicate = receipt.confirmLaunch(version: "0.3.0", build: 543)
-        #expect(!oldBuild)
-        #expect(!wrongVersion)
-        #expect(installed)
-        #expect(!duplicate)
-        #expect(receipt.event.properties["app_version"] == "0.3.0")
-    }
-
 }

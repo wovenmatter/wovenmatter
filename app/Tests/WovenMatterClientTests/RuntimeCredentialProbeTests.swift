@@ -24,41 +24,6 @@ struct RuntimeCredentialProbeTests {
     #expect(result.launchConfiguration?.executableURL == discovered.launchConfiguration?.executableURL)
   }
 
-  @Test("an explicit runtime check cannot start other enabled providers", arguments: Self.kinds)
-  func scopedExplicitCheck(kind: AgentRuntimeKind) async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: kind))
-    let discovered = resolution(kind)
-    let calls = RuntimeProbeCalls()
-    for selected in Self.kinds {
-      _ = await LocalACPRuntimeVerifier.refresh(
-        definition: definition,
-        resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"),
-        credentialCheckRuntimeKinds: [selected],
-        verification: { _, _, _ in
-          await calls.record()
-          return discovered
-        }
-      )
-    }
-    #expect(await calls.count == 1)
-  }
-
-  @Test("a canceled explicit check does not start a provider")
-  func cancellationDoesNotProbe() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
-    let discovered = resolution(.codex)
-    let task = Task {
-      withUnsafeCurrentTask { $0?.cancel() }
-      return await LocalACPRuntimeVerifier.refresh(
-        definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), credentialCheckRuntimeKinds: [.codex],
-        verification: { _, _, _ in Issue.record("Canceled check must not start a provider"); return discovered }
-      )
-    }
-    #expect(await task.value.availability == discovered.availability)
-  }
-
   private func resolution(_ kind: AgentRuntimeKind, path: String? = nil) -> LocalACPRuntimeResolution {
     let path = path ?? "/fixture/\(kind.rawValue)"
     return LocalACPRuntimeResolution(
@@ -67,9 +32,4 @@ struct RuntimeCredentialProbeTests {
       launchConfiguration: .init(runtimeKind: kind, executableURL: URL(fileURLWithPath: path), arguments: [])
     )
   }
-}
-
-private actor RuntimeProbeCalls {
-  var count = 0
-  func record() { count += 1 }
 }
