@@ -148,8 +148,8 @@ struct PublicSourceContractsTests {
     #expect(restoredBusiness.quotaWindows.first?.usedPercent == 70)
   }
 
-  @Test("disabled providers are filtered from analytics and limits")
-  func disabledProvidersAreFiltered() async throws {
+  @Test("account preferences filter limits but never device analytics")
+  func accountPreferencesOnlyFilterLimits() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-filtering")
     defer { directory.remove() }
     let databaseURL = directory.url.appending(path: "workspace.sqlite")
@@ -186,16 +186,13 @@ struct PublicSourceContractsTests {
       now: now
     )
 
-    #expect(snapshot.analytics.samples.map(\.provider) == [.claude])
-    #expect(snapshot.analytics.sources.allSatisfy { $0.provider != .codex })
+    #expect(snapshot.analytics.samples.map(\.provider) == [.codex, .claude])
+    #expect(snapshot.analytics.sources.contains { $0.provider == .codex })
     #expect(snapshot.limits.map(\.provider) == [.claude])
     #expect(credentials.readCount == 0)
-    #expect(sourceAccess.providerSourceChecks.allSatisfy { path in
-      !path.contains("/.codex/")
-        && !path.contains("/.grok/")
-        && !path.contains("/.cursor/")
-        && !path.contains("/.local/share/opencode/")
-    })
+    for suffix in ["/.codex/sessions", "/.claude/projects", "/.grok/sessions", "/.local/share/opencode/opencode.db"] {
+      #expect(sourceAccess.providerSourceChecks.contains { $0.hasSuffix(suffix) })
+    }
   }
 
 
@@ -345,8 +342,8 @@ struct PublicSourceContractsTests {
     #expect(openRouter.details.contains { $0.label == "Rate limit" })
   }
 
-  @Test("disabled providers do not scan local sources or read credentials")
-  func disabledProvidersDoNotAccessSources() async throws {
+  @Test("device analytics discovers local sources with no enabled accounts or credential reads")
+  func analyticsDiscoversSourcesWithoutAccounts() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-disabled")
     defer { directory.remove() }
     let sourceAccess = UsageSourceAccessRecorder()
@@ -368,10 +365,10 @@ struct PublicSourceContractsTests {
     )
 
     #expect(snapshot.analytics.samples.isEmpty)
-    #expect(snapshot.analytics.sources.isEmpty)
+    #expect(snapshot.analytics.sources.allSatisfy { $0.status == .notFound })
     #expect(snapshot.limits.isEmpty)
     #expect(credentials.readCount == 0)
-    #expect(sourceAccess.providerSourceChecks.isEmpty)
+    #expect(!sourceAccess.providerSourceChecks.isEmpty)
   }
 
 }

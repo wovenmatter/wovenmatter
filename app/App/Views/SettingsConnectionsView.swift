@@ -24,15 +24,14 @@ enum ConnectionSettingsFocus {
 struct SettingsConnectionsView: View {
     @Bindable var model: ApplicationModel
     var initialScope = "global"
-    var backTitle = "Settings"
-    var focus: ConnectionSettingsFocus?
-    var reservesRailControlSpace = false
+    var focus: ConnectionSettingsFocus = .providers
+    var embedded = false
+    var onConnected: ((String) -> Void)?
     let onBack: () -> Void
     @State private var keyDrafts: [String: String] = [:]
     @State private var keyLabels: [String: String] = [:]
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
-    @State private var showsExa = false
     @Environment(\.dashboardTheme) private var theme
     private var agent: DefaultAgentSettingsModel { model.connections }
     private var editable: Bool { !agent.inherits }
@@ -40,71 +39,19 @@ struct SettingsConnectionsView: View {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     var body: some View {
-        Group {
-            if let focus {
-                focusedContent(focus)
-            } else {
-                fullSettings
-            }
-        }
+        focusedContent(focus)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .task { agent.changeScope(initialScope); agent.loadAccounts() }
-        .onDisappear { agent.cancel() }
+        .task { if !embedded { agent.changeScope(initialScope) }; agent.loadAccounts() }
+        .onDisappear { if !embedded { agent.cancel() } }
+        .onChange(of: agent.signInOutcome) { _, outcome in
+            guard focus == .providers, let outcome, outcome.error == nil,
+                  outcome.notice?.hasPrefix("Connected.") == true else { return }
+            onConnected?(outcome.provider)
+        }
         .confirmationDialog("Reset Pi Durable credentials in this workspace?", isPresented: $confirmingCredentialReset) {
             Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
         } message: {
             Text("Encrypted workspace credentials will be reset and shared connections restored. Claude’s separate native sign-in, files, and conversations are kept.")
-        }
-    }
-
-    private var fullSettings: some View {
-        SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable and Usage.", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
-            Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
-                keyDrafts.removeAll()
-                answer = ""
-                agent.changeScope($0)
-                agent.loadAccounts()
-            })) {
-                Text("Woven Matter · shared").tag("global")
-                Text("Local workspace overrides").tag("local")
-                ForEach(model.remoteWorkspaces.workspaces) { workspace in Text(workspace.name).tag(workspace.id.uuidString.lowercased()) }
-            }
-            if agent.scope != "global" {
-                Toggle("Use global workspace defaults", isOn: Binding(get: { agent.inherits }, set: {
-                    keyDrafts.removeAll()
-                    agent.setInherits($0)
-                    agent.loadAccounts()
-                }))
-                Text("App-wide Usage uses the shared accounts. Workspace overrides apply to Pi Durable.").font(.callout).foregroundStyle(.secondary)
-            }
-            connectionsSection
-                .transaction { transaction in
-                    transaction.animation = nil
-                    transaction.disablesAnimations = true
-                }
-            searchSection
-                .transaction { transaction in
-                    transaction.animation = nil
-                    transaction.disablesAnimations = true
-                }
-            if agent.signInProvider == nil, let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
-            if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
-            HStack {
-                Button("Refresh connections") { agent.refresh(remote: remote) }.disabled(agent.busy)
-                if remote != nil {
-                    Button("Reset workspace credentials") { confirmingCredentialReset = true }.disabled(agent.busy)
-                }
-                if agent.busy && agent.signInProvider == nil { ProgressView().controlSize(.small); Button("Cancel") { agent.cancel() } }
-            }.buttonStyle(SettingsQuietButtonStyle())
-            Text("Subscription sign-ins and API keys remain separate. Disconnecting a shared account affects every feature using it. Disabling dictation or usage tracking keeps the account connected.").font(.callout).foregroundStyle(.secondary)
-            LocalModelServerConnections(agent: agent)
-            if let tools = model.agentTools { ExecutorConnectionsCard(model: model, tools: tools) }
-        }
-    }
-
-    private var connectionsSection: some View {
-        SettingsCard(title: "Model providers", detail: "Connect accounts for Pi Durable and Usage. Choose a preferred account and arrange backups for sign-in or usage exhaustion.") {
-            providerRows
         }
     }
 
@@ -117,14 +64,17 @@ struct SettingsConnectionsView: View {
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Exa API key").font(.system(size: 13, weight: .medium))
-                    if agent.searchConfigured || !(agent.accounts["exa"] ?? []).isEmpty {
-                        SettingsNote("An Exa API key is already saved.")
-                    }
-                    keyEntry("exa")
+                    connectionContent("exa")
                 }
                 .padding(16)
                 .background(theme.palette.themeWhisper)
                 .clipShape(DashboardShapes.card)
+            }
+            if focus == .providers, remote != nil {
+                DisclosureGroup("Workspace account recovery") {
+                    Button("Reset workspace credentials") { confirmingCredentialReset = true }
+                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
+                }
             }
             if agent.signInProvider == nil, let notice = agent.notice { SettingsNote(notice) }
             if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
@@ -158,20 +108,30 @@ struct SettingsConnectionsView: View {
     }
 
     @ViewBuilder private var providerDivider: some View {
-        if focus != nil { Rectangle().fill(theme.palette.border).frame(height: 1).padding(.horizontal, 16) }
+        Rectangle().fill(theme.palette.border).frame(height: 1).padding(.horizontal, 16)
     }
 
     private func providerRow<Content: View>(_ title: String, detail: String, @ViewBuilder content: @escaping () -> Content) -> some View {
         DisclosureGroup(content: content) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.system(size: 13, weight: .medium))
-                if focus != nil {
-                    Text(detail).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
-                }
-            }.frame(minHeight: focus == nil ? 30 : 44, alignment: .leading)
+                Text(providerSummary(title) ?? detail).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            }.frame(minHeight: 44, alignment: .leading)
         }
-        .padding(.horizontal, focus == nil ? 0 : 16)
-        .padding(.vertical, focus == nil ? 0 : 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+    private func providerSummary(_ title: String) -> String? {
+        let ids: [String]
+        switch title {
+        case "OpenAI": ids = ["openai-codex", "openai"]
+        case "Anthropic": ids = ["claude-subscription", "anthropic"]
+        case "Grok · xAI": ids = ["xai", "xai-api"]
+        case "OpenRouter": ids = ["openrouter"]
+        default: ids = ["opencode-go"]
+        }
+        let accounts = ids.flatMap { agent.accounts[$0] ?? [] }
+        return accounts.isEmpty ? nil : accounts.map(\.label).joined(separator: " · ")
     }
     private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {
         DisclosureGroup(title) {
@@ -239,7 +199,8 @@ struct SettingsConnectionsView: View {
                     guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
                     keyDrafts[id] = nil
                     keyLabels[id] = nil
-                    agent.refresh(remote: remote)
+                    if let onConnected, id != "exa" { onConnected(id) }
+                    else { agent.refresh(remote: remote) }
                 }
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
@@ -288,16 +249,11 @@ struct SettingsConnectionsView: View {
             if let error = outcome.error { SettingsError(error) }
         }
     }
-    private var searchSection: some View {
-        SettingsCard(title: "Web search") {
-            DisclosureGroup("Exa", isExpanded: $showsExa) { connectionContent("exa").padding(.leading, 12) }
-        }
-    }
 
 }
 
 struct ConnectionsLink: View {
-    var title = "Manage connections"
+    var title = "Manage accounts"
     var scope = "global"
     var body: some View {
         Button(title) {

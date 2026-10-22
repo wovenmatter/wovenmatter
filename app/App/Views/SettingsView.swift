@@ -68,7 +68,7 @@ struct SettingsView: View {
                     onBack: { section = .landing }
                 )
             case .connections(let scope):
-                SettingsConnectionsView(model: model, initialScope: scope,
+                SettingsDefaultAgentView(model: model, initialScope: scope,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .harness(let runtimeKind, let workspaceID, let origin):
                 SettingsHarnessView(
@@ -142,6 +142,7 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             section = .connections(event.object as? String ?? "global")
         }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-usage-settings"))) { _ in section = .usage }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
     }
 
@@ -152,7 +153,7 @@ struct SettingsView: View {
     }
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
-        section = .connections(scope); model.pendingConnectionsScope = nil
+        section = scope == "usage" ? .usage : .connections(scope); model.pendingConnectionsScope = nil
     }
 
     private var landing: some View {
@@ -177,15 +178,6 @@ struct SettingsView: View {
                     action: { section = .companion }
                 )
                 }
-                SettingsDestinationRow(
-                    title: "Connections",
-                    detail: "Shared accounts, API keys, and local model servers.",
-                    icon: {
-                        DashboardLucideIcon(glyph: .plug, size: 15)
-                            .rotationEffect(.degrees(45))
-                    },
-                    action: { section = .connections("global") }
-                )
                 SettingsDestinationRow(
                     title: "Local Agent Workspace",
                     detail: "Agents and files on this Mac.",

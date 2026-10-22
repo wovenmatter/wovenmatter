@@ -74,6 +74,10 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)
             switch c.action {
+            case "checkKeychain":
+                try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                    try DefaultAgentSupport.checkKeychainAccess()
+                }
             case "localServers": break
             case "connectServer":
                 let enteredKey = (c.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

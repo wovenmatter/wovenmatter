@@ -50,6 +50,7 @@ public struct KeychainAccess: Sendable {
   /// Only Settings > General's deliberate recovery action enables this scope.
   /// Task-local authorization follows actor calls without authorizing other tasks.
   @TaskLocal public static var isCredentialAuthorizationActive = false
+  public static let accessNeedsAttention = Notification.Name("wovenmatter.keychain-access-needs-attention")
   private static let systemPolicy = KeychainInteractionPolicy(operations: .init())
   private let policy: KeychainInteractionPolicy
   private var operations: KeychainOperations { policy.operations }
@@ -71,9 +72,11 @@ public struct KeychainAccess: Sendable {
     _ query: [String: Any],
     allowInteraction: Bool = false
   ) -> (OSStatus, CFTypeRef?) {
-    withInteractionPolicy(allowInteraction, failure: { ($0, nil) }) {
+    let result = withInteractionPolicy(allowInteraction, failure: { ($0, nil) }) {
       operations.copyMatching(authenticationQuery(query, allowInteraction: allowInteraction))
     }
+    reportAccessFailure(result.0)
+    return result
   }
 
   public func update(
@@ -81,26 +84,69 @@ public struct KeychainAccess: Sendable {
     _ attributes: [String: Any],
     allowInteraction: Bool = false
   ) -> OSStatus {
-    withInteractionPolicy(allowInteraction, failure: { $0 }) {
+    let status = withInteractionPolicy(allowInteraction, failure: { $0 }) {
       operations.update(authenticationQuery(query, allowInteraction: allowInteraction), attributes)
     }
+    reportAccessFailure(status)
+    return status
   }
 
   public func add(
     _ attributes: [String: Any],
     allowInteraction: Bool = false
   ) -> OSStatus {
-    withInteractionPolicy(allowInteraction, failure: { $0 }) {
+    let status = withInteractionPolicy(allowInteraction, failure: { $0 }) {
       operations.add(authenticationQuery(attributes, allowInteraction: allowInteraction))
     }
+    reportAccessFailure(status)
+    return status
   }
 
   public func delete(
     _ query: [String: Any],
     allowInteraction: Bool = false
   ) -> OSStatus {
-    withInteractionPolicy(allowInteraction, failure: { $0 }) {
+    let status = withInteractionPolicy(allowInteraction, failure: { $0 }) {
       operations.delete(authenticationQuery(query, allowInteraction: allowInteraction))
+    }
+    reportAccessFailure(status)
+    return status
+  }
+
+  private func reportAccessFailure(_ status: OSStatus) {
+    if [errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled, errSecNotAvailable].contains(status) {
+      NotificationCenter.default.post(name: Self.accessNeedsAttention, object: nil)
+    }
+  }
+
+  /// Check each saved item, rather than treating acceptance of a disclosure as access.
+  /// Secret values are discarded immediately and never returned to the UI.
+  public func checkStoredItems(services: [String], authorize: Bool = false) throws {
+    for service in services {
+      let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service]
+      var listing = base
+      listing[kSecReturnAttributes as String] = true
+      listing[kSecMatchLimit as String] = kSecMatchLimitAll
+      let (status, result) = copyMatching(listing, allowInteraction: authorize)
+      if status == errSecItemNotFound { continue }
+      guard status == errSecSuccess else { throw DefaultAgentError.message("Keychain access needs attention (status \(status)).") }
+      guard let items = result as? [[String: Any]] ?? (result as? [String: Any]).map({ [$0] }) else {
+        throw DefaultAgentError.message("Saved Keychain items could not be checked.")
+      }
+      for item in items {
+        guard let account = item[kSecAttrAccount as String] as? String else {
+          throw DefaultAgentError.message("A saved Keychain item could not be checked.")
+        }
+        var query = base
+        query[kSecAttrAccount as String] = account
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let (readStatus, _) = copyMatching(query, allowInteraction: authorize)
+        guard readStatus == errSecSuccess || readStatus == errSecItemNotFound else {
+          throw DefaultAgentError.message("Keychain access needs attention (status \(readStatus)).")
+        }
+      }
     }
   }
 

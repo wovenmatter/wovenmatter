@@ -11,7 +11,7 @@ actor UsageTranscriptImporter {
     let failures: Int
     static let empty = Outcome(failures: 0)
   }
-  private static let parserVersion = "usage-index-v3"
+  private static let parserVersion = "usage-index-v4"
   let homeDirectory: URL
   private static let sharedPreparationWorker = DatabaseWorker(label: "wovenmatter.usage.import", capacity: 4)
   private let ownership: UsageRefreshOwnership
@@ -139,7 +139,6 @@ actor UsageTranscriptImporter {
       ) { indexedAfter, check in
         try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
           .samples(cutoff: indexedAfter, now: now, check: check)
-          .filter { $0.provider == .openCodeGo }
       }
     }
   }

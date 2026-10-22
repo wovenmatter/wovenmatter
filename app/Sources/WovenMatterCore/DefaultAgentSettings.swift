@@ -25,6 +25,12 @@ public struct DefaultAgentSettings: Codable, Equatable, Sendable {
             max(Self.subagentConcurrencyRange.lowerBound, subagentConcurrency ?? 8))
     }
     public init() {}
+    /// Provider access follows credentials; model visibility remains an explicit choice.
+    public var withAvailableProviders: Self {
+        var value = self
+        value.providers = Self.providerIDs + providers.filter { !Self.providerIDs.contains($0) }
+        return value
+    }
 
     /// Apply a UI edit to the latest saved value without undoing a connection
     /// added or removed while the edit was in flight to the background service.

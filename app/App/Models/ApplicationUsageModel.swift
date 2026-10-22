@@ -207,9 +207,7 @@ final class ApplicationUsageModel {
         selectedCodexUsageWorkspaceID = CodexUsageWorkspacePreferences(
             defaults: applicationDefaults
         ).selectedWorkspaceID
-        enabledUsageProviders = UsageProviderPreferences(
-            defaults: applicationDefaults
-        ).enabledProviders
+        enabledUsageProviders = Set(ProviderKind.supportedAccounts)
     }
 
     func refreshLocalUsage(
@@ -301,10 +299,8 @@ final class ApplicationUsageModel {
             UsageAnalyticsSnapshot
         >.Policy
     ) async {
-        let enabledProviders = enabledUsageProviders
-        let allowsCredentialAccess = isOpenRouterCredentialConfigured
-            && hasAcknowledgedCredentialAccessDisclosure
-            && enabledProviders.contains(.openRouter)
+        let enabledProviders = Set(ProviderKind.allCases)
+        let allowsCredentialAccess = false
         let key = UsageAnalyticsRefreshKey(
             range: range.rawValue,
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
@@ -325,8 +321,7 @@ final class ApplicationUsageModel {
                     allowCredentialAccess: allowsCredentialAccess
                 )
             }
-            guard usageAnalyticsRequestID == requestID,
-                  enabledUsageProviders == enabledProviders else { return }
+            guard usageAnalyticsRequestID == requestID else { return }
             try Task.checkCancellation()
             let existing = localUsage
             localUsage = LocalUsageSnapshot(
@@ -524,9 +519,6 @@ final class ApplicationUsageModel {
         if isOpenRouterCredentialConfigured, enabledUsageProviders.contains(.openRouter) {
             try await localUsageService.authorizeOpenRouterCredentialAccess()
         }
-        if enabledUsageProviders.contains(.claude) {
-            try await localUsageService.authorizeClaudeCredentialAccess()
-        }
     }
 
     func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
@@ -649,12 +641,12 @@ final class ApplicationUsageModel {
     func signInUsageProvider(_ provider: ProviderKind) {
         if isBackendProjection {
             if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
-                NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
+                NotificationCenter.default.post(name: .init("wovenmatter.open-usage-settings"), object: "global")
             } else { Task { await forward(.signIn(provider)) } }
             return
         }
         if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
-            NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
+            NotificationCenter.default.post(name: .init("wovenmatter.open-usage-settings"), object: "global")
             return
         }
         guard !signingInUsageProviders.contains(provider) else { return }

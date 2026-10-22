@@ -43,6 +43,17 @@ when an intentional design change is accepted.
   padding, inset dividers, and quiet actions. Keep provider setup limited to
   OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; web-search setup shows only
   the Exa key form. Both are optional and also accessible from Pi Durable settings.
+- **Agent setup:** Pi Durable uses the same grouped provider rows as Harness setup,
+  inline below SDK management. Web search follows accounts, then the model browser
+  and its single default-model choice. Successful sign-in/key addition opens that
+  provider's model browser. Fallback ordering and workspace overrides are disclosures.
+- **Usage:** account setup lives in Usage settings. Limits show each saved account
+  and signed-out providers, with Go to Usage settings. Device analytics never depends
+  on limits-account switches or credentials.
+- **Tool defaults:** settings say Woven Matter CLI and show effective defaults,
+  rather than an off-looking inheritance switch. Composer controls retain Tools.
+- **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
+  Access ready, and Access needs attention. Consent is not verification.
 - **Pi Durable SDK settings:** place SDK management directly below the workspace
   scope controls. The local workspace uses a fixed heading with Pi Durable SDK and Claude
   SDK versions and explicit check/update actions always visible. Remote workspaces
@@ -50,8 +61,8 @@ when an intentional design change is accepted.
   All workspaces lists the local location and configured remote workspaces; an
   individual scope shows only that location. Keep progress and errors with their
   workspace and preserve operation state when a remote row is collapsed.
-- **Settings disclosures:** use `SettingsDisclosureGroupStyle` on the Connections
-  page so the chevron, label, and remaining header width all toggle expansion.
+- **Settings disclosures:** use `SettingsDisclosureGroupStyle` in provider account
+  editors so the chevron, label, and remaining header width all toggle expansion.
   The style propagates to nested provider, credential, account, and Executor
   defaults disclosures.
   OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.

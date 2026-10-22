@@ -596,7 +596,7 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
   public let refreshError: String?
   public let dashboardURL: URL?
 
-  public var id: String { provider.rawValue }
+  public var id: String { accountScopeID.map { provider.rawValue + ":" + $0 } ?? provider.rawValue }
 
   public init(
     provider: ProviderKind,

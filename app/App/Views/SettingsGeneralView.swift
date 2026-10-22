@@ -39,7 +39,10 @@ struct SettingsGeneralView: View {
             harnessSetupCard
             appearanceCard
             sidebarLayoutCard
-            if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
+            if let tools = model.agentTools {
+                WorkspaceToolDefaultsCard(tools: tools)
+                DisclosureGroup("Connected apps · Executor") { ExecutorConnectionsCard(model: model, tools: tools) }
+            }
             dictationCard
             conversationTitlesCard
             if showsBackgroundExecution { backgroundExecutionCard }
@@ -50,6 +53,13 @@ struct SettingsGeneralView: View {
             } else {
                 ProductAnalyticsSettingsCard(analytics: model.analytics)
             }
+        }
+        .task { await model.checkSavedCredentialAccess() }
+        .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
+            model.keychainAccessNeedsAttention()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if !model.isReconnectingSavedCredentials { Task { await model.checkSavedCredentialAccess() } }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -203,23 +213,23 @@ struct SettingsGeneralView: View {
 
     private var credentialAccessCard: some View {
         SettingsCard(
-            title: "Credential access",
-            detail: "One saved permission for Woven Matter. Enabled features reuse credentials quietly."
+            title: "Keychain access",
+            detail: "Woven Matter saves your credentials in Apple Keychain. Enable access to use your saved accounts and API keys. When macOS asks, choose Always Allow to avoid repeated prompts for that item."
         ) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(model.hasAcknowledgedCredentialAccessDisclosure ? "Enabled" : "Not enabled")
+                    Text(model.isReconnectingSavedCredentials ? "Checking…" : model.keychainAccessReady == true ? "Access ready" : model.keychainAccessReady == false ? "Access needs attention" : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled")
                         .font(.system(size: 13, weight: .medium))
                     Text(model.credentialAccessStatus
-                         ?? "Automatic refreshes never request permission. Reconnect here if access to a saved credential changes.")
+                         ?? "Automatic refreshes never request permission. Restore access here if a saved credential becomes unavailable.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                Button(model.isReconnectingSavedCredentials ? "Reconnecting…"
-                       : model.hasAcknowledgedCredentialAccessDisclosure
-                         ? "Reconnect saved credentials" : "Enable credential access") {
+                Button(model.isReconnectingSavedCredentials ? "Checking…"
+                       : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
+                         ? "Restore Keychain access" : "Enable Keychain access") {
                     if model.hasAcknowledgedCredentialAccessDisclosure {
                         Task { await model.reconnectSavedCredentials() }
                     } else {

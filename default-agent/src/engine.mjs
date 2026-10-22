@@ -278,12 +278,12 @@ export class DefaultAgentEngine {
     if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Pi Durable.');
     const accounts = await this.credentials.candidates(model.provider);
     const account = accounts.find(a => a.credential && (a.credential.type !== 'oauth' || a.credential.expires > Date.now()));
-    if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Connections before choosing this model.`);
+    if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Pi Durable before choosing this model.`);
     try {
       const select = () => record.session.setModel(model);
       await this.credentials.runWithAccount(model.provider, account ?? accounts[0], () => model.provider === 'claude-subscription' && this.claude.withProfile
         ? this.claude.withProfile(account?.credential?.accountId, select) : select());
-    } catch { throw new DefaultAgentError(`This ${this.providerName(model.provider)} connection is unavailable. Check its account in Settings → Connections.`); }
+    } catch { throw new DefaultAgentError(`This ${this.providerName(model.provider)} connection is unavailable. Check its account in Settings → Pi Durable.`); }
     record.selected = reference;
     this.persistOptions(record);
     await record.configurationQueue;
@@ -432,14 +432,14 @@ export class DefaultAgentEngine {
           if (controller.signal.aborted) return { stopReason: 'cancelled' };
           if (record.nativeContextFailure) throw new DefaultAgentError(record.nativeContextFailure.message);
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : (error.accessReason ?? accessFailure(error));
-          if (!reason || visible || steered || record.nativeVisible) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Connections.'));
+          if (!reason || visible || steered || record.nativeVisible) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Pi Durable.'));
           record.allowFallback = true;
           await record.rewind(beforeLeaf);
           await record.session.refreshContext();
 
         }
       }
-      throw new DefaultAgentError('No configured connection has access. Open Settings → Connections to sign in or update an API key.');
+      throw new DefaultAgentError('No configured connection has access. Open Settings → Pi Durable to sign in or update an API key.');
     } catch (error) {
       if (controller.signal.aborted) return { stopReason: 'cancelled' };
       statusError = error;

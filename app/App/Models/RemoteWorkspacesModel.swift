@@ -605,7 +605,7 @@ final class RemoteWorkspacesModel {
         operation: (RemoteWorkspaceServiceClient) async throws -> Value
     ) async throws -> Value {
         guard isCredentialAccessEnabled else {
-            throw RemoteWorkspaceClientError.invalidResponse("Enable credential access in Settings to connect.")
+            throw RemoteWorkspaceClientError.invalidResponse("Enable Keychain access in Settings → General to connect.")
         }
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
@@ -714,7 +714,7 @@ final class RemoteWorkspacesModel {
     ) {
         if forwardToBackend(.create(name: name, workspaceID: workspaceID, hostName: hostName, userName: userName, port: port, memoryLimit: memoryLimit, swapLimit: swapLimit)) { return }
         guard isCredentialAccessEnabled else {
-            errorMessage = "Enable credential access before creating a remote workspace."
+            errorMessage = "Enable Keychain access before creating a remote workspace."
             return
         }
         guard !isCreating else { return }
@@ -950,7 +950,7 @@ final class RemoteWorkspacesModel {
     ) {
         if forwardToBackend(.delete(configuration.id, removePersistentData: removePersistentData)) { return }
         guard isCredentialAccessEnabled else {
-            errorMessage = "Enable credential access before deleting a remote workspace."
+            errorMessage = "Enable Keychain access before deleting a remote workspace."
             return
         }
         performBusy(configuration) {

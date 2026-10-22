@@ -188,6 +188,10 @@ struct WorkspaceView: View {
         .onChange(of: model.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-usage-settings"))) { _ in
+            model.pendingConnectionsScope = "usage"
+            openUtility(.settings)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             model.pendingConnectionsScope = event.object as? String ?? "global"
             openUtility(.settings)

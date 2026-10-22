@@ -6,7 +6,7 @@ extension ApplicationModel {
     func executorClient(install: Bool = false, config proposed: ExecutorConfiguration? = nil, prepareHost: Bool = false) async throws -> ExecutorBrokerClient {
         guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let saved = try await database.toolSettings().executor
-        guard let config = proposed ?? saved else { throw DefaultAgentError.message("Set up Executor in Settings → Connections first.") }
+        guard let config = proposed ?? saved else { throw DefaultAgentError.message("Set up Executor in Settings → General first.") }
         if executorRuntime.client == nil {
             executorRuntime.client = ExecutorBrokerClient(directory: try Self.dashboardSupportDirectory().appending(path: "executor"))
         }
@@ -119,7 +119,7 @@ extension ApplicationModel {
 
     func synchronizeExecutorScope(_ session: String, policy: WorkspaceSessionTools) async throws {
         guard let settings = try await dashboardStore?.database.toolSettings(), let config = settings.executor else {
-            if policy.enabled.contains(.executor) { throw DefaultAgentError.message("Set up Executor in Connections first.") }; return
+            if policy.enabled.contains(.executor) { throw DefaultAgentError.message("Set up Executor in Settings → General → Executor first.") }; return
         }
         let profiles = config.apps.filter { policy.executorProfiles?.contains($0.id) == true }
         _ = try await executorClient().call(.object(["operation": .string("scope"), "session": .string(session),

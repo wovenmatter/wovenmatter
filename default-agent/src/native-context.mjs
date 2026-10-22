@@ -63,7 +63,7 @@ export function nativeContextBridge(record, engine, background) {
   const filterTools = messages => record.codeModeState.value === 'only' ? messages.map(message => message.role === 'system' ? { ...message, ...(message.toolsAdded ? { toolsAdded: message.toolsAdded.filter(tool => tool.name === 'codemode') } : {}), ...(message.toolsRemoved ? { toolsRemoved: message.toolsRemoved.filter(tool => tool.name === 'codemode') } : {}) } : message) : messages;
   const selectedAccount = async route => {
     const account = (await engine.credentials.candidates(route.provider)).find(candidate => candidate.id === route.accountID);
-    if (!account) throw new DefaultAgentError('The selected account is unavailable. Check Settings → Connections.');
+    if (!account) throw new DefaultAgentError('The selected account is unavailable. Check Settings → Pi Durable.');
     const pin = record.connectionPin;
     if (pin && (pin.provider !== route.provider || pin.accountID !== route.accountID || pin.modelId !== route.modelID
         || (account.owned === true) !== pin.accountOwned || credentialRouteIdentity(record, account) !== pin.credentialIdentity)) {

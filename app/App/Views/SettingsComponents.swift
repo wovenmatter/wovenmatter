@@ -889,7 +889,7 @@ struct CredentialAccessDisclosureView: View {
                         Circle().fill(DashboardPalette.primary.opacity(0.1))
                     )
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Enable credential access")
+                    Text("Enable Keychain access")
                         .font(.system(size: 17, weight: .semibold))
                     Text(purpose)
                         .font(.system(size: 12.5))
@@ -900,7 +900,7 @@ struct CredentialAccessDisclosureView: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 disclosureRow(
-                    "This is one saved choice for Woven Matter across the features you enable."
+                    "Woven Matter saves your credentials in Apple Keychain."
                 )
                 disclosureRow(
                     "Enabled features can reuse saved credentials. Automatic background refreshes never request permission."
@@ -911,7 +911,7 @@ struct CredentialAccessDisclosureView: View {
             }
 
             DisclosureGroup("Keychain prompts") {
-                Text("macOS may ask when you use Credential access in General settings. This app-wide choice stays saved; opening the browser and background refreshes stay silent.")
+                Text("macOS may ask when you use Keychain access in General settings. Choose Always Allow to remember access to the requested item. Background refreshes stay silent.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -922,7 +922,7 @@ struct CredentialAccessDisclosureView: View {
                 Spacer()
                 Button("Not now", role: .cancel, action: onCancel)
                     .buttonStyle(SettingsQuietButtonStyle())
-                Button("Enable credential access", action: onEnable)
+                Button("Enable Keychain access", action: onEnable)
                     .buttonStyle(DashboardPrimaryButtonStyle())
             }
         }

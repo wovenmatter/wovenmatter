@@ -9,6 +9,11 @@ struct SettingsAgentDefaultsSection: View {
     @Bindable var model: ApplicationModel
     let runtime: AgentRuntimeKind
     var fixedScope: String? = nil
+    var showsModel = true
+    var showsThinking = true
+    var showsTools = true
+    var showsPermissions = true
+    var title = "New conversations"
     @State private var selectedScope = "global"
     @State private var stored = SessionSelections()
     @State private var resolved = SessionSelections()
@@ -29,7 +34,7 @@ struct SettingsAgentDefaultsSection: View {
     private var identity: String { runtime.rawValue + ":" + scope + ":" + (workspaceScope ?? "") }
     private var inheritedLabel: String { scope == "global" ? "Use agent default" : "Use All workspaces" }
     private var enabledTools: Set<String> {
-        Set(resolved.tools ?? model.agentTools?.settings.enabledByDefault.map(\.rawValue) ?? [])
+        Set(resolved.tools ?? model.agentTools?.settings.enabledByDefault.map(\.rawValue) ?? WorkspaceToolSettings().enabledByDefault.map(\.rawValue))
     }
 
     var body: some View {
@@ -42,40 +47,41 @@ struct SettingsAgentDefaultsSection: View {
                 }
                 .frame(maxWidth: 440, alignment: .leading)
             }
-            SettingsCard(title: "Conversation defaults",
+            SettingsCard(title: title,
                 detail: "New conversations with \(runtime.displayName) start with these settings. Changes within a conversation apply only to that conversation.") {
                 VStack(alignment: .leading, spacing: 14) {
                     SettingsNote(scope == "global"
                         ? "Native options are read from the local agent workspace. Workspace overrides can use the options available on that host."
                         : "These choices override this agent’s All workspaces defaults.")
-                    selectionRow("Permissions", field: .permission, value: stored.permission,
+                    if showsPermissions { selectionRow("Permissions", field: .permission, value: stored.permission,
                         effective: resolved.permission, options: metadata?.permissionOptions ?? [],
-                        labels: metadata?.permissionOptionMetadata ?? [:])
-                    selectionRow("Model", field: .model, value: stored.model,
+                        labels: metadata?.permissionOptionMetadata ?? [:]) }
+                    if showsModel { selectionRow("Model", field: .model, value: stored.model,
                         effective: resolved.model, options: metadata?.selectableModels ?? [],
-                        labels: metadata?.modelOptionMetadata ?? [:])
-                    selectionRow("Thinking level", field: .thinking, value: stored.thinking,
+                        labels: metadata?.modelOptionMetadata ?? [:]) }
+                    if showsThinking { selectionRow("Thinking level", field: .thinking, value: stored.thinking,
                         effective: resolved.thinking, options: metadata?.selectableThinkingLevels ?? [],
-                        labels: metadata?.thinkingOptionMetadata ?? [:])
+                        labels: metadata?.thinkingOptionMetadata ?? [:]) }
                     HStack(spacing: 10) {
                         Button(loading ? "Reading native options…" : "Refresh native options") { Task { await loadOptions() } }
                             .buttonStyle(SettingsQuietButtonStyle()).disabled(loading || saving || !scopeAvailable)
                         if loading { ProgressView().controlSize(.small) }
                     }
-                    if metadata != nil, metadata?.permissionOptions?.isEmpty != false {
+                    if showsPermissions, metadata != nil, metadata?.permissionOptions?.isEmpty != false {
                         SettingsNote("This agent does not expose a selectable permission policy.")
                     }
-                    if metadata != nil, metadata?.selectableThinkingLevels.isEmpty != false {
+                    if showsThinking, metadata != nil, metadata?.selectableThinkingLevels.isEmpty != false {
                         SettingsNote("The selected model does not expose a thinking level control.")
                     }
                 }
             }.disabled(!scopeAvailable)
-            SettingsCard(title: "Woven tools", detail: "Choose tools for this agent’s new conversations. Inherited tools come from All workspaces or General.") {
+            if showsTools { SettingsCard(title: "Woven Matter CLI", detail: "Default tools for new conversations. Change tools within a conversation using Tools.") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Choose tools for this agent", isOn: Binding(get: { stored.tools != nil }, set: { enabled in
-                        save(.tools, selections: SessionSelections(tools: enabled ? enabledTools.sorted() : nil))
+                    Toggle("Enable Woven Matter CLI", isOn: Binding(get: { !enabledTools.subtracting(["goals"]).isEmpty }, set: { enabled in
+                        save(.tools, selections: SessionSelections(tools: enabled
+                            ? WorkspaceToolSettings().enabledByDefault.map(\.rawValue).sorted() : []))
                     }))
-                    if stored.tools != nil {
+                    if !enabledTools.subtracting(["goals"]).isEmpty {
                         ForEach(WorkspaceToolGroup.configurableCases) { group in
                             Toggle(group.title, isOn: Binding(get: { enabledTools.contains(group.rawValue) }, set: { enabled in
                                 var tools = enabledTools
@@ -84,14 +90,22 @@ struct SettingsAgentDefaultsSection: View {
                             }))
                         }
                     }
-                    SettingsNote("Calendar access, session limits, and connected app selections retain their shared settings.")
+                    if stored.tools != nil {
+                        Button("Use shared defaults") { save(.tools, selections: SessionSelections(tools: nil)) }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                    }
+                    SettingsNote("Calendar access, session limits, and connected apps use shared settings.")
                 }
             }.disabled(!scopeAvailable)
+            }
             if let error { SettingsError(error) }
         }
         .disabled(saving)
         .task(id: identity) { await loadDefaults() }
         .onDisappear { requestID = UUID() }
+        .onChange(of: model.connections.configuration.defaultModel) { _, _ in
+            if runtime == .defaultAgent, showsThinking { Task { await loadDefaults() } }
+        }
     }
 
     private func selectionRow(_ title: String, field: SessionSelectionField, value: String?, effective: String?,
@@ -146,6 +160,7 @@ struct SettingsAgentDefaultsSection: View {
             let defaults = try await model.agentSelectionDefaults(runtime: runtime, workspace: workspaceScope)
             guard requestID == request, !Task.isCancelled else { return }
             stored = defaults.stored; resolved = defaults.resolved
+            if showsThinking, runtime != .defaultAgent || model.connections.configuration.defaultModel != nil { await loadOptions() }
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -158,7 +173,7 @@ struct SettingsAgentDefaultsSection: View {
         requestID = request; loading = true; error = nil; metadata = nil
         let selectedRuntime = runtime, selectedWorkspace = workspaceID
         var task = model.calendarTaskDefaults(runtime: selectedRuntime, workspaceID: selectedWorkspace)
-        task.configuration.model = resolved.model
+        task.configuration.model = runtime == .defaultAgent ? model.connections.configuration.defaultModel : resolved.model
         defer { if requestID == request { loading = false } }
         do {
             let result = try await model.calendarTaskMetadata(task)
