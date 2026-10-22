@@ -41,6 +41,39 @@ function fragmentedResponse(value, sizes = [1, 2, 7, 13]) {
   } }), { headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+for (const support of ['changes', 'additions', 'none']) test(`Codex compaction preserves changed tool definitions with ${support} support`, async () => {
+  const args = codexArgs();
+  Object.assign(args.model.compat, { supportsMidConvoSystemMessages: true,
+    supportsAdditionalTools: support === 'changes', supportsToolSearch: support === 'additions' });
+  const original = { name: 'read', description: 'Original read', parameters: { type: 'object', properties: { path: { type: 'string' } } } };
+  const revised = { ...original, description: 'Revised read', parameters: { type: 'object', properties: { file: { type: 'string' } } } };
+  const search = { name: 'search', description: 'Deferred search', parameters: { type: 'object', properties: {} } };
+  args.context = { messages: [
+    { role: 'system', content: 'Initial instructions', toolsAdded: [original] },
+    { role: 'user', content: 'Read a file', timestamp: 1 },
+    { role: 'system', content: 'Use the revised read tool', toolsRemoved: [original], toolsAdded: [revised] },
+    { role: 'user', content: 'Continue reading', timestamp: 2 },
+    { role: 'system', content: 'Search is now available', toolsAdded: [search] },
+    { role: 'user', content: 'Compact this conversation', timestamp: 3 },
+  ] };
+  let request;
+  await compactProviderContext({ ...args, fetchRequest: async (_url, init) => {
+    request = JSON.parse(init.body); return codexReply(nativeFor(args.model));
+  } });
+  const declarations = request.input.filter(item => item.type === 'additional_tools' || item.type === 'tool_search_output');
+  const names = tools => tools.map(tool => tool.name);
+  if (support === 'changes') {
+    assert.equal(request.tools, undefined, 'In-place definitions must not also be declared at the top level');
+    assert.deepEqual(declarations.map(item => names(item.tools)), [['read'], ['read'], ['search']]);
+    assert.equal(declarations[0].tools[0].description, original.description);
+    assert.deepEqual(declarations[1].tools[0].parameters, revised.parameters);
+  } else {
+    assert.deepEqual(names(request.tools), support === 'none' ? ['read', 'search'] : ['read']);
+    assert.deepEqual(request.tools[0].parameters, revised.parameters);
+    assert.deepEqual(declarations.map(item => names(item.tools)), support === 'none' ? [] : [['search']]);
+  }
+});
+
 test('native compact preserves every output item, unknown field, raw response, tool ID and usage for continuation', async () => {
   const model = modelFor(), route = routeFor(model), native = nativeFor(model);
   const raw = JSON.stringify(native, null, 2) + '\n';

@@ -1,5 +1,5 @@
 # Same unchanged local runtime as macOS, packaged for a managed Linux host.
-FROM node:24.22.1-trixie-slim@sha256:fdc9220097e0ae3bd947c44b10cd3af5867a67a6d3a23b30b30b70929219034e
+FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
 # The published runtime bundles Git/workerd, while Debian supplies their shared
 # libraries and the CA store used for app/package and provider HTTPS traffic.
 RUN export DEBIAN_FRONTEND=noninteractive \

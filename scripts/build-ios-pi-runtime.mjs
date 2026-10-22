@@ -28,8 +28,8 @@ const provenance = JSON.stringify({sdkVersion:expected,entry:'ios/Runtime/entry.
 // Keep reviewed copyright notices, including TypeBox, rather than dropping them
 // when a package release omits its standalone license file.
 const notices = (await readFile(path.join(output, 'THIRD_PARTY_LICENSES.txt'), 'utf8'))
-  .replace(/^Pi Durable, Pi AI and Chord [^\n]+\nhttps:\/\/github\.com\/earendil-works\/pi\/tree\/v[^\n]+/,
-    `Pi Durable, Pi AI and Chord ${expected}\nhttps://github.com/earendil-works/pi/tree/v${expected}`);
+  .replace(/^Pi Durable, Pi AI(?: and Chord|, Chord and Pi Telemetry) [^\n]+\nhttps:\/\/github\.com\/earendil-works\/pi\/tree\/v[^\n]+/,
+    `Pi Durable, Pi AI, Chord and Pi Telemetry ${expected}\nhttps://github.com/earendil-works/pi/tree/v${expected}`);
 const files = [...result.outputFiles.map(file=>({path:file.path,content:file.text})),
   {path:path.join(output,'provenance.json'),content:provenance},
   {path:path.join(output,'THIRD_PARTY_LICENSES.txt'),content:notices},
