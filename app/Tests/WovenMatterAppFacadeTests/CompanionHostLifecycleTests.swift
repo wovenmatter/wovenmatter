@@ -94,12 +94,14 @@ struct CompanionHostLifecycleTests {
         #expect(fixture.host.localDevelopmentStatus.allowed)
         let grant = try await fixture.host.connectLocalDevelopment(request)
         #expect(grant.pairing.deviceID == request.deviceID)
+        #expect(try await fixture.libraryStatus(grant.pairing) == 200)
         #expect(fixture.host.pendingPairingRequests.isEmpty)
         #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID && $0.isLocalDevelopment == true })
         #expect(fixture.makeHost().allowsLocalDevelopment)
         await fixture.host.setAllowsLocalDevelopment(false)
         await #expect(throws: CompanionAPIError.self) { try await fixture.host.connectLocalDevelopment(request) }
         #expect(!fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        #expect(try await fixture.libraryStatus(grant.pairing) == 401)
         #expect(fixture.host.pairedDevices.contains { $0.id == ordinary.deviceID })
         #expect(!fixture.makeHost().allowsLocalDevelopment)
     }
@@ -357,6 +359,16 @@ private enum HostFixtureError: Error { case timeout }
         let workspaces = try await database.companionExecutionWorkspaces()
         let workspace = try #require(workspaces.first { $0.kind == .mac && $0.ownerDeviceID == identity.hostDeviceID })
         return try await host.provisionExecutionWorkspace(id: workspace.id, device: device)
+    }
+    func libraryStatus(_ credential: CompanionPairResponse) async throws -> Int {
+        var request = URLRequest(url: try loopbackURL(path: "v1/snapshot"))
+        request.setValue("Bearer " + credential.credential, forHTTPHeaderField: "Authorization")
+        request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+        request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = try #require((response as? HTTPURLResponse)?.statusCode)
+        if status == 200 { _ = try JSONDecoder().decode(CompanionSnapshot.self, from: data) }
+        return status
     }
     func executionStatus(_ credential: CompanionExecutionCredential) async throws -> Int {
         var request = URLRequest(url: try loopbackURL(path: "v1/execution"))
