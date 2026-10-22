@@ -23,11 +23,8 @@ mkdir -p "$cache"
 if [ ! -f "$cache/$name/.verified" ]; then
   staging="$(mktemp -d "$cache/.download.XXXXXX")"
   trap 'rm -rf "$staging"' EXIT
-  curl --fail --location --retry 3 --silent --show-error \
-    "https://cef-builds.spotifycdn.com/$name.tar.bz2" -o "$staging/cef.tar.bz2"
-  actual="$(shasum "$staging/cef.tar.bz2" | awk '{print $1}')"
-  if [ "$actual" != "$expected" ]; then echo 'CEF archive checksum mismatch.' >&2; exit 1; fi
-  tar -xjf "$staging/cef.tar.bz2" -C "$staging"
+  archive="$(python3 "$repo_root/scripts/cached-download.py" "https://cef-builds.spotifycdn.com/$name.tar.bz2" sha1 "$expected")"
+  tar -xjf "$archive" -C "$staging"
   touch "$staging/$name/.verified"
   if [ ! -d "$cache/$name" ]; then
     mv "$staging/$name" "$cache/$name"
@@ -42,10 +39,19 @@ sdk="$cache/$name"
 build="${DERIVED_FILE_DIR:?}/cef-$architecture"
 products="${BUILT_PRODUCTS_DIR:?}"
 mkdir -p "$DERIVED_FILE_DIR" "$products"
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+browser_key="$(python3 "$repo_root/scripts/browser-build-cache.py" key "$architecture" "$cmake")"
+browser_cache="${WOVENMATTER_BROWSER_CACHE:-$HOME/Library/Caches/WovenMatter/BrowserBuilds}/$browser_key"
+if python3 "$repo_root/scripts/browser-build-cache.py" restore "$browser_cache" "$build"; then
+  echo "Reused unsigned browser products: $browser_key"
+else
 "$cmake" -S "$repo_root/app/Browser" -B "$build" -G 'Unix Makefiles' \
   -DCEF_ROOT="$sdk" -DPROJECT_ARCH="$architecture" -DCMAKE_OSX_ARCHITECTURES="$architecture" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DUSE_SANDBOX=ON > "$build-config.log"
 "$cmake" --build "$build" --parallel 6 > "$build-build.log" 2>&1 || { tail -100 "$build-build.log"; exit 1; }
+  python3 "$repo_root/scripts/browser-build-cache.py" save "$browser_cache" "$build"
+fi
+if [ "${WOVENMATTER_BROWSER_BUILD_ONLY:-0}" = 1 ]; then exit 0; fi
 cp "$build/libWovenBrowser.a" "$products/libWovenBrowser.a"
 cp "$build/libcef_dll_wrapper/libcef_dll_wrapper.a" "$products/libcef_dll_wrapper.a"
 app="${TARGET_BUILD_DIR:?}/${WRAPPER_NAME:?}"

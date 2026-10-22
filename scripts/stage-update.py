@@ -98,6 +98,40 @@ def validate_reused(folder, version, revision, build):
     run('xcrun', 'stapler', 'validate', dmg)
     run('spctl', '--assess', '--type', 'open', '--context', 'context:primary-signature', dmg)
 
+def restore_tagged(folder, version, revision, build):
+    """Resume an ordinary private tag's complete artifacts without rebuilding."""
+    tag = 'v' + version
+    private = optional_release(tag)
+    if private is None:
+        return False
+    assert private['isDraft'], 'Tagged release is already public; refusing to rebuild'
+    names = {a['name'] for a in private['assets']}
+    if not {'SHA256SUMS.txt', 'release-build.json'}.issubset(names):
+        return False
+    with tempfile.TemporaryDirectory() as temporary:
+        index = Path(temporary)
+        download(tag, 'SHA256SUMS.txt', index / 'SHA256SUMS.txt')
+        download(tag, 'release-build.json', index / 'release-build.json')
+        verify_uploaded(tag, index)
+        record = json.loads((index / 'release-build.json').read_text())
+        assert record['source_revision'] == revision and record['version'] == version and record['build'] == build
+        expected = {'SHA256SUMS.txt'}
+        for line in (index / 'SHA256SUMS.txt').read_text().splitlines():
+            match = re.fullmatch(r'[0-9a-f]{64}  ([A-Za-z0-9_.-]+)', line)
+            assert match, 'Invalid retained checksum inventory'
+            assert match[1] not in expected, 'Duplicate retained asset'
+            expected.add(match[1])
+        if not expected.issubset(names):
+            return False  # Interrupted upload, never a complete signed release.
+        assert expected == names, 'Unexpected assets on private tagged release'
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in sorted(expected):
+        download(tag, name, folder / name)
+    validate_reused(folder, version, revision, build)
+    verify_uploaded(tag, folder, exact=True)
+    return True
+
+
 def restore_staged(folder, version, revision, build):
     tag = f'v{version}-build{build}'
     private = optional_release(tag)
@@ -300,9 +334,11 @@ if __name__ == '__main__':
     parser.add_argument('version')
     parser.add_argument('--refresh', action='store_true')
     parser.add_argument('--restore-staged', action='store_true')
+    parser.add_argument('--restore-tagged', action='store_true')
     args = parser.parse_args()
-    if args.restore_staged:
+    if args.restore_staged or args.restore_tagged:
         revision = run('git', 'rev-parse', 'HEAD')
         build = int(run('git', 'rev-list', '--count', 'HEAD'))
-        raise SystemExit(0 if restore_staged(args.folder, args.version, revision, build) else 3)
+        restore = restore_tagged if args.restore_tagged else restore_staged
+        raise SystemExit(0 if restore(args.folder, args.version, revision, build) else 3)
     main(args.folder, args.version, args.refresh)

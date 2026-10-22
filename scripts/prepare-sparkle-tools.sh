@@ -19,12 +19,9 @@ cache="${WOVENMATTER_SPARKLE_TOOLS_DIR:-${TMPDIR:-/tmp}/wovenmatter-sparkle-$ver
 if [ ! -f "$cache/.verified-$expected" ]; then
   temporary="$(mktemp -d)"
   trap 'rm -rf "$temporary"' EXIT
-  curl --fail --location --retry 3 --silent --show-error \
-    "https://github.com/sparkle-project/Sparkle/releases/download/$version/Sparkle-$version.tar.xz" \
-    -o "$temporary/sparkle.tar.xz"
-  test "$(shasum -a 256 "$temporary/sparkle.tar.xz" | awk '{print $1}')" = "$expected"
+  archive="$(python3 "$repo_root/scripts/cached-download.py" "https://github.com/sparkle-project/Sparkle/releases/download/$version/Sparkle-$version.tar.xz" sha256 "$expected")"
   mkdir -p "$temporary/tools"
-  tar -xf "$temporary/sparkle.tar.xz" -C "$temporary/tools"
+  tar -xf "$archive" -C "$temporary/tools"
   touch "$temporary/tools/.verified-$expected"
   rm -rf "$cache"
   mv "$temporary/tools" "$cache"

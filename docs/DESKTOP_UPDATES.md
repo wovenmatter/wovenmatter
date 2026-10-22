@@ -103,3 +103,51 @@ build-aware, signed delta path.
 
 References: [Sparkle delta updates](https://sparkle-project.org/documentation/delta-updates/)
 and [publishing](https://sparkle-project.org/documentation/publishing/).
+
+## Release performance and cache trust
+
+`Prepare release dependencies` runs only on trusted `main`. It saves verified
+upstream download archives, npm's integrity-checked download store, SwiftPM Git
+repositories, and unsigned browser products. Release tags only restore caches;
+they never write them. Default-branch caches are intentional: GitHub does not
+share one release tag's private cache with the next tag. A miss builds normally.
+No app bundle, signing identity, notarization key, or updater key enters a cache.
+Archive digests are checked on every restored download. Browser outputs require
+an exact source/CEF/architecture/compiler/SDK/CMake/flags key and a complete
+content manifest. Corrupt entries rebuild. Swift checkouts are recreated from
+resolved revisions, and npm still installs the locked graph with scripts disabled.
+
+The main workflow also prepares Xcode's native compilation cache using an
+unsigned **Release** build. A release reuses compiler results, not an old app:
+it uses fresh DerivedData, links, stamps version/source metadata, and signs anew.
+Compiler cache keys are scoped to the exact toolchain and dependency inputs;
+Xcode checks individual compilation inputs within that cache. Only trusted main
+produces reusable entries. A failed cached compilation retries once with fresh
+intermediates and caching disabled. The pull-request `Release cache validation`
+workflow exercises cold/warm Release builds without signing secrets or publishing
+anything. It requires actual cache replay and retains timing logs. This moves
+work ahead of release time; it does not eliminate the main build's compute cost.
+
+Ordinary private tagged releases can restore a complete, digest-verified uploaded
+artifact set after a failed workflow attempt. Source, version, build, inventory,
+Developer ID, notarization, Gatekeeper and updater signatures must still pass;
+public releases and mismatched provenance are rejected. Partial uploads rebuild.
+
+Every newly generated full update is mounted and its app verified. Each generated
+delta is applied to its published base and compared with the full app, including
+file contents, executable modes, symlinks, and bundled ticket files. Signatures,
+app stapling, and Gatekeeper checks remain required. Offline fixture tests cover
+both a same-version refresh and a new-version upgrade, including corrupt deltas.
+These tests do not substitute for an isolated offline first-launch acceptance test.
+
+Both notarization submissions remain in place for now. Apple permits a single
+outermost-DMG submission, but our delta payload currently carries the app's own
+stapled ticket. Removing that ticket before validating offline full/delta installs
+would weaken the distribution proof. No source, notes, assets or tags belonging
+to an already-running release are changed by these optimizations.
+
+Delta compression uses Sparkle's supported LZFSE format instead of its default
+LZMA mode. This preserves signed deltas and reconstruction checks while avoiding
+LZMA's high compression cost. Full DMGs use zlib level 6; if the image approaches
+the legacy 512 MiB limit, packaging retries at level 9 before signing/notarizing.
+The final signed-image size limit remains enforced.

@@ -16,7 +16,7 @@ asset="WovenMatter_${version}_${build}_arm64.dmg"
 cp "$dmg" "$archives/$asset"
 "$tools/bin/generate_appcast" --ed-key-file "$WOVENMATTER_SPARKLE_PRIVATE_KEY" \
   --download-url-prefix "https://github.com/wovenmatter/wovenmatter/releases/download/v${version}/" \
-  --maximum-versions 1 --maximum-deltas 5 --versions "$build" \
+  --maximum-versions 1 --maximum-deltas 5 --delta-compression lzfse --versions "$build" \
   --full-release-notes-url "https://github.com/wovenmatter/wovenmatter/releases/tag/v${version}" \
   -o "$archives/appcast.xml" "$archives"
 python3 "$repo_root/scripts/normalize-update-feed.py" "$archives" "$version" "$build"
@@ -26,3 +26,5 @@ cp "$archives/$asset" "$archives/appcast.xml" "$output/"
 find "$archives" -maxdepth 1 -name '*.delta' -exec cp {} "$output/" \;
 swift "$repo_root/scripts/verify-update-signatures.swift" "$output"
 python3 "$repo_root/scripts/release-assets.py" prepare "$output" "$version" "$(git -C "$repo_root" rev-parse HEAD)" --build "$build" --history "$history"
+
+python3 "$repo_root/scripts/verify-update-paths.py" "$output" "$history" "$tools"

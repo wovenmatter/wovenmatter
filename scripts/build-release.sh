@@ -35,7 +35,7 @@ fi
 release_root="${WOVENMATTER_RELEASE_WORK_DIR:-/private/tmp/wovenmatter-release-${version}}"
 output_dir="${WOVENMATTER_RELEASE_OUTPUT_DIR:-${repo_root}/dist}"
 derived_data="${release_root}/DerivedData"
-package_cache="${release_root}/SourcePackages"
+package_cache="${WOVENMATTER_PACKAGE_CACHE:-${release_root}/SourcePackages}"
 notary_app_zip="${release_root}/WovenMatter-${version}-notary.zip"
 staging="${release_root}/dmg-root"
 app="${derived_data}/Build/Products/Release/Woven Matter.app"
@@ -55,7 +55,8 @@ release_status() {
 }
 
 release_status 'Compiling production Release app'
-xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
+compile_release() {
+xcodebuild -quiet -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
   -configuration Release \
@@ -72,7 +73,22 @@ xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   MARKETING_VERSION="$version" \
   CURRENT_PROJECT_VERSION="$build_number" \
   WOVENMATTER_SOURCE_REVISION="$revision" \
+  "$@" \
   build
+}
+if [ -n "${WOVENMATTER_COMPILER_CACHE:-}" ]; then
+  if ! compile_release COMPILATION_CACHE_ENABLE_CACHING=YES \
+      COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES \
+      "COMPILATION_CACHE_CAS_PATH=$WOVENMATTER_COMPILER_CACHE"; then
+    # A cache/toolchain failure must never bypass a build or release check.
+    # Retry once from fresh intermediates without compilation caching.
+    release_status 'Cached compilation failed; retrying a clean uncached build'
+    rm -rf "$derived_data"
+    compile_release COMPILATION_CACHE_ENABLE_CACHING=NO
+  fi
+else
+  compile_release COMPILATION_CACHE_ENABLE_CACHING=NO
+fi
 
 release_status 'Signing nested updater helpers and sealing the app'
 scripts/sign-release-updater.sh "$app" "$signing_identity"
@@ -130,12 +146,7 @@ release_status 'Creating and signing disk image'
 ditto "$app" "$staging/Woven Matter.app"
 ln -s /Applications "$staging/Applications"
 rm -f "$dmg"
-hdiutil create \
-  -volname 'Woven Matter' \
-  -srcfolder "$staging" \
-  -format UDZO \
-  -imagekey zlib-level=9 \
-  "$dmg"
+scripts/create-release-dmg.sh "$staging" "$dmg"
 codesign --force --timestamp --sign "$signing_identity" "$dmg"
 codesign --verify --verbose=2 "$dmg"
 release_status 'Submitting disk image to Apple; waiting for notarization'
