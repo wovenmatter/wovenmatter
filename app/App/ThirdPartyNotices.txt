@@ -504,7 +504,7 @@ Swift Numerics 1.1.1
     you may redistribute such product without providing attribution as would
     otherwise be required by Sections 4(a), 4(b) and 4(d) of the License.
 
-Swift Log 1.16.1
+Swift Log 1.16.2
 
 
                                  Apache License

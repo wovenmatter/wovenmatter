@@ -43,6 +43,12 @@ enum LocalACPSessionPermissions {
         runtimeKind: AgentRuntimeKind, options: [ACPJSONValue], idKeys: [String]
     ) -> [String: SessionOptionMetadata] {
         var result: [String: SessionOptionMetadata] = [:]
+        // Codex ACP 2.x separates workspace-write from agent (auto review).
+        // Older adapters used agent for workspace access, so preserve that
+        // interpretation unless the distinct preset or explicit kind is present.
+        let separatesWorkspaceAccess = options.contains { option in
+            idKeys.contains { option[$0]?.stringValue == "workspace-write" }
+        }
         for option in options {
             guard let id = idKeys.compactMap({ option[$0]?.stringValue }).first else {
                 result.merge(nativeMetadata(runtimeKind: runtimeKind,
@@ -58,7 +64,7 @@ enum LocalACPSessionPermissions {
             case (.claudeCode, "default"):
                 name = "Ask for approval"
             case (.codex, "agent"):
-                if option["_meta"]?["kind"]?.stringValue == "auto_review" {
+                if separatesWorkspaceAccess || option["_meta"]?["kind"]?.stringValue == "auto_review" {
                     name = "Approve for me"
                     description = "Only ask for actions detected as potentially unsafe."
                 } else {
