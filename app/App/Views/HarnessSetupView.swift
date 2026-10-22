@@ -44,23 +44,19 @@ struct HarnessSetupView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("Harnesses").foregroundStyle(step == 0 ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
-                Text("/").foregroundStyle(DashboardPalette.mutedForeground)
-                Text("Pi Durable").foregroundStyle(step == 1 ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
-                Spacer()
-                Text("\(step + 1) of 2").foregroundStyle(DashboardPalette.mutedForeground)
-            }
-            .font(.system(size: 11.5, weight: .medium))
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
                 Text(step == 0 ? "Set up your harnesses" : "Make Pi Durable your own")
                     .font(.system(size: 22, weight: .semibold)).tracking(-0.35)
-                Text(step == 0
-                     ? "Use the tools already on your Mac, or choose more to install."
-                     : "Already included. Connect a provider and add web search whenever you’re ready.")
-                    .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+                Spacer()
+                Text("\(step + 1) of 2")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
             }
+            Text(step == 0
+                 ? "Use the tools already on your Mac, or choose more to install."
+                 : "Already included. Connect a provider and add web search whenever you’re ready.")
+                .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
         }
         .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 8)
     }
