@@ -72,7 +72,7 @@ final class HarnessSetupModel {
     }
 
     func refreshSignIns() async {
-        for kind in HarnessOnboarding.runtimes { await application.harnessSignIn.refresh(kind) }
+        for kind in HarnessOnboarding.runtimes { await application.refreshHarnessSignIn(kind) }
     }
 
     func installSelected() {
@@ -152,6 +152,15 @@ final class HarnessSetupModel {
 }
 
 extension ApplicationModel {
+    func refreshHarnessSignIn(_ kind: AgentRuntimeKind) async {
+        await harnessSignIn.refresh(kind)
+        if harnessSignIn.takeCompletedSignIn(kind) {
+            // An explicit completed sign-in can clear a previous authentication
+            // failure. Ordinary status refreshes never start a readiness session.
+            refreshLocalACPRuntimesNow(checkCredentialsFor: [kind])
+        }
+    }
+
     /// Await command acceptance so setup also observes operations owned by the
     /// background service before advancing its installation queue.
     func requestSetupRuntimeCommand(_ command: BackendRuntimeCommand) async throws {
@@ -173,6 +182,7 @@ final class HarnessSignInModel {
     private(set) var checking: Set<AgentRuntimeKind> = []
     private(set) var opening: Set<AgentRuntimeKind> = []
     private(set) var messages: [AgentRuntimeKind: String] = [:]
+    private var awaitingReturn: Set<AgentRuntimeKind> = []
 
     func refresh(_ kind: AgentRuntimeKind) async {
         guard checking.insert(kind).inserted else { return }
@@ -182,6 +192,11 @@ final class HarnessSignInModel {
         if statuses[kind]?.state == "verified" || statuses[kind]?.state == "credentials_present" {
             messages[kind] = nil
         }
+    }
+
+    func takeCompletedSignIn(_ kind: AgentRuntimeKind) -> Bool {
+        guard ["verified", "credentials_present"].contains(statuses[kind]?.state ?? "") else { return false }
+        return awaitingReturn.remove(kind) != nil
     }
 
     func signIn(_ kind: AgentRuntimeKind) {
@@ -202,6 +217,7 @@ final class HarnessSignInModel {
                 try Data(script.utf8).write(to: file, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
                 _ = try await NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: .init())
+                awaitingReturn.insert(kind)
                 messages[kind] = "Finish signing in in Terminal, then return here."
             } catch {
                 messages[kind] = "Could not open sign-in. Check that this harness and Terminal are installed, then try again."

@@ -981,9 +981,9 @@ struct SettingsHarnessSignInControl: View {
             }
             if let message = signIn.messages[runtimeKind], !compact { SettingsNote(message) }
         }
-        .task { await signIn.refresh(runtimeKind) }
+        .task { await model.refreshHarnessSignIn(runtimeKind) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await signIn.refresh(runtimeKind) }
+            Task { await model.refreshHarnessSignIn(runtimeKind) }
         }
     }
 }
