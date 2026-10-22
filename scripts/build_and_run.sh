@@ -46,6 +46,9 @@ build_overrides=(CODE_SIGNING_ALLOWED=NO "WOVENMATTER_DEV_PRODUCT_NAME=$product_
 app="${derived_data}/Build/Products/Debug/${product_name}.app"
 executable="${app}/Contents/MacOS/${product_name}"
 printf 'Development instance: %s\nData mode: %s\nLocal storage: %s\n' "$instance" "$data_mode" "$support_directory"
+if [ "$data_mode" = client ]; then
+  printf '%s\n' 'Client mode requires a running, compatible production library host with background execution and Tailscale enabled. A successful app launch does not verify its library connection; check that the workspace opens.'
+fi
 if [ "$data_mode" = live ]; then
   printf '%s\n' 'Live host: uses production data directly. Stop the current host (including background execution) before launching; the app enforces exclusive ownership.'
 fi

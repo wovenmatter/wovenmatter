@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The production desktop surface backed by this instance's execution model and
@@ -24,12 +25,20 @@ struct DevelopmentClientView: View {
                         }
                     }
             } else {
-                CentralLibraryClientSettings(model: client, application: application)
+                connectionSetup
             }
         }
         .sheet(isPresented: $showsConnection) {
-            CentralLibraryClientSettings(model: client, application: application)
-                .frame(minWidth: 560, minHeight: 480)
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button("Done") { showsConnection = false }
+                        .buttonStyle(SettingsQuietButtonStyle())
+                }.padding(16)
+                CentralLibraryClientSettings(model: client, application: application,
+                    onBackFromSetup: { showsConnection = false })
+            }
+            .frame(minWidth: 560, minHeight: 480)
         }
         .task { await client.run() }
         .alert("Woven Matter", isPresented: Binding(
@@ -57,4 +66,36 @@ struct DevelopmentClientView: View {
             .padding(24).frame(minWidth: 480)
         }
     }
+
+    private var connectionSetup: some View {
+        SettingsPage(title: "Connect your Dev client") {
+            SettingsCard(title: "Production library") {
+                Text("This client needs a running library host before it can open your workspace.")
+                Text("Open Woven Matter with background execution enabled, then retry. The host must support Dev client connections and have its central library available through Tailscale.")
+                    .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                if let error = client.deviceConnectionsError ?? client.errorMessage {
+                    Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button(client.developmentConnectionBusy ? "Connecting…" : "Retry connection") {
+                        Task {
+                            if client.credential == nil { await client.connectDevelopmentLibrary() }
+                            else { await client.initializeClientWorkspace() }
+                        }
+                    }
+                    .disabled(!client.initialized || client.developmentConnectionBusy || client.localExecutionBusy)
+                    Button("Devices…") { showsConnection = true }
+                    Button("Quit Dev client") { NSApplication.shared.terminate(nil) }
+                }.buttonStyle(SettingsQuietButtonStyle())
+            }
+            SettingsCard(title: "Testing without a running host") {
+                Text("For an independent copy of your library, launch this branch in snapshot mode from the terminal:")
+                    .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("scripts/build_and_run.sh --mode snapshot --instance " + (DevelopmentLaunch.instance ?? "review"))
+                    .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+            }
+        }
+    }
+
 }

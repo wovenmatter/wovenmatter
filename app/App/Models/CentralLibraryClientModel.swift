@@ -207,19 +207,32 @@ final class CentralLibraryClientModel {
         do {
             credential = try MobileCredentialVault.load()
             if credential == nil, DevelopmentLaunch.isClient {
-                do {
-                    let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
-                    try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
-                } catch {
-                    deviceConnectionsError = "The local production library could not connect: " + error.localizedDescription
-                        + " You can also pair this instance in Device Connections."
-                }
+                await connectDevelopmentLibrary()
             }
             try configureTransport()
             try configureDirectClients()
             if let store { await analytics.configure(store.analytics, transport: transport) }
         } catch { errorMessage = error.localizedDescription }
     }
+    var developmentConnectionBusy = false
+
+    /// Retry enrollment without resetting initialization or reading another client's credentials.
+    func connectDevelopmentLibrary(
+        connect: (String) async throws -> DevelopmentClientConnection = { try await DevelopmentLaunch.connect(deviceID: $0) }
+    ) async {
+        guard credential == nil, !developmentConnectionBusy else { return }
+        developmentConnectionBusy = true
+        defer { developmentConnectionBusy = false }
+        deviceConnectionsError = nil
+        do {
+            let connection = try await connect(state.deviceID)
+            try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
+            await enableLocalExecution()
+        } catch {
+            deviceConnectionsError = "The local production library could not connect: " + error.localizedDescription
+        }
+    }
+
     func run() async {
         guard !running else { return }; running = true
         defer { running = false }

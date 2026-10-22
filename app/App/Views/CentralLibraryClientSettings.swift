@@ -7,10 +7,14 @@ import SwiftUI
 struct CentralLibraryClientSettings: View {
     @Bindable var model: CentralLibraryClientModel
     let application: ApplicationModel
+    var onBackFromSetup: (() -> Void)? = nil
     var body: some View {
         Group {
             if showingDevices || model.credential == nil {
-                SettingsCompanionView(model: application, host: application.companionHost, onBack: { showingDevices = false })
+                SettingsCompanionView(model: application, host: application.companionHost, onBack: {
+                    if model.credential == nil, let onBackFromSetup { onBackFromSetup() }
+                    else { showingDevices = false }
+                })
             } else if let execution = model.localExecution {
                 SettingsView(model: execution.model, clientContext: model, applicationContext: application)
             } else {
