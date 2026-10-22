@@ -952,7 +952,7 @@ struct SettingsHarnessSignInControl: View {
 
     private var signIn: HarnessSignInModel { model.harnessSignIn }
     private var signedIn: Bool {
-        ["verified", "credentials_present"].contains(signIn.statuses[runtimeKind]?.state ?? "")
+        signIn.statuses[runtimeKind]?.state == "verified"
     }
 
     var body: some View {
@@ -963,6 +963,10 @@ struct SettingsHarnessSignInControl: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                 } else {
+                    if compact, signIn.statuses[runtimeKind]?.state == "credentials_present" {
+                        Text("Credentials found").font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
                     if !compact {
                         Text(signIn.statuses[runtimeKind]?.label ?? "Checking sign-in…")
                             .font(.system(size: 12.5))
