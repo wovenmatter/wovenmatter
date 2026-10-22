@@ -75,15 +75,22 @@ final class CompanionUITests: XCTestCase {
     let app = launch(tab: "Chats", scenario: "running-tools")
     let group = app.buttons["work-group:group:fixture-read"]
     XCTAssertTrue(group.waitForExistence(timeout: 5))
-    XCTAssertEqual(app.progressIndicators.count, 1, "Collapsed work has one progress indicator")
+    // SwiftUI combines a button's spinner into its accessibility element.
+    // Assert the exposed progress owner across each disclosure state.
+    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
+    XCTAssertEqual(group.value as? String, "Collapsed, In progress")
+    XCTAssertEqual(busyRows.count, 1, "Collapsed work has one progress owner")
     XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
     group.tap()
     let activity = app.buttons["work-activity:fixture-current"]
     XCTAssertTrue(activity.waitForExistence(timeout: 5))
-    XCTAssertEqual(app.progressIndicators.count, 1, "Expanded work moves progress to the current tool")
+    XCTAssertEqual(group.value as? String, "Expanded")
+    XCTAssertEqual(activity.value as? String, "Collapsed, In progress")
+    XCTAssertEqual(busyRows.count, 1, "Expanded work moves progress to the current tool")
     activity.tap()
     XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Input")).firstMatch.waitForExistence(timeout: 5))
-    XCTAssertEqual(app.progressIndicators.count, 1, "Opening tool details does not add a spinner")
+    XCTAssertEqual(activity.value as? String, "Expanded, In progress")
+    XCTAssertEqual(busyRows.count, 1, "Opening tool details does not add another progress owner")
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Running tool details without duplicate spinners"
     capture.lifetime = .keepAlways
@@ -92,7 +99,8 @@ final class CompanionUITests: XCTestCase {
     app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = "running-tools-settled"
     app.launch()
     XCTAssertTrue(app.buttons["work-group:group:fixture-read"].waitForExistence(timeout: 5))
-    XCTAssertEqual(app.progressIndicators.count, 0, "Finished tools stop spinning while the agent continues its reply")
+    XCTAssertEqual(busyRows.count, 0, "Finished tools stop spinning while the agent continues its reply")
+    XCTAssertEqual(app.buttons["work-group:group:fixture-read"].value as? String, "Collapsed")
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Working for ")).firstMatch.exists)
   }
 
@@ -105,6 +113,9 @@ final class CompanionUITests: XCTestCase {
     let controls = [app.buttons["Add to chat"], app.buttons["chat-model"], app.buttons["chat-thinking"], permissions, app.buttons["chat-tools"], app.buttons["Send message"]]
     XCTAssertEqual(controls[1].value as? String, "GPT-6.1 Sol")
     XCTAssertEqual(controls[2].value as? String, "High")
+    let dictation = app.buttons["dictation-microphone"]
+    XCTAssertTrue(dictation.isHittable)
+    XCTAssertLessThanOrEqual(dictation.frame.maxY, controls[0].frame.minY, "Dictation stays beside the editor above the settings row")
     for (left, right) in zip(controls, controls.dropFirst()) {
       XCTAssertEqual(left.frame.midY, right.frame.midY, accuracy: 1, "Composer controls stay on one row")
       XCTAssertLessThanOrEqual(left.frame.maxX, right.frame.minX + 1, "Composer controls retain their order without overlap")

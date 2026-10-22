@@ -27,7 +27,8 @@ when an intentional design change is accepted.
   and descriptions. On iPhone, keep the composer controls on one compact row:
   add, model name, thinking level, permission key, tools icon, and send. Keep
   permission and tool labels inside their popouts so the model and thinking
-  selection stay visible.
+  selection stay visible. Keep the dictation microphone beside the text entry
+  area above this row.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
   patterns in
