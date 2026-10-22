@@ -24,7 +24,7 @@ extension CompanionModel {
     deviceToolGroups.map { group in
       let description = group.isAutomation
         ? "Control the paired central Mac's \(group == .browser ? "embedded Woven Matter browser" : "desktop after Computer Use is enabled"). This capability runs on the Mac, requires its execution access, and never controls this iPhone. Arguments omit the group name. Use [\"--help\"] for commands. Input uses a stable request ID; inspect fresh state after interruption."
-        : "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations require approval and use a stable request ID."
+        : "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations use this chat's approval mode and a stable request ID."
       return ["name": "wovenmatter_" + group.rawValue,
        "description": description,
        "parameters": ["type": "object", "properties": ["arguments": ["type": "array", "items": ["type": "string"]], "target": ["type": "string", "enum": ["local", "central"]]], "required": ["arguments"]]]
