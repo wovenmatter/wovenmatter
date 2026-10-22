@@ -1,4 +1,5 @@
 // Real CEF + Playwright, hidden window, fake Keychain and loopback fixtures.
+#include "include/cef_version.h"
 #include "../../app/Browser/WMBrowserBridge.mm"
 #include <cstdio>
 #include <cstdlib>
@@ -45,7 +46,7 @@ static NSDictionary *Action(WMBrowserPage *page, NSString *node, NSString *scrip
     });
   };
   Check([task launchAndReturnError:nil]);
-  send(@{@"target":@{@"id":@"fixture",@"title":page.title,@"url":page.url},@"version":@"154.0.8037.98",@"input":input});
+  send(@{@"target":@{@"id":@"fixture",@"title":page.title,@"url":page.url},@"version":[NSString stringWithFormat:@"%d.%d.%d.%d", CHROME_VERSION_MAJOR, CHROME_VERSION_MINOR, CHROME_VERSION_BUILD, CHROME_VERSION_PATCH],@"input":input});
   Until(^BOOL { return result || failure; });
   if (failure && !expectsFailure) fprintf(stderr,"Playwright: %s\n",failure.UTF8String);
   Check(expectsFailure ? [failure containsString:@"at most 2 MiB"] : !failure);

@@ -222,6 +222,33 @@ struct ACPSessionPermissionTests {
         }
     }
 
+    // Captured from Codex ACP 2.2.2 with Woven's ordinary client capabilities.
+    // The separate workspace-write preset identifies agent as auto review;
+    // this response does not carry the older _meta.kind classification.
+    @Test(arguments: [false, true])
+    func codexSeparateWorkspacePresetIdentifiesAutoReview(modern: Bool) async throws {
+        let idKey = modern ? "value" : "id"
+        let options: [[String: Any]] = [
+            [idKey: "read-only", "name": "Read-only"],
+            [idKey: "workspace-write", "name": "Workspace access"],
+            [idKey: "agent", "name": "Auto review"],
+            [idKey: "agent-full-access", "name": "Full access"],
+        ]
+        let state: [String: Any] = modern
+            ? ["configOptions": [["id": "mode", "category": "mode", "type": "select", "currentValue": "agent", "options": options]]]
+            : ["modes": ["currentModeId": "agent", "availableModes": options]]
+        try await withClient(state: state) { _, fixture, initialized async throws in
+            let value = initialized.configuration
+            #expect(value.permission == "agent")
+            #expect(value.permissionOptions == ["read-only", "workspace-write", "agent", "agent-full-access"])
+            #expect(value.permissionOptionMetadata["workspace-write"]?.name == "Workspace access")
+            #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
+            #expect(value.permissionOptionMetadata["agent"]?.description == "Only ask for actions detected as potentially unsafe.")
+            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
+            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
+        }
+    }
+
     @Test func nativeErrorAndUnknownValuesNeverEscalate() async throws {
         try await withClient(state: configuration(permission: "default"), handlers: [
             "session/set_config_option": #"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Policy rejects full"}}\n' "$id""#,

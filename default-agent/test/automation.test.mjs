@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 import { PassThrough } from 'node:stream';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +14,38 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { WebSocket } from 'ws';
 import { browserAction, createCEFBridge } from '../src/browser-runtime.mjs';
 import { callAutomation, automationSchemas } from '../src/automation-tools.mjs';
+
+test('browser helper keeps its input open until the host acknowledges its terminal result', { timeout: 5000 }, async t => {
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/browser-runtime.mjs', import.meta.url))], {
+    env: { PATH: process.env.PATH }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const exited = once(child, 'close');
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; });
+  const lines = createInterface({ input: child.stdout });
+  t.after(() => lines.close());
+  let nativeCalls = 0;
+  const result = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    lines.on('line', line => {
+      const packet = JSON.parse(line);
+      if (packet.cdp) {
+        nativeCalls++;
+        assert.equal(packet.cdp.method, 'Page.handleJavaScriptDialog');
+        child.stdin.write(JSON.stringify({ native: { id: packet.cdp.id, result: {} } }) + '\n');
+      }
+      if (packet.result) resolve(packet.result);
+      if (packet.error) reject(new Error(packet.error));
+    });
+  });
+  child.stdin.write(JSON.stringify({ target: { id: 'fixture', url: 'about:blank' }, version: '156', input: { action: 'dialog', accept: true } }) + '\n');
+  assert.deepEqual(await result, { content: [{ type: 'text', text: 'Browser dialog handled.' }] });
+  assert.equal(nativeCalls, 1);
+  assert.equal(await Promise.race([exited.then(() => false), delay(100).then(() => true)]), true,
+    'CEF can still deliver native events while the host is consuming the result');
+  await new Promise((resolve, reject) => child.stdin.write(JSON.stringify({ native: { method: 'Runtime.executionContextsCleared', params: {} } }) + '\n', error => error ? reject(error) : resolve()));
+  child.stdin.end();
+  assert.deepEqual(await exited, [0, null]);
+});
 
 test('bundled MCP server negotiates tools and delivers inline screenshots over stdio', async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-mcp-'));

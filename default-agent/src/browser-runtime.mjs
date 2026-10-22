@@ -138,6 +138,7 @@ export async function browserAction(page, input, command, waitDownload) {
 
 async function main() {
   const lines = createInterface({ input: process.stdin });
+  const inputClosed = new Promise(resolve => lines.once('close', resolve));
   const listeners = new Set();
   const first = await new Promise(resolve => lines.once('line', line => resolve(JSON.parse(line))));
   lines.on('line', line => { try { const packet = JSON.parse(line); if (packet.native) for (const listener of listeners) listener(packet.native); } catch {} });
@@ -174,6 +175,10 @@ async function main() {
   } catch (error) {
     process.stdout.write(JSON.stringify({ error: String(error.message).slice(0, 2000) }) + '\n');
   } finally {
+    // CEF may emit more events after the result is written but before the
+    // host consumes it. The host detaches the observer and closes stdin when
+    // it handles that result; keep the pipe alive until that acknowledgement.
+    await inputClosed;
     await browser?.close().catch(() => {});
     await bridge.close(); lines.close();
   }

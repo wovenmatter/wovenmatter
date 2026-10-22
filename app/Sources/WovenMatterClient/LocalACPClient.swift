@@ -1375,7 +1375,7 @@ public actor LocalACPClient {
             .split(maxSplits: 1, whereSeparator: \.isWhitespace)
         guard let command = parts.first else { return false }
         let argument = parts.dropFirst().first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // Codex ACP 1.13.1 CodexCommands: these branches are entirely local to
+        // Codex ACP 2.2.2 CodexCommands: these branches are entirely local to
         // the adapter. Review, compact, goal creation and unknown commands may
         // start native work and must retain the lifecycle observer.
         switch command.lowercased() {

@@ -13,7 +13,10 @@ struct RuntimeMaintenanceTests {
         #expect(version == "2.0.26")
     }
 
-    @Test func codexInventoryFindsTheEngineBesideTheLaunchedAdapter() async throws {
+    @Test(arguments: [false, true])
+    func codexInventoryFindsTheEngineBesideTheLaunchedAdapter(legacyAdapter: Bool) async throws {
+        let minimum = try #require(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion)
+        let adapterVersion = legacyAdapter ? "1.13.1" : minimum
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let adapter = root.appending(path: "lib/node_modules/@agentclientprotocol/codex-acp")
@@ -21,12 +24,13 @@ struct RuntimeMaintenanceTests {
         try FileManager.default.createDirectory(at: root.appending(path: "bin"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: adapter.appending(path: "dist"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: engine.appending(path: "bin"), withIntermediateDirectories: true)
-        try Data(#"{"name":"@agentclientprotocol/codex-acp","version":"1.13.1"}"#.utf8).write(to: adapter.appending(path: "package.json"))
+        try JSONSerialization.data(withJSONObject: ["name": "@agentclientprotocol/codex-acp", "version": adapterVersion])
+            .write(to: adapter.appending(path: "package.json"))
         try Data(#"{"name":"@openai/codex","version":"0.148.0"}"#.utf8).write(to: engine.appending(path: "package.json"))
         try Data("#!/bin/sh\necho 0.148.0\n".utf8).write(to: engine.appending(path: "bin/codex.js"))
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: engine.appending(path: "bin/codex.js").path)
         let script = adapter.appending(path: "dist/index.js")
-        try Data("#!/bin/sh\necho 1.13.1\n".utf8).write(to: script)
+        try Data("#!/bin/sh\necho \(adapterVersion)\n".utf8).write(to: script)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
         try FileManager.default.createSymbolicLink(at: root.appending(path: "bin/codex-acp"), withDestinationURL: script)
         let cli = root.appending(path: "bin/codex")
@@ -34,8 +38,9 @@ struct RuntimeMaintenanceTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
         let resolver = LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path])
         let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true, resolver: resolver,
-            fetch: { _ in Data(#"{"version":"1.14.0","bin":{"cli":"bin.js"}}"#.utf8) })
-        #expect(inventory.isInstalled)
+            fetch: { _ in Data(#"{"version":"99.0.0","bin":{"cli":"bin.js"}}"#.utf8) })
+        #expect(inventory.isInstalled == !legacyAdapter)
+        #expect(inventory.components[0].installed == adapterVersion)
         #expect(inventory.components[1].installed == "0.148.0")
         #expect(inventory.components[2].installed == "0.154.0")
         #expect(inventory.outdated)
