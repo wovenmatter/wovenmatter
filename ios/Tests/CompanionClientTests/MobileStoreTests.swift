@@ -196,6 +196,24 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertEqual(state.pinnedTranscriptIDs, ["pinned"])
     XCTAssertEqual(state.transcripts["pinned"]?.messages.first?.content, text)
   }
+  func testSettledTranscriptReplacesStreamingRowsWithoutReorderingUserOrDroppingHistory() async throws {
+    let location = file(), store = try MobileStore(file: location)
+    try await store.setTranscriptPinned("chat", true)
+    let older = CompanionMessage(id: "older", conversationID: "chat", role: "user", content: "Earlier turn")
+    let user = CompanionMessage(id: "u", conversationID: "chat", runID: "r", role: "user", content: "Weather?", sequence: 0)
+    let streaming = CompanionMessage(id: "chat-streaming", conversationID: "chat", runID: "r", role: "assistant", content: "Sunny", status: "streaming", sequence: 1)
+    let transient = CompanionActivity(id: "thinking-live", runID: "r", title: "Thinking", status: "running", isTransient: true)
+    try await store.cache(.init(conversationID: "chat", messages: [older, user, streaming], activities: [transient]))
+    // The final SDK entry gets a durable ID, unlike the temporary streaming row.
+    let final = CompanionMessage(id: "answer", conversationID: "chat", runID: "r", role: "assistant", content: "Sunny and breezy.", sequence: 1)
+    try await store.cache(.init(conversationID: "chat", messages: [user, final]))
+    let restarted = try MobileStore(file: location)
+    let state = await restarted.snapshot()
+    let transcript = try XCTUnwrap(state.transcripts["chat"])
+    XCTAssertEqual(transcript.messages.map(\.id), ["older", "u", "answer"])
+    XCTAssertTrue(transcript.activities.isEmpty)
+  }
+
   func testPairingIdentityPersistsBeforeFirstSnapshot() async throws {
     let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
     let store = try MobileStore(file: location)

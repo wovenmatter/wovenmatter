@@ -526,8 +526,12 @@ public actor MobileStore {
       if protectedIDs.contains(transcript.conversationID), let previous = next.transcripts[transcript.conversationID] {
         let ids = Set(bounded.messages.map(\.id)), activities = Set(bounded.activities.map(\.id))
         let removed = Set(bounded.removedMessageIDs ?? [])
-        bounded.messages = previous.messages.filter { !ids.contains($0.id) && (!removed.contains($0.id) || $0.role == "user") } + bounded.messages
-        bounded.activities = previous.activities.filter { !activities.contains($0.id) } + bounded.activities
+        // Streaming rows are replaced by each fresh snapshot. Keeping an old
+        // temporary response prepends it before the user and steals its turn.
+        bounded.messages = previous.messages.filter {
+          !ids.contains($0.id) && ($0.role == "user" || ($0.status != "streaming" && !removed.contains($0.id)))
+        } + bounded.messages
+        bounded.activities = previous.activities.filter { !activities.contains($0.id) && $0.isTransient != true } + bounded.activities
         if preservingOlderPages && transcript.olderCursor != nil { bounded.olderCursor = previous.olderCursor }
       }
       // Tool output must not evict the surrounding conversation. Detailed
