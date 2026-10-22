@@ -6,8 +6,14 @@ Technical reference. For everyday setup, start with [Agent setup](guide/agents.m
 
 **Settings → Local Agent Workspace** shows the executable and components used
 by each harness. Missing components show **Install**; verified installations
-can be enabled. Opening settings refreshes the inventory. Enabled runtimes also
-check versions at startup or reopen, without a repeating timer.
+appear in the sidebar automatically. **Sign in…** opens the native harness's
+account flow in Terminal, and returning to Woven Matter refreshes its status.
+Opening settings refreshes the inventory and available versions, without a
+repeating timer. **Settings → General → Set up harnesses** reopens the first-launch
+guide, including optional Pi Durable provider and Exa setup. The provider page
+contains only OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; the web-search
+page contains the Exa key form. These focused pages are also available from
+**Settings → Pi Durable**.
 
 **Check for updates** reports available versions. **Update** installs an observed
 update. Network failures leave the latest version unknown. Both actions remain
@@ -32,8 +38,12 @@ are retained so running adapters retain their dependency trees; automatic garbag
 collection is deliberately absent. Existing flat managed installs remain readable.
 Subprocesses have a bounded duration and their own process group, so a timed-out
 shell's children cannot continue an installation after retry becomes available.
-New local message sends and maintenance actions are mutually gated during a local
-runtime operation. No operation cancels an active turn.
+Different local harnesses can update concurrently. Each harness keeps its own
+progress, failure, and installation lock; duplicate operations on the same
+harness are rejected. Shared Node bootstrap is coalesced, while npm packages use
+separate staging directories and atomic launcher promotion. New local message
+sends and maintenance actions are mutually gated during a local runtime
+operation. No operation cancels an active turn.
 
 ## Remote installation
 

@@ -11,6 +11,7 @@ struct SettingsGeneralView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
@@ -35,6 +36,7 @@ struct SettingsGeneralView: View {
         ) {
             releaseUpdateCard
             credentialAccessCard
+            harnessSetupCard
             appearanceCard
             sidebarLayoutCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
@@ -185,6 +187,18 @@ struct SettingsGeneralView: View {
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
             Task { await model.setClosedLidPolicyFromSettings(policy) }
         })
+    }
+
+    private var harnessSetupCard: some View {
+        SettingsCard(
+            title: "Harness setup",
+            detail: "Install more harnesses or revisit Pi Durable setup."
+        ) {
+            Button("Set up harnesses") {
+                openWindow(id: HarnessSetupPresentation.windowID)
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+        }
     }
 
     private var credentialAccessCard: some View {

@@ -405,6 +405,9 @@ struct WovenMatterApp: App {
            UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
             Darwin.exit(EXIT_SUCCESS)
         }
+        if !isRunningUnitTests, LocalExecutionRole.current != .backend {
+            HarnessSetupPresentation.shared.prepareForLaunch()
+        }
         if !isRunningUnitTests { KeychainAccess.enforceCentralAuthorization() }
         workspaceProcessLease = isRunningUnitTests
             ? nil
@@ -527,6 +530,23 @@ struct WovenMatterApp: App {
                 }
             }
         }
+
+        Window("Set up Woven Matter", id: HarnessSetupPresentation.windowID) {
+            if applicationModel.isLibraryClient {
+                if let execution = applicationModel.libraryClient.localExecution {
+                    HarnessSetupView(model: execution.model)
+                } else {
+                    Text("Connect this Mac to its library in Settings → Devices before setting up harnesses.")
+                        .frame(width: 640, height: 240)
+                }
+            } else if applicationModel.state == .ready {
+                HarnessSetupView(model: applicationModel)
+            } else {
+                ProgressView("Opening workspace…").frame(width: 740, height: 640)
+            }
+        }
+        .defaultPosition(.center)
+        .windowResizability(.contentSize)
 
         Settings {
             Group {

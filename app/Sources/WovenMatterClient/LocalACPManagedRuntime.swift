@@ -104,6 +104,7 @@ public enum LocalACPManagedRuntimePaths {
 }
 
 public actor LocalACPManagedNodeRuntime {
+    public static let shared = LocalACPManagedNodeRuntime()
     public typealias Downloader = @Sendable (URL) async throws -> Data
 
     private static let maximumArchiveBytes = 90 * 1_024 * 1_024
@@ -122,7 +123,20 @@ public actor LocalACPManagedNodeRuntime {
         self.downloader = downloader
     }
 
+    private var installation: Task<URL, any Error>?
+
     public func ensureInstalled() async throws -> URL {
+        if let installation { return try await installation.value }
+        let task = Task { try await installIfNeeded() }
+        installation = task
+        defer { installation = nil }
+        return try await task.value
+    }
+
+    private func installIfNeeded() async throws -> URL {
+        let lock = try await RuntimeInstallationLock.acquire(
+            directory: rootDirectory, key: "node-\(artifact.version)-\(artifact.platform)")
+        defer { lock.release() }
         let finalDirectory = runtimeDirectory
         if runtimeIsReady(at: finalDirectory) {
             return finalDirectory.appending(path: "bin/npm")
@@ -508,7 +522,7 @@ public struct LocalACPInstallerPreview: Codable, Equatable, Sendable {
     }
 }
 
-public actor LocalACPRuntimeInstaller {
+public struct LocalACPRuntimeInstaller: Sendable {
     public typealias InstallerFetcher = @Sendable (
         URL,
         URL,
@@ -526,7 +540,7 @@ public actor LocalACPRuntimeInstaller {
 
     public init(
         installPrefix: URL = LocalACPManagedRuntimePaths.nodeToolsPrefix,
-        managedNodeRuntime: LocalACPManagedNodeRuntime = LocalACPManagedNodeRuntime(),
+        managedNodeRuntime: LocalACPManagedNodeRuntime = .shared,
         npmExecutableURL: URL? = nil,
         installerFetcher: InstallerFetcher? = nil,
         metadataFetcher: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata,
@@ -585,7 +599,7 @@ public actor LocalACPRuntimeInstaller {
         expectedPackageSpec: String? = nil
     ) async throws -> URL {
         guard AgentRuntimeKind.allCases.contains(definition.runtimeKind) else { throw LocalACPRuntimeInstallError.notInstallable }
-        let lock = try RuntimeInstallationLock(directory: installPrefix)
+        let lock = try RuntimeInstallationLock(directory: installPrefix, key: definition.runtimeKind.rawValue)
         defer { lock.release() }
         return switch component {
         case .cli:
@@ -659,7 +673,8 @@ public actor LocalACPRuntimeInstaller {
     public func installPackage(_ package: String, version: String, executableName: String) async throws -> URL {
         guard ["@agentclientprotocol/codex-acp", "@agentclientprotocol/claude-agent-acp"].contains(package),
               Self.isExactSemanticVersion(version) else { throw LocalACPRuntimeInstallError.unpinnedPackage }
-        let lock = try RuntimeInstallationLock(directory: installPrefix)
+        let kind: AgentRuntimeKind = package.hasSuffix("/codex-acp") ? .codex : .claudeCode
+        let lock = try RuntimeInstallationLock(directory: installPrefix, key: kind.rawValue)
         defer { lock.release() }
         return try await installNpmPackage("\(package)@\(version)", executableName: executableName)
     }
@@ -996,16 +1011,27 @@ private extension Array where Element: Equatable {
     }
 }
 
-/// A nonblocking host lock also covers separate installer actor instances.
+/// A per-harness host lock covers separate installers without blocking other harnesses.
 private struct RuntimeInstallationLock {
     let descriptor: Int32
-    init(directory: URL) throws {
+    init(directory: URL, key: String) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        descriptor = Darwin.open(directory.appending(path: ".installation.lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        descriptor = Darwin.open(directory.appending(path: ".installation-\(key).lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw RuntimeMaintenanceError.busy }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             Darwin.close(descriptor)
             throw RuntimeMaintenanceError.busy
+        }
+    }
+    static func acquire(directory: URL, key: String) async throws -> Self {
+        let deadline = Date().addingTimeInterval(15 * 60)
+        while true {
+            try Task.checkCancellation()
+            do { return try Self(directory: directory, key: key) }
+            catch RuntimeMaintenanceError.busy {
+                guard Date() < deadline else { throw RuntimeMaintenanceError.timeout }
+                try await Task.sleep(for: .milliseconds(100))
+            }
         }
     }
     func release() { flock(descriptor, LOCK_UN); Darwin.close(descriptor) }

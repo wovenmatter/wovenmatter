@@ -160,6 +160,7 @@ public struct LocalACPRuntimePreferences {
     public static let shownRuntimeKindsKey =
         "wovenmatter.local-acp.shown-runtimes"
 
+    private static let hiddenRuntimeKindsKey = "wovenmatter.local-acp.hidden-runtimes"
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
@@ -198,6 +199,9 @@ public struct LocalACPRuntimePreferences {
     ) -> State {
         guard AgentRuntimeKind.allCases.contains(runtimeKind) else { return state }
         var state = state
+        var hidden = hiddenRuntimeKinds
+        if isShown { hidden.remove(runtimeKind) } else { hidden.insert(runtimeKind) }
+        defaults.set(hidden.map(\.rawValue).sorted(), forKey: Self.hiddenRuntimeKindsKey)
         if isShown {
             state.shownRuntimeKinds.insert(runtimeKind)
         } else {
@@ -205,6 +209,27 @@ public struct LocalACPRuntimePreferences {
         }
         save(state)
         return state
+    }
+
+    /// Installed harnesses are immediately available; sidebar hiding stays a
+    /// separate presentation preference and never grants app Keychain access.
+    @discardableResult
+    public func adoptInstalled(_ installed: Set<AgentRuntimeKind>) -> State {
+        let hidden = hiddenRuntimeKinds
+        defaults.set(hidden.map(\.rawValue).sorted(), forKey: Self.hiddenRuntimeKindsKey)
+        let available = installed.union([.defaultAgent])
+        let value = State(enabledRuntimeKinds: available,
+                          shownRuntimeKinds: available.subtracting(hidden).union([.defaultAgent]))
+        save(value)
+        return value
+    }
+
+    private var hiddenRuntimeKinds: Set<AgentRuntimeKind> {
+        if defaults.object(forKey: Self.hiddenRuntimeKindsKey) != nil {
+            return runtimeKinds(forKey: Self.hiddenRuntimeKindsKey)
+        }
+        // Only an enabled runtime absent from the old sidebar list was hidden.
+        return state.enabledRuntimeKinds.subtracting(state.shownRuntimeKinds)
     }
 
     public static func visibleRuntimeKinds(
