@@ -35,6 +35,10 @@ fi
         tool = root / 'tools' / name
         tool.write_text('#!/bin/sh\nif [ "$1 $2" = "stapler staple" ]; then echo staple >> "$EVENTS"; fi\nexit 0\n')
         tool.chmod(0o755)
+    # The release runs on macOS; model BSD stat when this contract runs on Linux.
+    stat = root / 'tools/stat'
+    stat.write_text('#!/bin/sh\n[ \"$1\" = -f ] && [ \"$2\" = %z ] || exit 2\nwc -c < \"$3\"\n')
+    stat.chmod(0o755)
     for mode in ('success', 'notary-failure', 'delta-failure'):
         events = root / f'{mode}.events'
         dmg = root / f'{mode}.dmg'
