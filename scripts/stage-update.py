@@ -58,11 +58,13 @@ def uploaded_assets(tag):
     info = json.loads(run('gh', 'api', f'repos/{REPO}/releases/{identifier}'))
     return {a['name']: a for a in info['assets']}
 
-def discard_failed_upload(tag, name):
-    item = uploaded_assets(tag).get(name)
+def failed_upload(item):
     # GitHub can leave an empty starter after an upload transport failure. This
     # is not a published immutable artifact; never replace a completed upload.
-    if item and item.get('state') == 'starter' and item['size'] == 0 and not item.get('digest'):
+    return bool(item and item.get('state') == 'starter' and item['size'] == 0 and not item.get('digest'))
+
+def discard_failed_upload(tag, name):
+    if failed_upload(uploaded_assets(tag).get(name)):
         gh('release', 'delete-asset', tag, name, '--yes')
         return True
     return False
@@ -97,6 +99,43 @@ def validate_reused(folder, version, revision, build):
     run('codesign', '--verify', '--strict', dmg)
     run('xcrun', 'stapler', 'validate', dmg)
     run('spctl', '--assess', '--type', 'open', '--context', 'context:primary-signature', dmg)
+
+def restore_tagged(folder, version, revision, build):
+    """Resume an ordinary private tag's complete artifacts without rebuilding."""
+    tag = 'v' + version
+    private = optional_release(tag)
+    if private is None:
+        return False
+    assert private['isDraft'], 'Tagged release is already public; refusing to rebuild'
+    uploaded = uploaded_assets(tag)
+    assert all(item.get('state') == 'uploaded' or failed_upload(item) for item in uploaded.values()), 'Invalid private upload state'
+    names = set(uploaded)
+    complete = {name for name, item in uploaded.items() if not failed_upload(item)}
+    if not {'SHA256SUMS.txt', 'release-build.json'}.issubset(complete):
+        return False
+    with tempfile.TemporaryDirectory() as temporary:
+        index = Path(temporary)
+        download(tag, 'SHA256SUMS.txt', index / 'SHA256SUMS.txt')
+        download(tag, 'release-build.json', index / 'release-build.json')
+        verify_uploaded(tag, index)
+        record = json.loads((index / 'release-build.json').read_text())
+        assert record['source_revision'] == revision and record['version'] == version and record['build'] == build
+        expected = {'SHA256SUMS.txt'}
+        for line in (index / 'SHA256SUMS.txt').read_text().splitlines():
+            match = re.fullmatch(r'[0-9a-f]{64}  ([A-Za-z0-9_.-]+)', line)
+            assert match, 'Invalid retained checksum inventory'
+            assert match[1] not in expected, 'Duplicate retained asset'
+            expected.add(match[1])
+        if not expected.issubset(complete):
+            return False  # Interrupted upload, never a complete signed release.
+        assert expected == names, 'Unexpected assets on private tagged release'
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in sorted(expected):
+        download(tag, name, folder / name)
+    validate_reused(folder, version, revision, build)
+    verify_uploaded(tag, folder, exact=True)
+    return True
+
 
 def restore_staged(folder, version, revision, build):
     tag = f'v{version}-build{build}'
@@ -300,9 +339,11 @@ if __name__ == '__main__':
     parser.add_argument('version')
     parser.add_argument('--refresh', action='store_true')
     parser.add_argument('--restore-staged', action='store_true')
+    parser.add_argument('--restore-tagged', action='store_true')
     args = parser.parse_args()
-    if args.restore_staged:
+    if args.restore_staged or args.restore_tagged:
         revision = run('git', 'rev-parse', 'HEAD')
         build = int(run('git', 'rev-list', '--count', 'HEAD'))
-        raise SystemExit(0 if restore_staged(args.folder, args.version, revision, build) else 3)
+        restore = restore_tagged if args.restore_tagged else restore_staged
+        raise SystemExit(0 if restore(args.folder, args.version, revision, build) else 3)
     main(args.folder, args.version, args.refresh)

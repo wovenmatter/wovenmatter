@@ -35,7 +35,7 @@ fi
 release_root="${WOVENMATTER_RELEASE_WORK_DIR:-/private/tmp/wovenmatter-release-${version}}"
 output_dir="${WOVENMATTER_RELEASE_OUTPUT_DIR:-${repo_root}/dist}"
 derived_data="${release_root}/DerivedData"
-package_cache="${release_root}/SourcePackages"
+package_cache="${WOVENMATTER_PACKAGE_CACHE:-${release_root}/SourcePackages}"
 notary_app_zip="${release_root}/WovenMatter-${version}-notary.zip"
 staging="${release_root}/dmg-root"
 app="${derived_data}/Build/Products/Release/Woven Matter.app"
@@ -55,7 +55,8 @@ release_status() {
 }
 
 release_status 'Compiling production Release app'
-xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
+compile_release() {
+  xcodebuild -quiet -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
   -configuration Release \
@@ -72,7 +73,22 @@ xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   MARKETING_VERSION="$version" \
   CURRENT_PROJECT_VERSION="$build_number" \
   WOVENMATTER_SOURCE_REVISION="$revision" \
+  "$@" \
   build
+}
+if [ -n "${WOVENMATTER_COMPILER_CACHE:-}" ]; then
+  if ! compile_release COMPILATION_CACHE_ENABLE_CACHING=YES \
+      COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES \
+      "COMPILATION_CACHE_CAS_PATH=$WOVENMATTER_COMPILER_CACHE"; then
+    # A cache/toolchain failure must never bypass a build or release check.
+    # Retry once from fresh intermediates without compilation caching.
+    release_status 'Cached compilation failed; retrying a clean uncached build'
+    rm -rf "$derived_data"
+    compile_release COMPILATION_CACHE_ENABLE_CACHING=NO
+  fi
+else
+  compile_release COMPILATION_CACHE_ENABLE_CACHING=NO
+fi
 
 release_status 'Signing nested updater helpers and sealing the app'
 scripts/sign-release-updater.sh "$app" "$signing_identity"
@@ -130,14 +146,27 @@ release_status 'Creating and signing disk image'
 ditto "$app" "$staging/Woven Matter.app"
 ln -s /Applications "$staging/Applications"
 rm -f "$dmg"
-hdiutil create \
-  -volname 'Woven Matter' \
-  -srcfolder "$staging" \
-  -format UDZO \
-  -imagekey zlib-level=9 \
-  "$dmg"
+scripts/create-release-dmg.sh "$staging" "$dmg"
 codesign --force --timestamp --sign "$signing_identity" "$dmg"
 codesign --verify --verbose=2 "$dmg"
+# The app is already signed, notarized and stapled. Generate its deltas while
+# Apple processes the outer image; regenerate/sign the feed after DMG stapling.
+update_archives="$release_root/update-archives"
+delta_source="$release_root/delta-source.dmg"
+cp "$dmg" "$delta_source"
+delta_pid=""
+cleanup_delta() {
+  if [ -n "$delta_pid" ]; then
+    kill "$delta_pid" 2>/dev/null || true
+    wait "$delta_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup_delta EXIT
+trap 'exit 130' INT TERM
+WOVENMATTER_UPDATE_ARCHIVES="$update_archives" WOVENMATTER_UPDATE_PREPARE_ONLY=1 \
+  scripts/generate-update-feed.sh "$version" "$build_number" "$delta_source" "$output_dir" \
+  "${WOVENMATTER_UPDATE_HISTORY:?Published update history directory is required}" &
+delta_pid=$!
 release_status 'Submitting disk image to Apple; waiting for notarization'
 notarize "$dmg"
 release_status 'Disk image accepted; stapling and assessing image'
@@ -151,8 +180,9 @@ test "$(stat -f %z "$dmg")" -le 536870912 \
 release_status 'Generating updater manifest and checksums'
 scripts/generate-release-manifest.sh \
   "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"
-release_status 'Generating signed delta updates from published app bundles'
-scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir" \
+release_status 'Finalizing signed delta updates after disk image notarization'
+if wait "$delta_pid"; then delta_pid=""; else status=$?; delta_pid=""; exit "$status"; fi
+WOVENMATTER_UPDATE_ARCHIVES="$update_archives" scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir" \
   "${WOVENMATTER_UPDATE_HISTORY:?Published update history directory is required}"
 release_status 'Distribution artifacts ready'
 printf 'Release artifacts ready in %s\n' "$output_dir"
