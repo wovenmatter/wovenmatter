@@ -58,8 +58,9 @@ struct ChatPane: View {
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
             }
-            if model.activeRunID != nil {
-              HStack { ProgressView(); Text(model.executionOnline ? "Running on \(model.executionName.lowercased())" : "Workspace connection interrupted · execution stays there").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+            if model.activeRunID != nil && !model.executionOnline {
+              Text("Workspace connection interrupted · execution stays there")
+                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
@@ -181,17 +182,20 @@ struct ChatPane: View {
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
         HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
-      MobileDictationComposer(text: $model.composer, focused: $composerFocused, editor: dictationEditor,
-        identity: "chat:\(model.selectedExecutionWorkspaceID):\(model.selectedConversationID ?? "new")",
-        prompt: model.activeRunID == nil ? "Chat…" : "Steer this run…")
-        .overlay(alignment: .topLeading) {
-          if model.composer.isEmpty {
-            Text(model.activeRunID == nil ? "Chat…" : "Steer this run…")
-              .foregroundStyle(DashboardPalette.mutedForeground).allowsHitTesting(false)
-              .accessibilityHidden(true)
-          }
-        }.accessibilityIdentifier("chat-composer")
-      HStack(spacing: 8) {
+      HStack(alignment: .bottom, spacing: 8) {
+        MobileDictationComposer(text: $model.composer, focused: $composerFocused, editor: dictationEditor,
+          identity: "chat:\(model.selectedExecutionWorkspaceID):\(model.selectedConversationID ?? "new")",
+          prompt: model.activeRunID == nil ? "Chat…" : "Steer this run…")
+          .overlay(alignment: .topLeading) {
+            if model.composer.isEmpty {
+              Text(model.activeRunID == nil ? "Chat…" : "Steer this run…")
+                .foregroundStyle(DashboardPalette.mutedForeground).allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+          }.accessibilityIdentifier("chat-composer")
+        MobileDictationMicrophone(editor: dictationEditor)
+      }
+      ChatComposerSettings(model: model) {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
           if model.selectedExecutionWorkspaceID == "local", model.selectedConversationID != nil {
@@ -199,8 +203,7 @@ struct ChatPane: View {
           }
         } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Add to chat")
-        ChatComposerSettings(model: model)
-        MobileDictationMicrophone(editor: dictationEditor)
+      } submission: {
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
           Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
             .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)

@@ -5,6 +5,15 @@ import WovenMatterCompanion
 import CompanionInference
 import PiDurableRuntime
 
+enum DevicePermissionMode: String, Codable, CaseIterable {
+  case ask, full
+  static let defaultMode: Self = .full
+  var label: String { self == .full ? "Full Access" : "Ask for Approval" }
+  var detail: String {
+    self == .full ? "Enabled tools run without approval prompts in this chat." : "Ask before tool actions that need approval."
+  }
+}
+
 struct DeviceConversationRecord: Codable, Equatable {
   var id: String
   var goalLedger: WorkspaceGoalLedger?
@@ -15,6 +24,7 @@ struct DeviceConversationRecord: Codable, Equatable {
   var isTrashed: Bool?
   var enabledTools: [String]?
   var thinkingLevel: String?
+  var permissionMode: DevicePermissionMode?
   var executionPolicy: PiExecutionPolicy?
   var additionalInstructions: String?
   var connectionID: String
@@ -44,6 +54,7 @@ struct DeviceAgentDefaults: Codable, Equatable {
 struct DeviceChatSettings: Codable, Equatable {
   var connection: InferenceConnection?
   var thinkingLevel: String?
+  var permissionMode: DevicePermissionMode?
   var enabledTools: [String]?
 }
 
@@ -367,7 +378,7 @@ extension CompanionModel {
         let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), permissionMode: chatSettings.permissionMode, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
         if userInitiated { await analytics.record(.active) }
       }
