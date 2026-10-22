@@ -20,6 +20,25 @@ struct BackendRPCTests {
         #expect(try await BackendRPCClient(socketURL: url).ping().processID == getpid())
     }
 
+    @Test func missingHostIsUnavailableAndTheSameClientConnectsAfterStartup() async throws {
+        let url = endpoint()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let client = BackendRPCClient(socketURL: url)
+        do {
+            _ = try await client.ping()
+            Issue.record("Missing host unexpectedly responded")
+        } catch {
+            guard case BackendRPCError.unavailable = error else {
+                Issue.record("An absent host must trigger automatic startup, not an ownership failure: \(error)")
+                return
+            }
+        }
+        let server = BackendRPCServer(socketURL: url)
+        try server.start { BackendRPCResponse(id: $0.id) }
+        defer { server.stop() }
+        #expect(try await client.ping().processID == getpid())
+    }
+
     private func endpoint() -> URL {
         URL(fileURLWithPath: "/private/tmp/wm-rpc-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
     }
