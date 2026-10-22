@@ -6,19 +6,22 @@ import WovenMatterCore
 struct SettingsConnectionsView: View {
     @Bindable var model: ApplicationModel
     var initialScope = "global"
+    var backTitle = "Settings"
+    var webSearchFirst = false
     var reservesRailControlSpace = false
     let onBack: () -> Void
     @State private var keyDrafts: [String: String] = [:]
     @State private var keyLabels: [String: String] = [:]
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
+    @State private var showsExa = false
     private var agent: DefaultAgentSettingsModel { model.connections }
     private var editable: Bool { !agent.inherits }
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     var body: some View {
-        SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable and Usage.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "Connections", detail: "Shared accounts for Pi Durable and Usage.", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
                 keyDrafts.removeAll()
                 answer = ""
@@ -37,16 +40,19 @@ struct SettingsConnectionsView: View {
                 }))
                 Text("App-wide Usage uses the shared accounts. Workspace overrides apply to Pi Durable.").font(.callout).foregroundStyle(.secondary)
             }
+            if webSearchFirst { searchSection }
             connectionsSection
                 .transaction { transaction in
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
-            searchSection
-                .transaction { transaction in
-                    transaction.animation = nil
-                    transaction.disablesAnimations = true
-                }
+            if !webSearchFirst {
+                searchSection
+                    .transaction { transaction in
+                        transaction.animation = nil
+                        transaction.disablesAnimations = true
+                    }
+            }
             if agent.signInProvider == nil, let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
             if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
             HStack {
@@ -61,7 +67,7 @@ struct SettingsConnectionsView: View {
             if let tools = model.agentTools { ExecutorConnectionsCard(model: model, tools: tools) }
         }
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .task { agent.changeScope(initialScope); agent.loadAccounts() }
+        .task { showsExa = webSearchFirst; agent.changeScope(initialScope); agent.loadAccounts() }
         .onDisappear { agent.cancel() }
         .confirmationDialog("Reset Pi Durable credentials in this workspace?", isPresented: $confirmingCredentialReset) {
             Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
@@ -202,7 +208,7 @@ struct SettingsConnectionsView: View {
     }
     private var searchSection: some View {
         SettingsCard(title: "Web search") {
-            DisclosureGroup("Exa") { connectionContent("exa").padding(.leading, 12) }
+            DisclosureGroup("Exa", isExpanded: $showsExa) { connectionContent("exa").padding(.leading, 12) }
         }
     }
 

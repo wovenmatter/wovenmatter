@@ -3,6 +3,7 @@ import WovenMatterClient
 
 struct RootView: View {
     @Bindable var model: ApplicationModel
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
 
     private var theme: DashboardTheme {
@@ -24,6 +25,9 @@ struct RootView: View {
         }
         .task(id:model.state) {
             guard model.state == .ready, !model.isLibraryClient else { return }
+            if HarnessSetupPresentation.shared.takeAutomaticPresentation() {
+                openWindow(id: HarnessSetupPresentation.windowID)
+            }
             await model.analytics.openInterface()
         }
         .environment(\.dashboardTheme, theme)
