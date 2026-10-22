@@ -203,7 +203,7 @@ struct DashboardCloudConversation: View {
                                                     openAttachment(contentHash: attachment.contentHash,
                                                         fileName: attachment.fileName, mimeType: attachment.mimeType)
                                                 },
-                                                onOpenFile: { source in openGeneratedFile(source, message: message) },
+                                                resolveFile: { source in try await generatedFileURL(source, message: message) },
                                                 layout: fragment.layout,
                                                 displayedBody: presentation?.displayedBody,
                                                 commentaryIDs: presentation?.commentaryIDs,
@@ -656,19 +656,12 @@ struct DashboardCloudConversation: View {
         }
     }
 
-    private func openGeneratedFile(_ source: String, message: WorkspaceMessageRecord) {
+    private func generatedFileURL(_ source: String, message: WorkspaceMessageRecord) async throws -> URL {
         let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
-        Task {
-            do {
-                let url: URL
-                if let client = model.liveLibraryClient, client.isForeignConversation(message.conversationID) {
-                    url = try await client.exportFile(.libraryFile(id: id))
-                } else {
-                    url = try await model.library.fileURL(id: id)
-                }
-                openPreview?(url, "library:" + id)
-            } catch { attachmentOpenError = error.localizedDescription }
+        if let client = model.liveLibraryClient, client.isForeignConversation(message.conversationID) {
+            return try await client.exportFile(.libraryFile(id: id))
         }
+        return try await model.library.fileURL(id: id)
     }
 
     private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {
@@ -1121,7 +1114,7 @@ struct DashboardMessageRow: View {
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
-    var onOpenFile: ((String) -> Void)? = nil
+    var resolveFile: ((String) async throws -> URL)? = nil
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
@@ -1188,8 +1181,8 @@ struct DashboardMessageRow: View {
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                        if let onOpenFile, message.status != "streaming" {
-                            ConversationFilePreviews(content: assistantBody, onOpen: onOpenFile)
+                        if let resolveFile, message.status != "streaming" {
+                            ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
                         }
                     }
                     if !isUser, layout == nil {

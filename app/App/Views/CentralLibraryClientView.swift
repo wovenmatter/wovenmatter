@@ -299,7 +299,6 @@ struct LibraryClientNotePane: View {
 }
 
 private struct LibraryClientChatPane: View {
-    @Environment(\.openDocumentPreview) private var openPreview
     @Bindable var model: CentralLibraryClientModel
     @State private var settings = false
     @State private var details = false
@@ -319,12 +318,9 @@ private struct LibraryClientChatPane: View {
                             Text(message.role == "user" ? "You" : message.role.capitalized).font(.system(size: 11, weight: .semibold)).foregroundStyle(DashboardPalette.mutedForeground)
                             ConversationMarkdown(document: .init(message.content), isStreaming: message.status == "streaming").textSelection(.enabled)
                             if message.role == "assistant", message.status != "streaming" {
-                                ConversationFilePreviews(content: message.content) { source in
+                                ConversationFilePreviews(content: message.content, messageID: message.id) { source in
                                     let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
-                                    Task {
-                                        do { openPreview?(try await model.exportFile(.libraryFile(id: id)), "library:" + id) }
-                                        catch { model.errorMessage = error.localizedDescription }
-                                    }
+                                    return try await model.exportFile(.libraryFile(id: id))
                                 }
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)

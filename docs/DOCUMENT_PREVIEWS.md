@@ -19,8 +19,8 @@ Opening an existing file selects its tab. Hiding the pane and switching chats ke
 those tabs; closing a tab releases its preview, without deleting the retained file.
 Tabs are window-session state and are not restored after app restart.
 
-Generated handbacks have **Preview [filename]** buttons beneath the response.
-These resolve the original message/file identity through Library. They never read
+Generated handbacks appear as file attachments beneath the response. Click the filename to preview it in the side pane, drag it into Finder or another app to copy the file, or use **Save** to choose a destination. The file menu also offers **Open in Default App** and **Reveal in Finder**. Attachments wait briefly for Library retention and expose Retry with a concrete error when unavailable.
+These actions resolve the original message/file identity through Library. They never read
 a path directly from agent text. The file must have been retained by Library; a
 pending, unavailable, removed, or inaccessible item reports an error. Existing
 Library activation/history and retention limits still apply. Files already indexed
@@ -43,3 +43,11 @@ Opening a preview does not add document contents to a new agent prompt.
 
 Native previews vary by installed macOS preview providers. Manual acceptance of
 representative real-world workbooks and documents remains part of PR testing.
+
+## Agent delivery
+
+Shared harness instructions tell agents to create a real file in the requested format and include a Markdown link such as `[sample.xlsx](<file:///absolute/workspace/path/sample.xlsx>)` in their next response. File URLs must refer to an existing file within the session workspace or permitted temporary directory. Labels include the filename and extension. Library retains the file independently of the original path; the attachment UI resolves the original message identity through that retained catalog, including on clients.
+
+Creating an in-app spreadsheet or rendering a Markdown table does not deliver an Excel workbook. An inline preview may accompany the attachment, but agents must generate the requested binary format and report generation failures rather than invent links. Existing in-app spreadsheet export remains CSV; it is not an XLSX exporter.
+
+Review: ask Pi Durable for a sample XLSX, DOCX, and PDF. Confirm each response contains a real file attachment; click to preview, save a copy, drag to Finder, and open the copy in its associated app. Retry after an unavailable file should show a useful error, not open an arbitrary path from agent text.

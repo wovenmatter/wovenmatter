@@ -5,8 +5,6 @@ import WovenMatterCore
 /// are routed through the execution owner (including background-service mode).
 struct FederatedConversationPane: View {
     @Environment(\.dashboardTheme) private var theme
-    @Environment(\.openDocumentPreview) private var openPreview
-    @State private var previewError: String?
     @Bindable var model: ApplicationModel
     let conversation: WorkspaceConversationRecord
     let savedMessages: [WorkspaceMessageRecord]
@@ -55,17 +53,12 @@ struct FederatedConversationPane: View {
                                 ConversationMarkdown(document: .init(message.content), isStreaming: message.status == "streaming")
                                     .textSelection(.enabled)
                                 if message.role == "assistant", message.status != "streaming" {
-                                    ConversationFilePreviews(content: message.content) { source in
+                                    ConversationFilePreviews(content: message.content, messageID: message.id) { source in
                                         let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
-                                        Task {
-                                            do {
-                                                let url: URL
-                                                if let client = model.liveLibraryClient {
-                                                    url = try await client.exportFile(.libraryFile(id: id))
-                                                } else { url = try await model.library.fileURL(id: id) }
-                                                openPreview?(url, "library:" + id)
-                                            } catch { previewError = error.localizedDescription }
+                                        if let client = model.liveLibraryClient {
+                                            return try await client.exportFile(.libraryFile(id: id))
                                         }
+                                        return try await model.library.fileURL(id: id)
                                     }
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
@@ -81,7 +74,6 @@ struct FederatedConversationPane: View {
                 .onChange(of: conversation.id, initial: true) { _, _ in proxy.scrollTo("federated-bottom", anchor: .bottom) }
             }
             VStack(alignment: .leading, spacing: 12) {
-                if let previewError { Text(previewError).font(.caption).textSelection(.enabled) }
                 if let error = snapshot?.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled) }
                 ForEach(snapshot?.interactions ?? []) { interaction in
                     FederatedInteractionCard(interaction: interaction) { response in
