@@ -669,6 +669,34 @@ import CompanionInference
         }
         await reload()
       }
+      let scenario = ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] ?? ""
+      if scenario.hasPrefix("running-tools") {
+        let runID = "11111111-1111-4111-8111-111111111111"
+        let startedAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-8))
+        let currentStatus = scenario == "running-tools-settled" ? "completed" : "running"
+        let activities = try [("fixture-read", "completed"), ("fixture-current", currentStatus)].enumerated().map { index, value in
+          let activity = AgentRunActivity(id: value.0, kind: .tool, title: "Read file", status: value.1, toolName: "read_file",
+            rawInputJSON: "{\"path\":\"plan.md\"}")
+          let projection = String(decoding: try JSONEncoder().encode(activity), as: UTF8.self)
+          return CompanionActivity(id: value.0, runID: runID, title: "Read file", status: value.1, projectionJSON: projection, sequence: Int64(index + 1))
+        }
+        let transcript = CompanionTranscript(conversationID: "fixture-chat", messages: [
+          .init(id: "user", conversationID: "fixture-chat", runID: runID, role: "user", content: "Inspect the launch plan.", createdAt: startedAt, sequence: 0)
+        ], activities: activities, activeRunID: runID, runs: [.init(id: runID, status: "running", startedAt: startedAt)])
+        try await store.journal.append(workspaceID: "fixture-execution", transcript: transcript)
+        try await store.cache(transcript)
+        if scenario == "running-tools-expanded" {
+          let state = transcriptStates.state(for: "fixture-chat")
+          state.setExpanded(ConversationTranscriptState.disclosureKey(runID: runID, itemID: "group:fixture-read"), true)
+          state.setExpanded(ConversationTranscriptState.disclosureKey(runID: runID, itemID: "activity:fixture-current"), true)
+        }
+        online = true // Fixture presentation only; no transport or inference is configured.
+        await reload()
+      }
+      if scenario == "permissions" || scenario == "tools-menu" {
+        let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
+        executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
+      }
       selectedNoteID = notes.first?.id; selectedConversationID = "fixture-chat"
       if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "pairing" { pairingPresented = true }
       tab = Tab(rawValue: ProcessInfo.processInfo.environment["WOVENMATTER_UI_TAB"] ?? "Folders") ?? .folders

@@ -9,8 +9,8 @@ import { reportProgramStatus } from './program-status.mjs';
 // These documents describe native child ownership and the selected connection.
 // Native tasks, submissions and transcripts remain the execution state; there
 // is no second scheduler, delivery ledger or copy of a child's model history.
-export const Subagents = defineDoc({ kind: 'woven.subagents', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ epoch: 0, stopped: true, children: {} }) });
-export const ChildContext = defineDoc({ kind: 'woven.child-context', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({}) });
+export const Subagents = defineDoc({ kind: 'woven.subagents', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'initial', initial: () => ({ epoch: 0, stopped: true, children: {} }) });
+export const ChildContext = defineDoc({ kind: 'woven.child-context', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'initial', initial: () => ({}) });
 
 const MAX_PREVIEW = 4000;
 const MAX_ROWS = 24;
@@ -42,7 +42,7 @@ async function activeChild(tx, child) {
     const task = await tx.task(id);
     if (!terminal(task) && (child.stopping || task.state.checkpoint?.phase === 'deliver')) return true;
   }
-  for (const status of ['pending', 'running', 'waiting', 'completing']) {
+  for (const status of ['pending', 'running', 'sleeping', 'waiting', 'completing']) {
     if ((await tx.scanTasks({ conversationId: child.conversationId, status }, 1)).items.length) return true;
   }
   return false;
@@ -458,7 +458,7 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
           }
           const live = await tx.doc(LiveDoc, rootID), inbox = await tx.doc(InboxDoc, rootID);
           if (live.run || live.compactions?.length || inbox.items.some(item => item.mode !== 'write')) throw new DefaultAgentError('The previous native run is still active. Wait for it to finish or stop it before starting another run.');
-          for (const status of ['pending', 'running', 'waiting', 'completing']) {
+          for (const status of ['pending', 'running', 'sleeping', 'waiting', 'completing']) {
             if ((await tx.scanTasks({ conversationId: rootID, status }, 1)).items.length) throw new DefaultAgentError('The previous native run is still active. Wait for it to finish or stop it before starting another run.');
           }
         }

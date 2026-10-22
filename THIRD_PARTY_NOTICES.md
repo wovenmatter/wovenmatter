@@ -36,10 +36,10 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.3.0 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.3.0/packages/durable)
+Pi Durable bundles `@earendil-works/pi-durable` 1.4.0 from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.4.0/packages/durable)
 for native execution and persistence. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.3.0/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/v1.4.0/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
 Native store ownership uses `proper-lockfile` from

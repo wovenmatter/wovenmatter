@@ -9,7 +9,7 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
-      "minimumAdapterVersion": "1.13.1",
+      "minimumAdapterVersion": "2.2.2",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
@@ -61,7 +61,7 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
-      "minimumAdapterVersion": "0.81.2",
+      "minimumAdapterVersion": "0.94.0",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { defineExtension } from '@earendil-works/pi-durable';
+import { defineExtension, defineTask } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { ChildContext, Subagents } from '../src/subagents.mjs';
@@ -53,6 +53,36 @@ test('native owner lock excludes a second runtime and released identities can re
   const reopened = await other.create(record.session.sessionId);
   assert.equal(reopened.manifest.storeID, record.manifest.storeID);
   assert.equal(reopened.conversation.id, record.conversation.id);
+});
+
+for (const scope of ['root', 'child']) test(`a sleeping ${scope} task keeps its execution group owned until it is aborted`, { timeout: 10000 }, async t => {
+  const { engine } = await fixture(t), record = await engine.create();
+  const conversation = scope === 'root' ? record.conversation
+    : await record.harness.createConversation({ ownership: { kind: 'ownerless' } }, BACKGROUND_CONTEXT);
+  // No live anchor or reporter can mask a missing sleeping-task scan.
+  if (scope === 'child') await record.harness.commit(async tx => {
+    const group = await tx.doc(Subagents, record.conversation.id);
+    group.children.sleeper = { conversationId: conversation.id, anchorID: randomUUID(), reporterIDs: [], stopEpoch: 0 };
+  }, BACKGROUND_CONTEXT);
+  const sleeper = defineTask({ name: 'fixture.sleeping', version: 1, initial: () => ({ phase: 'wait' }), phases: {
+    wait: (_task, runtime, context) => runtime.sleepUntil(runtime.now() + 60000, { phase: 'done' }, context),
+    done: (_task, runtime, context) => runtime.commit(() => ({ status: 'terminal', outcome: { status: 'completed', result: null } }), context),
+  }, abort: (_task, runtime, context) => runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), context) });
+  record.registry.install(defineExtension({ name: 'sleeping-fixture', tasks: [sleeper] }));
+  const id = await record.harness.commit(tx => tx.createTask(sleeper, null, {
+    conversationId: conversation.id, ownership: { kind: 'conversation' },
+  }), BACKGROUND_CONTEXT);
+  const deadline = Date.now() + 3000;
+  let task;
+  do {
+    task = await record.harness.commit(tx => tx.task(id), BACKGROUND_CONTEXT);
+    if (task.state.status === 'sleeping') break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  } while (Date.now() < deadline);
+  assert.equal(task.state.status, 'sleeping');
+  await assert.rejects(record.subagents.beginGroup(randomUUID()), scope === 'root' ? /previous native run is still active/ : /previous attached run is still active/);
+  await conversation.abort(BACKGROUND_CONTEXT);
+  await record.subagents.beginGroup(randomUUID());
 });
 
 test('stable logical input receipts survive account reorder and conflicting payloads are rejected', async t => {

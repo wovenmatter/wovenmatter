@@ -1,6 +1,6 @@
 # On-device Pi Durable
 
-The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, and `chord`
+The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, `chord`, and `pi-telemetry`
 packages locked in `default-agent/package-lock.json`, the same release as the
 desktop runtime. It does not ship Node, run a remote agent loop, or download
 executable SDK code, so SDK updates reach iOS only in an App Store build. Rebuild

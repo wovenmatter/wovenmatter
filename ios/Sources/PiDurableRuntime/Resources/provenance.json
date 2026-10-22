@@ -1,10 +1,11 @@
 {
-  "sdkVersion": "1.3.0",
+  "sdkVersion": "1.4.0",
   "entry": "ios/Runtime/entry.js",
   "packages": [
     "@earendil-works/chord",
     "@earendil-works/pi-ai",
     "@earendil-works/pi-durable",
+    "@earendil-works/pi-telemetry",
     "typebox"
   ]
 }

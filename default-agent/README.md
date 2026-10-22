@@ -1,6 +1,6 @@
 # Pi Durable runtime
 
-The agent uses locked Pi Durable SDK 1.3.0 `Harness`, `Conversation` and `Submission`
+The agent uses locked Pi Durable SDK 1.4.0 `Harness`, `Conversation` and `Submission`
 APIs locally and remotely. The coding-agent library supplies image/file/search
 and code-mode tools, instructions and `ModelRuntime`; Durable owns execution.
 Claude accounts use the official Claude Agent SDK. Standalone Pi is independent.

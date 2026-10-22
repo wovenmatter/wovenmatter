@@ -1,0 +1,68 @@
+name: Prepare release dependencies
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'shared/**'
+      - 'ios/**'
+      - 'default-agent/**'
+      - 'scripts/**'
+      - '.github/workflows/release*.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-cache-main
+  cancel-in-progress: true
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Ensure CEF build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Identify exact dependency and toolchain inputs
+        id: inputs
+        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: cache
+        with:
+          path: |
+            ~/Library/Caches/WovenMatter/Downloads
+            ~/Library/Caches/WovenMatter/BrowserBuilds
+            ~/Library/Caches/WovenMatter/SourcePackages/repositories
+            ~/.npm
+          key: ${{ steps.inputs.outputs.key }}
+      - name: Prepare unsigned release dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/prepare-release-cache.sh
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/Library/Caches/WovenMatter/Downloads
+            ~/Library/Caches/WovenMatter/BrowserBuilds
+            ~/Library/Caches/WovenMatter/SourcePackages/repositories
+            ~/.npm
+          key: ${{ steps.inputs.outputs.key }}
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: compiler
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: compiler-v1-${{ steps.inputs.outputs.key }}-${{ github.sha }}
+          restore-keys: compiler-v1-${{ steps.inputs.outputs.key }}-
+      - name: Warm Release compiler cache without signing credentials
+        if: steps.compiler.outputs.cache-hit != 'true'
+        run: |
+          WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/Compiler" \
+          WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
+          WOVENMATTER_COMPILER_BUILD_ROOT=/private/tmp/wovenmatter-release-build \
+            scripts/warm-release-compiler.sh
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: steps.compiler.outputs.cache-hit != 'true'
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: compiler-v1-${{ steps.inputs.outputs.key }}-${{ github.sha }}

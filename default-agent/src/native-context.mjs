@@ -8,7 +8,7 @@ import { getCurrentSystemMessage } from '@earendil-works/pi-ai/utils/transcript'
 import { DefaultAgentError, accessFailure, operationErrorMessage } from './config.mjs';
 import { providerFetch } from './transport.mjs';
 
-export const NativeContext = defineDoc({ kind: 'woven.native-context', version: 1, scope: 'conversation', history: 'rewindable', fork: 'current', initial: () => ({ covered: [] }) });
+export const NativeContext = defineDoc({ kind: 'woven.native-context', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'rewindable', fork: 'current', initial: () => ({ covered: [] }) });
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sameRoute = (left, right) => left?.provider === right.provider && left.accountID === right.accountID && left.modelID === right.modelID && left.authIdentity === right.authIdentity && left.nativeAccountID === right.nativeAccountID && left.api === right.api && left.endpoint === right.endpoint;
 const usable = message => message.role !== 'assistant' || !['aborted', 'error', 'deferred'].includes(message.stopReason);
