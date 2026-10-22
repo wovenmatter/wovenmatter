@@ -42,6 +42,18 @@ struct SettingsCompanionView: View {
                         Spacer()
                     }
                 }
+                if DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost {
+                    SettingsCard(title: "Development") {
+                        Toggle("Allow local Dev clients", isOn: Binding(
+                            get: { host.allowsLocalDevelopment },
+                            set: { enabled in Task { await host.setAllowsLocalDevelopment(enabled) } }
+                        ))
+                        .toggleStyle(DashboardSwitchToggleStyle())
+                        .disabled(host.changingLocalDevelopment)
+                        Text("Dev clients running under your macOS account connect automatically. Other devices still require approval. Turning this off revokes local Dev client access.")
+                            .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                }
                 if !host.pendingPairingRequests.isEmpty { pairingRequests }
                 if !host.pairedDevices.isEmpty { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }

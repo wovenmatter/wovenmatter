@@ -195,6 +195,7 @@ final class BackendApplicationService {
             let host = model.companionHost
             switch action {
             case .status: await host.refreshStatus()
+            case .setLocalDevelopment(let enabled): await host.setAllowsLocalDevelopment(enabled)
             case .discover: await host.refreshDiscovery()
             case .approvePairing(let id): await host.approvePairing(id: id)
             case .denyPairing(let id): await host.denyPairing(id: id)

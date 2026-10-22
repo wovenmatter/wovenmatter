@@ -1,6 +1,9 @@
+import AppKit
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
+
+struct DevelopmentHostStatus: Codable, Sendable { var allowed: Bool; var ready: Bool }
 
 struct DevelopmentClientRequest: Codable { var deviceID: String; var name: String }
 struct DevelopmentClientConnection: Codable { var endpoint: URL; var pairing: CompanionPairResponse }
@@ -71,11 +74,73 @@ enum DevelopmentLaunch {
         #endif
     }
 
+    @MainActor private static var lastClientStartup: Data?
+
+    @MainActor static func reportClientStartup(ready: Bool, error: String? = nil) {
+        guard isClient, let directory = supportDirectory else { return }
+        let value: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier,
+            "executable": Bundle.main.executableURL?.path ?? "",
+            "state": ready ? "ready" : error == nil ? "connecting" : "failed",
+            "error": error ?? ""]
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: value, options: .sortedKeys)
+            guard data != lastClientStartup else { return }
+            try data.write(to: directory.appending(path: "development-client-startup.json"), options: .atomic)
+            lastClientStartup = data
+        } catch { NSLog("Could not report Dev client startup: %@", error.localizedDescription) }
+    }
+
+    /// Same-user IPC establishes trust. Never invoke remote pairing or copy host credentials.
     @MainActor static func connect(deviceID: String) async throws -> DevelopmentClientConnection {
+        guard isClient else { throw BackendRPCError.remote("Automatic local connection is only available to Dev client builds.") }
         let production = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appending(path: "Woven Matter")
         let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: production))
-        let bytes = try await client.call(method: "development.connect",
-            payload: JSONEncoder().encode(DevelopmentClientRequest(deviceID: deviceID, name: displayName)), timeout: 3)
-        return try JSONDecoder().decode(DevelopmentClientConnection.self, from: bytes)
+        return try await connectWhenReady(
+            status: {
+                let data = try await client.call(method: "development.status", timeout: 2)
+                return try JSONDecoder().decode(DevelopmentHostStatus.self, from: data)
+            },
+            wakeHost: {
+                guard NSRunningApplication.runningApplications(withBundleIdentifier: "wovenmatter.desktop").isEmpty else { return }
+                guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "wovenmatter.desktop") else {
+                    throw BackendRPCError.remote("Install the central Woven Matter app before launching a Dev client.")
+                }
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = false
+                _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            },
+            enroll: {
+                let bytes = try await client.call(method: "development.connect",
+                    payload: JSONEncoder().encode(DevelopmentClientRequest(deviceID: deviceID, name: displayName)), timeout: 10)
+                return try JSONDecoder().decode(DevelopmentClientConnection.self, from: bytes)
+            })
+    }
+
+    @MainActor static func connectWhenReady(
+        attempts: Int = 60,
+        status: () async throws -> DevelopmentHostStatus,
+        wakeHost: () async throws -> Void,
+        pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(500)) },
+        enroll: () async throws -> DevelopmentClientConnection
+    ) async throws -> DevelopmentClientConnection {
+        var wokeHost = false
+        for _ in 0..<attempts {
+            try Task.checkCancellation()
+            let current: DevelopmentHostStatus?
+            do { current = try await status() }
+            catch BackendRPCError.unavailable {
+                current = nil
+                if !wokeHost { try await wakeHost(); wokeHost = true }
+            } catch BackendRPCError.timedOut { current = nil }
+            if let current {
+                guard current.allowed else {
+                    throw BackendRPCError.remote("Enable Allow local Dev clients in the central Mac’s Devices settings once. Future Dev launches connect automatically.")
+                }
+                if current.ready { return try await enroll() }
+            }
+            try await pause()
+        }
+        throw BackendRPCError.remote("The central Woven Matter app did not become ready. Install a version with local Dev client support and enable Allow local Dev clients in its Devices settings once.")
     }
 }

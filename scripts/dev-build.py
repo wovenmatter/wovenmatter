@@ -185,6 +185,27 @@ def snapshot(source, destination):
             shutil.rmtree(temporary)
 
 
+def wait_for_client(status_file, executable, timeout=90):
+    """Launch is successful only when this instance has opened a connected workspace."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            value = json.loads(status_file.read_text())
+            if value.get("executable") == str(executable):
+                pid = value.get("pid")
+                if isinstance(pid, int) and pid > 0:
+                    os.kill(pid, 0)
+                    if value.get("state") == "ready":
+                        print("Dev client connected to the local central library; workspace ready.")
+                        return
+                    if value.get("state") == "failed":
+                        raise ValueError(value.get("error") or "Dev client connection failed.")
+        except (FileNotFoundError, ProcessLookupError, json.JSONDecodeError):
+            pass
+        time.sleep(0.25)
+    raise TimeoutError("Dev client did not open a connected workspace. Check the central app's local Dev client setting and version.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -195,9 +216,15 @@ def main():
     snap = sub.add_parser("snapshot")
     snap.add_argument("--source", type=Path, required=True)
     snap.add_argument("--destination", type=Path, required=True)
+    wait = sub.add_parser("wait-client")
+    wait.add_argument("--status", type=Path, required=True)
+    wait.add_argument("--executable", type=Path, required=True)
+    wait.add_argument("--timeout", type=float, default=90)
     args = parser.parse_args()
     if args.command == "profile":
         print(json.dumps(profile(args.root, args.instance, args.mode)))
+    elif args.command == "wait-client":
+        wait_for_client(args.status, args.executable, args.timeout)
     else:
         snapshot(args.source, args.destination)
 

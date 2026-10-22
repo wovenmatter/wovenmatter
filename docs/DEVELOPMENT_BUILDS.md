@@ -59,18 +59,26 @@ storage and working directories. A shared folder without a local execution root
 cannot silently become a local project: create a folder in the Dev workspace or
 use All Workspaces for a new scratch directory.
 
-On the same Mac, initial connection uses production's private, same-user Unix
-socket. The production host must include the development-connect endpoint from
-this change, have background execution enabled (or be a running live Dev host), and have its central library
-available through the existing Tailscale connection. It provisions an independent,
-revocable Dev device identity. Credentials are saved directly to this instance's
-Keychain namespace; the launcher never reads or copies production credentials.
+On the central Mac, enable **Devices → Allow local Dev clients** once. It is off
+by default. After that, `scripts/build_and_run.sh --mode client` opens a Dev
+client directly into the workspace. The client uses the private same-user Unix
+socket to enroll automatically, waits for the host to become ready, and opens
+the installed central app in the background if it is not running. Normal
+foreground hosts and background execution hosts both support this flow; users
+do not need to turn on background execution just to test a Dev client.
 
-When that local endpoint is unavailable, the app opens the existing Device
-Connections setup with the failure reason. Pairing to another Mac uses the normal
-approved pairing flow. An agent must not operate account authentication or
-device-authorization UI to recover access. The instance never falls back to
-opening production SQLite or starting a replacement central library.
+The central app must include this support and have its regular library service
+available. Each instance receives an independent credential in its own Keychain
+namespace. Rebuilds reuse the instance identity and revalidate host permission.
+No pairing link, pending approval, or credential copying is involved. Other Macs
+and ordinary clients retain the existing pairing and approval flow. Turning the
+setting off blocks enrollment and revokes local Dev client grants.
+
+This is an explicit same-macOS-user development trust boundary, not a remote
+pairing shortcut. Clients never open production SQLite, replace the running
+host, or fall back to snapshots. If the host is incompatible, development is
+disabled, or startup fails, the launch must report that failure rather than
+claiming a usable preview from a process check alone.
 
 Shared edits and accepted commands are real changes. A new Dev instance does
 not adopt existing production sessions or schedules. Closing an instance does

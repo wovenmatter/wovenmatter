@@ -1,12 +1,41 @@
 import CompanionClient
 import Foundation
 import Testing
+import WovenMatterClient
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
 struct DevelopmentLaunchTests {
+    @Test func clientWakesLocalHostAndWaitsForReadinessWithoutPairingUI() async throws {
+        var checks = 0, wakes = 0, enrollments = 0
+        let expected = DevelopmentClientConnection(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!,
+            pairing: .init(workspaceID: "library", deviceID: "client", credential: "fixture"))
+        let result = try await DevelopmentLaunch.connectWhenReady(attempts: 5, status: {
+            checks += 1
+            if checks == 1 { throw BackendRPCError.unavailable }
+            return .init(allowed: true, ready: checks >= 3)
+        }, wakeHost: { wakes += 1 }, pause: {}, enroll: { enrollments += 1; return expected })
+        #expect(checks == 3 && wakes == 1 && enrollments == 1)
+        #expect(result.pairing.deviceID == "client")
+    }
+
+    @Test func readyLocalHostNeedsNoWakeAndDisabledHostNeverEnrolls() async throws {
+        var enrollments = 0
+        let expected = DevelopmentClientConnection(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!,
+            pairing: .init(workspaceID: "library", deviceID: "client", credential: "fixture"))
+        _ = try await DevelopmentLaunch.connectWhenReady(status: { .init(allowed: true, ready: true) },
+            wakeHost: { Issue.record("Running host must be reused") }, pause: {},
+            enroll: { enrollments += 1; return expected })
+        await #expect(throws: BackendRPCError.self) {
+            try await DevelopmentLaunch.connectWhenReady(status: { .init(allowed: false, ready: true) },
+                wakeHost: { Issue.record("Disabled host must not be replaced") }, pause: {},
+                enroll: { enrollments += 1; return expected })
+        }
+        #expect(enrollments == 1)
+    }
+
     @Test func modesChooseDistinctRolesAndTheCorrectLibrary() {
         for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
             let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], backgroundEnabled: true,
