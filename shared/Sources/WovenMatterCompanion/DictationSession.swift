@@ -24,6 +24,28 @@ import Observation
   public private(set) var downloadProgress: Double?
   public private(set) var availableLanguages: [String] = []
   public var error: String?
+  public private(set) var historyError: String?
+  public private(set) var historyRevision = 0
+  @ObservationIgnored public var saveHistory: ((DictationRecord) async throws -> Void)?
+  @ObservationIgnored private var unsavedHistory: [DictationRecord] = []
+  @ObservationIgnored private var historyTask: Task<Void, Never>?
+
+  /// Saving is independent of insertion, native finalization, and retained-text retry.
+  public func retrySavingHistory() {
+    guard historyTask == nil, !unsavedHistory.isEmpty, let saveHistory else { return }
+    historyTask = Task {
+      defer { historyTask = nil }
+      while let record = unsavedHistory.first {
+        do {
+          try await saveHistory(record)
+          unsavedHistory.removeFirst(); historyError = nil; historyRevision &+= 1
+        } catch {
+          historyError = "Dictation history could not be saved: " + error.localizedDescription
+          return
+        }
+      }
+    }
+  }
   public var languageIdentifier: String {
     didSet { preferences.set(languageIdentifier, forKey: "wovenmatter.dictation.language") }
   }
@@ -103,6 +125,10 @@ import Observation
         if insert?(text) != true {
           retainedTranscript = text
           error = "The destination changed or closed. Your transcript is ready to insert in an editor."
+        }
+        if saveHistory != nil {
+          unsavedHistory.append(DictationRecord(id: id.uuidString.lowercased(), text: text))
+          retrySavingHistory()
         }
         endSession()
       } catch {

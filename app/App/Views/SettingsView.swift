@@ -29,6 +29,7 @@ private enum SettingsSection: Equatable {
     case localWorkspace
     case remoteWorkspaces
     case usage
+    case dictation
 }
 
 struct SettingsView: View {
@@ -122,6 +123,9 @@ struct SettingsView: View {
                     },
                     onBack: { section = .landing }
                 )
+            case .dictation:
+                SettingsDictationView(model: applicationContext ?? model, client: clientContext,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .usage:
                 SettingsUsageView(
                     model: model,
@@ -170,6 +174,12 @@ struct SettingsView: View {
                 )
                 }
                 if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Dictation",
+                    detail: "Read and copy your previous dictations.",
+                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    action: { section = .dictation }
+                )
                 SettingsDestinationRow(
                     title: "Devices",
                     detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",

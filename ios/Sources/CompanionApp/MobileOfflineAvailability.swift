@@ -8,7 +8,7 @@ extension CompanionModel {
     guard let store else { return }
     let snapshot = await store.snapshot()
     let journal = await store.journal.pendingOwnerEntries(deviceID: snapshot.deviceID)
-    let counts: [MobileSyncLane: Int] = [.library: snapshot.outbox.count,
+    let counts: [MobileSyncLane: Int] = [.dictation: (try? await store.dictations.pendingCount()) ?? 0, .library: snapshot.outbox.count,
       .calendar: await store.calendar.pendingCount() + store.calendar.pendingRuns().count,
       .journal: journal.count, .artifacts: await store.artifacts.pendingUploadCount(),
       .offlineCache: snapshot.uncachedNoteIDs.count + (await store.artifacts.pendingDownloadCount())]

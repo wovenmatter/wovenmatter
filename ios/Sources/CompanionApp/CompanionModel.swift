@@ -191,6 +191,11 @@ import CompanionInference
 
   func run() async {
     guard !isolatedTestHost else { return }
+    DictationSession.shared.saveHistory = { [weak self] record in
+      guard let store = self?.store else { throw MobileStore.Failure.incompatibleStore }
+      try await store.dictations.save(record)
+    }
+    DictationSession.shared.retrySavingHistory()
     if !booted {
       booted = true
       defer { initialized = true }

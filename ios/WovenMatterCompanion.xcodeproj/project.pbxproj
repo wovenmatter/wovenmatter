@@ -11,6 +11,7 @@
 		0395C8003E69C4C6763A9F1C /* ExecutionRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 332384BB7BE57DD70D3C3CCD /* ExecutionRoutingTests.swift */; };
 		0AC9BF1DE82D8FE4E01D882E /* ExecutionWorkspaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CB94BB1FE76AEF28F124AF /* ExecutionWorkspaces.swift */; };
 		0EE63D4FC706FC4C777B3950 /* MobileDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B227D7500F6D48347CEF1601 /* MobileDictation.swift */; };
+		314807F74815F07FE153957A /* DictationHistoryPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99181CFE1465430AF2EEE24E /* DictationHistoryPane.swift */; };
 		0F22D3EB3B5DD937B0EF3B11 /* MobileKeyboardDismissal.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE6C08436FBC343B6BE4931 /* MobileKeyboardDismissal.swift */; };
 		0F9A4E9FA0116086B9887DEE /* DeviceWorkspaceFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731407A642C2125A3B7C02B2 /* DeviceWorkspaceFiles.swift */; };
 		112A1DBDD09CA7467A3921B0 /* ProgramStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7B3B955033B1085B31AF16 /* ProgramStatus.swift */; };
@@ -133,6 +134,7 @@
 		ACE6C08436FBC343B6BE4931 /* MobileKeyboardDismissal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileKeyboardDismissal.swift; sourceTree = "<group>"; };
 		AD5CF78B55599027310424E6 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
 		B227D7500F6D48347CEF1601 /* MobileDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDictation.swift; sourceTree = "<group>"; };
+		99181CFE1465430AF2EEE24E /* DictationHistoryPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationHistoryPane.swift; sourceTree = "<group>"; };
 		B38EEDC7D482A17856A16295 /* DeviceCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCLI.swift; sourceTree = "<group>"; };
 		B6EA08B853D8F9DF586B2806 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
 		B9850315B032C364C200D69F /* CompanionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionModel.swift; sourceTree = "<group>"; };
@@ -230,6 +232,7 @@
 				94257C0EDA417A9BB92E813B /* MobileConversationTranscript.swift */,
 				316B1891F265DE4E356B02BA /* MobileDesign.swift */,
 				B227D7500F6D48347CEF1601 /* MobileDictation.swift */,
+				99181CFE1465430AF2EEE24E /* DictationHistoryPane.swift */,
 				ACE6C08436FBC343B6BE4931 /* MobileKeyboardDismissal.swift */,
 				E0CDCE0317D53152F07FFF36 /* MobileOfflineAvailability.swift */,
 				19598AFD98C07A606D32DCE5 /* NotePane.swift */,
@@ -508,6 +511,7 @@
 				3BAE916DA746DB25CD357329 /* MobileConversationTranscript.swift in Sources */,
 				234EB3BE45378206F3566AAD /* MobileDesign.swift in Sources */,
 				0EE63D4FC706FC4C777B3950 /* MobileDictation.swift in Sources */,
+				314807F74815F07FE153957A /* DictationHistoryPane.swift in Sources */,
 				0F22D3EB3B5DD937B0EF3B11 /* MobileKeyboardDismissal.swift in Sources */,
 				749D4011CF1D15C83973BE8E /* MobileOfflineAvailability.swift in Sources */,
 				28CEC0B02F6E6ABE6CC30610 /* NotePane.swift in Sources */,

@@ -2,7 +2,18 @@ import XCTest
 @testable import CompanionClient
 import WovenMatterCompanion
 
-private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport {
+private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport, CompanionDictationTransport {
+  var dictations: [DictationRecord] = []
+  var loseDictationReceipt = false
+  func loseNextDictationReceipt() { loseDictationReceipt = true }
+  func publishDictation(_ record: DictationRecord) throws -> DictationRecord {
+    if !dictations.contains(where: { $0.id == record.id }) { dictations.append(record) }
+    if loseDictationReceipt { loseDictationReceipt = false; throw MobileConnectionError.offline }
+    return record
+  }
+  func dictationChanges(after: Int64) -> DictationHistoryPage {
+    .init(workspaceID: workspace, cursor: Int64(dictations.count), records: Array(dictations.dropFirst(Int(after))), hasMore: false)
+  }
   var workspace = "mac-a"
   var refusedFolderIDs = Set<String>()
   var failArtifacts = false
@@ -121,6 +132,26 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
 }
 
 final class MobileSyncEngineTests: XCTestCase {
+  func testDictationsSyncAcrossClientsAfterLostAcknowledgement() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = try MobileStore(file: directory.appendingPathComponent("first.json"))
+    let second = try MobileStore(file: directory.appendingPathComponent("second.json"))
+    let server = FakeMac()
+    let record = DictationRecord(text: "An offline dictation")
+    try await first.dictations.save(record)
+    let engine = MobileSyncEngine(store: first, transport: server)
+    await server.loseNextDictationReceipt()
+    do { try await engine.synchronize(); XCTFail("Expected lost acknowledgement") } catch { }
+    let pending = try await first.dictations.pendingCount()
+    XCTAssertEqual(pending, 1)
+    try await engine.synchronize()
+    try await MobileSyncEngine(store: second, transport: server).synchronize()
+    let firstRecords = try await first.dictations.records(), secondRecords = try await second.dictations.records()
+    let uploaded = await server.dictations
+    XCTAssertEqual(firstRecords, [record]); XCTAssertEqual(secondRecords, [record]); XCTAssertEqual(uploaded, [record])
+  }
+
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
