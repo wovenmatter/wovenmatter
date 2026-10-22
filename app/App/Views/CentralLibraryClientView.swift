@@ -2,6 +2,7 @@ import AppKit
 import CompanionClient
 import SwiftUI
 import WovenMatterCompanion
+import WovenMatterCore
 
 struct CentralLibraryClientView: View {
     @Bindable var model: CentralLibraryClientModel
@@ -58,6 +59,12 @@ struct CentralLibraryClientView: View {
         } detail: {
             detail.frame(maxWidth: .infinity, maxHeight: .infinity).background(theme.palette.workspace)
         }
+        .environment(\.openDocumentPreview) { url, identity in
+            do {
+                try application.workspaceAssets.openDocument(url, identity: identity)
+                model.section = .browser
+            } catch { model.errorMessage = error.localizedDescription }
+        }
         .navigationSplitViewStyle(.balanced)
         .disabled(model.preparingTransition)
         .task {
@@ -91,7 +98,7 @@ struct CentralLibraryClientView: View {
         case .library: LibraryClientLibraryPane(model: model)
         case .calendar: LibraryClientCalendarPane(model: model)
         case .browser:
-            if application.workspaceAssets.tabs.browserIDs.isEmpty {
+            if application.workspaceAssets.tabs.tabs.isEmpty {
                 ContentUnavailableView("Browser unavailable", systemImage: "globe",
                     description: Text(application.workspaceAssets.notice ?? "Open a browser tab to browse alongside your work."))
             } else {
@@ -292,6 +299,7 @@ struct LibraryClientNotePane: View {
 }
 
 private struct LibraryClientChatPane: View {
+    @Environment(\.openDocumentPreview) private var openPreview
     @Bindable var model: CentralLibraryClientModel
     @State private var settings = false
     @State private var details = false
@@ -310,6 +318,15 @@ private struct LibraryClientChatPane: View {
                         VStack(alignment: .leading, spacing: 7) {
                             Text(message.role == "user" ? "You" : message.role.capitalized).font(.system(size: 11, weight: .semibold)).foregroundStyle(DashboardPalette.mutedForeground)
                             ConversationMarkdown(document: .init(message.content), isStreaming: message.status == "streaming").textSelection(.enabled)
+                            if message.role == "assistant", message.status != "streaming" {
+                                ConversationFilePreviews(content: message.content) { source in
+                                    let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
+                                    Task {
+                                        do { openPreview?(try await model.exportFile(.libraryFile(id: id)), "library:" + id) }
+                                        catch { model.errorMessage = error.localizedDescription }
+                                    }
+                                }
+                            }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(model.transcript?.activities ?? []) { activity in

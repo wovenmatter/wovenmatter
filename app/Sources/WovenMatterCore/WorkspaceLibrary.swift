@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum LibraryItemKind: String, Codable, CaseIterable, Sendable {
   case file, link, photo
@@ -85,6 +86,10 @@ public enum LibraryFileReference {
 }
 
 public struct WorkspaceLibraryItem: Codable, Equatable, Identifiable, Sendable {
+  public static func identifier(messageID: String, source: String) -> String {
+    SHA256.hash(data: Data((messageID + "\u{0}" + source).utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
   public let id: String
   public let conversationID: String
   public let messageID: String

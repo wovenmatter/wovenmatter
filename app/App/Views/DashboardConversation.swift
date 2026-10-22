@@ -30,6 +30,7 @@ private enum DashboardConversationDisplayRow: Identifiable {
 }
 
 struct DashboardCloudConversation: View {
+    @Environment(\.openDocumentPreview) private var openPreview
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ApplicationModel
@@ -202,6 +203,7 @@ struct DashboardCloudConversation: View {
                                                     openAttachment(contentHash: attachment.contentHash,
                                                         fileName: attachment.fileName, mimeType: attachment.mimeType)
                                                 },
+                                                onOpenFile: { source in openGeneratedFile(source, message: message) },
                                                 layout: fragment.layout,
                                                 displayedBody: presentation?.displayedBody,
                                                 commentaryIDs: presentation?.commentaryIDs,
@@ -647,8 +649,24 @@ struct DashboardCloudConversation: View {
         }
         Task {
             do {
-                try await model.library.openAttachment(
+                let url = try await model.library.attachmentURL(
                     contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+                openPreview?(url, nil)
+            } catch { attachmentOpenError = error.localizedDescription }
+        }
+    }
+
+    private func openGeneratedFile(_ source: String, message: WorkspaceMessageRecord) {
+        let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
+        Task {
+            do {
+                let url: URL
+                if let client = model.liveLibraryClient, client.isForeignConversation(message.conversationID) {
+                    url = try await client.exportFile(.libraryFile(id: id))
+                } else {
+                    url = try await model.library.fileURL(id: id)
+                }
+                openPreview?(url, "library:" + id)
             } catch { attachmentOpenError = error.localizedDescription }
         }
     }
@@ -1103,6 +1121,7 @@ struct DashboardMessageRow: View {
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
+    var onOpenFile: ((String) -> Void)? = nil
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
@@ -1169,6 +1188,9 @@ struct DashboardMessageRow: View {
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
+                        if let onOpenFile, message.status != "streaming" {
+                            ConversationFilePreviews(content: assistantBody, onOpen: onOpenFile)
+                        }
                     }
                     if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)

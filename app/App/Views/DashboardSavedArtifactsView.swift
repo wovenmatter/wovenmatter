@@ -76,6 +76,7 @@ struct DashboardSavedArtifactsView: View {
 }
 
 private struct SavedArtifactRow: View {
+    @Environment(\.openDocumentPreview) private var openPreview
     @Environment(\.dashboardTheme) private var theme
     let item: SavedArtifactLibraryItem
     @Bindable var model: SavedArtifactsModel
@@ -90,7 +91,7 @@ private struct SavedArtifactRow: View {
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.palette.themeWhisper).clipShape(DashboardShapes.card)
         .contextMenu {
-            Button("Open") { Task { await model.open(item) } }.disabled(busy)
+            Button("Open") { Task { if let openPreview { await model.open(item, onOpenFile: openPreview) } } }.disabled(busy)
             Button("Reveal in Finder") {
                 Task {
                     if let url = await model.prepare(item) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
@@ -103,7 +104,7 @@ private struct SavedArtifactRow: View {
             Image(systemName: item.manifest.mediaType.hasPrefix("image/") ? "photo" : "doc")
                 .font(.system(size: 20)).foregroundStyle(DashboardPalette.primary).frame(width: 36, height: 40)
             VStack(alignment: .leading, spacing: 5) {
-                Button { Task { await model.open(item) } } label: {
+                Button { Task { if let openPreview { await model.open(item, onOpenFile: openPreview) } } } label: {
                     Text(item.manifest.title).font(.system(size: 13, weight: .semibold))
                         .lineLimit(2).multilineTextAlignment(.leading)
                 }.buttonStyle(.plain).disabled(busy)
@@ -116,7 +117,7 @@ private struct SavedArtifactRow: View {
     private var actions: some View {
         HStack(spacing: 8) {
             if busy { ProgressView().controlSize(.small).accessibilityLabel("Preparing saved artifact") }
-            Button("Open") { Task { await model.open(item) } }
+            Button("Open") { Task { if let openPreview { await model.open(item, onOpenFile: openPreview) } } }
                 .buttonStyle(DashboardQuietButtonStyle()).disabled(busy)
             Button("Share") {
                 Task {
