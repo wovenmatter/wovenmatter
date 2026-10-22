@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image_name='wovenmatter/workspace:0.1'
+image_name='wovenmatter/workspace:latest'
 os_release_file="${WOVENMATTER_OS_RELEASE:-/etc/os-release}"
 low_storage_bytes="${WOVENMATTER_LOW_STORAGE_BYTES:-10737418240}"
 low_storage_percent="${WOVENMATTER_LOW_STORAGE_PERCENT:-10}"

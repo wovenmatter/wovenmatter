@@ -5,6 +5,7 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct CompanionRunControlTests {
+
     @Test func recoveryCopyRetainsUnknownBytesAndRetryCannotResurrectDeletedCopy() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -25,6 +26,7 @@ struct CompanionRunControlTests {
         }
         #expect(try await database.companionNote(id: copyID) == nil)
     }
+
 
     // OpenCode v2 owns its native HTTP session lifecycle; legacy ACP transcripts
     // are read-only. Its acceptance/disconnect recovery is covered by

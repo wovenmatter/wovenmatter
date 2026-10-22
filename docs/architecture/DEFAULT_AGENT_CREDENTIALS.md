@@ -63,12 +63,10 @@ hardware key service is required. Losing the Mac key requires an explicit reset
 and re-sign-in for independent remote accounts. This feature is not a SOC 2 or
 FIPS certification claim.
 
-Grok dictation uses the same in-memory access snapshot as other app consumers;
-it never creates a second credential file or passes credentials to a remote
-workspace for speech capture. An early HTTP 401 can trigger a single coordinated
-renewal. Account labels are display metadata, not proof of entitlement. Dictation
-being disabled does not remove the shared sign-in. Local model server keys use
-the same Keychain and encrypted remote vault, with a separate identity per server.
+Dictation uses Apple's on-device SpeechAnalyzer API and does not consume provider
+credentials. Grok subscription and API connections remain available to agents and
+Usage. Local model server keys use the same Keychain and encrypted remote vault,
+with a separate identity per server.
 
 ## Native Claude subscription exception
 

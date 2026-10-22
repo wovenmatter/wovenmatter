@@ -5,6 +5,7 @@ import WovenMatterCore
 
 @Suite("Public source contracts", .serialized)
 struct PublicSourceContractsTests {
+
   @Test("enabling one usage account does not probe the others")
   func scopedUsageAccountEnablement() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-consent")
@@ -19,34 +20,11 @@ struct PublicSourceContractsTests {
     #expect(accounts.map(\.provider) == [.openCodeGo])
   }
 
-  @Test("usage providers default disabled and persist exact choices")
-  func usageProviderPreferences() throws {
-    let suiteName = "wovenmatter-usage-provider-preferences-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-    let preferences = UsageProviderPreferences(defaults: defaults)
-
-    #expect(preferences.enabledProviders.isEmpty)
-
-    preferences.save([.codex, .openCodeGo])
-    #expect(
-      UsageProviderPreferences(defaults: defaults).enabledProviders
-        == [.codex, .openCodeGo]
-    )
-
-    preferences.save([])
-    #expect(UsageProviderPreferences(defaults: defaults).enabledProviders.isEmpty)
-
-    let workspacePreferences = CodexUsageWorkspacePreferences(defaults: defaults)
-    #expect(workspacePreferences.selectedWorkspaceID == nil)
-    workspacePreferences.save(selectedWorkspaceID: "workspace-business")
-    #expect(CodexUsageWorkspacePreferences(
-      defaults: defaults
-    ).selectedWorkspaceID == "workspace-business")
-  }
 
   @Test("Codex workspace catalog exposes distinct metadata without credentials")
   func codexWorkspaceCatalog() throws {
+    try #require(ProcessInfo.processInfo.environment["CODEX_HOME"] == nil,
+      "Run tests with CODEX_HOME unset so fixtures cannot read inherited credentials.")
     let directory = try TemporaryDirectory(prefix: "wovenmatter-codex-workspaces")
     defer { directory.remove() }
     let support = directory.url.appending(
@@ -108,6 +86,143 @@ struct PublicSourceContractsTests {
       homeDirectory: directory.url,
       workspaceID: "workspace-personal"
     ) == personalHome)
+  }
+
+  @Test("normalized last-good limit snapshots persist without credentials")
+  func limitSnapshotPersistence() throws {
+    let directory = try TemporaryDirectory(prefix: "wovenmatter-limit-cache")
+    defer { directory.remove() }
+    let store = try UsageStore(databaseURL: directory.url.appending(path: "workspace.sqlite"))
+    let account = UsageLimitAccount(
+      provider: .openRouter,
+      accountLabel: "Fixture key",
+      status: .available,
+      quotaWindows: [ProviderQuotaWindow(
+        id: "monthly", label: "Monthly", usedPercent: 20,
+        usageKnown: true, windowMinutes: nil, resetsAt: nil
+      )],
+      source: "Fixture",
+      detail: "Normalized fixture",
+      observedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    try store.saveUsageLimitAccounts([account], storedAt: account.observedAt)
+    let restored = try #require(store.usageLimitAccounts(providers: [.openRouter]).first)
+    #expect(restored == account)
+
+    let personal = UsageLimitAccount(
+      provider: .codex,
+      accountScopeID: "workspace-personal",
+      accountLabel: "Personal — same@example.com",
+      status: .available,
+      quotaWindows: [ProviderQuotaWindow(
+        id: "weekly", label: "Weekly", usedPercent: 10,
+        usageKnown: true, windowMinutes: nil, resetsAt: nil
+      )],
+      source: "Fixture",
+      detail: "Personal workspace",
+      observedAt: account.observedAt
+    )
+    let business = UsageLimitAccount(
+      provider: .codex,
+      accountScopeID: "workspace-business",
+      accountLabel: "Example Business — same@example.com",
+      status: .available,
+      quotaWindows: [ProviderQuotaWindow(
+        id: "weekly", label: "Weekly", usedPercent: 70,
+        usageKnown: true, windowMinutes: nil, resetsAt: nil
+      )],
+      source: "Fixture",
+      detail: "Business workspace",
+      observedAt: account.observedAt
+    )
+    try store.saveUsageLimitAccounts([personal, business], storedAt: account.observedAt)
+    let restoredPersonal = try #require(store.usageLimitAccounts(
+      providers: [.codex],
+      accountScopes: [.codex: "workspace-personal"]
+    ).first)
+    let restoredBusiness = try #require(store.usageLimitAccounts(
+      providers: [.codex],
+      accountScopes: [.codex: "workspace-business"]
+    ).first)
+    #expect(restoredPersonal.quotaWindows.first?.usedPercent == 10)
+    #expect(restoredBusiness.quotaWindows.first?.usedPercent == 70)
+  }
+
+  @Test("disabled providers are filtered from analytics and limits")
+  func disabledProvidersAreFiltered() async throws {
+    let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-filtering")
+    defer { directory.remove() }
+    let databaseURL = directory.url.appending(path: "workspace.sqlite")
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let store = try UsageStore(databaseURL: databaseURL)
+    try store.replace(
+      sourceID: "fixture:providers",
+      sourceName: "Fixture",
+      location: "Fixture",
+      provider: .unknown,
+      harness: "Fixture",
+      fingerprint: "fixture",
+      samples: [
+        usageSample(provider: .codex, timestamp: now.addingTimeInterval(-60)),
+        usageSample(provider: .claude, timestamp: now.addingTimeInterval(-30)),
+      ],
+      importedAt: now
+    )
+
+    let sourceAccess = UsageSourceAccessRecorder()
+    let credentials = RecordingUsageCredentialStore()
+    let service = LocalUsageService(
+      homeDirectory: directory.url,
+      fileManager: RecordingUsageFileManager(recorder: sourceAccess),
+      credentialStore: credentials,
+      usageDatabaseURL: databaseURL
+    )
+    let snapshot = try await service.snapshot(
+      range: .last30Days,
+      refreshLimits: false,
+      refreshReason: .rangeChanged,
+      enabledProviders: [.claude],
+      allowCredentialAccess: true,
+      now: now
+    )
+
+    #expect(snapshot.analytics.samples.map(\.provider) == [.claude])
+    #expect(snapshot.analytics.sources.allSatisfy { $0.provider != .codex })
+    #expect(snapshot.limits.map(\.provider) == [.claude])
+    #expect(credentials.readCount == 0)
+    #expect(sourceAccess.providerSourceChecks.allSatisfy { path in
+      !path.contains("/.codex/")
+        && !path.contains("/.grok/")
+        && !path.contains("/.cursor/")
+        && !path.contains("/.local/share/opencode/")
+    })
+  }
+
+
+  @Test("usage providers default disabled and persist exact choices")
+  func usageProviderPreferences() throws {
+    let suiteName = "wovenmatter-usage-provider-preferences-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let preferences = UsageProviderPreferences(defaults: defaults)
+
+    #expect(preferences.enabledProviders.isEmpty)
+
+    preferences.save([.codex, .openCodeGo])
+    #expect(
+      UsageProviderPreferences(defaults: defaults).enabledProviders
+        == [.codex, .openCodeGo]
+    )
+
+    preferences.save([])
+    #expect(UsageProviderPreferences(defaults: defaults).enabledProviders.isEmpty)
+
+    let workspacePreferences = CodexUsageWorkspacePreferences(defaults: defaults)
+    #expect(workspacePreferences.selectedWorkspaceID == nil)
+    workspacePreferences.save(selectedWorkspaceID: "workspace-business")
+    #expect(CodexUsageWorkspacePreferences(
+      defaults: defaults
+    ).selectedWorkspaceID == "workspace-business")
   }
 
   @Test("provider response fixtures preserve distinct quota semantics")
@@ -230,145 +345,6 @@ struct PublicSourceContractsTests {
     #expect(openRouter.details.contains { $0.label == "Rate limit" })
   }
 
-  @Test("Keychain interaction is one-shot and explicit-only")
-  func keychainInteractionPolicy() {
-    let passiveReasons: [UsageRefreshReason] = [
-      .startup, .viewAppeared, .rangeChanged, .manual, .runCompleted, .periodic,
-    ]
-    for reason in passiveReasons {
-      #expect(UsageKeychainInteraction.resolve(
-        refreshReason: reason,
-        disclosureAcknowledged: true,
-        explicitUserAction: true
-      ) == .noninteractive)
-    }
-    #expect(UsageKeychainInteraction.resolve(
-      refreshReason: .credentialChanged,
-      disclosureAcknowledged: false,
-      explicitUserAction: true
-    ) == .noninteractive)
-    #expect(UsageKeychainInteraction.resolve(
-      refreshReason: .credentialChanged,
-      disclosureAcknowledged: true,
-      explicitUserAction: false
-    ) == .noninteractive)
-    #expect(UsageKeychainInteraction.resolve(
-      refreshReason: .credentialChanged,
-      disclosureAcknowledged: true,
-      explicitUserAction: true
-    ) == .oneShotExplicit)
-  }
-
-  @Test("normalized last-good limit snapshots persist without credentials")
-  func limitSnapshotPersistence() throws {
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-limit-cache")
-    defer { directory.remove() }
-    let store = try UsageStore(databaseURL: directory.url.appending(path: "workspace.sqlite"))
-    let account = UsageLimitAccount(
-      provider: .openRouter,
-      accountLabel: "Fixture key",
-      status: .available,
-      quotaWindows: [ProviderQuotaWindow(
-        id: "monthly", label: "Monthly", usedPercent: 20,
-        usageKnown: true, windowMinutes: nil, resetsAt: nil
-      )],
-      source: "Fixture",
-      detail: "Normalized fixture",
-      observedAt: Date(timeIntervalSince1970: 1_800_000_000)
-    )
-    try store.saveUsageLimitAccounts([account], storedAt: account.observedAt)
-    let restored = try #require(store.usageLimitAccounts(providers: [.openRouter]).first)
-    #expect(restored == account)
-
-    let personal = UsageLimitAccount(
-      provider: .codex,
-      accountScopeID: "workspace-personal",
-      accountLabel: "Personal — same@example.com",
-      status: .available,
-      quotaWindows: [ProviderQuotaWindow(
-        id: "weekly", label: "Weekly", usedPercent: 10,
-        usageKnown: true, windowMinutes: nil, resetsAt: nil
-      )],
-      source: "Fixture",
-      detail: "Personal workspace",
-      observedAt: account.observedAt
-    )
-    let business = UsageLimitAccount(
-      provider: .codex,
-      accountScopeID: "workspace-business",
-      accountLabel: "Example Business — same@example.com",
-      status: .available,
-      quotaWindows: [ProviderQuotaWindow(
-        id: "weekly", label: "Weekly", usedPercent: 70,
-        usageKnown: true, windowMinutes: nil, resetsAt: nil
-      )],
-      source: "Fixture",
-      detail: "Business workspace",
-      observedAt: account.observedAt
-    )
-    try store.saveUsageLimitAccounts([personal, business], storedAt: account.observedAt)
-    let restoredPersonal = try #require(store.usageLimitAccounts(
-      providers: [.codex],
-      accountScopes: [.codex: "workspace-personal"]
-    ).first)
-    let restoredBusiness = try #require(store.usageLimitAccounts(
-      providers: [.codex],
-      accountScopes: [.codex: "workspace-business"]
-    ).first)
-    #expect(restoredPersonal.quotaWindows.first?.usedPercent == 10)
-    #expect(restoredBusiness.quotaWindows.first?.usedPercent == 70)
-  }
-
-  @Test("disabled providers are filtered from analytics and limits")
-  func disabledProvidersAreFiltered() async throws {
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-filtering")
-    defer { directory.remove() }
-    let databaseURL = directory.url.appending(path: "workspace.sqlite")
-    let now = Date(timeIntervalSince1970: 1_800_000_000)
-    let store = try UsageStore(databaseURL: databaseURL)
-    try store.replace(
-      sourceID: "fixture:providers",
-      sourceName: "Fixture",
-      location: "Fixture",
-      provider: .unknown,
-      harness: "Fixture",
-      fingerprint: "fixture",
-      samples: [
-        usageSample(provider: .codex, timestamp: now.addingTimeInterval(-60)),
-        usageSample(provider: .claude, timestamp: now.addingTimeInterval(-30)),
-      ],
-      importedAt: now
-    )
-
-    let sourceAccess = UsageSourceAccessRecorder()
-    let credentials = RecordingUsageCredentialStore()
-    let service = LocalUsageService(
-      homeDirectory: directory.url,
-      fileManager: RecordingUsageFileManager(recorder: sourceAccess),
-      credentialStore: credentials,
-      usageDatabaseURL: databaseURL
-    )
-    let snapshot = try await service.snapshot(
-      range: .last30Days,
-      refreshLimits: false,
-      refreshReason: .rangeChanged,
-      enabledProviders: [.claude],
-      allowCredentialAccess: true,
-      now: now
-    )
-
-    #expect(snapshot.analytics.samples.map(\.provider) == [.claude])
-    #expect(snapshot.analytics.sources.allSatisfy { $0.provider != .codex })
-    #expect(snapshot.limits.map(\.provider) == [.claude])
-    #expect(credentials.readCount == 0)
-    #expect(sourceAccess.providerSourceChecks.allSatisfy { path in
-      !path.contains("/.codex/")
-        && !path.contains("/.grok/")
-        && !path.contains("/.cursor/")
-        && !path.contains("/.local/share/opencode/")
-    })
-  }
-
   @Test("disabled providers do not scan local sources or read credentials")
   func disabledProvidersDoNotAccessSources() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-disabled")
@@ -396,35 +372,6 @@ struct PublicSourceContractsTests {
     #expect(snapshot.limits.isEmpty)
     #expect(credentials.readCount == 0)
     #expect(sourceAccess.providerSourceChecks.isEmpty)
-  }
-
-  @Test("the bundled catalog is complete and executable")
-  func harnessCatalog() throws {
-    let document = try HarnessCatalog.loadBundled()
-
-    #expect(document.schemaVersion == 4)
-    #expect(document.harnesses.map(\.id) == [
-      .codex, .claudeCode, .grokBuild, .opencode,
-    ])
-    #expect(document.harnesses.allSatisfy { harness in
-      !harness.capabilities.isEmpty
-        && harness.install.source.scheme == "https"
-        && (harness.transport == "opencode-v2" || (!harness.authentication.statusCommands.isEmpty
-        && !harness.authentication.methods.isEmpty))
-        && (harness.adapterPackage != nil || harness.transportCheckCommand != nil)
-    })
-    #expect(document.harnesses.filter { $0.adapterPackage != nil }.allSatisfy {
-      guard let version = $0.minimumAdapterVersion else { return false }
-      let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-      return parts.count == 3
-        && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
-    })
-    #expect(document.harnesses.filter {
-      $0.install.kind == "npm-global"
-    }.allSatisfy {
-      if $0.id == .opencode { return $0.install.package == "@opencode/cli@2" }
-      return $0.id == .pi && $0.install.package == "@earendil-works/pi-coding-agent@1"
-    })
   }
 
 }

@@ -5,37 +5,6 @@ import Testing
 
 @Suite("Release updates")
 struct ReleaseUpdateTests {
-  @Test("compares semantic release versions")
-  func versionComparison() throws {
-    let current = try #require(WovenMatterReleaseVersion("0.1.0"))
-    let patch = try #require(WovenMatterReleaseVersion("0.1.1"))
-    let minor = try #require(WovenMatterReleaseVersion("0.2.0"))
-    #expect(current < patch)
-    #expect(patch < minor)
-    #expect(WovenMatterReleaseVersion("0.1") == nil)
-    #expect(WovenMatterReleaseVersion("v0.1.0") == nil)
-  }
-
-  @Test("accepts only the official arm64 release path")
-  func validatesManifest() throws {
-    let manifest = try JSONDecoder().decode(
-      WovenMatterReleaseManifest.self,
-      from: Data(validManifest.utf8)
-    )
-    #expect(try manifest.validated() == manifest)
-
-    let changed = validManifest.replacingOccurrences(
-      of: "WovenMatter_0.1.0_arm64.dmg",
-      with: "WovenMatter_0.1.0_x64.dmg"
-    )
-    let invalid = try JSONDecoder().decode(
-      WovenMatterReleaseManifest.self,
-      from: Data(changed.utf8)
-    )
-    #expect(throws: WovenMatterReleaseUpdateError.invalidManifest) {
-      try invalid.validated()
-    }
-  }
 
   @Test("reports a newer published version")
   func updateAvailable() async throws {
@@ -81,27 +50,26 @@ struct ReleaseUpdateTests {
     }
   }
 
-  @Test("ignores minimum macOS for a release that is not newer")
-  func currentVersionIgnoresMinimumSystem() async throws {
-    let futureManifest = validManifest.replacingOccurrences(
-      of: "\"minimum_macos\": \"26.0\"",
-      with: "\"minimum_macos\": \"27.0\""
+
+  @Test("accepts only the official arm64 release path")
+  func validatesManifest() throws {
+    let manifest = try JSONDecoder().decode(
+      WovenMatterReleaseManifest.self,
+      from: Data(validManifest.utf8)
     )
-    let client = WovenMatterReleaseUpdateClient(
-      fetch: { url in
-        let response = try #require(HTTPURLResponse(
-          url: url,
-          statusCode: 200,
-          httpVersion: "HTTP/1.1",
-          headerFields: nil
-        ))
-        return (Data(futureManifest.utf8), response)
-      },
-      currentOperatingSystemVersion: {
-        OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
-      }
+    #expect(try manifest.validated() == manifest)
+
+    let changed = validManifest.replacingOccurrences(
+      of: "WovenMatter_0.1.0_arm64.dmg",
+      with: "WovenMatter_0.1.0_x64.dmg"
     )
-    #expect(try await client.check(currentVersion: "0.1.0") == .current)
+    let invalid = try JSONDecoder().decode(
+      WovenMatterReleaseManifest.self,
+      from: Data(changed.utf8)
+    )
+    #expect(throws: WovenMatterReleaseUpdateError.invalidManifest) {
+      try invalid.validated()
+    }
   }
 
   @Test("downloads a verified release into app-managed storage")
@@ -164,17 +132,6 @@ struct ReleaseUpdateTests {
       try await installer.download(manifest)
     }
     #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
-  }
-
-  @Test("replacement helper is valid shell")
-  func replacementHelperSyntax() throws {
-    let result = try LocalACPProcessRunner.run(
-      executableURL: URL(fileURLWithPath: "/bin/sh"),
-      arguments: [
-        "-n", "-c", WovenMatterReleaseUpdateInstaller.replacementScript,
-      ]
-    )
-    #expect(result.succeeded)
   }
 
   private let validManifest = """

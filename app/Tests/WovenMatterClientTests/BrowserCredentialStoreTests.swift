@@ -4,6 +4,23 @@ import Testing
 @testable import WovenMatterClient
 
 struct BrowserCredentialStoreTests {
+
+  @Test func failedSaveKeepsPriorPasswordAndRecoveryReloads() throws {
+    let fixture = BrowserKeychainFixture()
+    let store = fixture.store()
+    try store.prepare(consented: true)
+    try store.save(origin: "https://example.com", username: "alice", password: "original")
+    fixture.writeStatus = errSecInteractionNotAllowed
+    #expect(throws: BrowserCredentialStore.AccessError.self) {
+      try store.save(origin: "https://example.com", username: "alice", password: "replacement")
+    }
+    #expect(try store.savedPasswords(for: "https://example.com").first?.password == "original")
+    fixture.writeStatus = errSecSuccess
+    try store.prepare(consented: true, authorize: true)
+    try store.save(origin: "https://example.com", username: "alice", password: "replacement")
+    #expect(try store.savedPasswords(for: "https://example.com").first?.password == "replacement")
+  }
+
   @Test func savesUpdatesAndReloadsWithoutPrompting() throws {
     let fixture = BrowserKeychainFixture()
     let first = fixture.store()
@@ -33,22 +50,6 @@ struct BrowserCredentialStoreTests {
     #expect(throws: BrowserCredentialStore.AccessError.self) { try store.prepare(consented: true) }
     #expect(fixture.writes == 0)
     #expect(fixture.interactiveCalls == 0)
-  }
-
-  @Test func failedSaveKeepsPriorPasswordAndRecoveryReloads() throws {
-    let fixture = BrowserKeychainFixture()
-    let store = fixture.store()
-    try store.prepare(consented: true)
-    try store.save(origin: "https://example.com", username: "alice", password: "original")
-    fixture.writeStatus = errSecInteractionNotAllowed
-    #expect(throws: BrowserCredentialStore.AccessError.self) {
-      try store.save(origin: "https://example.com", username: "alice", password: "replacement")
-    }
-    #expect(try store.savedPasswords(for: "https://example.com").first?.password == "original")
-    fixture.writeStatus = errSecSuccess
-    try store.prepare(consented: true, authorize: true)
-    try store.save(origin: "https://example.com", username: "alice", password: "replacement")
-    #expect(try store.savedPasswords(for: "https://example.com").first?.password == "replacement")
   }
 
   @Test func validatesExactSecureOrigins() {

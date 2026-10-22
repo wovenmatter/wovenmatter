@@ -161,17 +161,18 @@ final class ProductAnalyticsModel {
       defaults.set(next.addingTimeInterval(-ProductAnalyticsEvent.signalInterval), forKey: key)
     }
   }
-  func prepareUpdateInstallation(_ manifest: WovenMatterReleaseManifest) async -> UUID {
-    await refresh()
+  /// Persist before the updater may terminate us, including install-on-quit.
+  /// Delivery refreshes and checks the library preference again after launch.
+  func prepareUpdateInstallation(version: String, build: Int) -> UUID {
     let installationID = UUID()
     defaults.removeObject(forKey: Self.updateReceiptKey)
     guard !locallyDisabled, let preference,
       preference.collects else { return installationID }
     let receipt = ProductAnalyticsUpdateReceipt(
-      analyticsID: preference.analyticsID, version: manifest.version, build: manifest.build,
+      analyticsID: preference.analyticsID, version: version, build: build,
       event: ProductAnalyticsEvent(id: installationID.uuidString.lowercased(),
         preferenceRevision: preference.revision, name: .updateInstallCompleted,
-        properties: ["platform": "macos", "target_version": manifest.version]))
+        properties: ["platform": "macos", "target_version": version]))
     if let data = try? JSONEncoder().encode(receipt) {
       defaults.set(data, forKey: Self.updateReceiptKey)
     }
@@ -185,6 +186,14 @@ final class ProductAnalyticsModel {
     guard let data = defaults.data(forKey: updateReceiptKey),
       var receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data),
       receipt.confirmLaunch(marker: marker, version: version, build: build),
+      let updated = try? JSONEncoder().encode(receipt) else { return }
+    defaults.set(updated, forKey: updateReceiptKey)
+  }
+  static func markUpdateLaunched(version: String, build: Int) {
+    let defaults = UserDefaults.standard
+    guard let data = defaults.data(forKey: updateReceiptKey),
+      var receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data),
+      receipt.confirmLaunch(version: version, build: build),
       let updated = try? JSONEncoder().encode(receipt) else { return }
     defaults.set(updated, forKey: updateReceiptKey)
   }
@@ -314,9 +323,14 @@ struct ProductAnalyticsUpdateReceipt: Codable, Equatable {
   var confirmed = false
 
   mutating func confirmLaunch(marker: URL, version: String, build: Int, now: Date = Date()) -> Bool {
+    guard marker.lastPathComponent == ".ready-" + event.id else { return false }
+    return confirmLaunch(version: version, build: build, now: now)
+  }
+  // Sparkle relaunches without the legacy installer's command-line marker.
+  // The running app must match the exact intended version AND build.
+  mutating func confirmLaunch(version: String, build: Int, now: Date = Date()) -> Bool {
     guard !confirmed, self.version == version, self.build == build,
-      UUID(uuidString: event.id) != nil, marker.lastPathComponent == ".ready-" + event.id
-    else { return false }
+      UUID(uuidString: event.id) != nil else { return false }
     confirmed = true
     event.timestamp = now
     event.properties["app_version"] = version

@@ -3,6 +3,7 @@ import CompanionClient
 import Foundation
 import Observation
 import WovenMatterCompanion
+import WovenMatterCore
 
 enum CentralLibraryClientConfiguration {
     static let preferenceKey = LocalExecutionRole.libraryClientPreferenceKey
@@ -205,6 +206,15 @@ final class CentralLibraryClientModel {
         guard engine == nil else { return }
         do {
             credential = try MobileCredentialVault.load()
+            if credential == nil, DevelopmentLaunch.isClient {
+                do {
+                    let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
+                    try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
+                } catch {
+                    deviceConnectionsError = "The local production library could not connect: " + error.localizedDescription
+                        + " You can also pair this instance in Device Connections."
+                }
+            }
             try configureTransport()
             try configureDirectClients()
             if let store { await analytics.configure(store.analytics, transport: transport) }
@@ -296,6 +306,10 @@ final class CentralLibraryClientModel {
             if let engine { value = await engine.synchronizationStatus() }
             else { value = await MobileSyncEngine.localSynchronizationStatus(store: store) }
             if generation == connectionGeneration { synchronization = value }
+        }
+        if DevelopmentLaunch.isClient, let model = localExecution?.model {
+            model.liveLibraryClient = self
+            await model.refreshWorkspace()
         }
     }
     func attachExecutionWorkspace(_ workspace: CompanionExecutionWorkspace, transport: any ExecutionWorkspaceTransport) async throws {
@@ -675,6 +689,63 @@ final class CentralLibraryClientModel {
     }
     func executionOwner(for conversationID: String) -> String? {
         journal.conversationWorkspaceIDs[conversationID]
+    }
+
+    func isForeignConversation(_ id: String) -> Bool {
+        state.conversations[id] != nil && executionOwner(for: id) != localExecution?.descriptor.id
+    }
+
+    func desktopSend(id: String, text: String) async throws {
+        let snapshot = try await desktopExecution(.refresh(conversationID: id))
+        let command = CompanionCommand(deviceID: state.deviceID, kind: snapshot.transcript?.activeRunID == nil ? .send : .steer,
+            conversationID: id, runID: snapshot.transcript?.activeRunID, text: text)
+        try requireAccepted(await submit(command, workspaceID: executionOwner(for: id) ?? "central"))
+        await refresh()
+    }
+
+    func desktopExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
+        let id: String
+        var earlier: CompanionTranscript?
+        switch action {
+        case .refresh(let value): id = value
+        case .stop(let value, let run):
+            id = value
+            try requireAccepted(await submit(.init(deviceID: state.deviceID, kind: .stop, conversationID: id, runID: run), workspaceID: executionOwner(for: id) ?? "central"))
+        case .respond(let interaction, let response):
+            id = interaction.conversationID
+            try requireAccepted(await submit(.init(deviceID: state.deviceID, kind: .respond, conversationID: id,
+                runID: interaction.runID, interactionID: interaction.id, response: response), workspaceID: executionOwner(for: id) ?? "central"))
+        case .configure(let value, let command):
+            id = value
+            try requireAccepted(await submit(.init(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: command), workspaceID: executionOwner(for: id) ?? "central"))
+        case .earlier(let value, let before):
+            id = value
+            if let owner = executionOwner(for: id), let client = directClients[owner] { earlier = try await client.earlierTranscript(id, before: before) }
+            else { earlier = try await transport?.transcript(id, before: before) }
+        }
+        let owner = executionOwner(for: id) ?? "central"
+        var provider: CompanionProvider?
+        var interactions: [CompanionPendingInteraction] = []
+        var refreshError: String?
+        do {
+        if owner == "central", let engine {
+            try await engine.refreshTranscript(id)
+            provider = try? await transport?.capabilities(id)
+            interactions = (try? await engine.pending()) ?? []
+        } else if let client = directClients[owner] {
+            try await client.refresh()
+            provider = try? await client.capabilities(id)
+            interactions = (try? await client.pending()) ?? []
+        }
+        } catch { refreshError = error.localizedDescription }
+        await reload()
+        var settings: CompanionSessionSettings?
+        if case .session(let value) = try? await workspace(.session(id: id)) { settings = value }
+        let descriptor = journal.workspaces[owner] ?? CompanionExecutionWorkspace(id: owner,
+            libraryID: state.workspaceID ?? "", ownerDeviceID: owner, kind: .mac, name: "Production", capabilities: ["execution.v1"])
+        return .init(workspace: descriptor, transcript: earlier ?? state.transcripts[id] ?? journal.transcripts[id],
+            capability: provider, interactions: interactions.filter { $0.conversationID == id }, session: settings,
+            online: refreshError == nil && (owner == "central" ? online : directOnline.contains(owner)), error: refreshError)
     }
     func continueLaunch(_ launch: MobileLaunchRecord) async {
         guard !sending else { return }; sending = true; defer { sending = false }

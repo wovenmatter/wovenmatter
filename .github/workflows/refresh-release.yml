@@ -1,0 +1,49 @@
+name: Refresh desktop update
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/release-refresh.json]
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: desktop-refresh-dispatch
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Dispatch accepted desktop update build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Tag push and signed-build dispatch: exact current release, updated by
+      # the maintenance agent (docs/DEPENDENCIES.md).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Create immutable build tag and start signed workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(jq -er '.version' .github/release-refresh.json)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "v$version"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          build="$(git rev-list --count HEAD)"
+          tag="v${version}-build${build}"
+          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+            test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          else
+            git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              tag -a "$tag" "$GITHUB_SHA" -m "Desktop update build $build for v$version"
+            git push origin "refs/tags/$tag"
+          fi
+          # Explicit dispatch is required: pushes made by GITHUB_TOKEN do not
+          # trigger another workflow. The v* build tag uses the existing signing policy.
+          gh workflow run release.yml --ref "$tag" -f refresh=true
+          echo "Started signed v$version build $build at $GITHUB_SHA ($tag)." >> "$GITHUB_STEP_SUMMARY"

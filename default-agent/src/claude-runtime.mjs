@@ -28,9 +28,9 @@ export function claudeExecutable(platform = process.platform, arch = process.arc
 
 // Claude owns the contents of these directories. Never read, export, encrypt,
 // refresh, or synchronize its subscription credentials from Woven Matter.
-export async function claudeDirectories(directory, { platform = process.platform, memoryRoot = '/dev/shm' } = {}) {
+export async function claudeDirectories(directory, { platform = process.platform, memoryRoot = '/dev/shm', filesystemStatus = statfs } = {}) {
   if (platform === 'linux') {
-    if ((await statfs(memoryRoot)).type !== 0x01021994) throw new DefaultAgentError('Claude subscription sign-in requires a memory-backed workspace directory.');
+    if ((await filesystemStatus(memoryRoot)).type !== 0x01021994) throw new DefaultAgentError('Claude subscription sign-in requires a memory-backed workspace directory.');
     const suffix = createHash('sha256').update(directory).digest('hex').slice(0, 16);
     const config = join(memoryRoot, `woven-claude-${process.getuid()}-${suffix}`);
     await privateDirectory(config);

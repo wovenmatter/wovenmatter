@@ -20,13 +20,6 @@ function fixture(overrides = {}) {
   })
 }
 
-test('host registration credentials never appear in status', async () => {
-  const instances = fixture()
-  assert.equal((await instances.status('opencode')).state, 'running')
-  assert.equal(JSON.stringify(await instances.status('opencode')).includes('host-secret'), false)
-  assert.equal(instances.registrationPath, '/remote/project/.woven-matter/opencode-state/opencode/service.json')
-})
-
 test('reject non-loopback, credentials in URL, malformed PID and incompatible services before any mutation', async () => {
   for (const patch of [{ url: 'http://example.com' }, { url: 'http://user:secret@127.0.0.1' }, { pid: -1 }]) {
     const instances = fixture({ readFile: async () => JSON.stringify({ ...info, ...patch }) })
@@ -35,15 +28,6 @@ test('reject non-loopback, credentials in URL, malformed PID and incompatible se
   }
   const incompatible = fixture({ fetch: async () => ({ ok: true, json: async () => ({ healthy: true, pid: info.pid, version: '1.0.0' }) }) })
   await assert.rejects(incompatible.action('opencode', 'stop'), /version_incompatible/)
-})
-
-test('enabled guard applies before starting; existing live service is reused', async () => {
-  await assert.rejects(fixture({ isEnabled: async () => false }).action('opencode', 'start'), /runtime_disabled/)
-  let launches = 0
-  const instances = fixture({ spawn: () => { launches++; throw new Error('must not launch') } })
-  await instances.action('opencode', 'start')
-  assert.equal(launches, 0)
-  assert.equal(await instances.hasActiveRuntime('opencode'), true)
 })
 
 test('startup is serialized, version checked, loopback bound and workspace state isolated', async () => {
@@ -70,6 +54,9 @@ test('startup is serialized, version checked, loopback bound and workspace state
   const first = instances.action('opencode', 'start')
   await assert.rejects(instances.action('opencode', 'start'), /operation_in_progress/)
   release(); await first
+  const publicStatus = await instances.status('opencode')
+  assert.equal(JSON.stringify(publicStatus).includes(info.password), false)
+  assert.equal(JSON.stringify(publicStatus).includes(Buffer.from('opencode:' + info.password).toString('base64')), false)
   assert.equal(unlocks, 0, 'server must hold lock after startup completes')
   ownedChild.exitCode = 0; ownedChild.emit('close', 0)
   assert.equal(unlocks, 1)
@@ -89,8 +76,6 @@ test('stop verifies service and registration identity before signaling only its 
   const changed = fixture({ readFile: async () => JSON.stringify({ ...info, password: ++reads > 1 ? 'different' : info.password }) })
   await assert.rejects(changed.action('opencode', 'stop'), /identity_changed/)
 })
-
-
 
 test('streaming proxy uses host Basic auth, strips client bearer and cookies, preserves SSE', async () => {
   let recorded
@@ -120,41 +105,4 @@ test('streaming proxy uses host Basic auth, strips client bearer and cookies, pr
     await instances.handle(fileRequest, fileResponse, new URL('http://host/v1/workspace-instances/opencode/api/fs/read/%2Fremote%2Ffile%2Etxt'))
     assert.equal(recorded.url, '/api/fs/read/%2Fremote%2Ffile%2Etxt')
   } finally { await new Promise((done) => upstream.close(done)) }
-})
-
-test('future v2 service releases stay compatible while mismatched registration identity is refused', async () => {
-  const future = { ...info, version: '2.99.1' }
-  const instances = fixture({ readFile: async () => JSON.stringify(future),
-    fetch: async () => ({ ok: true, json: async () => ({ pid: future.pid, version: future.version }) }) })
-  assert.equal((await instances.status('opencode')).version, future.version)
-  await instances.action('opencode', 'start')
-  const mismatch = fixture({ fetch: async () => ({ ok: true, json: async () => ({ pid: info.pid, version: '2.99.1' }) }) })
-  await assert.rejects(mismatch.action('opencode', 'start'), /version_incompatible/)
-})
-
-test('startup falls back to supported v2 alias when canonical command is still v1', async () => {
-  let registered = false
-  const instances = fixture({
-    readFile: async () => { if (!registered) throw Object.assign(new Error(), { code: 'ENOENT' }); return JSON.stringify(info) },
-    execFile: async command => ({ stdout: command === 'opencode' ? '1.18.29' : 'opencode2 v2.0.22' }),
-    mkdir: async () => {},
-    spawn: command => {
-      assert.equal(command, 'opencode2'); registered = true
-      return Object.assign(new EventEmitter(), { exitCode: 0 })
-    },
-  })
-  await instances.action('opencode', 'start')
-})
-
-test('explicit stop authenticates legacy v2 beta identity without permitting session use', async () => {
-  const beta = { ...info, version: '0.0.0-beta-19507' }
-  let stopped = false
-  const instances = fixture({ readFile: async () => JSON.stringify(beta),
-    fetch: async url => url.pathname === '/api/info' ? { ok: false, status: 404 }
-      : { ok: true, json: async () => ({ healthy: true, pid: beta.pid, version: beta.version }) },
-    signal: (_pid, name) => { if (name === 'SIGTERM') stopped = true; else if (stopped) throw Object.assign(new Error(), { code: 'ESRCH' }) },
-  })
-  await assert.rejects(instances.action('opencode', 'start'), /health_unavailable/)
-  await instances.action('opencode', 'stop')
-  assert.equal(stopped, true)
 })

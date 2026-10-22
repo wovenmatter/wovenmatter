@@ -61,6 +61,25 @@ public actor CompanionAuthentication {
   }
 
   public func devices() -> [CompanionPairedDevice] { state.devices.filter { $0.revokedAt == nil } }
+
+  /// Called only by the same-user Unix socket, never by an HTTP route. A local
+  /// development instance receives its own revocable identity, not the host's.
+  public func enrollLocalDevelopment(deviceID: String, name: String, workspaceID: String) throws -> CompanionPairResponse {
+    guard UUID(uuidString: deviceID) != nil, name.hasPrefix("Dev · "), name.utf8.count <= 120,
+          !name.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
+      throw Self.error("invalid_device", "Invalid development instance identity.")
+    }
+    if let existing = state.devices.first(where: { $0.id == deviceID }), existing.name != name {
+      throw Self.error("invalid_device", "This device identity is already in use.")
+    }
+    let token = try Self.randomToken()
+    var next = state
+    next.devices.removeAll { $0.id == deviceID }
+    next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), revokedAt: nil,
+      metadata: .init(kind: .mac), lastSeenAt: now(), credentialHash: Self.digest(token)))
+    try persist(next); state = next
+    return .init(workspaceID: workspaceID, deviceID: deviceID, credential: token)
+  }
   public func deviceConnections() -> [CompanionDeviceConnection] {
     devices().map { .init(id: $0.id, name: $0.name, metadata: $0.metadata ?? .init(), pairedAt: $0.pairedAt, lastSeenAt: $0.lastSeenAt) }
   }

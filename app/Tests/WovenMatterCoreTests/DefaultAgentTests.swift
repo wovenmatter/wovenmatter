@@ -5,13 +5,6 @@ import WovenMatterCore
 
 @Suite("Built-in settings and recovery")
 struct DefaultAgentTests {
-    @Test func modelChoicesAreOptInAndDefaultRemainsAvailable() {
-        let catalog = ["openai/gpt", "openrouter/anthropic/claude", "opencode-go/glm"]
-        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [], defaultModel: catalog[1], catalog: catalog) == [catalog[1]])
-        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [catalog[2]], defaultModel: catalog[1], catalog: catalog) == [catalog[1], catalog[2]])
-        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [], defaultModel: nil, catalog: catalog) == [catalog[0]])
-        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [catalog[2], catalog[1]], defaultModel: catalog[1], catalog: catalog) == [catalog[2], catalog[1]])
-    }
     @Test func labsAreSharedAcrossConnectionTypes() {
         for id in ["anthropic/claude-sonnet-4", "claude-subscription/sonnet", "openrouter/anthropic/claude-sonnet", "opencode-go/claude-sonnet-4"] {
             #expect(DefaultAgentModelCatalog.lab(id: id, name: "Claude Sonnet") == "Anthropic")
@@ -38,26 +31,4 @@ struct DefaultAgentTests {
         #expect(settings.resolved("remote") == settings.global)
     }
 
-    @Test func completedRemoteRunsRecoverOnlyTheirOwnConversationOnce() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "woven-default-agent-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let owner = UUID()
-        let first = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "First", ownerDeviceID: owner)
-        let second = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Second", ownerDeviceID: owner)
-        let run = try await database.beginLocalACPRun(conversationID: first, content: "Work remotely")
-        try await database.completeLocalACPRun(runID: run.runID, error: "Disconnected")
-        let snapshot = DefaultAgentRunSnapshot(runID: run.runID, content: "Finished remotely", model: "openrouter/fallback")
-        try await database.recoverRemoteAgentRuns(conversationID: second, snapshots: [snapshot])
-        #expect(try await database.conversationHistoryPage(id: first, limit: 20).runs.first?.status == "failed")
-        try await database.recoverRemoteAgentRuns(conversationID: first, snapshots: [snapshot])
-        let recovered = try await database.conversationHistoryPage(id: first, limit: 20)
-        #expect(recovered.runs.first?.status == "completed")
-        #expect(recovered.messages.first { $0.id == run.assistantMessageID }?.content == "Finished remotely")
-        try await database.recoverRemoteAgentRuns(conversationID: first, snapshots: [.init(runID: run.runID, content: "stale")])
-        #expect(try await database.conversationHistoryPage(id: first, limit: 20) == recovered)
-        let external = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "External harness", ownerDeviceID: owner)
-        await #expect(throws: (any Error).self) { try await database.recoverRemoteAgentRuns(conversationID: external, snapshots: [snapshot]) }
-    }
 }

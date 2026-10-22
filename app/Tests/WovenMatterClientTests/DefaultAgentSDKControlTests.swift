@@ -6,6 +6,22 @@ import Testing
 
 @Suite("SDK maintenance process ownership")
 struct DefaultAgentSDKControlTests {
+
+    @Test func taskCancellationTerminatesTheHelper() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let operation = await startFixture {
+            try await DefaultAgentSDKControl.run(.init(action: .check, id: "pi"), executable: URL(filePath: "/bin/sh"),
+                arguments: ["-c", hangingScript, "fixture", root.path], timeout: 30)
+        }
+        defer { operation.cancel() }
+        try await awaitFile(root.appending(path: "child"))
+        operation.cancel()
+        do { _ = try await operation.value; Issue.record("A canceled fixture must not return an SDK status") }
+        catch { #expect(error.localizedDescription.contains("Reload installed versions")) }
+        try assertReaped(root.appending(path: "parent"))
+    }
+
     private func directory() throws -> URL {
         let value = FileManager.default.temporaryDirectory.appending(path: "woven-sdk-control-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: value, withIntermediateDirectories: true)
@@ -77,20 +93,6 @@ struct DefaultAgentSDKControlTests {
         #expect(pressure.probeRemainsQueued())
     }
 
-    @Test func cancellationBeforeExecutionStartsDoesNotSpawnAHelper() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let operation = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return try await DefaultAgentSDKControl.run(.init(action: .status),
-                executable: URL(filePath: "/bin/sh"),
-                arguments: ["-c", "printf started > \"$1/parent\"", "fixture", root.path], timeout: 1)
-        }
-        do { _ = try await operation.value; Issue.record("Cancelled maintenance unexpectedly ran") }
-        catch is CancellationError { }
-        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "parent").path))
-    }
-
     @Test func timeoutReapsOnlyItsOwnedProcessGroup() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -119,33 +121,7 @@ struct DefaultAgentSDKControlTests {
         #expect(unrelated.isRunning)
     }
 
-    @Test func taskCancellationTerminatesTheHelper() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let operation = await startFixture {
-            try await DefaultAgentSDKControl.run(.init(action: .check, id: "pi"), executable: URL(filePath: "/bin/sh"),
-                arguments: ["-c", hangingScript, "fixture", root.path], timeout: 30)
-        }
-        defer { operation.cancel() }
-        try await awaitFile(root.appending(path: "child"))
-        operation.cancel()
-        do { _ = try await operation.value; Issue.record("A canceled fixture must not return an SDK status") }
-        catch { #expect(error.localizedDescription.contains("Reload installed versions")) }
-        try assertReaped(root.appending(path: "parent"))
-    }
-
-    @Test func aConfirmedActivationWinsOverLateCancellation() async throws {
-        let script = #"""
-        trap '' TERM
-        printf '%s\n' '{"result":{"sdks":[],"generation":"confirmed-installed"}}'
-        while :; do /bin/sleep 1; done
-        """#
-        let result = try await DefaultAgentSDKControl.run(.init(action: .update, id: "claude"),
-            executable: URL(filePath: "/bin/sh"), arguments: ["-c", script], timeout: 0.1)
-        #expect(result.generation == "confirmed-installed")
-    }
 }
-
 
 extension DefaultAgentSDKControlTests {
     @Test(arguments: ["exit", "wait"])

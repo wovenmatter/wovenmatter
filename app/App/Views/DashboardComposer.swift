@@ -101,6 +101,7 @@ struct DashboardComposer: View {
                             .lineLimit(1)
                     }
                     .menuStyle(.borderlessButton)
+                    .menuIndicator(folderSelectionDisabled || onSelectFolder == nil ? .hidden : .visible)
                     .fixedSize(horizontal: false, vertical: true)
                     .disabled(folderSelectionDisabled || onSelectFolder == nil)
                     .help(folderSelectionDisabled ? "The folder is fixed after the first message." : "Choose a folder in this agent's workspace")

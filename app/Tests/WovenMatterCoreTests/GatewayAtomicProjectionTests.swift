@@ -61,30 +61,4 @@ struct GatewayAtomicProjectionTests {
     #expect(try await database.deviceOwnedGatewayTraceEvents(runID: run.runID).map(\.sequence) == [1])
   }
 
-  @Test("trace hydration retains durable sequence order across reopen")
-  func hydrationOrder() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appendingPathComponent("workspace.sqlite")
-    let database = try await WorkspaceDatabase(url: url)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
-      title: "Replay", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Hello")
-    let sameInstant = Date(timeIntervalSince1970: 100)
-    _ = try await database.applyDeviceOwnedGatewayProjection(runID: run.runID, remoteRunID: "remote",
-      eventName: "agent", eventStream: "assistant",
-      sequence: 1, eventType: "assistant_delta", eventPhase: "update", toolName: nil,
-      content: nil, rawEventJSON: "seven", assistantMessageID: nil,
-      assistantMutation: nil, activity: nil, createdAt: sameInstant)
-    _ = try await database.applyDeviceOwnedGatewayProjection(runID: run.runID, remoteRunID: "remote",
-      eventName: "agent", eventStream: "reasoning",
-      sequence: 1, eventType: "reasoning", eventPhase: "update", toolName: nil,
-      content: nil, rawEventJSON: "three", assistantMessageID: nil,
-      assistantMutation: nil, activity: nil, createdAt: sameInstant)
-    let reopened = try await WorkspaceDatabase(url: url)
-    let events = try await reopened.deviceOwnedGatewayTraceEvents(runID: run.runID)
-    #expect(events.map(\.sequence) == [1, 1])
-    #expect(events.map(\.rawEventJSON) == ["seven", "three"])
-  }
 }

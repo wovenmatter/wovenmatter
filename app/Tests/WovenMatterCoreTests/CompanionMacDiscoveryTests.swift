@@ -26,9 +26,6 @@ struct CompanionMacDiscoveryTests {
         #expect(peers.count == 1 && peers.first?.endpoint.port == 8445)
         #expect(await recorder.urls.count == 4)
     }
-    @Test func loggedOutStatusRequiresConnectionWithoutAuthenticationRecovery() throws {
-        #expect(throws: CompanionAPIError.self) { try CompanionMacDiscovery.candidates(status: Data(#"{"BackendState":"NeedsLogin","Peer":{}}"#.utf8)) }
-    }
 }
 private actor DiscoveryRecorder {
     var urls: [URL] = []

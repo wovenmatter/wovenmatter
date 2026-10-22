@@ -41,7 +41,7 @@ cleanup
 mkdir -p "$legacy_data"
 
 if [ "$build_image" = true ]; then
-  docker build --pull --no-cache --tag wovenmatter/workspace:0.1 --file remote/Dockerfile .
+  docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile .
 fi
 WOVENMATTER_API_TOKEN="$token_a" \
   scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
@@ -90,7 +90,7 @@ scripts/remote-workspace.sh restart "$workspace_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
-scripts/remote-workspace.sh update "$workspace_a" wovenmatter/workspace:0.1 "" "" "$port_a" >/dev/null
+scripts/remote-workspace.sh update "$workspace_a" wovenmatter/workspace:latest "" "" "$port_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
@@ -107,7 +107,7 @@ printf legacy > "$legacy_data/marker"
 docker create --name "$legacy_container" \
   --label "com.wovenmatter.workspace=${legacy_workspace}" \
   --volume "$legacy_data:/home/legacy" \
-  --entrypoint /bin/true wovenmatter/workspace:0.1 >/dev/null
+  --entrypoint /bin/true wovenmatter/workspace:latest >/dev/null
 if scripts/remote-workspace.sh delete "$legacy_workspace" --data \
   >"$legacy_data/delete.out" 2>"$legacy_data/delete.err"; then
   printf '%s\n' 'legacy storage deletion unexpectedly succeeded' >&2

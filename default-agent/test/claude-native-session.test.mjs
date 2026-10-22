@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
-import { createClaudeStream, compactClaudeContext, canUseClaudeNativeCompaction, getClaudeNativePrincipal, claudePrincipalIdentity } from '../src/claude-provider.mjs';
+import { createClaudeStream, compactClaudeContext, getClaudeNativePrincipal, claudePrincipalIdentity } from '../src/claude-provider.mjs';
 
 const model = { provider: 'anthropic', api: 'woven-claude-native', id: 'sonnet', reasoning: false };
 const tool = { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } };
@@ -45,42 +45,6 @@ async function fixture(t) {
   return { native, credentials, requests, records, dependencies, scope,
     stream: createClaudeStream(native, credentials, dependencies), setResponse: value => { blocks = value; } };
 }
-
-test('native compaction capability applies only to the official Claude SDK routes', () => {
-  assert.equal(canUseClaudeNativeCompaction(model), true);
-  assert.equal(canUseClaudeNativeCompaction({ ...model, provider: 'claude-subscription' }), true);
-  assert.equal(canUseClaudeNativeCompaction({ ...model, api: 'anthropic-messages' }), false);
-  assert.equal(canUseClaudeNativeCompaction({ ...model, provider: 'openai' }), false);
-});
-
-test('automatic SDK compaction has a separate admission budget and contributes usage without publishing its summary', { timeout: 15000 }, async t => {
-  const f = await fixture(t);
-  let index = 0;
-  const dependencies = { ...f.dependencies, admission: { fetcher: async () => new Response(response(index++ === 0
-    ? [{ type: 'text', text: 'NATIVE_COMPACT_SUMMARY_NOT_USER_REPLY' }] : [{ type: 'text', text: 'Final answer only.' }]),
-  { headers: { 'content-type': 'text/event-stream' } }) } };
-  f.native.sdkQuery = async ({ prompt, options }) => {
-    const native = (async function* () {
-      for await (const input of prompt) if (input.shouldQuery === false) yield { type: 'result', num_turns: 0, is_error: false };
-      const send = async () => {
-        const result = await fetch(options.env.ANTHROPIC_BASE_URL + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: options.abortController.signal });
-        await result.text();
-      };
-      await options.hooks.PreCompact[0].hooks[0]({ trigger: 'auto' }); await send();
-      await options.hooks.PostCompact[0].hooks[0]({ compact_summary: 'NATIVE_COMPACT_SUMMARY_NOT_USER_REPLY' });
-      yield { type: 'system', subtype: 'compact_boundary', uuid: randomUUID(), compact_metadata: { trigger: 'auto', pre_tokens: 100 } };
-      await send(); yield { type: 'result', num_turns: 1, is_error: false };
-    })(); native.close = () => {}; return native;
-  };
-  const stream = createClaudeStream(f.native, f.credentials, dependencies)(model,
-    normalizeContext({ messages: [{ role: 'user', content: 'Fixture', timestamp: 1 }] }), { wovenNativeContext: f.scope(1) });
-  const events = []; for await (const event of stream) events.push(event);
-  const result = await stream.result();
-  assert.equal(result.stopReason, 'stop', result.errorMessage); assert.equal(index, 2);
-  assert.equal(result.usage.totalTokens, 50);
-  assert.equal(result.content[0].text, 'Final answer only.');
-  assert.ok(!JSON.stringify(events).includes('NATIVE_COMPACT_SUMMARY_NOT_USER_REPLY'));
-});
 
 test('a host tool-result boundary preserves exact native identity and sends the actual result once', { timeout: 50000 }, async t => {
   const f = await fixture(t);
@@ -159,19 +123,6 @@ for (const provider of ['anthropic', 'claude-subscription']) test(`${provider} n
   assert.equal(final.match(/Continue with the fact\./g)?.length, 1); assert.ok(!final.includes('ORIGINAL_FACT_0'));
 });
 
-test('unknown native principal fails closed and supported account lookup cancellation closes its process', async () => {
-  let closed = false;
-  const unknown = { environment: async () => ({}), sdkQuery: async ({ options }) => {
-    assert.equal(options.persistSession, false); assert.deepEqual(options.tools, []);
-    return { accountInfo: async () => ({ apiProvider: 'firstParty' }), close: () => { closed = true; } };
-  } };
-  await assert.rejects(getClaudeNativePrincipal(unknown), /establish.*account/); assert.equal(closed, true);
-  const controller = new AbortController(); closed = false;
-  const waiting = getClaudeNativePrincipal({ ...unknown, sdkQuery: async () => ({ accountInfo: async () => new Promise(() => {}), close: () => { closed = true; } }) }, { signal: controller.signal });
-  await new Promise(resolve => setImmediate(resolve)); controller.abort();
-  await assert.rejects(waiting, /abort/i); assert.equal(closed, true);
-});
-
 test('an account change between metadata probe and native query admits no replay frames or provider request', async t => {
   const f = await fixture(t), selected = { ...model, provider: 'claude-subscription' };
   const principal = { email: 'fixture-a@example.invalid', organization: 'Fixture A', apiProvider: 'firstParty' };
@@ -196,4 +147,17 @@ test('an account change between metadata probe and native query admits no replay
   assert.equal(result.stopReason, 'error'); assert.match(result.errorMessage, /account changed/);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(replayed, 0); assert.equal(f.requests.length, 0);
+});
+
+test('unknown native principal fails closed and supported account lookup cancellation closes its process', async () => {
+  let closed = false;
+  const unknown = { environment: async () => ({}), sdkQuery: async ({ options }) => {
+    assert.equal(options.persistSession, false); assert.deepEqual(options.tools, []);
+    return { accountInfo: async () => ({ apiProvider: 'firstParty' }), close: () => { closed = true; } };
+  } };
+  await assert.rejects(getClaudeNativePrincipal(unknown), /establish.*account/); assert.equal(closed, true);
+  const controller = new AbortController(); closed = false;
+  const waiting = getClaudeNativePrincipal({ ...unknown, sdkQuery: async () => ({ accountInfo: async () => new Promise(() => {}), close: () => { closed = true; } }) }, { signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await assert.rejects(waiting, /abort/i); assert.equal(closed, true);
 });

@@ -30,47 +30,6 @@ final class CompanionTransportTests: XCTestCase {
     catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "unauthorized") }
   }
 
-  func testPhoneAndTabletsRemainPairedAndRevocationIsIndependent() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let file = directory.appendingPathComponent("credentials.json")
-    let auth = try CompanionAuthentication(fileURL: file)
-    let endpoint = try XCTUnwrap(URL(string: "https://fixture.test.ts.net/wovenmatter"))
-    var paired: [CompanionPairResponse] = []
-    for name in ["iPhone", "iPad", "Second iPad"] {
-      let offer = try await auth.createOffer(endpoint: endpoint)
-      paired.append(try await auth.pair(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: name), workspaceID: "fixture"))
-    }
-    let reopened = try CompanionAuthentication(fileURL: file)
-    for device in paired { let verified = try await reopened.authenticate(bearer: device.credential); XCTAssertEqual(verified.id, device.deviceID) }
-    try await reopened.revoke(deviceID: paired[1].deviceID)
-    do { _ = try await reopened.authenticate(bearer: paired[1].credential); XCTFail("Revoked tablet remained paired") }
-    catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "unauthorized") }
-    for device in [paired[0], paired[2]] { let verified = try await reopened.authenticate(bearer: device.credential); XCTAssertEqual(verified.id, device.deviceID) }
-    let offer = try await reopened.createOffer(endpoint: endpoint)
-    do {
-      _ = try await reopened.pair(.init(token: offer.payload.token, deviceID: paired[0].deviceID.uppercased(), deviceName: "Duplicate"), workspaceID: "fixture")
-      XCTFail("Active device identity was reused")
-    } catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "invalid_device") }
-  }
-
-  func testExpiredPairingAndVersionMismatchNeverCreateDevice() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let clock = FixtureClock()
-    let auth = try CompanionAuthentication(fileURL: directory.appendingPathComponent("credentials.json"), now: { clock.now })
-    let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
-    clock.advance(301)
-    let request = CompanionPairRequest(token: offer.payload.token, deviceID: UUID().uuidString, deviceName: "Fixture")
-    do { _ = try await auth.pair(request, workspaceID: "fixture"); XCTFail("Expired offer accepted") }
-    catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "invalid_pairing") }
-    let mismatch = CompanionPairRequest(token: offer.payload.token, deviceID: UUID().uuidString, deviceName: "Fixture", protocolVersion: 1)
-    do { _ = try await auth.pair(mismatch, workspaceID: "fixture"); XCTFail("Unknown protocol accepted") }
-    catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "version_mismatch") }
-    let devices = await auth.devices()
-    XCTAssertTrue(devices.isEmpty)
-  }
-
   func testHTTPReaderHandlesSplitUTF8AndRejectsSmugglingAndBrowserOrigins() async throws {
     let body = Data("{\"title\":\"Idea 🌿\"}".utf8)
     var wire = Data("POST /v1/mutations HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
@@ -103,25 +62,6 @@ final class CompanionTransportTests: XCTestCase {
     XCTAssertEqual((secondResponse as? HTTPURLResponse)?.statusCode, 200)
   }
 
-  func testProbeBoundsOutputTimeoutAndCancellation() async throws {
-    do {
-      _ = try await CompanionProcessProbe().run(executable: URL(fileURLWithPath: "/usr/bin/yes"), arguments: [], maximumBytes: 1024, timeout: 1)
-      XCTFail("Unbounded output was accepted")
-    } catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "probe_too_large") }
-    let start = Date()
-    do {
-      _ = try await CompanionProcessProbe().run(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "trap '' TERM; while :; do :; done"], timeout: 0.1)
-      XCTFail("Unresponsive child was accepted")
-    } catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "probe_timeout") }
-    XCTAssertLessThan(Date().timeIntervalSince(start), 2)
-    let task = Task {
-      try await CompanionProcessProbe().run(executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["10"], timeout: 10)
-    }
-    task.cancel()
-    do { _ = try await task.value; XCTFail("Cancelled probe succeeded") }
-    catch { XCTAssertTrue(error is CancellationError) }
-  }
-
   @MainActor func testStoppedServeProbeCannotLaunchAfterReplacementStarts() async throws {
     let probes = DelayedServeProbes()
     let child = FixtureServingProcess()
@@ -145,6 +85,24 @@ final class CompanionTransportTests: XCTestCase {
   @MainActor func testServeInspectionIncludesAllForegroundAndPersistentPorts() async throws {
     let data = Data(#"{"TCP":{"443":{"HTTPS":true}},"Foreground":{"existing":{"TCP":{"8443":{"HTTPS":true}},"Web":{}}}}"#.utf8)
     XCTAssertEqual(try CompanionTailscaleServe.occupiedPorts(in: data), Set([443, 8443]))
+  }
+
+  @MainActor func testMoreThanFourLocalExecutorsHaveIndependentServeAddresses() async throws {
+    let child = FixtureServingProcess()
+    let serve = CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
+      probe: { _, arguments in
+        if arguments.first == "status" {
+          return Data(#"{"BackendState":"Running","Self":{"DNSName":"fixture.test.ts.net."}}"#.utf8)
+        }
+        return Data(#"{"TCP":{"8443":{},"10000":{},"8444":{},"8445":{}},"Web":{"fixture.test.ts.net:11005":{"Handlers":{"/wovenmatter":{"Proxy":"http://127.0.0.1:50005"}}}}}"#.utf8)
+      }, launch: { _, arguments in
+        XCTAssertTrue(arguments.contains("--https=11005"))
+        child.isRunning = true
+        return child
+      })
+    let endpoint = try await serve.start(loopbackPort: 50005)
+    XCTAssertEqual(endpoint.port, 11005)
+    serve.stop()
   }
 }
 

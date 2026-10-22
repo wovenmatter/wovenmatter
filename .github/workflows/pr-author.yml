@@ -8,7 +8,8 @@ on:
 
 permissions:
   issues: write
-  pull-requests: read
+  # Adding/removing labels on a pull request requires PR write access.
+  pull-requests: write
 
 jobs:
   label:
@@ -16,15 +17,17 @@ jobs:
       github.repository == 'wovenmatter/wovenmatter' &&
       (github.event_name == 'pull_request_target' ||
        (github.event.issue.pull_request && github.event.comment.body == '/recheck-author'))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     concurrency:
       group: pr-author-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: false
     steps:
       # Only GitHub metadata is read. Never check out or execute PR code in
       # this write-permission workflow, including on a comment recheck.
+      # Write token on untrusted PR events: exact current release, updated by
+      # the maintenance agent (docs/DEPENDENCIES.md).
       - name: Classify PR author and apply review label
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const repo = context.repo;

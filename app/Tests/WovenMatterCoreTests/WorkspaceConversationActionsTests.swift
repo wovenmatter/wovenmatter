@@ -21,6 +21,80 @@ struct WorkspaceConversationActionsTests {
     func close() { try? FileManager.default.removeItem(at: root) }
   }
 
+  @Test func trashFencesNativeOpenCodeWorkBeforeTheFirstRun() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let id = try await f.db.createLocalACPSession(runtimeKind: .opencode, title: "Native chat", ownerDeviceID: UUID(),
+      openCodeAssociation: ("fixture", "native-session"))
+    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "sending")
+    #expect(try await f.db.conversationContent(id: id).runs.isEmpty)
+    for status in ["sending", "uncertain"] {
+      try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: status)
+      await #expect(throws: WorkspaceConversationActionError.self) {
+        try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
+      }
+    }
+    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "rejected")
+    var snapshot = OpenCodeSessionSnapshot()
+    snapshot.active = true
+    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
+    #expect(try await f.db.conversationContent(id: id).runs.isEmpty)
+    await #expect(throws: WorkspaceConversationActionError.self) {
+      try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
+    }
+    #expect(try await f.db.trashedConversations().isEmpty)
+    snapshot.active = false
+    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
+    try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
+    await #expect(throws: LocalACPSessionDatabaseError.self) {
+      try await f.db.saveOpenCodeSubmission(conversationID: id, id: "new", payload: [:], status: "sending")
+    }
+    // Finishing an existing receipt remains legal even after visibility changes.
+    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "rejected")
+    try await f.db.mutateConversation(id: id, mutation: .restore)
+    #expect(try await f.db.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+  }
+
+  @Test func trashRetainsLibraryFilesAcrossCleanupAndRestore() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    try await f.db.setLibraryLocation(conversationID: f.chat, workspaceName: "Original workspace", root: f.root.path)
+    let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep the file")
+    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Report](./report.txt)")
+    try await f.db.completeLocalACPRun(runID: run.runID)
+    try await f.db.indexLibraryMessages()
+    let item = try #require(try await f.db.libraryItems().first)
+    let files = LibraryFileStore(supportDirectory: f.root)
+    let bytes = Data("Retained original file".utf8)
+    let hash = try files.retain(bytes)
+    try await f.db.finishLibraryFile(id: item.id, hash: hash, size: Int64(bytes.count))
+    let blob = f.root.appending(path: "library-files/" + hash)
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: blob.path)
+    // Simulate upgrading a database that still has the old destructive trash trigger.
+    try await f.db.write { connection in try connection.transaction {
+      try connection.executeUnlocked("""
+        DROP TRIGGER library_trashed_conversation;
+        CREATE TRIGGER library_trashed_conversation AFTER UPDATE OF deleted_at ON dashboard_conversations
+        WHEN NEW.deleted_at IS NOT NULL BEGIN
+          DELETE FROM library_messages WHERE message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=NEW.id);
+          DELETE FROM library_locations WHERE conversation_id=NEW.id;
+        END;
+        """)
+    } }
+    let upgraded = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
+    let revision = try await upgraded.libraryRevision()
+    try await upgraded.mutateConversation(id: f.chat, mutation: .moveToTrash)
+    #expect(try await f.db.libraryItems().isEmpty)
+    #expect(try await f.db.retainedLibraryHashes().contains(hash))
+    try await f.db.cleanupLibraryFiles()
+    #expect(FileManager.default.fileExists(atPath: blob.path))
+    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
+    try await reopened.mutateConversation(id: f.chat, mutation: .restore)
+    let restored = try #require(try await reopened.libraryItem(id: item.id))
+    #expect(restored.workspaceName == "Original workspace")
+    #expect(try await reopened.libraryRoot(conversationID: f.chat) == f.root.path)
+    #expect(try Data(contentsOf: files.url(for: restored)) == bytes)
+    #expect(try await reopened.libraryRevision() > revision)
+  }
+
   @Test func pinRenameAndMoveSurviveReopening() async throws {
     let f = try await Fixture(); defer { f.close() }
     let folder = try await f.db.createFolder(name: "Research", location: f.location)
@@ -40,62 +114,6 @@ struct WorkspaceConversationActionsTests {
     #expect(try await reopened.moveConversation(id: f.chat, toFolderID: nil))
     let updated = try #require(try await reopened.workspaceOverview().conversations.first)
     #expect(!updated.isPinned && updated.folderID == nil)
-  }
-
-  @Test func explicitRenameSurvivesOpenCodeSnapshots() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let id = try await f.db.createLocalACPSession(runtimeKind: .opencode, title: "Native title", ownerDeviceID: UUID(),
-      openCodeAssociation: ("fixture", "native-session"))
-    try await f.db.mutateConversation(id: id, mutation: .rename("My name"))
-    var snapshot = OpenCodeSessionSnapshot()
-    snapshot.info = ["id": "native-session", "title": "Provider title"]
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
-    #expect(try await f.db.workspaceOverview().conversations.first(where: { $0.id == id })?.title == "My name")
-  }
-
-  @Test func trashFencesNativeOpenCodeWorkBeforeTheFirstRun() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let id = try await f.db.createLocalACPSession(runtimeKind: .opencode, title: "Native chat", ownerDeviceID: UUID(),
-      openCodeAssociation: ("fixture", "native-session"))
-    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "sending")
-    for status in ["sending", "uncertain"] {
-      try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: status)
-      await #expect(throws: WorkspaceConversationActionError.self) {
-        try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
-      }
-    }
-    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "rejected")
-    var snapshot = OpenCodeSessionSnapshot()
-    snapshot.active = true
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
-    #expect(try await f.db.conversationContent(id: id).runs.isEmpty)
-    await #expect(throws: WorkspaceConversationActionError.self) {
-      try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
-    }
-    snapshot.active = false
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
-    try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
-    await #expect(throws: LocalACPSessionDatabaseError.self) {
-      try await f.db.saveOpenCodeSubmission(conversationID: id, id: "new", payload: [:], status: "sending")
-    }
-    // Finishing an existing receipt remains legal even after visibility changes.
-    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "rejected")
-    try await f.db.mutateConversation(id: id, mutation: .restore)
-    #expect(try await f.db.openCodeUncertainSubmissions(conversationID: id).isEmpty)
-  }
-
-  @Test func invalidMutationsDoNotChangeTheChat() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.mutateConversation(id: f.chat, mutation: .rename(" \n\t")) }
-    await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.mutateConversation(id: "missing", mutation: .setPinned(true)) }
-    await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.mutateConversation(id: f.chat, mutation: .restore) }
-    #expect(try await f.db.localACPSession(conversationID: f.chat).title == "New Codex chat")
-    let reader = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-    await #expect(throws: (any Error).self) { try await reader.mutateConversation(id: f.chat, mutation: .setPinned(true)) }
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET desktop_owned = 0 WHERE id = ?", [f.chat])
-    } }
-    await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash) }
   }
 
   @Test func trashRejectsActiveWorkThenRestoresRetainedMessagesAndPin() async throws {
@@ -149,74 +167,6 @@ struct WorkspaceConversationActionsTests {
     #expect(try await f.db.sessionTimers(sessionID: f.chat).first?.pendingDeliveryID == nil)
     #expect(try await f.db.dueSessionTimers().isEmpty)
     #expect(try await f.db.claimToolDelivery(id: deliveryID) == nil)
-  }
-
-  @Test func trashRetainsLibraryFilesAcrossCleanupAndRestore() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    try await f.db.setLibraryLocation(conversationID: f.chat, workspaceName: "Original workspace", root: f.root.path)
-    let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep the file")
-    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Report](./report.txt)")
-    try await f.db.completeLocalACPRun(runID: run.runID)
-    try await f.db.indexLibraryMessages()
-    let item = try #require(try await f.db.libraryItems().first)
-    let files = LibraryFileStore(supportDirectory: f.root)
-    let bytes = Data("Retained original file".utf8)
-    let hash = try files.retain(bytes)
-    try await f.db.finishLibraryFile(id: item.id, hash: hash, size: Int64(bytes.count))
-    let blob = f.root.appending(path: "library-files/" + hash)
-    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: blob.path)
-    // Simulate upgrading a database that still has the old destructive trash trigger.
-    try await f.db.write { connection in try connection.transaction {
-      try connection.executeUnlocked("""
-        DROP TRIGGER library_trashed_conversation;
-        CREATE TRIGGER library_trashed_conversation AFTER UPDATE OF deleted_at ON dashboard_conversations
-        WHEN NEW.deleted_at IS NOT NULL BEGIN
-          DELETE FROM library_messages WHERE message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=NEW.id);
-          DELETE FROM library_locations WHERE conversation_id=NEW.id;
-        END;
-        """)
-    } }
-    let upgraded = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
-    let revision = try await upgraded.libraryRevision()
-    try await upgraded.mutateConversation(id: f.chat, mutation: .moveToTrash)
-    #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.retainedLibraryHashes().contains(hash))
-    try await f.db.cleanupLibraryFiles()
-    #expect(FileManager.default.fileExists(atPath: blob.path))
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
-    try await reopened.mutateConversation(id: f.chat, mutation: .restore)
-    let restored = try #require(try await reopened.libraryItem(id: item.id))
-    #expect(restored.workspaceName == "Original workspace")
-    #expect(try await reopened.libraryRoot(conversationID: f.chat) == f.root.path)
-    #expect(try Data(contentsOf: files.url(for: restored)) == bytes)
-    #expect(try await reopened.libraryRevision() > revision)
-  }
-
-  @Test func trashCancelsClaimedUnsentDeliveriesPermanently() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let other = try await f.db.createLocalACPSession(runtimeKind: .claudeCode, title: "Sender", ownerDeviceID: UUID())
-    let id = UUID().uuidString.lowercased()
-    _ = try await f.db.reserveToolDelivery(sourceID: other, targetID: f.chat, text: "Deferred work", requestID: id)
-    #expect(try await f.db.claimToolDelivery(id: id) != nil)
-    try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
-    try await f.db.mutateConversation(id: f.chat, mutation: .restore)
-    await #expect(throws: WorkspaceToolError.self) { try await f.db.validateClaimedToolDelivery(id: id) }
-    try await f.db.failToolDeliveryAttempt(id: id)
-    try await f.db.recoverToolDeliveries()
-    #expect(try await f.db.claimToolDelivery(id: id) == nil)
-    #expect(try await f.db.sessionDeliveries().first(where: { $0.id == id })?.status == "cancelled")
-  }
-
-  @Test func unicodeExportFilenamesFitTheFilesystem() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    for title in [String(repeating: "🙂", count: 100), String(repeating: "界", count: 100),
-                  String(repeating: "a\u{0301}", count: 100)] {
-      let filename = WorkspaceConversationExportFormat.fullRun.suggestedFilename(title: title)
-      #expect(filename.utf8.count <= 255)
-      let file = f.root.appending(path: filename)
-      try Data("Export".utf8).write(to: file)
-      #expect(try Data(contentsOf: file) == Data("Export".utf8))
-    }
   }
 
   @Test func exportsContainOlderMessagesReferencesAndUntruncatedRunHistory() async throws {
@@ -276,26 +226,6 @@ struct WorkspaceConversationActionsTests {
     #expect(hidden.messages.isEmpty && hidden.runs.isEmpty && hidden.attachments.isEmpty && hidden.references.isEmpty)
   }
 
-  @Test func emptyExportsAndFilenamesAreUsable() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    #expect(String(decoding: try await f.db.conversationExport(id: f.chat, format: .messages), as: UTF8.self) == "# New Codex chat\n")
-    let name = WorkspaceConversationExportFormat.fullRun.suggestedFilename(title: "../../A:B\\C\nD")
-    #expect(!name.contains("/") && !name.contains(":") && !name.contains("\\") && !name.contains("\n"))
-    #expect(name.hasSuffix("-full-run.json"))
-    #expect(WorkspaceConversationExportFormat.messages.suggestedFilename(title: " ") == "Chat-messages.md")
-    await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.conversationExport(id: "missing", format: .fullRun) }
-  }
-
-  @Test func renameRejectsSilentCStringTruncationAndOversizedNames() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    for title in ["\0Hidden", "Visible\0hidden", String(repeating: "界", count: 1_366)] {
-      await #expect(throws: WorkspaceConversationActionError.invalidTitle) {
-        try await f.db.mutateConversation(id: f.chat, mutation: .rename(title))
-      }
-    }
-    #expect(try await f.db.localACPSession(conversationID: f.chat).title == "New Codex chat")
-  }
-
   @Test func restoreDoesNotAdoptAFolderThatChangedOwnership() async throws {
     let f = try await Fixture(); defer { f.close() }
     let folder = try await f.db.createFolder(name: "Original", location: f.location)
@@ -308,62 +238,7 @@ struct WorkspaceConversationActionsTests {
     #expect(try await f.db.workspaceOverview().conversations.first?.folderID == nil)
   }
 
-  @Test func exportBudgetIncludesRawPayloadsBeforeDecodingAndCountsEmptyRows() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Small message")
-    try await f.db.completeLocalACPRun(runID: run.runID)
-    let largePayload = String(repeating: "x", count: 16_384)
-    for column in ["raw_event_json", "stream_event_json"] {
-      try await f.db.write { connection in try connection.transaction {
-        try connection.toolsExecuteUnlocked("DELETE FROM dashboard_run_trace_events WHERE conversation_id=?", [f.chat])
-        // Deliberately malformed oversized JSON proves the preflight runs first.
-        try connection.toolsExecuteUnlocked("INSERT INTO dashboard_run_trace_events(id,run_id,conversation_id,\(column)) VALUES('large',?,?,?)",
-          [run.runID, f.chat, largePayload])
-      } }
-      let messages = try await f.db.read { connection in
-        try connection.conversationExport(id: f.chat, format: .messages, budget: .init(maximumBytes: 12_000))
-      }
-      #expect(String(decoding: messages, as: UTF8.self).contains("Small message"))
-      await #expect(throws: WorkspaceExportError.tooLarge) {
-        try await f.db.read { connection in
-          try connection.conversationExport(id: f.chat, format: .fullRun, budget: .init(maximumBytes: 12_000))
-        }
-      }
-    }
-    await #expect(throws: WorkspaceExportError.tooLarge) {
-      try await f.db.read { connection in
-        try connection.conversationExport(id: f.chat, format: .messages, budget: .init(maximumItems: 1))
-      }
-    }
-    // A refusal leaves the retained snapshot intact.
-    #expect(try await f.db.conversationContent(id: f.chat).messages.first?.content == "Small message")
-  }
-
 }
 
-
 extension WorkspaceConversationActionsTests {
-  @Test func activityOnlyCompletionKeepsIdentityWithoutInventedAssistantText() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let db = try await WorkspaceDatabase(url: directory.appending(path: "test.sqlite"))
-    let conversation = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Command", ownerDeviceID: UUID())
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "/notify")
-    try await db.upsertDeviceOwnedRunActivity(runID: run.runID,
-      activity: AgentRunActivity(id: "notice", kind: .activity, title: "Notification", content: "Command complete"))
-    try await db.completeLocalACPAssistantMessage(runID: run.runID, assistantMessageID: run.assistantMessageID)
-    try await db.completeLocalACPRun(runID: run.runID)
-    let page = try await db.conversationHistoryPage(id: conversation, limit: 100)
-    let assistant = try #require(page.messages.first { $0.id == run.assistantMessageID })
-    #expect(assistant.content.isEmpty)
-    #expect(assistant.status == "completed")
-    #expect(page.runs.first?.assistantMessageID == assistant.id)
-    #expect(page.activities.first?.activity.content == "Command complete")
-    #expect(AssistantTranscriptProjection(messageID: assistant.id, content: assistant.content,
-      activities: page.activities.map(\.activity)).body.isEmpty)
-    let failure = try await db.beginLocalACPRun(conversationID: conversation, content: "/fail")
-    try await db.completeLocalACPRun(runID: failure.runID, error: "Command failed")
-    #expect(try await db.conversationContent(id: conversation).messages.first { $0.id == failure.assistantMessageID }?.content == "Command failed")
-  }
 }

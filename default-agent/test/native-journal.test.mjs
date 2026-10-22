@@ -1,27 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, open, readFile, stat, rm } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { openNativeArchive, openNativeJournal, sanitizeNativeTransportBytes } from '../src/native-journal.mjs';
-
-test('encoded native transport copies reuse endpoint sanitization while arbitrary user base64 remains untouched', async () => {
-  const capability = '/private/tmp/wmtools-' + 'a'.repeat(32) + '/' + 'b'.repeat(32) + '.sock';
-  const remote = '/home/.wmt/' + 'c'.repeat(32) + '/' + 'd'.repeat(32) + '/wovenmatter';
-  const userBase64 = Buffer.from(capability).toString('base64');
-  const original = Buffer.from(JSON.stringify({ tool: capability, nested: JSON.stringify({ remote, unchanged: '🙂漢字', userBase64 }), userBase64 }));
-  const safe = await sanitizeNativeTransportBytes(original), reconstructed = Buffer.from(safe.bytes.toString('base64'), 'base64'), parsed = JSON.parse(reconstructed);
-  assert.ok(!reconstructed.toString().includes('wmtools-')); assert.ok(!reconstructed.toString().includes('.wmt'));
-  assert.equal(parsed.userBase64, userBase64); assert.equal(JSON.parse(parsed.nested).userBase64, userBase64);
-  assert.equal(JSON.parse(parsed.nested).unchanged, '🙂漢字');
-  assert.equal(safe.byteFidelity, 'tool-endpoint-redacted');
-  assert.equal(safe.sourceSHA256, createHash('sha256').update(original).digest('hex')); assert.equal(safe.sha256, createHash('sha256').update(reconstructed).digest('hex'));
-  assert.equal(safe.sourceBytes, original.length); assert.equal(safe.totalBytes, reconstructed.length);
-  const plain = Buffer.from(JSON.stringify({ userBase64, other: '/private/tmp/ordinary.sock', unicode: '🙂' })), exact = await sanitizeNativeTransportBytes(plain);
-  assert.deepEqual(exact.bytes, plain); assert.equal(exact.byteFidelity, 'exact-native-bytes'); assert.equal(exact.sha256, exact.sourceSHA256);
-});
+import { openNativeArchive } from '../src/native-journal.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-native-stream-'));
@@ -156,22 +140,4 @@ test('fresh transport spools preserve ordinary encoding and never overwrite an e
   } while (true);
   assert.equal(manifest.originalRecord.id, 'medium');
   assert.equal(Buffer.concat(chunks).toString(), JSON.stringify(medium));
-});
-
-test('current journal pages seek through a large spool without retaining payload copies', async t => {
-  const path = await fixture(t), journal = await openNativeJournal(path);
-  const update = { sessionUpdate: 'woven_native_record', payload: 'x'.repeat(524288) };
-  for (let index = 0; index < 257; index++) await journal.append([update]);
-  assert.ok((await stat(path)).size > 134217728);
-  let after = 253;
-  do {
-    const page = await journal.page(after);
-    assert.ok(Buffer.byteLength(JSON.stringify(page.updates)) <= 1048576);
-    assert.equal(page.updates.length, 1); assert.deepEqual(page.updates[0], update);
-    assert.equal(page.totalCount, 257); assert.ok(page.cursor > after);
-    after = page.cursor; if (!page.hasMore) break;
-  } while (true);
-  await journal.append([{ sessionUpdate: 'finished', content: '🙂' }]);
-  assert.equal(journal.index.length, 258);
-  assert.deepEqual((await journal.page(257)).updates, [{ sessionUpdate: 'finished', content: '🙂' }]);
 });

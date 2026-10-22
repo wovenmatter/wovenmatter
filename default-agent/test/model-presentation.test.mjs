@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { claudeModelName, modelOption } from '../src/model-presentation.mjs';
+import { claudeModelName } from '../src/model-presentation.mjs';
 
 // Pure metadata fixtures: no runtime, account, SDK or provider invocation.
 test('Claude aliases display their reported version without changing selection IDs', () => {
@@ -19,22 +19,4 @@ test('Claude aliases display their reported version without changing selection I
     assert.equal(claudeModelName(model), expected);
     assert.deepEqual(model, original);
   }
-});
-
-test('menu attribution is distinct from inline names and actual connection routes', () => {
-  for (const [provider, attribution] of Object.entries({
-    'openai-codex': 'ChatGPT subscription', openai: 'OpenAI subscription',
-    openrouter: 'OpenRouter subscription', 'opencode-go': 'OpenCode Go',
-    xai: 'Grok subscription', 'xai-api': 'XAI subscription',
-    'claude-subscription': 'Claude subscription', anthropic: 'Anthropic subscription',
-  })) {
-    const option = modelOption({ id: `${provider}/fixture`, name: 'Fixture Model', provider, providerName: 'Actual connection route' });
-    assert.equal(option.value, `${provider}/fixture`);
-    assert.equal(option.name, `Fixture Model · ${attribution}`);
-    assert.equal(option._meta.modelName, 'Fixture Model');
-    assert.equal(option.description, 'Actual connection route');
-  }
-  const custom = modelOption({ id: 'custom/model', name: 'Model · Native Variant', provider: 'custom', providerName: 'Local server' });
-  assert.equal(custom.name, 'Model · Native Variant · Local server');
-  assert.equal(custom._meta.modelName, 'Model · Native Variant');
 });

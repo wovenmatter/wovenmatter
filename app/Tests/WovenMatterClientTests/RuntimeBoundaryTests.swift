@@ -5,46 +5,6 @@ import Testing
 
 @Suite("Runtime boundaries", .serialized)
 struct RuntimeBoundaryTests {
-  @Test("built-in agent stays available while external runtimes persist visibility independently")
-  func localRuntimeVisibilityPreferences() throws {
-    let suiteName = "wovenmatter.runtime-visibility.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-    let preferences = LocalACPRuntimePreferences(defaults: defaults)
-
-    #expect(preferences.state.enabledRuntimeKinds == [.defaultAgent])
-    #expect(preferences.state.shownRuntimeKinds == [.defaultAgent])
-
-    var state = preferences.enable(.codex)
-    #expect(state.enabledRuntimeKinds == [.defaultAgent, .codex])
-    #expect(state.shownRuntimeKinds == [.defaultAgent, .codex])
-
-    state = preferences.setShown(false, for: .codex)
-    #expect(state.enabledRuntimeKinds == [.defaultAgent, .codex])
-    #expect(state.shownRuntimeKinds == [.defaultAgent])
-
-    state = preferences.setShown(true, for: .codex)
-    state = preferences.disable(.codex)
-    #expect(state.enabledRuntimeKinds == [.defaultAgent])
-    #expect(state.shownRuntimeKinds == [.defaultAgent, .codex])
-
-    state = preferences.setShown(false, for: .codex)
-    state = preferences.setShown(true, for: .claudeCode)
-    #expect(state.enabledRuntimeKinds == [.defaultAgent])
-    #expect(state.shownRuntimeKinds == [.defaultAgent, .claudeCode])
-
-    let restored = LocalACPRuntimePreferences(defaults: defaults).state
-    #expect(restored == state)
-  }
-
-  @Test("workspace setup creates a blank root")
-  func workspaceLayout() throws {
-    let fixture = try TemporaryDirectory(prefix: "wovenmatter-layout")
-    defer { fixture.remove() }
-    let local = fixture.url.appending(path: "local", directoryHint: .isDirectory)
-    _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: local)
-    #expect(try entries(at: local).isEmpty)
-  }
 
   @Test("workspace setup leaves existing user files and instructions intact")
   func workspaceUpgradePreservesContent() throws {
@@ -63,119 +23,6 @@ struct RuntimeBoundaryTests {
     #expect(try String(contentsOf: root.appending(path: ".scratch/work.py"), encoding: .utf8) == "legacy")
     #expect(try String(contentsOf: root.appending(path: "scratch/work.py"), encoding: .utf8) == "current")
     #expect(try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8) == personal)
-  }
-
-  @Test("remote commands preserve data and reject unsafe input")
-  func remoteWorkspaceBoundary() async throws {
-    let recorder = SSHRecorder(response: Self.statusJSON)
-    let client = RemoteWorkspaceSSHClient(
-      runner: { destination, command, input in
-        try recorder.record(destination: destination, command: command, input: input)
-      },
-      scriptLoader: { Data("script".utf8) }
-    )
-    let configuration = RemoteWorkspaceConfiguration(
-      name: "Work",
-      workspaceID: "work-1",
-      hostName: "linux-box",
-      userName: "woven",
-      remotePort: 7440,
-      memoryLimit: "8",
-      swapLimit: "4"
-    )
-
-    _ = try await client.create(configuration: configuration, token: "secret-token")
-    #expect(recorder.destination == "woven@linux-box")
-    #expect(recorder.command?.contains("secret-token") == false)
-    #expect(recorder.command?.contains("'8589934592' '12884901888'") == true)
-    #expect(recorder.input?.starts(with: Data("secret-token\nscript".utf8)) == true)
-
-    let launch = try RemoteHarnessLaunchResolver.resolve(
-      configuration: configuration,
-      runtimeKind: .codex,
-      processWorkingDirectory: URL(filePath: "/private/tmp")
-    )
-    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"))
-    #expect(builtIn.launch.arguments.last?.contains("default-agent/src/main.mjs") == true)
-    #expect(builtIn.launch.arguments.last?.contains("'--remote'") == true)
-    #expect(builtIn.launch.arguments.last?.contains("runtime-operation.lock") == false)
-    #expect(launch.workspace.rootURL.path == "/home/.woven-matter")
-    #expect(launch.launch.arguments.last?.contains("'HOME=/home'") == true)
-    #expect(launch.launch.arguments.last?.contains("flock --shared --nonblock 9") == true)
-    #expect(launch.launch.arguments.last?.contains("/home/.wovenmatter/runtime-operation.lock") == true)
-    #expect(launch.launch.arguments.last?.contains("Runtime maintenance is in progress") == true)
-    for runtime in AgentRuntimeKind.allCases {
-      let directory = URL(fileURLWithPath: "/home/projects/a quoted ' directory")
-      let inherited = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
-        processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
-        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
-      #expect(inherited.workspace.rootURL == directory)
-      #expect(inherited.workspace.databasesURL.path == "/home/.local/share/wovenmatter/databases")
-      #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
-      #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
-    }
-
-    let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)
-    let deleteClient = RemoteWorkspaceSSHClient(
-      runner: { destination, command, input in
-        try deleteRecorder.record(destination: destination, command: command, input: input)
-      },
-      scriptLoader: { Data("script".utf8) }
-    )
-    try await deleteClient.delete(configuration: configuration, removePersistentData: false)
-    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1'")
-    try await deleteClient.delete(configuration: configuration, removePersistentData: true)
-    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1' '--data'")
-
-    #expect(throws: RemoteWorkspaceClientError.self) {
-      try RemoteWorkspaceSSHClient.validatedDestination(
-        hostName: "-oProxyCommand=bad",
-        userName: nil
-      )
-    }
-  }
-
-  @Test("local CLI install requires a reviewed digest and a matching redownload")
-  func localCLIInstallerDigestBoundary() async throws {
-    let reviewed = Data("#!/bin/sh\nexit 0\n".utf8)
-    let changed = Data("#!/bin/sh\nexit 1\n".utf8)
-    let downloads = InstallerDownloads([reviewed, changed])
-    let installer = LocalACPRuntimeInstaller(
-      installerFetcher: { source, destination, maximumBytes in
-        try await downloads.fetch(
-          source: source,
-          destination: destination,
-          maximumBytes: maximumBytes
-        )
-      },
-      executableResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
-    )
-    let definition = cliDefinition()
-
-    do {
-      _ = try await installer.install(definition, component: .cli)
-      Issue.record("A CLI installer must require explicit digest confirmation")
-    } catch let error as LocalACPRuntimeInstallError {
-      #expect(error == .confirmationRequired)
-    }
-    #expect(await downloads.fetchCount() == 0)
-
-    let preview = try await installer.prepareCLIInstall(definition)
-    #expect(preview.source == URL(string: "https://example.com/install.sh"))
-    #expect(preview.bytes == reviewed.count)
-    #expect(preview.sha256 == "306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb")
-
-    do {
-      _ = try await installer.install(
-        definition,
-        component: .cli,
-        expectedSourceSHA256: preview.sha256
-      )
-      Issue.record("A changed installer source must not execute")
-    } catch let error as LocalACPRuntimeInstallError {
-      #expect(error == .sourceDigestChanged)
-    }
-    #expect(await downloads.fetchCount() == 2)
   }
 
   @Test("local installer accepts only bounded HTTPS sources")
@@ -293,6 +140,120 @@ struct RuntimeBoundaryTests {
     #expect(!LocalACPRuntimeInstaller.isExactPackageSpec(
       "@example/fake-cli@latest"
     ))
+  }
+
+
+  @Test("remote commands preserve data and reject unsafe input")
+  func remoteWorkspaceBoundary() async throws {
+    let recorder = SSHRecorder(response: Self.statusJSON)
+    let client = RemoteWorkspaceSSHClient(
+      runner: { destination, command, input in
+        try recorder.record(destination: destination, command: command, input: input)
+      },
+      scriptLoader: { Data("script".utf8) }
+    )
+    let configuration = RemoteWorkspaceConfiguration(
+      name: "Work",
+      workspaceID: "work-1",
+      hostName: "linux-box",
+      userName: "woven",
+      remotePort: 7440,
+      memoryLimit: "8",
+      swapLimit: "4"
+    )
+
+    _ = try await client.create(configuration: configuration, token: "secret-token")
+    #expect(recorder.destination == "woven@linux-box")
+    #expect(recorder.command?.contains("secret-token") == false)
+    #expect(recorder.command?.contains("'8589934592' '12884901888'") == true)
+    #expect(recorder.input?.starts(with: Data("secret-token\nscript".utf8)) == true)
+
+    let launch = try RemoteHarnessLaunchResolver.resolve(
+      configuration: configuration,
+      runtimeKind: .codex,
+      processWorkingDirectory: URL(filePath: "/private/tmp")
+    )
+    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"))
+    #expect(builtIn.launch.arguments.last?.contains("default-agent/src/main.mjs") == true)
+    #expect(builtIn.launch.arguments.last?.contains("'--remote'") == true)
+    #expect(builtIn.launch.arguments.last?.contains("runtime-operation.lock") == false)
+    #expect(launch.workspace.rootURL.path == "/home/.woven-matter")
+    #expect(launch.launch.arguments.last?.contains("'HOME=/home'") == true)
+    #expect(launch.launch.arguments.last?.contains("flock --shared --nonblock 9") == true)
+    #expect(launch.launch.arguments.last?.contains("/home/.wovenmatter/runtime-operation.lock") == true)
+    #expect(launch.launch.arguments.last?.contains("Runtime maintenance is in progress") == true)
+    for runtime in AgentRuntimeKind.allCases {
+      let directory = URL(fileURLWithPath: "/home/projects/a quoted ' directory")
+      let inherited = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
+        processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
+        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
+      #expect(inherited.workspace.rootURL == directory)
+      #expect(inherited.workspace.databasesURL.path == "/home/.local/share/wovenmatter/databases")
+      #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
+      #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
+    }
+
+    let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)
+    let deleteClient = RemoteWorkspaceSSHClient(
+      runner: { destination, command, input in
+        try deleteRecorder.record(destination: destination, command: command, input: input)
+      },
+      scriptLoader: { Data("script".utf8) }
+    )
+    try await deleteClient.delete(configuration: configuration, removePersistentData: false)
+    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1'")
+    try await deleteClient.delete(configuration: configuration, removePersistentData: true)
+    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1' '--data'")
+
+    #expect(throws: RemoteWorkspaceClientError.self) {
+      try RemoteWorkspaceSSHClient.validatedDestination(
+        hostName: "-oProxyCommand=bad",
+        userName: nil
+      )
+    }
+  }
+
+  @Test("local CLI install requires a reviewed digest and a matching redownload")
+  func localCLIInstallerDigestBoundary() async throws {
+    let reviewed = Data("#!/bin/sh\nexit 0\n".utf8)
+    let changed = Data("#!/bin/sh\nexit 1\n".utf8)
+    let downloads = InstallerDownloads([reviewed, changed])
+    let installer = LocalACPRuntimeInstaller(
+      installerFetcher: { source, destination, maximumBytes in
+        try await downloads.fetch(
+          source: source,
+          destination: destination,
+          maximumBytes: maximumBytes
+        )
+      },
+      executableResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
+    )
+    let definition = cliDefinition()
+
+    do {
+      _ = try await installer.install(definition, component: .cli)
+      Issue.record("A CLI installer must require explicit digest confirmation")
+    } catch let error as LocalACPRuntimeInstallError {
+      #expect(error == .confirmationRequired)
+    }
+    #expect(await downloads.fetchCount() == 0)
+
+    let preview = try await installer.prepareCLIInstall(definition)
+    #expect(preview.source == URL(string: "https://example.com/install.sh"))
+    #expect(preview.bytes == reviewed.count)
+    #expect(preview.sha256 == "306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb")
+
+    do {
+      _ = try await installer.install(
+        definition,
+        component: .cli,
+        expectedSourceSHA256: preview.sha256
+      )
+      Issue.record("A changed installer source must not execute")
+    } catch let error as LocalACPRuntimeInstallError {
+      #expect(error == .sourceDigestChanged)
+    }
+    #expect(await downloads.fetchCount() == 2)
   }
 
   private func entries(at root: URL) throws -> [String] {

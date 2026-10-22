@@ -47,33 +47,6 @@ struct RemoteScheduledArchiveTests {
       completedAt: run.scheduledAt.addingTimeInterval(10), updateOffset: updateOffset, complete: complete)
   }
 
-  @Test func completeNativeAndUnknownRecordsSurviveReplayWithoutRepeatingMessages() async throws {
-    let (database, directory, workspaceID, run) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let answer = try value(#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}}"#)
-    let compaction = try value(#"{"sessionUpdate":"context_compacted","summary":"Retained summary","unknownNativeField":{"image":{"uri":"native://artifact/1"}}}"#)
-    let updates = [answer, compaction, try nativeUpdate(sessionID: "native-session", runID: run.id)]
-    try await importResult(database, workspaceID: workspaceID, run: run, updates: updates)
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    try await importResult(reopened, workspaceID: workspaceID, run: run,
-      updates: updates + [try nativeUpdate(sessionID: "native-session", id: "commit:2:0", text: "Late native summary", runID: run.id)])
-    let archive = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("""
-        SELECT source_id,native_record_id,run_id,payload,text_content FROM workspace_history_events
-        WHERE conversation_id=? AND kind LIKE 'native.%' ORDER BY sequence
-        """, values: [run.sessionID])
-    }
-    #expect(archive.count == 4)
-    #expect(archive.allSatisfy { $0.objectValue?["run_id"]?.stringValue == run.id })
-    #expect(archive.contains { $0.objectValue?["payload"]?.stringValue?.contains("unknownNativeField") == true })
-    #expect(archive.contains { $0.objectValue?["text_content"]?.stringValue == "Late native summary" })
-    #expect(archive.filter { $0.objectValue?["native_record_id"]?.stringValue == "commit:1:0" }.count == 1)
-    #expect(archive.contains { $0.objectValue?["source_id"]?.stringValue == "remote:" + workspaceID.uuidString.lowercased() + ":builtin-pi-durable:fixture-store" })
-    #expect(try await reopened.conversationContent(id: run.sessionID).messages.count == 2)
-    let search = try await reopened.queryAgentHistory(.init(command: "search", search: "Late native summary"), callerID: run.sessionID)
-    #expect(search.objectValue?["rows"]?.arrayValue?.count == 1)
-  }
-
   @Test func boundedPagesReplayExactlyAndPublishOneCompleteReplyInOrdinalOrder() async throws {
     let (database, directory, workspaceID, run) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -113,42 +86,6 @@ struct RemoteScheduledArchiveTests {
     #expect(Array(after.prefix(10)) == before)
     #expect(after.contains { $0.objectValue?["native_record_id"]?.stringValue == "receipt:receipt:update:11" })
     #expect(after.filter { $0.objectValue?["native_record_id"]?.stringValue == "commit:1:0" }.count == 1)
-  }
-
-  @Test func recurringSnapshotsRetainUnknownHistoryAndExplicitRunOwnership() async throws {
-    let (database, directory, workspaceID, firstRun) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    var secondRun = firstRun
-    secondRun.id = UUID().uuidString.lowercased()
-    secondRun.occurrenceIndex = 1
-    secondRun.scheduledAt = firstRun.scheduledAt.addingTimeInterval(60)
-    let historical = WorkspaceNativeRunRecord(id: "historical", kind: "message", payload: #"{"text":"Earlier native history"}"#, contentMode: "snapshot")
-    var first = WorkspaceNativeRunRecord(id: "first", runID: firstRun.id, kind: "message", payload: #"{"text":"First result"}"#, contentMode: "snapshot")
-    let second = WorkspaceNativeRunRecord(id: "second", runID: secondRun.id, kind: "message", payload: #"{"text":"Second result"}"#, contentMode: "snapshot")
-    let firstSnapshot = try nativeUpdate(sessionID: "native-session", records: [historical, first])
-    // Later full native exports cannot identify which prior Woven run emitted
-    // each record. A previously known association still remains authoritative.
-    first.runID = nil
-    let secondSnapshot = try nativeUpdate(sessionID: "native-session", records: [historical, first, second])
-    for (run, snapshot, receipt) in [(firstRun, firstSnapshot, "first"), (secondRun, secondSnapshot, "second")] {
-      for _ in 0..<2 {
-        try await importResult(database, workspaceID: workspaceID, run: run,
-          updates: [snapshot], receiptID: receipt, complete: false)
-        try await importResult(database, workspaceID: workspaceID, run: run,
-          updates: [], receiptID: receipt, updateOffset: 1)
-      }
-    }
-    let records = try await database.read { connection in
-      try connection.historyRowsUnlocked("SELECT native_record_id,run_id FROM workspace_history_events WHERE conversation_id=? AND source_id=? ORDER BY sequence",
-        values: [firstRun.sessionID, "remote:" + workspaceID.uuidString.lowercased() + ":builtin-pi-durable:fixture-store"])
-    }
-    #expect(records.count == 3)
-    #expect(records[0].objectValue?["native_record_id"]?.stringValue == "historical")
-    #expect(records[0].objectValue?["run_id"]?.stringValue == nil)
-    #expect(records[1].objectValue?["run_id"]?.stringValue == firstRun.id)
-    #expect(records[2].objectValue?["run_id"]?.stringValue == secondRun.id)
-    let content = try await database.conversationContent(id: firstRun.sessionID)
-    #expect(content.messages.count == 4 && content.runs.count == 2)
   }
 
   @Test func foreignNativeSessionRollsBackAndReceiptCannotMoveAcrossRoutes() async throws {

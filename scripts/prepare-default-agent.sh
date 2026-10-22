@@ -2,12 +2,14 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 agent_root="$repo_root/default-agent"
-version=24.22.0
+# One tested Node stable record for this bundle, CI, and the managed adapter runtime.
+# Dependency maintenance must update it and the checksums below together.
+version="$(tr -d '[:space:]' < "$agent_root/.node-version")"
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi
 case "$arch" in
-  arm64) node_arch=arm64; checksum=6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5 ;;
-  x86_64) node_arch=x64; checksum=495e3f273c645f3c4677d438304cdfc701729ea5dec5728f5c8e76a2dece4b91 ;;
+  arm64) node_arch=arm64; checksum=1901d539912c02afa10d1cc126943a8855a7eedebe830119463470db5e6c59e8 ;;
+  x86_64) node_arch=x64; checksum=b85c2ea4420ad0bc4abf2dc6cf1f55130ed681f1cabf60cf3f526e4c9e2712ff ;;
   *) printf 'Unsupported Built-in architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 cache="${TMPDIR:-/tmp}/wovenmatter-node-$version-$node_arch"
@@ -20,7 +22,7 @@ if [ ! -x "$cache/bin/node" ]; then
   tar -xzf "$stage/node.tar.gz" --strip-components=1 -C "$cache"
 fi
 export PATH="$cache/bin:$PATH"
-lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-darwin-$node_arch"
+lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch"
 # Keep reproducible dependencies outside a possibly cloud-synced checkout.
 # Copying node_modules from Desktop can block on File Provider hydration (and
 # include conflict copies) even when every package version is already locked.
@@ -39,7 +41,7 @@ fi
 output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
-  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
+  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=/.node-version --exclude=.DS_Store "$agent_root/" "$output/"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
@@ -54,6 +56,10 @@ for modules in "$output/node_modules" "$output/node_modules/@earendil-works/pi-c
   rm -rf "$modules/esbuild" "$modules/@esbuild"
   rm -f "$modules/.bin/esbuild"
 done
+
+# Source maps are diagnostic build output; Node executes the original JS/TS.
+# Leave executable code, declarations, licenses, and vendor signatures intact.
+find "$output/node_modules" -type f -name '*.map' -delete
 
 claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$claude_binary"

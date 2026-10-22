@@ -2,12 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>WovenMatterDevelopmentMode</key>
+    <string>$(WOVENMATTER_DEV_MODE)</string>
+    <key>WovenMatterDevelopmentInstance</key>
+    <string>$(WOVENMATTER_DEV_INSTANCE)</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Woven Matter uses your microphone to transcribe dictation with your connected Grok subscription.</string>
+    <string>Woven Matter uses your microphone to transcribe dictation on your Mac. Audio stays on this device.</string>
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>WovenMatterSourceRevision</key>
+    <string>$(WOVENMATTER_SOURCE_REVISION)</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/wovenmatter/wovenmatter/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI=</string>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
     <key>LSMultipleInstancesProhibited</key>
     <true/>
 </dict>

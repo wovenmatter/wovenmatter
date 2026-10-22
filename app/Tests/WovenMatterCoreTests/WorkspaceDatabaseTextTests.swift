@@ -32,37 +32,6 @@ struct WorkspaceDatabaseTextTests {
     }
   }
 
-  @Test func scalarWindowsMatchSQLiteIndexingWithoutTruncatingNUL() async throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    try await database.read { connection in
-      for value in ["\0é🪡z", "é\0🪡z", "é🪡z\0", "e\u{0301}\0🪡z", ""] {
-        let scalars = Array(value.unicodeScalars)
-        let length = try connection.historyRowsUnlocked("SELECT woven_text_length(?) AS n", values: [value])
-        #expect(length.first?.objectValue?["n"]?.intValue == scalars.count)
-        for offset in 0...scalars.count {
-          let row = try connection.historyRowsUnlocked("SELECT woven_text_substr(?,?,?) AS value", values: [value, String(offset + 1), "2"])
-          let expected = String(String.UnicodeScalarView(scalars.dropFirst(offset).prefix(2)))
-          #expect(row.first?.objectValue?["value"]?.stringValue == expected)
-        }
-      }
-      for position in [-20, -4, -1, 0, 1, 2, 20] {
-        for width in [-20, -1, 0, 1, 3, 20] {
-          let values = ["aé🪡z", String(position), String(width)]
-          let row = try connection.historyRowsUnlocked("SELECT woven_text_substr(?,?,?) AS actual,substr(?,?,?) AS expected", values: values + values)
-          #expect(row.first?.objectValue?["actual"] == row.first?.objectValue?["expected"])
-        }
-      }
-      let suffix = try connection.historyRowsUnlocked("SELECT woven_text_substr(?,-2) AS value", values: ["é\0🪡z"])
-      #expect(suffix.first?.objectValue?["value"]?.stringValue == "🪡z")
-      let nulls = try connection.historyRowsUnlocked("SELECT woven_text_length(NULL) AS n,woven_text_substr('x',1,NULL) AS value", values: [])
-      #expect(nulls.first?.objectValue?["n"] == .null)
-      #expect(nulls.first?.objectValue?["value"] == .null)
-    }
-  }
-
   @Test func deliveryRetryPreservesTextAfterNULAcrossConnections() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

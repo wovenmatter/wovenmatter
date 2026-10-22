@@ -5,10 +5,13 @@ import SwiftUI
 import WovenMatterDashboardStore
 import WovenMatterClient
 
-/// Optional development variants have their own database and process lease.
+/// Client/snapshot variants are isolated; an explicit live host uses production's lease.
 /// Release builds always use the established workspace directory.
 enum WovenMatterWorkspacePaths {
     static var folderName: String {
+        if let mode = DevelopmentLaunch.mode, let instance = DevelopmentLaunch.instance {
+            return mode.workspaceFolder(instance: instance)
+        }
         #if DEBUG
         let prefix = "wovenmatter.desktop.dev."
         if let identifier = Bundle.main.bundleIdentifier, identifier.hasPrefix(prefix) {
@@ -269,11 +272,16 @@ final class WorkspaceProcessLease {
     static func verifyIncumbentHandoff(
         _ owner: WorkspaceProcessLeaseOwner?,
         currentProcessIdentifier: Int32,
+        currentBundleIdentifier: String? = Bundle.main.bundleIdentifier,
         candidateForProcessIdentifier: (Int32) -> WorkspaceProcessLeaseActivationCandidate?,
         candidatesForBundleIdentifier: (String) -> [WorkspaceProcessLeaseActivationCandidate]
     ) -> WorkspaceProcessLeaseHandoffResult {
+        let identifiers: [String]
+        if let currentBundleIdentifier, currentBundleIdentifier.hasPrefix("wovenmatter.desktop.dev.") {
+            identifiers = [currentBundleIdentifier]
+        } else { identifiers = appBundleIdentifiers }
         if let owner,
-           appBundleIdentifiers.contains(owner.bundleIdentifier),
+           identifiers.contains(owner.bundleIdentifier),
            owner.processIdentifier != currentProcessIdentifier,
            let candidate = candidateForProcessIdentifier(owner.processIdentifier),
            candidate.owner == owner,
@@ -282,7 +290,7 @@ final class WorkspaceProcessLease {
            !candidate.isTerminated() {
             return .activated(owner)
         }
-        for bundleIdentifier in appBundleIdentifiers {
+        for bundleIdentifier in identifiers {
             for candidate in candidatesForBundleIdentifier(bundleIdentifier) {
                 guard candidate.owner.bundleIdentifier == bundleIdentifier,
                       candidate.owner.processIdentifier != currentProcessIdentifier,
@@ -384,6 +392,13 @@ struct WovenMatterApp: App {
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil
             || environment.keys.contains("XCTestConfigurationFilePath")
+        if !isRunningUnitTests, CompanionTestWorkspace.supportDirectory == nil {
+            do { try DevelopmentLaunch.validate() }
+            catch {
+                NSLog("Development launch refused: %@", error.localizedDescription)
+                Darwin.exit(EXIT_FAILURE)
+            }
+        }
         // A leftover login job must not reopen an old central library after
         // this Mac has explicitly switched to a different library's client.
         if !isRunningUnitTests, LocalExecutionRole.current == .backend,
@@ -394,7 +409,7 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
-        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
+        if !isRunningUnitTests && (LocalExecutionRole.current == .backend || DevelopmentLaunch.isLiveHost) {
             do {
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                     LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -403,6 +418,8 @@ struct WovenMatterApp: App {
                 NSLog("Woven Matter backend endpoint recovery failed: %@", error.localizedDescription)
                 Darwin.exit(EXIT_FAILURE)
             }
+        }
+        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
             let backendModel = ApplicationModel()
             let backendDelegate = WovenMatterLifecycleDelegate()
             backendDelegate.model = backendModel
@@ -419,6 +436,10 @@ struct WovenMatterApp: App {
         _applicationModel = State(initialValue: ApplicationModel())
         if !isRunningUnitTests {
             Self.markUpdateReadyIfRequested()
+            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+               let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") {
+                ProductAnalyticsModel.markUpdateLaunched(version: version, build: build)
+            }
         }
     }
 
@@ -452,6 +473,7 @@ struct WovenMatterApp: App {
             RootView(model: applicationModel)
                 .onAppear {
                     lifecycleDelegate.model = applicationModel
+                    DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                     LocalBackgroundExecution.shared.transitionHandler = { enabled in
                         try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)
@@ -466,12 +488,25 @@ struct WovenMatterApp: App {
                 ) { _ in
                     Task { await applicationModel.flushNoteDrafts() }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in
+                    // AppKit focus is not observable. Publish changes after its
+                    // event cycle so the dictation command's enabled state follows it.
+                    DictationModel.shared.refreshShortcutEditor()
+                }
 
         }
         .defaultSize(width: 1320, height: 860)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(after: .textEditing) {
+                Button(DictationModel.shared.isRecording ? "Stop and Insert Dictation" : "Dictate into Current Editor") {
+                    DictationModel.shared.toggleActiveEditor()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(DictationModel.shared.shortcutEditor?.ticket() == nil
+                    || DictationModel.shared.phase == .finishing)
+            }
             CommandMenu("Workspace") {
                 Button("Refresh Workspace") {
                     Task { await applicationModel.refreshWorkspace() }
@@ -495,7 +530,10 @@ struct WovenMatterApp: App {
 
         Settings {
             Group {
-                if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
+                if DevelopmentLaunch.isClient, let execution = applicationModel.libraryClient.localExecution {
+                    SettingsView(model: execution.model)
+                }
+                else if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
                 else { SettingsView(model: applicationModel) }
             }.scrollIndicators(.never)
         }

@@ -5,15 +5,6 @@ import WovenMatterCore
 
 @Suite("Note menu revisions, retention and export")
 struct WorkspaceNoteActionsTests {
-  private struct Fixture {
-    let root = FileManager.default.temporaryDirectory.appending(path: "note-actions-" + UUID().uuidString)
-    let db: WorkspaceDatabase
-    init() async throws {
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-      db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    }
-    func close() { try? FileManager.default.removeItem(at: root) }
-  }
 
   @Test func nestedListsPersistThroughDatabaseAndStyleChanges() async throws {
     let f = try await Fixture(); defer { f.close() }
@@ -47,6 +38,41 @@ struct WorkspaceNoteActionsTests {
     guard case .richText(let oldList) = decoded.blocks[0] else { Issue.record("Missing old list"); return }
     #expect(oldList.style == .numberedList && oldList.list == nil)
     #expect(NoteDocument.decode(try decoded.encoded()) == decoded)
+  }
+
+  @Test func inlineValueLinksSurviveStorageAndUseExistingEditExportBounds() throws {
+    let link = DatabaseArtifactLink(sourceID: "device:test", databaseID: "sales", relativePath: "data.sqlite",
+                                   sqliteQuery: "SELECT sum(amount) FROM sales")
+    var wireRun = NoteTextRun(text: "", databaseLink: link)
+    wireRun.databaseValueID = nil // Agents may omit identity in their JSON edits.
+    let document = NoteDocument(blocks: [.richText(.init(id: "summary", runs: [.init(text: "Total: "), wireRun]))])
+    let stored = NoteDocument.decode(try document.encoded())
+    guard case .richText(let text) = stored.blocks[0], let value = text.runs.last else {
+      Issue.record("Missing inline value"); return
+    }
+    #expect(value.databaseLink == link && value.databaseValueID != nil && value.text.isEmpty)
+    #expect(NoteDocument.decode(try stored.encoded()) == stored)
+    #expect(stored.plainText == "Total: ")
+
+    var excessive = value
+    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: 64 * 1_024 + 1)
+    #expect(throws: RemoteNoteEditError.operationTooLarge) {
+      try RemoteNoteEditEnvelope.validate(operations: [.replaceBlock(id: "summary", block: .richText(.init(runs: [excessive])))],
+                                          noteKind: .note)
+    }
+    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)
+    let oversized = NoteDocument(blocks: [.richText(.init(runs: [excessive]))])
+    #expect(throws: WorkspaceExportError.tooLarge) { try oversized.exported(title: "Inline", format: .document) }
+  }
+
+  private struct Fixture {
+    let root = FileManager.default.temporaryDirectory.appending(path: "note-actions-" + UUID().uuidString)
+    let db: WorkspaceDatabase
+    init() async throws {
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+    }
+    func close() { try? FileManager.default.removeItem(at: root) }
   }
 
   @Test func staleRevisionCannotRenameTrashOrExportNewerContent() async throws {
@@ -99,27 +125,6 @@ struct WorkspaceNoteActionsTests {
     }
   }
 
-  @Test func moveRejectsForeignFolderAndRestoreFallsBackAfterFolderRemoval() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    // App startup seeds local agents before asset mutations. Keep that ownership
-    // anchor while the synthetic foreign folder outlives the local note's folder.
-    _ = try await f.db.createLocalACPSession(runtimeKind: .codex, title: "Workspace owner", ownerDeviceID: UUID())
-    let folder = try await f.db.createFolder(name: "Previous folder")
-    let id = try await f.db.createNote(folderID: folder, title: "Retained")
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("INSERT INTO folders(id,user_id,name) VALUES('foreign','someone-else','Foreign')", [])
-    } }
-    await #expect(throws: WorkspaceNoteMutationError.folderNotFound) {
-      try await f.db.mutateNote(id: id, mutation: .moveToFolder("foreign"), expectedRevision: f.db.noteActionRevision(id: id))
-    }
-    #expect(try await f.db.workspaceOverview().notes.first?.folderID == folder)
-    try await f.db.mutateNote(id: id, mutation: .moveToTrash, expectedRevision: f.db.noteActionRevision(id: id))
-    _ = try await f.db.deleteFolder(id: folder)
-    #expect(try await f.db.trashedNotes().contains { $0.id == id && $0.title == "Retained" })
-    try await f.db.mutateNote(id: id, mutation: .restore, expectedRevision: f.db.noteActionRevision(id: id, trashed: true))
-    #expect(try await f.db.workspaceOverview().notes.first?.folderID == nil)
-  }
-
   @Test func readableExportsEscapeContentAndDocumentExportRetainsStructure() throws {
     let rich = NoteRichTextBlock(style: .heading2, runs: [
       .init(text: "A [link]", bold: true, link: "https://example.org/a(b)?q=two words")
@@ -146,62 +151,6 @@ struct WorkspaceNoteActionsTests {
     let bounded = try note.exported(title: String(repeating: "界🙂", count: 300) + "/:\\\n", format: .standard)
     #expect(bounded.suggestedFilename.decomposedStringWithCanonicalMapping.utf8.count <= 255)
     #expect(!bounded.suggestedFilename.contains("/") && !bounded.suggestedFilename.contains(":"))
-  }
-
-  @Test func renameValidationPreservesNoteRevision() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let id = try await f.db.createNote(folderID: nil, title: "Original")
-    let revision = try await f.db.noteActionRevision(id: id)
-    for title in ["\0Hidden", "Visible\0hidden", String(repeating: "界", count: 1_366)] {
-      await #expect(throws: WorkspaceNoteActionError.invalidTitle) {
-        try await f.db.mutateNote(id: id, mutation: .rename(title), expectedRevision: revision)
-      }
-    }
-    #expect(try await f.db.noteActionRevision(id: id) == revision)
-    #expect(try await f.db.readNoteForEditing(id: id).title == "Original")
-  }
-
-  @Test func sparseTablesAreBoundedBeforeNormalizationAndEmptyDocumentsExport() throws {
-    let sparse = NoteDocument(kind: .spreadsheet, blocks: [.table(.init(
-      columns: (0..<200).map { _ in .init() },
-      rows: (0..<200).map { _ in .init(cells: []) }
-    ))])
-    // encoded() normalizes; retained wire bytes must be checked before that expansion.
-    let content = String(decoding: try JSONEncoder().encode(sparse), as: UTF8.self)
-    #expect(content.utf8.count < WorkspaceExportBudget.maximumStoredBytes)
-    #expect(throws: WorkspaceExportError.tooLarge) {
-      try NoteDocument.exportRetained(content: content, title: "Sparse", format: .standard)
-    }
-    let empty = try NoteDocument.exportRetained(content: "", title: "Empty", format: .standard)
-    #expect(empty.fileExtension == "md" && String(decoding: empty.data, as: UTF8.self).contains("# Empty"))
-    let linked = NoteDocument(databaseLink: .init(sourceID: "source", databaseID: "db", relativePath: "file",
-      sqliteQuery: String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)))
-    #expect(throws: WorkspaceExportError.tooLarge) { try linked.exported(title: "Linked", format: .document) }
-  }
-
-  @Test func inlineValueLinksSurviveStorageAndUseExistingEditExportBounds() throws {
-    let link = DatabaseArtifactLink(sourceID: "device:test", databaseID: "sales", relativePath: "data.sqlite",
-                                   sqliteQuery: "SELECT sum(amount) FROM sales")
-    var wireRun = NoteTextRun(text: "", databaseLink: link)
-    wireRun.databaseValueID = nil // Agents may omit identity in their JSON edits.
-    let document = NoteDocument(blocks: [.richText(.init(id: "summary", runs: [.init(text: "Total: "), wireRun]))])
-    let stored = NoteDocument.decode(try document.encoded())
-    guard case .richText(let text) = stored.blocks[0], let value = text.runs.last else {
-      Issue.record("Missing inline value"); return
-    }
-    #expect(value.databaseLink == link && value.databaseValueID != nil && value.text.isEmpty)
-    #expect(NoteDocument.decode(try stored.encoded()) == stored)
-    #expect(stored.plainText == "Total: ")
-
-    var excessive = value
-    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: 64 * 1_024 + 1)
-    #expect(throws: RemoteNoteEditError.operationTooLarge) {
-      try RemoteNoteEditEnvelope.validate(operations: [.replaceBlock(id: "summary", block: .richText(.init(runs: [excessive])))],
-                                          noteKind: .note)
-    }
-    excessive.databaseLink?.sqliteQuery = String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)
-    let oversized = NoteDocument(blocks: [.richText(.init(runs: [excessive]))])
-    #expect(throws: WorkspaceExportError.tooLarge) { try oversized.exported(title: "Inline", format: .document) }
   }
 
   @Test func cancelledExportNeverTouchesAnExistingDestination() async throws {

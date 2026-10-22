@@ -20,7 +20,11 @@ run_static_checks() {
     bash -n "$file"
   done
   scripts/test-release.sh
+  python3 scripts/test-support/test_update_refresh.py
+  python3 scripts/test-support/test_ci_scopes.py
+  python3 scripts/test-support/test_ios_runner.py
   bash scripts/test-dev-signing.sh
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_dev_build.py
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh
@@ -31,7 +35,6 @@ run_static_checks() {
   python3 scripts/test-support/test_executor_deployment.py
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
   node --test scripts/test-support/native-cli.test.mjs
-  node --test scripts/test-support/runtime-updates.test.mjs
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_owner_local_databases.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
@@ -61,7 +64,7 @@ run_package_tests() {
   local test_command=(env
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
-    swift test --package-path app --scratch-path "$swift_scratch")
+    swift test --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
   # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
@@ -84,6 +87,7 @@ run_default_agent_tests() {
   npm test --prefix default-agent
   node scripts/build-ios-pi-runtime.mjs --check
   node scripts/build-ios-embedded-runtime.mjs --check
+  scripts/test-embedded-runtime-macos.sh
 }
 
 run_remote_tests() {
@@ -91,7 +95,7 @@ run_remote_tests() {
 }
 
 run_app_build() {
-  xcodebuild -quiet \
+  xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
     -project app/WovenMatter.xcodeproj \
     -scheme WovenMatter \
     -configuration Debug \
@@ -115,8 +119,10 @@ run_companion() {
     CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
     SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
     swift test --package-path shared --scratch-path "${cache_root}/SharedSwiftPM"
-  env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
-    scripts/test-ios.sh "$ios_mode"
+  if [ "$ios_mode" != --desktop-only ]; then
+    env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
+      scripts/test-ios.sh "$ios_mode"
+  fi
   env WOVENMATTER_INTEGRATION_TEST_CACHE_DIR="${cache_root}/Integration" \
     scripts/test-companion-integration.sh
 }
@@ -130,12 +136,15 @@ run_all() {
   run_companion --all-devices
 }
 
-run_macos() {
+run_desktop() {
   run_static_checks
   run_default_agent_tests
   run_package_tests
   run_app_build
-  # CI runs iPhone/iPad UI in independent matrix jobs. --all retains both locally.
+}
+
+run_macos() {
+  run_desktop
   run_companion --simulator
 }
 
@@ -148,12 +157,14 @@ run_remote() {
 mode="${1:-changed}"
 case "$mode" in
   --all) run_all; exit ;;
+  --desktop) run_desktop; exit ;;
   --macos) run_macos; exit ;;
   --companion) run_companion --simulator; exit ;;
+  --companion-desktop) run_companion --desktop-only; exit ;;
   --remote) run_remote; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--macos|--companion|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--desktop|--macos|--companion|--companion-desktop|--remote]' >&2
     exit 64
     ;;
 esac

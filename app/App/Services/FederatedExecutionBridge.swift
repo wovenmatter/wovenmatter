@@ -22,6 +22,9 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
 
 extension ApplicationModel {
     func centralExecutionClient() throws -> CentralExecutionClient {
+        guard !DevelopmentLaunch.isSnapshot else {
+            throw WorkspaceToolError.invalid("Snapshot history is disconnected. Start a new session to test execution.")
+        }
         guard !isBackendFrontend, let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         if let federatedExecutionClient { return federatedExecutionClient }
         let directory = try CompanionTestWorkspace.supportDirectory ?? Self.dashboardSupportDirectory()
@@ -59,6 +62,8 @@ extension ApplicationModel {
     }
 
     func performFederatedExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
+        if let client = liveLibraryClient { return try await client.desktopExecution(action) }
+        if DevelopmentLaunch.isSnapshot { return try await savedDevelopmentExecution(action) }
         let client = try centralExecutionClient()
         let id: String
         var earlier: CompanionTranscript?
@@ -78,6 +83,23 @@ extension ApplicationModel {
             session: session, online: client.onlineWorkspaces.contains(workspace.id), error: client.errors[workspace.id])
         federatedExecutionSnapshots[id] = snapshot
         return snapshot
+    }
+
+    /// Snapshot history has no connection or credential to its former owner.
+    func savedDevelopmentExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
+        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let id: String
+        let before: String?
+        switch action {
+        case .refresh(let value): id = value; before = nil
+        case .earlier(let value, let cursor): id = value; before = cursor
+        default: throw WorkspaceToolError.invalid("Snapshot history is disconnected. Start a new session to test execution.")
+        }
+        var transcript = try await database.companionFederatedTranscript(conversationID: id, before: before)
+        transcript?.activeRunID = nil
+        return .init(workspace: .init(id: "snapshot-history", libraryID: try await database.companionWorkspaceID(),
+            ownerDeviceID: "snapshot-history", kind: .mac, name: "Snapshot history"),
+            transcript: transcript, capability: nil, interactions: [], session: nil, online: false, error: nil)
     }
 
     /// Transfer existing idle native sessions once their workspace participates in

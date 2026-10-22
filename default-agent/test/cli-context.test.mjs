@@ -23,23 +23,28 @@ test('consumed inputs change future shells without retargeting existing or other
   assert.equal(session.environment(runningShell).WOVENMATTER_CONTEXT_ID, undefined);
 });
 
-test('rejected and cancelled inputs cannot become the next message binding', () => {
-  const session = new SessionCLIContext();
-  session.enqueue(input('first')); session.consumed();
-  const reject = session.enqueue(input('rejected')); reject();
-  session.enqueue(input('cancelled')); session.finish();
-  session.enqueue({ ...input('next'), socketPath: undefined }); session.consumed();
-  assert.equal(session.environment({}).WOVENMATTER_CONTEXT_ID, 'next');
-  assert.equal(session.environment({ WOVENMATTER_SOCKET: 'old' }).WOVENMATTER_SOCKET, undefined);
-});
-
-
-test('reconnecting preserves the active capture and existing shell snapshots', () => {
-  const session = new SessionCLIContext();
+test('rejected and stopped steering cannot transfer CLI authority to a later accepted input', () => {
+  const session = new SessionCLIContext(), child = new SessionCLIContext();
+  const source = { PATH: '/usr/bin', WOVENMATTER_SOCKET: '/tmp/old.sock' };
   session.enqueue(input('active')); session.consumed();
-  const prior = session.environment({});
-  session.reconnect({ ...input(''), socketPath: '/tmp/new.sock' });
-  assert.equal(session.environment({}).WOVENMATTER_CONTEXT_ID, 'active');
-  assert.equal(session.environment({}).WOVENMATTER_SOCKET, '/tmp/new.sock');
-  assert.equal(prior.WOVENMATTER_SOCKET, '/tmp/bound.sock');
+  session.reconnect(input('connection-only'));
+  const running = session.environment(source);
+  const inherited = session.fork();
+  assert.throws(() => inherited.reconnect(input('forbidden')), /cannot be changed/);
+  assert.throws(() => inherited.enqueue(input('forbidden')), /cannot be changed/);
+  inherited.consumed();
+  const rollback = session.enqueue(input('rejected-steer')); rollback();
+  session.enqueue(input('stopped-steer')); session.finish();
+  assert.equal(session.environment(source).WOVENMATTER_CONTEXT_ID, 'active');
+  session.enqueue({ ...input('accepted-next'), socketPath: '/tmp/new.sock' }); session.consumed();
+  const next = session.environment(source);
+  assert.equal(next.WOVENMATTER_CONTEXT_ID, 'accepted-next');
+  assert.equal(next.WOVENMATTER_SOCKET, '/tmp/new.sock');
+  assert.equal(running.WOVENMATTER_CONTEXT_ID, 'active');
+  assert.equal(running.WOVENMATTER_SOCKET, '/tmp/bound.sock');
+  assert.equal(child.environment(next).WOVENMATTER_CONTEXT_ID, undefined);
+  assert.equal(inherited.environment(next).WOVENMATTER_CONTEXT_ID, 'active');
+  assert.equal(inherited.environment(next).WOVENMATTER_SOCKET, '/tmp/bound.sock');
+  session.consumed();
+  assert.equal(session.environment(next).WOVENMATTER_CONTEXT_ID, undefined);
 });

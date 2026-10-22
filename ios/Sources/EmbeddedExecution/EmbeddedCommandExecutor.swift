@@ -165,6 +165,10 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
         self.continuation = continuation
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        // This executor intentionally has no visible view. WebKit may suspend
+        // detached views after navigation, before the Python worker is ready.
+        // Keep it scheduled until finish() tears down the worker and web view.
+        config.preferences.inactiveSchedulingPolicy = .none
         config.userContentController.add(self, name: "wovenEmbedded")
         let view = WKWebView(frame: .zero, configuration: config)
         browser = view; view.navigationDelegate = self
@@ -277,12 +281,17 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
     }
     let resultFiles = try EmbeddedWorkspace.decode(files: files, directories: directories, maxBytes: limits.workspaceBytes, maxFiles: limits.workspaceEntries)
     let prefix = "\(EmbeddedWorkspace.metadataDirectory)/\(request.id.uuidString)/"
+    let provenance = try JSONSerialization.jsonObject(with: Data(contentsOf: resourceURL.appendingPathComponent("provenance.json"))) as? [String: Any]
+    guard let pythonVersion = provenance?["pythonVersion"] as? String,
+          let pyodideVersion = provenance?["version"] as? String else {
+      throw EmbeddedExecutionError.unavailable("The bundled Python runtime provenance is incomplete.")
+    }
     let result = EmbeddedCommandResult(requestID: request.id, exitCode: code,
       stdout: String(decoding:stdoutPreview,as:UTF8.self), stderr:String(decoding:stderrPreview,as:UTF8.self),
       stdoutPath:prefix+"stdout.txt",stderrPath:prefix+"stderr.txt",
       outputPreviewLimited:outputBytes > stdoutPreview.count + stderrPreview.count,
       changedFiles:resultFiles.files.keys.filter { resultFiles.files[$0] != snapshot.files[$0] }.sorted(),
-      removedFiles:snapshot.files.keys.filter { resultFiles.files[$0] == nil }.sorted(), runtime:"CPython 3.14.2 / Pyodide 314.0.7")
+      removedFiles:snapshot.files.keys.filter { resultFiles.files[$0] == nil }.sorted(), runtime:"CPython \(pythonVersion) / Pyodide \(pyodideVersion)")
     try stdoutFile?.synchronize(); try stderrFile?.synchronize()
     try stdoutFile?.close(); stdoutFile = nil; try stderrFile?.close(); stderrFile = nil
     let receipt = try JSONEncoder().encode(EmbeddedReceipt(requestDigest:requestDigest,result:result))

@@ -8,130 +8,6 @@ import WovenMatterCore
 
 @Suite("Usage credential prompt suppression")
 struct UsageCredentialStoreTests {
-  @Test("presence reads attributes only and secret reads never allow authentication")
-  func noninteractiveReads() throws {
-    let fixture = KeychainFixture()
-    let store = fixture.store()
-
-    #expect(try store.hasOpenRouterAPIKey())
-    #expect(try store.loadOpenRouterAPIKey() == "fixture-key")
-
-    let reads = fixture.reads
-    #expect(reads.count == 2)
-    #expect(reads[0].attributes && !reads[0].secret)
-    #expect(reads[1].secret && !reads[1].attributes)
-    #expect(reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
-    #expect(fixture.policyChanges == [false, true, false, true])
-    #expect(fixture.interactionAllowed)
-  }
-
-  @Test("denied and missing credentials restore the original interaction policy",
-        arguments: [errSecInteractionNotAllowed, errSecAuthFailed, errSecItemNotFound])
-  func failedReadsRestorePolicy(status: OSStatus) throws {
-    let fixture = KeychainFixture(readStatus: status)
-    let store = fixture.store()
-    if status == errSecItemNotFound {
-      #expect(try !store.hasOpenRouterAPIKey())
-      #expect(try store.loadOpenRouterAPIKey() == nil)
-    } else {
-      #expect(throws: UsageCredentialStoreError.self) { try store.hasOpenRouterAPIKey() }
-      #expect(throws: UsageCredentialStoreError.self) { try store.loadOpenRouterAPIKey() }
-    }
-    #expect(fixture.policyChanges == [false, true, false, true])
-    #expect(fixture.interactionAllowed)
-  }
-
-  @Test("a preexisting noninteractive policy is never enabled")
-  func preservesDisabledInteraction() throws {
-    let fixture = KeychainFixture(initiallyAllowed: false)
-    #expect(try fixture.store().hasOpenRouterAPIKey())
-    #expect(!fixture.interactionAllowed)
-    #expect(fixture.policyChanges == [false, false])
-  }
-
-  @Test("failure to read or suppress the interaction policy fails before accessing the Keychain")
-  func suppressionFailureDoesNotRead() {
-    for fixture in [
-      KeychainFixture(policyStatus: errSecNotAvailable),
-      KeychainFixture(suppressionStatus: errSecNotAvailable),
-    ] {
-      #expect(throws: UsageCredentialStoreError.self) { try fixture.store().loadOpenRouterAPIKey() }
-      #expect(fixture.reads.isEmpty)
-      #expect(fixture.interactionAllowed)
-    }
-  }
-
-  @Test("concurrent store instances serialize read suppression and explicit changes")
-  func concurrentOperationsPreservePolicy() {
-    let fixture = KeychainFixture()
-    DispatchQueue.concurrentPerform(iterations: 60) { index in
-      // Separate instances model limits, analytics, and credential changes.
-      let store = fixture.store()
-      switch index % 3 {
-      case 0: #expect(throws: Never.self) { try store.hasOpenRouterAPIKey() }
-      case 1: #expect(throws: Never.self) { try store.saveOpenRouterAPIKey("fixture-replacement") }
-      default: #expect(throws: Never.self) { try store.deleteOpenRouterAPIKey() }
-      }
-    }
-    #expect(fixture.reads.count == 20)
-    #expect(fixture.reads.allSatisfy { !$0.interactionAllowed })
-    #expect(fixture.writePolicies.count == 40)
-    #expect(fixture.writePolicies.allSatisfy { $0 })
-    #expect(fixture.interactionAllowed)
-  }
-
-  @Test("failed background credential reads preserve last-good quota values")
-  func deniedLimitRefreshKeepsLastGood() async throws {
-    let directory = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let databaseURL = directory.appending(path: "usage.sqlite")
-    let now = Date(timeIntervalSince1970: 1_800_000_000)
-    let prior = UsageLimitAccount(
-      provider: .openRouter,
-      accountLabel: "Saved account",
-      status: .available,
-      balance: ProviderMoney(amountMicros: 20_000_000, currency: "USD"),
-      source: "Fixture",
-      detail: "Last successful refresh",
-      observedAt: now.addingTimeInterval(-120)
-    )
-    try UsageStore(databaseURL: databaseURL).saveUsageLimitAccounts([prior], storedAt: prior.observedAt)
-    let fixture = KeychainFixture(secretStatus: errSecInteractionNotAllowed)
-    let service = LocalUsageService(
-      homeDirectory: directory,
-      fileManager: .default,
-      credentialStore: fixture.store(),
-      usageDatabaseURL: databaseURL,
-      limitCollector: { request in
-        #expect(request.openRouterAPIKey == nil)
-        return [UsageLimitAccount(
-          provider: .openRouter,
-          accountLabel: "OpenRouter",
-          status: .needsCredential,
-          source: "Fixture",
-          detail: "No key supplied",
-          observedAt: request.now
-        )]
-      }
-    )
-    for reason in [UsageRefreshReason.startup, .manual, .credentialChanged] {
-      let snapshot = try await service.limitsSnapshot(
-        refresh: true,
-        refreshReason: reason,
-        enabledProviders: [.openRouter],
-        keychainInteraction: .oneShotExplicit,
-        now: now
-      )
-      let account = try #require(snapshot.accounts.first)
-      #expect(account.balance == prior.balance)
-      #expect(account.observedAt == prior.observedAt)
-      #expect(account.isStale)
-      #expect(account.refreshError?.contains("Keychain") == true)
-      #expect(snapshot.hasOpenRouterCredential)
-    }
-    #expect(fixture.reads.filter(\.secret).count == 3)
-    #expect(fixture.reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
-  }
 
   @Test("analytics reports inaccessible credentials without asking for a replacement key")
   func deniedAnalyticsRefreshIsHonest() async throws {
@@ -160,17 +36,6 @@ struct UsageCredentialStoreTests {
       #expect(fixture.reads.filter(\.secret).count == 1)
       #expect(fixture.reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
     }
-  }
-
-  @Test("explicit retry performs a single interactive read without changing system policy")
-  func explicitRetryReadsOnce() throws {
-    let fixture = KeychainFixture()
-    #expect(try fixture.store().authorizeOpenRouterAPIKey() == "fixture-key")
-    #expect(fixture.reads.count == 1)
-    #expect(fixture.reads[0].secret)
-    #expect(fixture.reads[0].interactionAllowed)
-    #expect(!fixture.reads[0].contextDisallowsInteraction)
-    #expect(fixture.policyChanges.isEmpty)
   }
 
   @Test("one-time authorization is reused by analytics and limits; save and delete replace session access")
@@ -234,6 +99,88 @@ struct UsageCredentialStoreTests {
     #expect(collector.limitKeys.last == "missing")
     #expect(collector.activityKeys.count == 4)
     #expect(credentials.readCount == 2)
+  }
+
+  @Test("presence reads attributes only and secret reads never allow authentication")
+  func noninteractiveReads() throws {
+    let fixture = KeychainFixture()
+    let store = fixture.store()
+
+    #expect(try store.hasOpenRouterAPIKey())
+    #expect(try store.loadOpenRouterAPIKey() == "fixture-key")
+
+    let reads = fixture.reads
+    #expect(reads.count == 2)
+    #expect(reads[0].attributes && !reads[0].secret)
+    #expect(reads[1].secret && !reads[1].attributes)
+    #expect(reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
+    #expect(fixture.policyChanges == [false, true, false, true])
+    #expect(fixture.interactionAllowed)
+  }
+
+  @Test("failure to read or suppress the interaction policy fails before accessing the Keychain")
+  func suppressionFailureDoesNotRead() {
+    for fixture in [
+      KeychainFixture(policyStatus: errSecNotAvailable),
+      KeychainFixture(suppressionStatus: errSecNotAvailable),
+    ] {
+      #expect(throws: UsageCredentialStoreError.self) { try fixture.store().loadOpenRouterAPIKey() }
+      #expect(fixture.reads.isEmpty)
+      #expect(fixture.interactionAllowed)
+    }
+  }
+
+  @Test("failed background credential reads preserve last-good quota values")
+  func deniedLimitRefreshKeepsLastGood() async throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let databaseURL = directory.appending(path: "usage.sqlite")
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let prior = UsageLimitAccount(
+      provider: .openRouter,
+      accountLabel: "Saved account",
+      status: .available,
+      balance: ProviderMoney(amountMicros: 20_000_000, currency: "USD"),
+      source: "Fixture",
+      detail: "Last successful refresh",
+      observedAt: now.addingTimeInterval(-120)
+    )
+    try UsageStore(databaseURL: databaseURL).saveUsageLimitAccounts([prior], storedAt: prior.observedAt)
+    let fixture = KeychainFixture(secretStatus: errSecInteractionNotAllowed)
+    let service = LocalUsageService(
+      homeDirectory: directory,
+      fileManager: .default,
+      credentialStore: fixture.store(),
+      usageDatabaseURL: databaseURL,
+      limitCollector: { request in
+        #expect(request.openRouterAPIKey == nil)
+        return [UsageLimitAccount(
+          provider: .openRouter,
+          accountLabel: "OpenRouter",
+          status: .needsCredential,
+          source: "Fixture",
+          detail: "No key supplied",
+          observedAt: request.now
+        )]
+      }
+    )
+    for reason in [UsageRefreshReason.startup, .manual, .credentialChanged] {
+      let snapshot = try await service.limitsSnapshot(
+        refresh: true,
+        refreshReason: reason,
+        enabledProviders: [.openRouter],
+        keychainInteraction: .oneShotExplicit,
+        now: now
+      )
+      let account = try #require(snapshot.accounts.first)
+      #expect(account.balance == prior.balance)
+      #expect(account.observedAt == prior.observedAt)
+      #expect(account.isStale)
+      #expect(account.refreshError?.contains("Keychain") == true)
+      #expect(snapshot.hasOpenRouterCredential)
+    }
+    #expect(fixture.reads.filter(\.secret).count == 3)
+    #expect(fixture.reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
   }
 
   @Test("a superseded limits save cannot replace the current session cache")

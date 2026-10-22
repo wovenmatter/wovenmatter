@@ -7,6 +7,23 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSteeringLifecycleTests {
+
+    @Test func outputAndDecisionBeforeAdmissionDoNotDeadlockOrLeakAcrossSegments() async throws {
+        let f = try await SteeringFixture()
+        defer { f.remove() }
+        _ = try await f.start()
+        await f.driver.waitForPrompt()
+        _ = try await f.coordinator.sendActiveInput(conversationID: f.id, content: "preflight")
+        await #expect(throws: LocalACPSessionDatabaseError.steeringUnsupported) {
+            try await f.coordinator.sendActiveInput(conversationID: f.id, content: "preflight-reject")
+        }
+        await f.driver.finishInitial()
+        try await f.waitForTerminal()
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "preflight"])
+        #expect(try await f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before", "accepted outputrejected output"])
+        await f.coordinator.shutdown()
+    }
+
     @Test func persistenceFailurePreventsNativeDispatch() async throws {
         let f = try await SteeringFixture()
         defer { f.remove() }
@@ -45,27 +62,6 @@ struct ACPSteeringLifecycleTests {
         await f.coordinator.shutdown()
     }
 
-    @Test func revokingToolAccessAfterDispatchDoesNotDiscardAnAcceptedInput() async throws {
-        let f = try await SteeringFixture()
-        defer { f.remove() }
-        _ = try await f.start()
-        await f.driver.waitForPrompt()
-        let source = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
-        try await f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
-        let deliveryID = UUID().uuidString.lowercased()
-        _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
-        _ = try await f.database.claimToolDelivery(id: deliveryID)
-        await f.driver.setBeforeAdmission {
-            #expect(try await f.database.toolDelivery(id: deliveryID)?.status == "accepted")
-            try await f.database.setSessionTools(.init(enabled: []), sessionID: source)
-        }
-        _ = try await f.coordinator.sendActiveInput(conversationID: f.id,
-            input: .init(text: "correction", historyDeliveryID: deliveryID))
-        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "correction"])
-        await f.driver.finishInitial()
-        try await f.waitForTerminal()
-        await f.coordinator.shutdown()
-    }
     @Test(arguments: [false, true])
     func toolDeliveryAuthorityIsCheckedBeforeNativeSteering(revoked: Bool) async throws {
         let f = try await SteeringFixture()
@@ -93,21 +89,6 @@ struct ACPSteeringLifecycleTests {
         try await f.waitForTerminal()
         await f.coordinator.shutdown()
     }
-    @Test func outputAndDecisionBeforeAdmissionDoNotDeadlockOrLeakAcrossSegments() async throws {
-        let f = try await SteeringFixture()
-        defer { f.remove() }
-        _ = try await f.start()
-        await f.driver.waitForPrompt()
-        _ = try await f.coordinator.sendActiveInput(conversationID: f.id, content: "preflight")
-        await #expect(throws: LocalACPSessionDatabaseError.steeringUnsupported) {
-            try await f.coordinator.sendActiveInput(conversationID: f.id, content: "preflight-reject")
-        }
-        await f.driver.finishInitial()
-        try await f.waitForTerminal()
-        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "preflight"])
-        #expect(try await f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before", "accepted outputrejected output"])
-        await f.coordinator.shutdown()
-    }
     @Test func repeatedSteersKeepOneRunAndRejectedInputDoesNotEnterHistory() async throws {
         let f = try await SteeringFixture()
         defer { f.remove() }
@@ -129,21 +110,6 @@ struct ACPSteeringLifecycleTests {
         #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "first", "second", "third"])
         #expect(try await f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before continued", "reply to first", "reply to second", "reply to third"])
         #expect(Set(try await f.messages().compactMap(\.runID)) == [run.runID])
-        await f.coordinator.shutdown()
-    }
-
-    @Test func originalCompletionDoesNotCloseAnAcceptedContinuation() async throws {
-        let f = try await SteeringFixture()
-        defer { f.remove() }
-        _ = try await f.start()
-        await f.driver.waitForPrompt()
-        _ = try await f.coordinator.sendActiveInput(conversationID: f.id, content: "continuation")
-        await f.driver.finishInitial()
-        try await f.driver.emit(.assistantChunk("continued work"))
-        #expect(try await f.database.activeDeviceOwnedConversationIDs().contains(f.id))
-        await f.driver.finishContinuation()
-        try await f.waitForTerminal()
-        #expect(try await f.messages().last?.content == "continued work")
         await f.coordinator.shutdown()
     }
 

@@ -7,30 +7,35 @@ Pi Durable SDK directly and exposes ACP to reuse the native conversation, tool a
 notes, persistence, and model-control presentation. It never invokes the
 external `pi` command.
 
-`default-agent/package-lock.json` pins the SDK dependency graph. The macOS build
-prepares Node 24.22.0 with pinned archive SHA-256 checks and includes its license.
-The workspace image uses its pinned Node base and installs the same locked SDK.
-Node receives its own JIT entitlement when the app is signed. SDK dependencies
-and runtime binaries are build products, not checked into Git. Remote deployment
-archives include only the helper's source and package manifests; local binaries,
-dependencies, tests, and build caches are not uploaded.
+`default-agent/package-lock.json` is the tested SDK dependency graph; builds and
+the workspace image install it with `npm ci`. The macOS build bundles the Node
+LTS release named in `default-agent/.node-version` and verifies its official
+archive SHA-256 values. Linux images follow the same LTS line. Node receives its
+JIT entitlement when signed. SDK dependencies and runtime binaries are build
+products, not checked into Git. Remote deployment archives include only the
+helper's source and package manifests; local binaries, dependencies, tests, and
+build caches are not uploaded. Daily source-maintenance PRs keep these records
+on current releases; see [the dependency policy](../DEPENDENCIES.md).
 
-External harness installs and updates resolve the newest supported release at the
-time of the operation: OpenCode stays on stable 2.x, Pi on stable 1.x, and ACP
-adapters use their latest release above the compatibility floor. A concrete
-version is frozen for each reviewed installation. Bundled Node, Playwright, and
-SDK lockfiles are tested distribution snapshots, not limits on harness updates.
-SDK updates likewise resolve the newest supported Pi 1.x or Claude 0.3.x release
-and activate it in an immutable generation after contract verification.
+External harness installs and updates resolve the newest supported release at
+the time of the operation. ACP adapters take their latest release at or above
+the catalog minimum. OpenCode stays on stable v2, the server API Woven Matter
+implements. Each installation freezes the concrete version it selected.
+
+SDK updates use the bundled `package.json` range as their compatibility policy.
+They select the newest stable Pi or Claude SDK release in that range, and Pi
+only selects a release published for every Pi package and Chord. A newer
+release outside the range is shown as needing a Woven Matter update.
 
 SDK management is scoped to the executing location. Installed-version reads use
 package metadata only; registry checks and updates are explicit user actions.
 The macOS bundle includes npm alongside its pinned Node distribution so updates
 do not depend on a user-installed package manager. Installation occurs under
 `<agent-directory>/sdk-runtime/generations`, outside the signed app bundle.
-Updates stage a complete locked dependency graph, keep the two Pi packages
-aligned, disable npm lifecycle scripts, and verify required SDK exports before
-atomically activating an immutable generation. Existing generations remain
+Updates stage a complete locked dependency graph, keep unrelated packages at
+their installed versions, keep the Pi packages aligned, disable npm lifecycle
+scripts, and verify required SDK exports before atomically activating an
+immutable generation. A failed or cancelled candidate is discarded. Existing generations remain
 available to running helpers. A helper-source fingerprint prevents an app
 update from selecting an older copied helper implementation.
 
@@ -94,28 +99,26 @@ real remote-host disconnect remain separate acceptance checks.
 
 ## Connections, dictation, and custom servers
 
-The app-owned coordinator supplies access-only snapshots to Usage, native Grok
-STT, and the Pi Durable transports. Concurrent refreshes coalesce. An STT or
-Usage HTTP 401 can request one early renewal through the same lock, with a
-compare-and-swap Keychain save so sign-out or a replacement account wins. Global
-connections serve app-wide consumers; workspace overrides serve Pi Durable.
-Usage does not restore persisted quotas belonging to a previous shared account
-or an independently signed-in harness.
+The app-owned coordinator supplies access-only snapshots to Usage and Pi Durable
+transports. Concurrent refreshes coalesce. Usage HTTP 401 responses can request
+one early renewal through the same lock, with a compare-and-swap Keychain save so
+sign-out or a replacement account wins. Global connections serve Usage;
+workspace overrides serve Pi Durable. Usage does not restore persisted quotas
+belonging to a previous shared account or independently signed-in harness.
 
-`DictationModel` owns a single recording across workspace views. Native
-AVAudioEngine capture converts microphone input to PCM16LE mono at 16 kHz;
-`GrokSpeechClient` sends it directly from the Mac to xAI's STT websocket using
-only the shared Grok OAuth access token. It waits for `transcript.created`, sends
-binary audio, finishes with `audio.done`, and inserts only `transcript.done`.
-There is no API-key billing fallback. A bounded audio queue, connection/final
-response deadlines, cancellation, and generation fencing prevent runaway
-recordings or late insertion. Neither audio nor transcript previews are saved.
-Cancellation is checked again after each suspended response, including a final
-transcript arriving after a newer recording starts. Capture/send failures retain
-their specific error instead of being masked by socket cancellation.
+`DictationSession` owns one native recording on the interface device, shared by
+Mac and iPhone. `AppleDictationEngine` uses SpeechAnalyzer with SpeechTranscriber,
+or DictationTranscriber for a supported language/device where appropriate.
+Apple-managed language assets are prepared only on an explicit recording action.
+The microphone stream is converted to the analyzer's negotiated audio format;
+audio is neither stored nor forwarded through workspace RPC. Finalized text
+segments are accumulated by audio range, and volatile revisions are preview-only.
+Stop drains and finalizes the analyzer before insertion. Cancellation fences late
+results and retains resource ownership until native work has settled. Capture
+interruptions retain completed text for explicit insertion where possible.
 
 Each native editor exposes a `DictationEditor` bridge. Stop captures its logical
-identity, current text, and UTF-16 selection. Insertion uses AppKit's native text
+identity, current text, and UTF-16 selection. Insertion uses the platform's native text
 system for rich text and one undo group. Non-overlapping edits can be reconciled;
 a reused/closed editor or conflicting edit retains the final transcript for
 explicit insertion. Leaving the workspace always stops capture. Test fixtures
@@ -166,7 +169,7 @@ No authentication UI is driven by automated tests. On macOS,
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps a stable private path that identifies the
 native Keychain entry. An `everyone deny add_file` macOS ACL blocks regular-file
 creation, including temporary files used by the plaintext fallback. Owner mode
-`0700` still permits the pinned runtime to create and remove its
+`0700` still permits the selected runtime to create and remove its
 `.storage-write.lock` directory before accessing Keychain. The ACL is installed
 before enabling directory writes; existing non-directory entries stop setup
 without reading or removing their contents. Runtime settings use a separate

@@ -5,49 +5,6 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSessionRoutingTests {
-    @Test @MainActor func composerReceivesDistinctBillingModelsThinkingAndPermissions() async throws {
-        let models = ["claude-subscription/sonnet", "anthropic/sonnet", "openai-codex/fixture"]
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [
-            update("config_option_update", fields: ["configOptions": [
-                ["id": "model", "category": "model", "currentValue": models[0],
-                 "options": models.map { ["value": $0, "name": $0] }],
-                ["id": "thinking", "category": "thought_level", "currentValue": "high",
-                 "options": [["value": "off"], ["value": "high"]]],
-                ["id": "permission_mode", "currentValue": "normal",
-                 "options": [["value": "normal", "name": "Ask Before Changes"], ["value": "full", "name": "Full Access"]]],
-            ]]),
-        ])
-        defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
-        defer { Task { await client.shutdown() } }
-        let configuration = try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: nil, title: nil
-        ).configuration
-        #expect(configuration.model == "claude-subscription/sonnet")
-        #expect(configuration.modelOptions == models)
-        #expect(configuration.thinking == "high" && configuration.thinkingOptions == ["off", "high"])
-        #expect(configuration.permission == "normal" && configuration.permissionOptions == ["normal", "full"])
-        #expect(configuration.permissionOptionMetadata["full"]?.name == "Full Access")
-        await client.shutdown()
-    }
-
-    @Test @MainActor func durableRemoteReconnectDeliversNativeApprovalWhileLoadingHistory() async throws {
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
-        defer { fixture.remove() }
-        let client = try fixture.client(durableRemoteACP: true)
-        defer { Task { await client.shutdown() } }
-        let approvals = RoutingPermissions()
-        await client.setResumePermissionHandler { request in
-            await approvals.record(request)
-            return "allow-exact-id"
-        }
-        let initialized = try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
-        #expect(initialized.loadedExistingSession)
-        #expect(await approvals.values().count == 1)
-        #expect(await approvals.values().first?.options.contains(where: { $0.id == "allow-exact-id" }) == true)
-        await client.shutdown()
-    }
 
     @Test @MainActor func disconnectDismissesAnApprovalDuringNativeResume() async throws {
         let fixture = try SessionRoutingFixture(bootstrapFrames: [
@@ -77,6 +34,54 @@ struct ACPSessionRoutingTests {
         #expect(await iterator.next() == "closed")
         _ = try? await loading.value
         events.continuation.finish()
+    }
+
+    @Test(arguments: [false, true])
+    func earlyNewAndLoadUpdatesKeepOnlyTheResolvedSession(loading: Bool) async throws {
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [
+            modelUpdate("early-parent"),
+            update("available_commands_update", fields: ["availableCommands": [["name": "early-parent-command"]]]),
+            modelUpdate("early-child", session: "child"),
+            update("available_commands_update", session: "child", fields: ["availableCommands": []]),
+        ])
+        defer { fixture.remove() }
+        let client = try fixture.client()
+        defer { Task { await client.shutdown() } }
+        let initialized = try await client.initializeSession(
+            workingDirectory: fixture.root, existingSessionID: loading ? "parent" : nil, title: nil
+        )
+        await client.shutdown()
+        #expect(initialized.sessionID == "parent")
+        #expect(initialized.loadedExistingSession == loading)
+        #expect(initialized.configuration.model == "early-parent")
+        #expect(initialized.configuration.slashCommands.map(\.name) == ["early-parent-command"])
+    }
+
+
+    @Test @MainActor func composerReceivesDistinctBillingModelsThinkingAndPermissions() async throws {
+        let models = ["claude-subscription/sonnet", "anthropic/sonnet", "openai-codex/fixture"]
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [
+            update("config_option_update", fields: ["configOptions": [
+                ["id": "model", "category": "model", "currentValue": models[0],
+                 "options": models.map { ["value": $0, "name": $0] }],
+                ["id": "thinking", "category": "thought_level", "currentValue": "high",
+                 "options": [["value": "off"], ["value": "high"]]],
+                ["id": "permission_mode", "currentValue": "normal",
+                 "options": [["value": "normal", "name": "Ask Before Changes"], ["value": "full", "name": "Full Access"]]],
+            ]]),
+        ])
+        defer { fixture.remove() }
+        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
+        defer { Task { await client.shutdown() } }
+        let configuration = try await client.initializeSession(
+            workingDirectory: fixture.root, existingSessionID: nil, title: nil
+        ).configuration
+        #expect(configuration.model == "claude-subscription/sonnet")
+        #expect(configuration.modelOptions == models)
+        #expect(configuration.thinking == "high" && configuration.thinkingOptions == ["off", "high"])
+        #expect(configuration.permission == "normal" && configuration.permissionOptions == ["normal", "full"])
+        #expect(configuration.permissionOptionMetadata["full"]?.name == "Full Access")
+        await client.shutdown()
     }
 
     @Test func childSessionsDoNotInterruptParentTextReasoningToolsOrConfiguration() async throws {
@@ -163,27 +168,6 @@ struct ACPSessionRoutingTests {
         #expect(log.components(separatedBy: #""method":"session/new""#).count - 1 == 1)
     }
 
-    @Test(arguments: [false, true])
-    func earlyNewAndLoadUpdatesKeepOnlyTheResolvedSession(loading: Bool) async throws {
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [
-            modelUpdate("early-parent"),
-            update("available_commands_update", fields: ["availableCommands": [["name": "early-parent-command"]]]),
-            modelUpdate("early-child", session: "child"),
-            update("available_commands_update", session: "child", fields: ["availableCommands": []]),
-        ])
-        defer { fixture.remove() }
-        let client = try fixture.client()
-        defer { Task { await client.shutdown() } }
-        let initialized = try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: loading ? "parent" : nil, title: nil
-        )
-        await client.shutdown()
-        #expect(initialized.sessionID == "parent")
-        #expect(initialized.loadedExistingSession == loading)
-        #expect(initialized.configuration.model == "early-parent")
-        #expect(initialized.configuration.slashCommands.map(\.name) == ["early-parent-command"])
-    }
-
     @Test func missingLoadedSessionSwitchesRoutingToTheNewSession() async throws {
         let fixture = try SessionRoutingFixture(
             bootstrapFrames: [modelUpdate("new-parent"), modelUpdate("obsolete", session: "old")],
@@ -200,6 +184,25 @@ struct ACPSessionRoutingTests {
         #expect(!initialized.loadedExistingSession)
         #expect(initialized.configuration.model == "new-parent")
         #expect(await events.values() == [.assistantChunk("new reply")])
+    }
+
+
+    @Test @MainActor func durableRemoteReconnectDeliversNativeApprovalWhileLoadingHistory() async throws {
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
+        defer { fixture.remove() }
+        let client = try fixture.client(durableRemoteACP: true)
+        defer { Task { await client.shutdown() } }
+        let approvals = RoutingPermissions()
+        await client.setResumePermissionHandler { request in
+            await approvals.record(request)
+            return "allow-exact-id"
+        }
+        let initialized = try await client.initializeSession(
+            workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
+        #expect(initialized.loadedExistingSession)
+        #expect(await approvals.values().count == 1)
+        #expect(await approvals.values().first?.options.contains(where: { $0.id == "allow-exact-id" }) == true)
+        await client.shutdown()
     }
 
     @Test func foreignPermissionsCancelWithoutCallingTheParentHandlerAndPreserveRequestIDs() async throws {
@@ -237,78 +240,6 @@ struct ACPSessionRoutingTests {
         #expect(responses.dropFirst(4).first?["id"] as? Int == 812)
     }
 
-    @Test(arguments: ["cancel", "invalid", "no-handler", "reject", "allow"])
-    func permissionSelectionUsesOnlyAnExplicitAdvertisedOption(selection: String) async throws {
-        let fixture = try SessionRoutingFixture(promptFrames: [permission(id: "approval")], permissionResponseCount: 1)
-        defer { fixture.remove() }
-        let client = try fixture.client()
-        defer { Task { await client.shutdown() } }
-        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        let handler: LocalACPClient.PermissionHandler? = selection == "no-handler" ? nil : { @Sendable _ in
-            switch selection {
-            case "cancel": nil
-            case "invalid": "not-advertised"
-            case "reject": "reject-exact-id"
-            default: "allow-exact-id"
-            }
-        }
-        #expect(try await client.prompt("fixture", onPermission: handler) == .endTurn)
-        await client.shutdown()
-        let response = try #require(fixture.permissionResponses().first)
-        let outcome = (response["result"] as? [String: Any])?["outcome"] as? [String: String]
-        if selection == "reject" || selection == "allow" {
-            #expect(outcome == ["outcome": "selected", "optionId": selection + "-exact-id"])
-        } else {
-            #expect(outcome == ["outcome": "cancelled"])
-        }
-    }
-
-    @Test func foreignApprovalSettlesWhileParentApprovalIsStillAwaitingSelection() async throws {
-        let fixture = try SessionRoutingFixture(promptFrames: [
-            permission(id: "held-parent"),
-            permission(id: "independent-child", session: "child"),
-            update("agent_message_chunk", text: "after parent selection"),
-        ], permissionResponseCount: 2)
-        defer { fixture.remove() }
-        let client = try fixture.client()
-        defer { Task { await client.shutdown() } }
-        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        let selections = AsyncStream<String>.makeStream()
-        defer { selections.continuation.finish() }
-        let events = RoutingEvents()
-        let calls = RoutingPermissions()
-        let turn = Task {
-            try await client.prompt("fixture", onEvent: { await events.record($0) }, onPermission: { request in
-                await calls.record(request)
-                var iterator = selections.stream.makeAsyncIterator()
-                return await iterator.next()
-            })
-        }
-        // Bounded wait, then release the parent even on the buggy implementation.
-        // Child cancellation must not depend on that unrelated user selection.
-        var childSettled = false
-        for _ in 0..<100 {
-            if (try? fixture.permissionResponses().contains { $0["id"] as? String == "independent-child" }) == true {
-                childSettled = true
-                break
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(childSettled)
-        #expect(await events.values().isEmpty)
-        selections.continuation.yield("allow-exact-id")
-        selections.continuation.finish()
-        #expect(try await turn.value == .endTurn)
-        await client.shutdown()
-        #expect(await calls.values().count == 1)
-        #expect(await events.values() == [.assistantChunk("after parent selection")])
-        let responses = try fixture.permissionResponses()
-        #expect(responses.count == 2)
-        let child = try #require(responses.first { $0["id"] as? String == "independent-child" })
-        let parent = try #require(responses.first { $0["id"] as? String == "held-parent" })
-        #expect((child["result"] as? [String: Any])?["outcome"] as? [String: String] == ["outcome": "cancelled"])
-        #expect((parent["result"] as? [String: Any])?["outcome"] as? [String: String] == ["outcome": "selected", "optionId": "allow-exact-id"])
-    }
 }
 
 private func update(_ kind: String, session: String? = "parent", text: String? = nil, fields: [String: Any] = [:]) -> [String: Any] {

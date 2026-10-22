@@ -349,7 +349,12 @@ struct WorkspaceView: View {
             DashboardRenameNoteSheet(note: note, model: model)
         }
         .sheet(isPresented: $showsWorkspaceTrash) {
-            DashboardWorkspaceTrashSheet(model: model)
+            if let client = model.liveLibraryClient {
+                LibraryClientTrashPane(model: client)
+                    .frame(minWidth: 600, minHeight: 420)
+            } else {
+                DashboardWorkspaceTrashSheet(model: model)
+            }
         }
         .sheet(item: $archivedLibrarySource) { item in
             DashboardLibrarySourceSheet(item: item, model: model)
@@ -715,6 +720,9 @@ struct WorkspaceView: View {
                         }
                     )
                 case .library:
+                    if let client = model.liveLibraryClient {
+                        LibraryClientLibraryPane(model: client)
+                    } else {
                     DashboardLibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
                         (id: $0.id.uuidString.lowercased(), name: $0.name)
                     }) { item in
@@ -725,6 +733,7 @@ struct WorkspaceView: View {
                         } else {
                             archivedLibrarySource = item
                         }
+                    }
                     }
                 case .databases:
                     DashboardDatabasesView(model: model)

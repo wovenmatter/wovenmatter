@@ -15,6 +15,7 @@ tailscale serve status --json > "$wm_root/serve.json"
 python3 - "$wm_payload" "$wm_root" <<'PY'
 import hashlib, json, pathlib, re, sys, urllib.parse
 payload=json.load(open(sys.argv[1])); root=pathlib.Path(sys.argv[2])
+# The manager implements Executor's V2 app API only (EXECUTOR_API_MAJOR).
 assert re.fullmatch(r'2\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', payload['version'])
 (root/'version').write_text(payload['version'])
 url=urllib.parse.urlparse(payload['origin'])
@@ -33,7 +34,10 @@ if env.exists():
         assert next(x for x in previous.splitlines() if x.startswith(key+'=')) == next(x for x in content.splitlines() if x.startswith(key+'=')), 'Existing Executor keys differ; refusing to replace credentials'
 env.write_text(content); env.chmod(0o600)
 (root/'Dockerfile').write_text(payload['dockerfile'])
-(root/'image-tag').write_text(payload['version']+'-'+hashlib.sha256(payload['dockerfile'].encode()).hexdigest()[:16])
+# Each explicit refresh gets a new build; retrying the same payload is idempotent.
+generation=payload.get('generation', '')
+assert not generation or re.fullmatch(r'[a-f0-9-]{36}', generation)
+(root/'image-tag').write_text(payload['version']+'-'+hashlib.sha256((payload['dockerfile']+generation).encode()).hexdigest()[:16])
 PY
 # Build before retiring the previous owned runtime. Exact image tags identify
 # this transaction; later setup resolves the supported channel again.

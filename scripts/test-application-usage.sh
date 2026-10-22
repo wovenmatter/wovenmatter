@@ -11,8 +11,8 @@ swift_scratch="${cache_root}/SwiftPM"
 mkdir -p "$cache_root/ModuleCache"
 export CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache"
-swift build --package-path "$repo_root/app" --scratch-path "$swift_scratch"
-build_dir="$(swift build --package-path "$repo_root/app" --scratch-path "$swift_scratch" --show-bin-path)"
+swift build --force-resolved-versions --package-path "$repo_root/app" --scratch-path "$swift_scratch"
+build_dir="$(swift build --force-resolved-versions --package-path "$repo_root/app" --scratch-path "$swift_scratch" --show-bin-path)"
 # SwiftPM's Swift Build backend emits aggregate objects; the native backend
 # keeps per-source objects and a separate Modules directory.
 if [ -f "$build_dir/WovenMatterCore.o" ]; then

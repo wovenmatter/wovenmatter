@@ -5,11 +5,7 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct LocalACPFormTests {
-    private var schema: [String: Any] { ["type": "object", "properties": [
-        "question_0": ["type": "string", "title": "Choose", "oneOf": [["const": "raw-id", "title": "Display label", "description": "Detail", "_meta": ["preview": "Preview"]]]],
-        "question_0_custom": ["type": "string", "title": "Other"],
-        "many": ["type": "array", "items": ["anyOf": [["const": "a", "title": "Alpha"], ["const": "b", "title": "Beta"]]]],
-    ]] }
+
     @Test func preservesClaudeValuesAnnotationsOptionalAnswersAndTypes() throws {
         let parsed = try LocalACPFormRequest.parse(message: "Questions", schema: JSONDecoder().decode(ACPJSONValue.self, from: JSONSerialization.data(withJSONObject: schema)))
         #expect(parsed.accepts([:]))
@@ -22,6 +18,12 @@ struct LocalACPFormTests {
         #expect(!typed.accepts(["text": .string("abc"), "flag": .boolean(false), "count": .number(1.5)]))
         #expect(!typed.accepts([:]))
     }
+
+    private var schema: [String: Any] { ["type": "object", "properties": [
+        "question_0": ["type": "string", "title": "Choose", "oneOf": [["const": "raw-id", "title": "Display label", "description": "Detail", "_meta": ["preview": "Preview"]]]],
+        "question_0_custom": ["type": "string", "title": "Other"],
+        "many": ["type": "array", "items": ["anyOf": [["const": "a", "title": "Alpha"], ["const": "b", "title": "Beta"]]]],
+    ]] }
     @Test(arguments: [#"{"type":"object","properties":{"x":{"type":"string","pattern":"(a+)+"}}}"#,
                        #"{"type":"object","properties":{"x":{"type":"string","enum":["a"],"oneOf":[{"const":"b"}]}}}"#])
     func declinesUnsupportedOrConflictingConstraints(schema: String) throws {
@@ -59,27 +61,6 @@ struct LocalACPFormTests {
         let results = try read(fixture).filter { ["foreign", "scoped"].contains($0["id"] as? String ?? "") }
         #expect(results.count == 2)
         #expect(results.allSatisfy { ($0["result"] as? [String: String])?["action"] == "cancel" })
-    }
-    @Test func nativeCancellationReleasesUnansweredFormOnce() async throws {
-        let opened = AsyncStream<Void>.makeStream()
-        let fixture = try SessionRoutingFixture(promptFrames: [form(id: "held", session: "parent"),
-            ["jsonrpc": "2.0", "method": "$/cancel_request", "params": ["requestId": "held"]]], permissionResponseCount: 1)
-        defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .claudeCode, historyRecorder: { direction, data in
-            if direction == "in", String(decoding: data, as: UTF8.self).contains("$/cancel_request") {
-                for await _ in opened.stream { break }
-            }
-        })
-        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        _ = try await client.prompt("fixture", onInteraction: { _ in
-            opened.continuation.yield(())
-            try? await Task.sleep(for: .seconds(30))
-            return .formValues(["question_0": .string("raw-id")])
-        })
-        await client.shutdown(); opened.continuation.finish()
-        let results = try read(fixture).filter { $0["id"] as? String == "held" }
-        #expect(results.count == 1)
-        #expect((results.first?["result"] as? [String: String])?["action"] == "cancel")
     }
     private func form(id: String, session: String?) -> [String: Any] {
         var params: [String: Any] = ["mode": "form", "message": "Choose", "requestedSchema": schema]

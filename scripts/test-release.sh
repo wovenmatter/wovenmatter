@@ -88,4 +88,8 @@ PYTEST
 python3 scripts/test-support/test_release_approval.py
 python3 scripts/test-support/test_release_notarization.py
 python3 scripts/test-support/test_release_code.py
+python3 scripts/test-support/test_release_metadata.py
+python3 scripts/test-support/test_updater_signing.py
+python3 scripts/test-support/test_update_request.py
+scripts/test-desktop-updater.sh
 printf '%s\n' 'Release contract validation passed.'

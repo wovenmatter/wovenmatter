@@ -26,6 +26,7 @@ struct NotePane: View {
   @State private var selectedBlockID: String?
   @State private var conflictsPresented = false
   @State private var detailsPresented = false
+  @State private var dictationEditor = MobileDictationEditor()
   init(model: CompanionModel, note: CompanionNote) {
     self.model = model; self.note = note
     _title = State(initialValue: model.draftTitles[note.id] ?? note.title)
@@ -52,6 +53,7 @@ struct NotePane: View {
           }
           Button("Add paragraph", glyph: .plus) { change { try RichDocumentEditing.appendingParagraph(to: content) } }
         } label: { Image(systemName: "textformat").font(.title3.weight(.medium)).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).disabled(!editable).accessibilityLabel("Note formatting")
+        if editable, document?.kind == .note { MobileDictationMicrophone(editor: dictationEditor) }
         Menu {
           Button("Details, move and export") { detailsPresented = true }.disabled(!model.online)
           Button("Reference in new chat", glyph: .messageSquare) { model.newChat(referencing: note.id) }.disabled(!editable)
@@ -90,7 +92,9 @@ struct NotePane: View {
                   HStack(alignment: .top, spacing: 9) {
                     if text.style == .bulletedList { Text("•").font(.body).padding(.top, 8) }
                     if text.style == .numberedList { Text("\((document.blocks.firstIndex(where: { $0.id == text.id }) ?? 0) + 1).").font(.body).padding(.top, 8) }
-                    RichBlockTextView(block: text, generation: documentGeneration, editable: editable, focused: { selectedBlockID = text.id }) { range, replacement in
+                    RichBlockTextView(block: text, generation: documentGeneration, editable: editable,
+                      dictationEditor: dictationEditor, dictationIdentity: "note:\(note.id):\(text.id)",
+                      focused: { selectedBlockID = text.id; MobileDictation.shared.activeEditor = dictationEditor }) { range, replacement in
                       do {
                         content = try RichDocumentEditing.replacingText(in: content, blockID: text.id, range: range, replacement: replacement)
                         documentGeneration += 1
@@ -181,6 +185,8 @@ private struct RichBlockTextView: UIViewRepresentable {
   var block: NoteRichTextBlock
   var generation: Int
   var editable: Bool
+  var dictationEditor: MobileDictationEditor
+  var dictationIdentity: String
   var focused: () -> Void
   var edit: (NSRange, String) -> (NoteRichTextBlock, Int)?
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -193,6 +199,7 @@ private struct RichBlockTextView: UIViewRepresentable {
     view.tintColor = DashboardColors.primary
     view.linkTextAttributes = [.foregroundColor: DashboardColors.success]
     view.delegate = context.coordinator; view.attributedText = Self.attributed(block)
+    dictationEditor.bind(view, identity: dictationIdentity)
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return view
   }
@@ -200,6 +207,7 @@ private struct RichBlockTextView: UIViewRepresentable {
     view.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
     guard generation >= context.coordinator.latestGeneration else { return }
     context.coordinator.parent = self; view.isEditable = editable
+    dictationEditor.bind(view, identity: dictationIdentity)
     context.coordinator.latestGeneration = generation
     if context.coordinator.renderedBlock != block {
       let desired = Self.attributed(block)
@@ -219,7 +227,10 @@ private struct RichBlockTextView: UIViewRepresentable {
     var latestGeneration: Int
     var renderedBlock: NoteRichTextBlock
     init(_ parent: RichBlockTextView) { self.parent = parent; latestGeneration = parent.generation; renderedBlock = parent.block }
-    func textViewDidBeginEditing(_ textView: UITextView) { parent.focused() }
+    func textViewDidBeginEditing(_ textView: UITextView) {
+      parent.dictationEditor.bind(textView, identity: parent.dictationIdentity)
+      parent.focused()
+    }
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
       guard let (result, generation) = parent.edit(range, text) else { return false }
       latestGeneration = generation; renderedBlock = result

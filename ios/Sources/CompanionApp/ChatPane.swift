@@ -11,7 +11,8 @@ struct ChatPane: View {
   @State private var detailsPresented = false
   @State private var settingsPresented = false
   @State private var pendingPresented = false
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
+  @State private var dictationEditor = MobileDictationEditor()
   @State private var scrollState = DashboardConversationScrollState()
   @State private var isUserScrolling = false
   @State private var transcriptOwnsScroll = false
@@ -181,8 +182,19 @@ struct ChatPane: View {
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
         HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
-      TextField(model.activeRunID == nil ? "Chat…" : "Steer this run…", text: $model.composer, axis: .vertical)
-        .lineLimit(2...6).focused($composerFocused).accessibilityIdentifier("chat-composer")
+      HStack(alignment: .bottom, spacing: 8) {
+        MobileDictationComposer(text: $model.composer, focused: $composerFocused, editor: dictationEditor,
+          identity: "chat:\(model.selectedExecutionWorkspaceID):\(model.selectedConversationID ?? "new")",
+          prompt: model.activeRunID == nil ? "Chat…" : "Steer this run…")
+          .overlay(alignment: .topLeading) {
+            if model.composer.isEmpty {
+              Text(model.activeRunID == nil ? "Chat…" : "Steer this run…")
+                .foregroundStyle(DashboardPalette.mutedForeground).allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+          }.accessibilityIdentifier("chat-composer")
+        MobileDictationMicrophone(editor: dictationEditor)
+      }
       ChatComposerSettings(model: model) {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
@@ -206,7 +218,7 @@ struct ChatPane: View {
     }.padding(15).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)).padding(.horizontal, 18).padding(.vertical, 12)
   }
   private var canSend: Bool {
-    model.executionOnline && model.activeProvider?.available == true && !model.canResumeLocalRun && !model.sending && !model.startingChat && !model.chatSettingsBusy && model.configuringDeviceSessions.isEmpty && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+    !DictationSession.shared.isBusy && model.executionOnline && model.activeProvider?.available == true && !model.canResumeLocalRun && !model.sending && !model.startingChat && !model.chatSettingsBusy && model.configuringDeviceSessions.isEmpty && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
       (model.activeRunID == nil || model.activeProvider?.canSteer == true)
   }
 }

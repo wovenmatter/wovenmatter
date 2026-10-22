@@ -216,7 +216,7 @@ struct LibraryClientPaneHeader<Actions: View>: View {
     }
 }
 
-private struct LibraryClientNotePane: View {
+struct LibraryClientNotePane: View {
     @Bindable var model: CentralLibraryClientModel
     let note: CompanionNote
     @State private var editor = DashboardNoteEditorController()

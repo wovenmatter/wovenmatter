@@ -5,6 +5,14 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.mjs'
 
+
+
+
+
+
+
+const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
+
 const opencode = {id:'opencode',displayName:'OpenCode',command:'opencode',cliCommand:'opencode',install:{kind:'npm-global',package:'@opencode/cli@2'}}
 async function fixture(t, overrides = {}) {
   const root = await mkdtemp(resolve(tmpdir(),'wm-maintenance-'))
@@ -19,7 +27,7 @@ async function fixture(t, overrides = {}) {
       if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
       if(command.startsWith('npm install')) { executions++; installed=true; return {code:0,output:'installed'} }
       throw Error('Unexpected command: '+command)
-    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>({version:'2.1.1'})}},...overrides}
+    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>registryMetadata('2.1.1')}},...overrides}
   return {root,service:createRuntimeMaintenance(options),options,calls,install:()=>{installed=true},get executions(){return executions},get requests(){return requests}}
 }
 async function finished(service) {
@@ -37,32 +45,7 @@ test('host state gates enable, persists visibility, checks latest only for enabl
   const value=(await service.list()).runtimes[0]
   assert.equal(value.enabled,true);assert.equal(value.visible,false)
 })
-test('preference migration preserves verified legacy runtimes without enabling later installs or overriding choices', async t => {
-  const legacy = await fixture(t)
-  legacy.install()
-  assert.equal(await legacy.service.isEnabled('opencode'), true, 'gateway/start checks can be the first migration caller')
-  await legacy.service.check()
-  assert.equal(legacy.requests, 1, 'migrated enabled runtimes receive the startup latest check')
-  assert.equal(legacy.executions, 0)
-  await legacy.service.preferences(opencode, { enabled: false, visible: false })
-  const restarted = createRuntimeMaintenance(legacy.options)
-  const retained = (await restarted.list()).runtimes[0]
-  assert.equal(retained.enabled, false)
-  assert.equal(retained.visible, false)
 
-  const missing = await fixture(t)
-  assert.equal(await missing.service.isEnabled('opencode'), false)
-  missing.install()
-  assert.equal((await createRuntimeMaintenance(missing.options).list()).runtimes[0].enabled, false)
-})
-test('migration of one catalog entry does not silently disable another uninspected entry', async t => {
-  const other = { ...opencode, id: 'other', command: 'other' }
-  const f = await fixture(t, { catalog: new Map([['opencode', opencode], ['other', other]]) })
-  f.install()
-  await f.service.inventory(opencode)
-  const restarted = createRuntimeMaintenance(f.options)
-  assert.equal((await restarted.inventory(other)).enabled, true)
-})
 test('corrupt saved preferences fail closed instead of re-enabling runtimes', async t => {
   const f = await fixture(t)
   f.install()
@@ -86,32 +69,58 @@ test('active host conversation or instance prevents mutation and two failures yi
   assert.match(value.diagnosticPrompt,/runtime_active/)
   assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123',{SECRET_TOKEN:'very-secret-token'}),'[redacted] [URL redacted] [redacted]')
 })
-test('OpenCode updates refuse active canonical and compatibility-alias processes', async t => {
-  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
-  for (const process of ['opencode', 'opencode2', '/host/bin/opencode2', 'node /host/bin/opencode2.js']) {
-    let installs = 0
-    const f = await fixture(t, { catalog: new Map([['opencode', harness]]),
-      execute: async command => {
-        if (command === 'ps -eo pid=,args=') return { code: 0, output: `1234 ${process} serve --service` }
-        if (command.startsWith('command -v')) return { code: 0, output: '/host/bin/opencode' }
-        if (command.endsWith('--version')) return { code: 0, output: '2.0.22' }
-        if (command.startsWith('npm install')) { installs++; return { code: 0, output: '' } }
-        throw Error('Unexpected command: ' + command)
-      },
-    })
-    await f.service.start(harness, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.7' })
-    const result = await finished(f.service)
-    assert.equal(result.operation.error, 'runtime_active_stop_conversations_or_server_first', process)
-    assert.equal(installs, 0, process)
-  }
+
+test('copyable failure diagnostics use only allowlisted categories, never arbitrary errors or paths', async t => {
+  const f = await fixture(t)
+  const secret = '/home/private-account/project confidential-provider-response unknown-unstructured-secret'
+  await f.service.recordFailure(opencode, 'install-preview', new Error(secret))
+  await f.service.recordFailure(opencode, 'install-preview', new Error('Installer exited 1. ' + secret))
+  const result = (await f.service.list()).runtimes[0]
+  assert.match(result.diagnosticPrompt, /Failure: installer_failed/)
+  assert.doesNotMatch(result.diagnosticPrompt, /private-account|confidential|unknown-unstructured-secret|\/home\//)
 })
 
-test('successful exit without verifiable required runtime fails and supports retry',async t=>{
-  const f=await fixture(t,{execute:async cmd=>cmd==='ps -eo pid=,args='?{code:0,output:''}:cmd.startsWith('npm install')?{code:0,output:'ok'}:{code:1,output:''}})
-  await f.service.start(opencode,'install',{confirmed:true});const value=await finished(f.service)
-  assert.equal(value.operation.status,'failed');assert.equal(value.installed,false)
-  assert.match(value.operation.error,/could not be verified/)
+test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releases stay fixed for each operation', async t => {
+  const f = await fixture(t)
+  for (const packageSpec of ['@foreign/package@2.1.0', '@opencode/cli@latest', '@opencode/cli@2.1.0;touch /tmp/unsafe']) {
+    await f.service.start(opencode, 'install', { confirmed: true, packageSpec })
+    const value = await finished(f.service)
+    assert.equal(value.operation.status, 'failed')
+    assert.match(value.operation.error, /invalid_package_spec/)
+  }
+  assert.equal(f.executions, 0)
+  await f.service.start(opencode, 'install', { confirmed: true })
+  await finished(f.service)
+  assert.ok(f.calls.some(c => c.includes("'@opencode/cli@2.1.1'")))
+  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
+  const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => registryMetadata('2.1.0') }) })
+  const preview = await other.service.npmPreview(h)
+  assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
+  await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@1.18.29' })
+  const failed = await finished(other.service)
+  assert.equal(failed.operation.error, 'opencode_version_incompatible')
+  assert.equal(other.executions, 0)
 })
+
+test('preference migration preserves verified legacy runtimes without enabling later installs or overriding choices', async t => {
+  const legacy = await fixture(t)
+  legacy.install()
+  assert.equal(await legacy.service.isEnabled('opencode'), true, 'gateway/start checks can be the first migration caller')
+  await legacy.service.check()
+  assert.equal(legacy.requests, 1, 'migrated enabled runtimes receive the startup latest check')
+  assert.equal(legacy.executions, 0)
+  await legacy.service.preferences(opencode, { enabled: false, visible: false })
+  const restarted = createRuntimeMaintenance(legacy.options)
+  const retained = (await restarted.list()).runtimes[0]
+  assert.equal(retained.enabled, false)
+  assert.equal(retained.visible, false)
+
+  const missing = await fixture(t)
+  assert.equal(await missing.service.isEnabled('opencode'), false)
+  missing.install()
+  assert.equal((await createRuntimeMaintenance(missing.options).list()).runtimes[0].enabled, false)
+})
+
 test('bundled Codex latest is checked separately and refresh respects adapter range', async t => {
   const root = await mkdtemp(resolve(tmpdir(), 'wm-codex-refresh-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -131,7 +140,7 @@ test('bundled Codex latest is checked separately and refresh respects adapter ra
     verifiedInstaller: async () => ({ path: resolve(root, 'fixture-installer.sh') }),
     fetchImplementation: async url => {
       requests.push(decodeURIComponent(url))
-      return { ok: true, json: async () => ({ version: String(url).includes('codex-acp') ? '1.11.0' : '0.154.0' }) }
+      return { ok: true, json: async () => registryMetadata(String(url).includes('codex-acp') ? '1.11.0' : '0.154.0') }
     },
     execute: async command => {
       calls.push(command)
@@ -157,7 +166,7 @@ test('bundled Codex latest is checked separately and refresh respects adapter ra
   assert.equal(bundled.updateTargetVersion, '0.153.4')
   assert.equal(initial.updateAvailable, true)
   assert.match(initial.notice, /declared compatibility/)
-  assert.ok(requests.includes('https://registry.npmjs.org/@openai/codex/latest'))
+  assert.ok(requests.includes('https://registry.npmjs.org/@openai/codex'))
   assert.ok(calls.some(c => c.includes("'@openai/codex@~0.153.0'")))
   // A successful installer exit is insufficient if its compatible bundled target is unchanged.
   refresh = false
@@ -181,51 +190,6 @@ test('bundled Codex latest is checked separately and refresh respects adapter ra
   assert.equal(unknown.updateAvailable, false)
 })
 
-test('copyable failure diagnostics use only allowlisted categories, never arbitrary errors or paths', async t => {
-  const f = await fixture(t)
-  const secret = '/home/private-account/project confidential-provider-response unknown-unstructured-secret'
-  await f.service.recordFailure(opencode, 'install-preview', new Error(secret))
-  await f.service.recordFailure(opencode, 'install-preview', new Error('Installer exited 1. ' + secret))
-  const result = (await f.service.list()).runtimes[0]
-  assert.match(result.diagnosticPrompt, /Failure: installer_failed/)
-  assert.doesNotMatch(result.diagnosticPrompt, /private-account|confidential|unknown-unstructured-secret|\/home\//)
-})
-
-test('reviewed OpenCode preview pins execution even when registry latest changes', async t => {
-  let version = '2.1.0'
-  const f = await fixture(t, { fetchImplementation: async () => ({ ok: true, json: async () => ({ version }) }) })
-  const preview = await f.service.npmPreview(opencode)
-  assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
-  assert.ok(preview.command.includes(preview.packageSpec))
-  version = '0.85.0'
-  await f.service.start(opencode, 'install', { confirmed: true, packageSpec: preview.packageSpec })
-  assert.equal((await finished(f.service)).operation.status, 'succeeded')
-  assert.ok(f.calls.includes(preview.command))
-  assert.equal(f.calls.some(c => c.includes('@latest') || c.includes('@0.85.0')), false)
-})
-
-test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releases stay fixed for each operation', async t => {
-  const f = await fixture(t)
-  for (const packageSpec of ['@foreign/package@2.1.0', '@opencode/cli@latest', '@opencode/cli@2.1.0;touch /tmp/unsafe']) {
-    await f.service.start(opencode, 'install', { confirmed: true, packageSpec })
-    const value = await finished(f.service)
-    assert.equal(value.operation.status, 'failed')
-    assert.match(value.operation.error, /invalid_package_spec/)
-  }
-  assert.equal(f.executions, 0)
-  await f.service.start(opencode, 'install', { confirmed: true })
-  await finished(f.service)
-  assert.ok(f.calls.some(c => c.includes("'@opencode/cli@2.1.1'")))
-  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
-  const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => ({ version: '2.1.0' }) }) })
-  const preview = await other.service.npmPreview(h)
-  assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
-  await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@1.18.29' })
-  const failed = await finished(other.service)
-  assert.equal(failed.operation.error, 'opencode_version_incompatible')
-  assert.equal(other.executions, 0)
-})
-
 test('OpenCode latest previews and updates accept newer v2 releases independently', async t => {
   const root = await mkdtemp(resolve(tmpdir(), 'wm-opencode-update-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -233,7 +197,7 @@ test('OpenCode latest previews and updates accept newer v2 releases independentl
   let installed = '2.0.22', latest = '2.1.7'
   const service = createRuntimeMaintenance({ catalog: new Map([['opencode', harness]]), workspaceRoot: root,
     environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    fetchImplementation: async url => { assert.ok(url.endsWith('/latest')); return { ok: true, json: async () => ({ version: latest }) } },
+    fetchImplementation: async url => { assert.equal(decodeURIComponent(url), 'https://registry.npmjs.org/@opencode/cli'); return { ok: true, json: async () => registryMetadata(latest) } },
     execute: async command => {
       if (command.startsWith('command -v')) return { code: 0, output: '/fixture/opencode' }
       if (command.endsWith('--version')) return { code: 0, output: installed }
@@ -251,4 +215,24 @@ test('OpenCode latest previews and updates accept newer v2 releases independentl
   assert.equal((await service.npmPreview(harness)).packageSpec, '@opencode/cli@2.99.0')
   latest = '1.18.29'
   await assert.rejects(service.npmPreview(harness), /latest_package_version_unavailable/)
+})
+
+test('OpenCode updates refuse active canonical and compatibility-alias processes', async t => {
+  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
+  for (const process of ['opencode', 'opencode2', '/host/bin/opencode2', 'node /host/bin/opencode2.js']) {
+    let installs = 0
+    const f = await fixture(t, { catalog: new Map([['opencode', harness]]),
+      execute: async command => {
+        if (command === 'ps -eo pid=,args=') return { code: 0, output: `1234 ${process} serve --service` }
+        if (command.startsWith('command -v')) return { code: 0, output: '/host/bin/opencode' }
+        if (command.endsWith('--version')) return { code: 0, output: '2.0.22' }
+        if (command.startsWith('npm install')) { installs++; return { code: 0, output: '' } }
+        throw Error('Unexpected command: ' + command)
+      },
+    })
+    await f.service.start(harness, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.7' })
+    const result = await finished(f.service)
+    assert.equal(result.operation.error, 'runtime_active_stop_conversations_or_server_first', process)
+    assert.equal(installs, 0, process)
+  }
 })

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        A03000000000000000000001 /* DesktopUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03000000000000000000002; };
+        A03000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A03000000000000000000004; };
 		B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = B40A00000000000000000002 /* WovenMatterAutomation */; };
 		DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */; };
 		DA4C00000000000000000001 /* DashboardColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000002 /* DashboardColors.swift */; };
@@ -23,7 +25,6 @@
 		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
 		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
 		0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */; };
-		E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */; };
 		B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCBB65211C7015A6B8158E80 /* DictationEditor.swift */; };
 		C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */; };
 		5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */; };
@@ -113,7 +114,6 @@
 		D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */; };
 		418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */; };
 		4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D14690B191EF43D51603C /* BackendConnectionsService.swift */; };
-		CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBCBD600AB92468988000002 /* BackendSpeechService.swift */; };
 		281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753DF034EE6D727B6091929D /* BackendLibraryService.swift */; };
 		C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */; };
 		C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */; };
@@ -146,9 +146,13 @@
 		9C717BDF5AA9D68422B42FCE /* ProductAnalyticsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */; };
 		6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */; };
 		E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */; };
+		66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */; };
+		7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */; };
+		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        A03000000000000000000002 /* DesktopUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopUpdater.swift; sourceTree = "<group>"; };
 		DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHTMLArtifactDocument.swift; sourceTree = "<group>"; };
 		DA4C00000000000000000002 /* DashboardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardColors.swift; sourceTree = "<group>"; };
 		FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = App/ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
@@ -164,7 +168,6 @@
 		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
 		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
 		7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationModel.swift; sourceTree = "<group>"; };
-		851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationAudioCapture.swift; sourceTree = "<group>"; };
 		FCBB65211C7015A6B8158E80 /* DictationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationEditor.swift; sourceTree = "<group>"; };
 		BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelServerConnections.swift; sourceTree = "<group>"; };
 		4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsConnectionsView.swift; sourceTree = "<group>"; };
@@ -255,7 +258,6 @@
 		D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceServices.swift"; sourceTree = "<group>"; };
 		DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRemoteWorkspaceService.swift"; sourceTree = "<group>"; };
 		296D14690B191EF43D51603C /* BackendConnectionsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendConnectionsService.swift"; sourceTree = "<group>"; };
-		CBCBD600AB92468988000002 /* BackendSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendSpeechService.swift"; sourceTree = "<group>"; };
 		753DF034EE6D727B6091929D /* BackendLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendLibraryService.swift"; sourceTree = "<group>"; };
 		C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ConversationActions.swift"; sourceTree = "<group>"; };
 		C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+NoteActions.swift"; sourceTree = "<group>"; };
@@ -287,6 +289,9 @@
 		F9A8D49669A63EFF38978B05 /* ProductAnalyticsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ProductAnalyticsViews.swift; sourceTree = "<group>"; };
 		CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+Automation.swift"; sourceTree = SOURCE_ROOT; };
 		259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/WovenAutomationHost.swift"; sourceTree = SOURCE_ROOT; };
+		51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLaunch.swift"; sourceTree = SOURCE_ROOT; };
+		EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLibraryProjection.swift"; sourceTree = SOURCE_ROOT; };
+		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -294,6 +299,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A03000000000000000000003 /* Sparkle in Frameworks */,
 				1865697E240F2F2763E855ED /* CompanionClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
 				B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */,
@@ -343,6 +349,9 @@
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
 				AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */,
+				4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */,
+				EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */,
+				51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */,
 				D49100000000000000000004 /* Models */,
 				D50000000000000000000007 /* Resources */,
 				D50000000000000000000008 /* Services */,
@@ -374,7 +383,6 @@
 				D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */,
 				DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */,
 				296D14690B191EF43D51603C /* BackendConnectionsService.swift */,
-				CBCBD600AB92468988000002 /* BackendSpeechService.swift */,
 				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
 				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
 				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
@@ -478,6 +486,7 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				A03000000000000000000002 /* DesktopUpdater.swift */,
 				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
 				4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */,
 				DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */,
@@ -492,7 +501,6 @@
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
 				259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */,
-				851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */,
 				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
@@ -522,6 +530,7 @@
 			);
 			name = WovenMatter;
 			packageProductDependencies = (
+                A03000000000000000000004 /* Sparkle */,
 				C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
 				B40A00000000000000000002 /* WovenMatterAutomation */,
@@ -555,6 +564,7 @@
 			mainGroup = 614FCD38F579029AF08B9221;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+                A03000000000000000000005 /* Sparkle */,
 				C06BA836DE1CAE4D56F3020D /* XCLocalSwiftPackageReference "../ios" */,
 				03A429A1CC1E3FDB9062F0AE /* XCLocalSwiftPackageReference "." */,
 			);
@@ -650,7 +660,6 @@
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
 				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
-				E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */,
 				B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */,
 				C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */,
 				5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */,
@@ -705,7 +714,6 @@
 				D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */,
 				418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */,
 				4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */,
-				CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */,
 				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
 				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
 				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
@@ -754,7 +762,11 @@
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
+				A03000000000000000000001 /* DesktopUpdater.swift in Sources */,
 				AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */,
+				115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */,
+				7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */,
+				66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -783,7 +795,6 @@
 					"@executable_path/../Frameworks",
 				);
 				INFOPLIST_FILE = App/Info.plist;
-				INFOPLIST_KEY_WovenMatterSourceRevision = "$(WOVENMATTER_SOURCE_REVISION)";
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop;
 				PRODUCT_MODULE_NAME = WovenMatter;
@@ -980,7 +991,16 @@
 /* End XCLocalSwiftPackageReference section */
 
 
+/* Begin XCRemoteSwiftPackageReference section */
+        A03000000000000000000005 /* Sparkle */ = {
+            isa = XCRemoteSwiftPackageReference;
+            repositoryURL = "https://github.com/sparkle-project/Sparkle";
+            requirement = { kind = revision; revision = eef1a539a373c1f1a320624b1130fc5de7b2e100; };
+        };
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+        A03000000000000000000004 /* Sparkle */ = {isa = XCSwiftPackageProductDependency; package = A03000000000000000000005; productName = Sparkle; };
 		B40A00000000000000000002 /* WovenMatterAutomation */ = {isa = XCSwiftPackageProductDependency; productName = WovenMatterAutomation; };
 		0C11E0000000000000000004 /* WovenMatterClient */ = {
 			isa = XCSwiftPackageProductDependency;

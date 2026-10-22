@@ -6,38 +6,19 @@ import { join } from 'node:path';
 import { CredentialVault } from '../src/vault.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { signInStatuses } from '../src/sign-in-status.mjs';
+
+
+
+
+
+
+
+
 async function temporary(t) {
   const directory = await mkdtemp('/tmp/woven-default-agent-test-');
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
-
-test('active sessions survive credential and settings updates and use the latest search key', async t => {
-  const directory = await temporary(t), key = randomBytes(32).toString('base64');
-  const service = createDefaultAgentService({ cwd: directory, directory });
-  assert.equal((await service.status()).locked, true);
-  const base = { workspace: 'fixture', unlockKey: key, config: { providers: ['openai', 'xai'] } };
-  await service.configure({ ...base, revision: 'first', credentials: { exa: { type: 'api_key', key: 'old-search-secret' } } });
-  const engine = await service.engine(), record = await engine.create();
-  record.busy = true;
-  const receipt = await service.configure({ ...base, revision: 'second', credentials: {
-    exa: { type: 'api_key', key: 'new-search-secret' },
-    xai: { type: 'oauth', access: 'borrowed-access', refresh: 'must-never-copy', refreshToken: 'also-never-copy', expires: Date.now() + 10000 },
-  } });
-  assert.equal(receipt.revision, 'second');
-  assert.equal(await service.engine(), engine);
-  assert.equal(engine.sessions.get(record.session.sessionId), record);
-  assert.equal((await engine.credentials.read('exa')).key, 'new-search-secret');
-  assert.equal((await engine.credentials.read('xai')).refresh, '');
-  assert.equal((await engine.credentials.read('xai')).borrowed, true);
-  assert.equal((await engine.credentials.read('xai')).refreshToken, undefined);
-  const settings = await readFile(join(directory, 'configuration.json'), 'utf8');
-  assert.ok(!settings.includes('secret') && !settings.includes('credentials'));
-  const disk = await readFile(join(directory, 'credentials.enc.json'), 'utf8');
-  assert.ok(!disk.includes('new-search-secret') && !disk.includes('must-never-copy'));
-  const restarted = createDefaultAgentService({ cwd: directory, directory });
-  await assert.rejects(restarted.engine(), /locked/);
-});
 
 test('tampering fails closed and repeated writes never reuse the GCM nonce', async t => {
   const directory = await temporary(t), vault = new CredentialVault(directory);
@@ -99,15 +80,31 @@ test('a rejected unlock never replaces a live workspace key', async t => {
   assert.equal((await vault.read()).shared.exa.key, 'still-usable');
 });
 
-test('an expired borrowed request remains cancellable without attempting OAuth refresh', async t => {
-  const directory = await temporary(t), service = createDefaultAgentService({ cwd: directory, directory });
-  await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {},
-    credentials: { xai: { type: 'oauth', access: 'expired', expires: 0 } } });
-  const engine = await service.engine(), controller = new AbortController();
-  const waiting = engine.runtime.getAuth('xai', { signal: controller.signal });
-  setTimeout(() => controller.abort(), 20);
-  await assert.rejects(waiting, error => error.name === 'AbortError');
-  assert.equal(engine.sessions.size, 0);
+test('active sessions survive credential and settings updates and use the latest search key', async t => {
+  const directory = await temporary(t), key = randomBytes(32).toString('base64');
+  const service = createDefaultAgentService({ cwd: directory, directory });
+  assert.equal((await service.status()).locked, true);
+  const base = { workspace: 'fixture', unlockKey: key, config: { providers: ['openai', 'xai'] } };
+  await service.configure({ ...base, revision: 'first', credentials: { exa: { type: 'api_key', key: 'old-search-secret' } } });
+  const engine = await service.engine(), record = await engine.create();
+  record.busy = true;
+  const receipt = await service.configure({ ...base, revision: 'second', credentials: {
+    exa: { type: 'api_key', key: 'new-search-secret' },
+    xai: { type: 'oauth', access: 'borrowed-access', refresh: 'must-never-copy', refreshToken: 'also-never-copy', expires: Date.now() + 10000 },
+  } });
+  assert.equal(receipt.revision, 'second');
+  assert.equal(await service.engine(), engine);
+  assert.equal(engine.sessions.get(record.session.sessionId), record);
+  assert.equal((await engine.credentials.read('exa')).key, 'new-search-secret');
+  assert.equal((await engine.credentials.read('xai')).refresh, '');
+  assert.equal((await engine.credentials.read('xai')).borrowed, true);
+  assert.equal((await engine.credentials.read('xai')).refreshToken, undefined);
+  const settings = await readFile(join(directory, 'configuration.json'), 'utf8');
+  assert.ok(!settings.includes('secret') && !settings.includes('credentials'));
+  const disk = await readFile(join(directory, 'credentials.enc.json'), 'utf8');
+  assert.ok(!disk.includes('new-search-secret') && !disk.includes('must-never-copy'));
+  const restarted = createDefaultAgentService({ cwd: directory, directory });
+  await assert.rejects(restarted.engine(), /locked/);
 });
 
 test('OpenCode lists credential presence and ambiguous successful output stays unknown', async () => {

@@ -71,7 +71,10 @@ struct DashboardAssetPane: View {
             Group {
                 switch assets.tabs.selected {
                 case .note(let id):
-                    if let note = notes.first(where: { $0.id == id }) {
+                    if let client = model.liveLibraryClient, let note = client.state.notes[id],
+                       DevelopmentLibraryProjection.usesCentralPreview(note) {
+                        LibraryClientNotePane(model: client, note: note).id(id)
+                    } else if let note = notes.first(where: { $0.id == id }) {
                         DashboardNotePane(
                             model: model, note: note,
                             focusesTitleOnAppear: note.id == newlyCreatedNoteID,
