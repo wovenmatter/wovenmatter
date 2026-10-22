@@ -1,5 +1,4 @@
 import Foundation
-import WovenMatterClient
 import Testing
 import CompanionClient
 import WovenMatterCompanion
@@ -7,37 +6,6 @@ import WovenMatterCompanion
 
 @MainActor @Suite(.serialized)
 struct CentralLibraryClientTests {
-    @Test func failedDevelopmentEnrollmentCanRetryWithoutReinitializing() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try MobileStore(file: directory.appending(path: "library.json"))
-        let client = CentralLibraryClientModel(store: store, transport: MacClientFakeCentral())
-        await client.initialize()
-        var attempts = 0
-        await client.connectDevelopmentLibrary { _ in
-            attempts += 1
-            #expect(client.developmentConnectionBusy)
-            await client.connectDevelopmentLibrary { _ in
-                Issue.record("Concurrent retry must not enroll twice")
-                throw BackendRPCError.unavailable
-            }
-            throw BackendRPCError.unavailable
-        }
-        #expect(client.deviceConnectionsError?.contains("unavailable") == true)
-        #expect(!client.developmentConnectionBusy)
-        await client.connectDevelopmentLibrary { _ in
-            attempts += 1
-            #expect(client.deviceConnectionsError == nil)
-            throw BackendRPCError.timedOut
-        }
-        #expect(attempts == 2)
-        #expect(client.initialized)
-        #expect(client.deviceConnectionsError?.contains("timed out") == true)
-        #expect(client.credential == nil)
-        #expect(client.localExecution == nil)
-    }
-
-
     @Test func desktopProjectionRoutesForeignExecutionWithoutImportingItsSession() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let store = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))

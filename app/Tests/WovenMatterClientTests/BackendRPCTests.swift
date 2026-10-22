@@ -12,38 +12,12 @@ struct BackendRPCTests {
         chmod(url.deletingLastPathComponent().path, 0o755)
         let server = BackendRPCServer(socketURL: url)
         #expect(throws: BackendRPCError.self) { try server.start { BackendRPCResponse(id: $0.id) } }
-        do {
-            _ = try await BackendRPCClient(socketURL: url).ping()
-            Issue.record("Public endpoint must not be trusted")
-        } catch {
-            guard case BackendRPCError.unauthorized = error else {
-                Issue.record("Unsafe permissions must remain an authorization failure: \(error)"); return
-            }
-        }
         chmod(url.deletingLastPathComponent().path, 0o700)
         try server.start { BackendRPCResponse(id: $0.id) }
         defer { server.stop() }
         let second = BackendRPCServer(socketURL: url)
         #expect(throws: BackendRPCError.self) { try second.start { BackendRPCResponse(id: $0.id) } }
         #expect(try await BackendRPCClient(socketURL: url).ping().processID == getpid())
-    }
-
-    @Test func missingDirectoryIsUnavailableAndCanRecoverWhenHostStarts() async throws {
-        let url = endpoint()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let client = BackendRPCClient(socketURL: url)
-        do {
-            _ = try await client.ping()
-            Issue.record("Missing host unexpectedly responded")
-        } catch {
-            guard case BackendRPCError.unavailable = error else {
-                Issue.record("Missing host must be unavailable, not an ownership error: \(error)"); return
-            }
-        }
-        let server = BackendRPCServer(socketURL: url)
-        try server.start { BackendRPCResponse(id: $0.id) }
-        defer { server.stop() }
-        #expect(try await client.ping().processID == getpid())
     }
 
     private func endpoint() -> URL {

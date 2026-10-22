@@ -66,15 +66,8 @@ available through the existing Tailscale connection. It provisions an independen
 revocable Dev device identity. Credentials are saved directly to this instance's
 Keychain namespace; the launcher never reads or copies production credentials.
 
-When that local endpoint is unavailable, the app shows a Dev client connection
-screen with the failure reason, host prerequisites, and **Retry connection**.
-A missing endpoint means the host is unavailable, not that it belongs to another
-user. **Devices…** opens pairing settings with a **Done** action back to the
-connection screen. Starting the host and retrying enrolls the instance without
-restarting the app. A client cannot open a workspace before its first connection.
-For testing without a host, explicitly launch a snapshot instead.
-A successful build, process check, or `verify` run proves launch only; confirm the
-workspace opens before reporting the client as ready for testing. Pairing to another Mac uses the normal
+When that local endpoint is unavailable, the app opens the existing Device
+Connections setup with the failure reason. Pairing to another Mac uses the normal
 approved pairing flow. An agent must not operate account authentication or
 device-authorization UI to recover access. The instance never falls back to
 opening production SQLite or starting a replacement central library.
