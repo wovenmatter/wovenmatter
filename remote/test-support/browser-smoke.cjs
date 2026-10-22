@@ -15,6 +15,8 @@ async function main() {
   // Resolves the global library even in an empty project with no node_modules.
   const { chromium } = require('playwright');
   const core = require('/opt/wovenmatter/default-agent/node_modules/playwright-core');
+  const esm = await import('/usr/local/lib/node_modules/playwright/index.mjs');
+  assert.equal(esm.chromium.executablePath(), chromium.executablePath());
   assert.equal(core.chromium.executablePath(), chromium.executablePath());
   assert.ok(chromium.executablePath().startsWith('/opt/ms-playwright/'));
   const html = `<!doctype html><title>Workspace browser</title>
@@ -45,7 +47,7 @@ async function main() {
     browser = undefined;
     // CLI screenshots use the full Chromium build, not just the headless shell.
     const output = join(directory, 'cli.png');
-    await exec('playwright', ['screenshot', url, output], { timeout: 30000 });
+    await exec('playwright', ['screenshot', '--channel', 'chromium', url, output], { timeout: 30000 });
     assert.equal((await readFile(output)).subarray(1, 4).toString(), 'PNG');
     // The app's bundled playwright-core resolves the same browser installation.
     browser = await core.chromium.launch({ timeout: 15000 });

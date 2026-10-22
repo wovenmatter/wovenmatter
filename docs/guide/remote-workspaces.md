@@ -50,7 +50,8 @@ node -e 'const { chromium } = require("playwright"); (async () => {
 
 CommonJS scripts can use `require("playwright")` from any workspace directory.
 ES modules can import from `/usr/local/lib/node_modules/playwright/index.mjs`.
-Project-installed Playwright versions should install their own matching browsers
+For a different project-installed Playwright version, set `PLAYWRIGHT_BROWSERS_PATH`
+to a writable project cache before installing and launching its matching browsers,
 or use the embedded version above. Only Chromium is preinstalled; interactive
 headed browsing requires a display server.
 
