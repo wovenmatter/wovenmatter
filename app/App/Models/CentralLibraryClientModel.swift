@@ -205,15 +205,12 @@ final class CentralLibraryClientModel {
         defer { initialized = true }
         guard engine == nil else { return }
         do {
-            credential = try MobileCredentialVault.load()
-            if credential == nil, DevelopmentLaunch.isClient {
-                do {
-                    let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
-                    try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
-                } catch {
-                    deviceConnectionsError = "The local production library could not connect: " + error.localizedDescription
-                        + " You can also pair this instance in Device Connections."
-                }
+            if DevelopmentLaunch.isClient {
+                // Revalidate local host permission on each launch, including an existing instance.
+                let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
+                try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
+            } else {
+                credential = try MobileCredentialVault.load()
             }
             try configureTransport()
             try configureDirectClients()
@@ -223,10 +220,13 @@ final class CentralLibraryClientModel {
     func run() async {
         guard !running else { return }; running = true
         defer { running = false }
+        DevelopmentLaunch.reportClientStartup(ready: false)
         await initializeClientWorkspace()
         if credential == nil { section = .settings }
         while !Task.isCancelled {
             await refresh(background: true)
+            DevelopmentLaunch.reportClientStartup(ready: localExecution != nil && online,
+                error: credential == nil ? errorMessage : nil)
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
         }
     }

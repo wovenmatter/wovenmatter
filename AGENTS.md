@@ -20,6 +20,10 @@
   or reading production data; `--mode auto` provides a conservative file-based
   fallback between client and snapshot; never select live automatically. Explicit
   user choice always wins. See [development builds](docs/DEVELOPMENT_BUILDS.md).
+- Same-Mac Dev clients use the central app's one-time **Allow local Dev clients**
+  setting, then connect automatically without pairing or approval. The client
+  launcher waits for a connected workspace. Do not report a client preview ready
+  based only on a successful build or a running process.
 - Only an explicitly requested live host may open production SQLite directly.
   Stop the existing production host, including background execution, before that
   launch; never bypass the lease or force-kill an owner. Client and snapshot builds

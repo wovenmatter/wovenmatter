@@ -409,7 +409,7 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
-        if !isRunningUnitTests && (LocalExecutionRole.current == .backend || DevelopmentLaunch.isLiveHost) {
+        if !isRunningUnitTests && (LocalExecutionRole.current == .backend || LocalExecutionRole.current == .standalone) {
             do {
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                     LocalExecutionRole.backendSocketURL(workspaceDirectory:

@@ -11,6 +11,7 @@ public struct CompanionPairedDevice: Codable, Equatable, Sendable, Identifiable 
   public var revokedAt: Date?
   public var metadata: CompanionDeviceMetadata?
   public var lastSeenAt: Date?
+  public var isLocalDevelopment: Bool? = nil
   public var kind: CompanionDeviceKind { metadata?.kind ?? .unknown }
   fileprivate let credentialHash: Data
 }
@@ -76,7 +77,7 @@ public actor CompanionAuthentication {
     var next = state
     next.devices.removeAll { $0.id == deviceID }
     next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), revokedAt: nil,
-      metadata: .init(kind: .mac), lastSeenAt: now(), credentialHash: Self.digest(token)))
+      metadata: .init(kind: .mac), lastSeenAt: now(), isLocalDevelopment: true, credentialHash: Self.digest(token)))
     try persist(next); state = next
     return .init(workspaceID: workspaceID, deviceID: deviceID, credential: token)
   }

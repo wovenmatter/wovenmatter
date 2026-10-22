@@ -176,7 +176,11 @@ private enum BackendSocket {
     static func validateDirectory(_ url: URL, create: Bool) throws {
         if create { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         var info = stat()
-        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+        guard lstat(url.path, &info) == 0 else {
+            if errno == ENOENT { throw BackendRPCError.unavailable }
+            throw BackendRPCError.unauthorized
+        }
+        guard info.st_mode & S_IFMT == S_IFDIR,
               info.st_uid == getuid(), info.st_mode & 0o077 == 0 else { throw BackendRPCError.unauthorized }
     }
     static func address(_ url: URL) throws -> sockaddr_un {

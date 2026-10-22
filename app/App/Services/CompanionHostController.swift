@@ -73,6 +73,9 @@ final class CompanionHostController {
     private var server: CompanionHTTPServer?
     private var serve: CompanionTailscaleServe?
     private var stoppingExposures: [CompanionTailscaleServe] = []
+    static let localDevelopmentKey = "wovenmatter.allow-local-development-clients"
+    private(set) var allowsLocalDevelopment = false
+    private(set) var changingLocalDevelopment = false
     private let defaults: UserDefaults
     private let supportDirectory: URL?
     private let makeExposure: @MainActor () -> CompanionTailscaleServe
@@ -86,6 +89,7 @@ final class CompanionHostController {
          makeExposure: @escaping @MainActor () -> CompanionTailscaleServe = { CompanionTailscaleServe() }) {
         self.model = model
         self.defaults = defaults
+        self.allowsLocalDevelopment = defaults.bool(forKey: Self.localDevelopmentKey)
         self.supportDirectory = supportDirectory
         self.makeExposure = makeExposure
         self.retryInterval = retryInterval
@@ -601,7 +605,8 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies)
+              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies,
+              allowsLocalDevelopment: allowsLocalDevelopment)
     }
 
     func refreshStatus() async {
@@ -652,6 +657,7 @@ final class CompanionHostController {
         guard let model else { return }
         do {
             guard let value = try await model.sendBackendCommand(.companion(action)).companion else { return }
+            allowsLocalDevelopment = value.allowsLocalDevelopment ?? false
             isEnabled = value.isEnabled; isStarting = value.isStarting; endpoint = value.endpoint
             status = value.status; errorMessage = value.errorMessage; pairingPayload = value.pairingPayload
             pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
@@ -682,13 +688,50 @@ final class CompanionHostController {
         pairingPayload = nil; pairingExpiresAt = nil
     }
 
+    func setAllowsLocalDevelopment(_ enabled: Bool) async {
+        guard !changingLocalDevelopment else { return }
+        changingLocalDevelopment = true
+        defer { changingLocalDevelopment = false }
+        if model?.isBackendFrontend == true { await forward(.setLocalDevelopment(enabled)); return }
+        do {
+            // Publish the opt-out before awaiting revocation, so no new request can enroll.
+            defaults.set(enabled, forKey: Self.localDevelopmentKey)
+            allowsLocalDevelopment = enabled
+            if enabled {
+                if LocalExecutionRole.current == .standalone {
+                    let directory = try supportDirectory ?? ApplicationModel.dashboardSupportDirectory()
+                    try model?.startDevelopmentConnectionService(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: directory))
+                }
+                await startForCentralDatabase()
+            } else {
+                try await loadAuthentication()
+                for device in pairedDevices where device.isLocalDevelopment == true {
+                    await revoke(device.id)
+                }
+            }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    var localDevelopmentStatus: DevelopmentHostStatus {
+        .init(allowed: allowsLocalDevelopment,
+              ready: model?.dashboardStore != nil && model?.isLibraryClient == false && endpoint != nil && authentication != nil)
+    }
+
     func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {
+        guard allowsLocalDevelopment else {
+            throw CompanionAPIError(code: "development_disabled", message: "Enable Allow local Dev clients in the central Mac’s Devices settings once, then launch the Dev client again.")
+        }
         guard DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost, model?.isLibraryClient == false,
               let database = model?.dashboardStore?.database, let endpoint, let authentication else {
-            throw CompanionAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its central library to connect.")
+            throw CompanionAPIError(code: "unavailable", message: "The local central library is still starting.")
         }
         let response = try await authentication.enrollLocalDevelopment(deviceID: request.deviceID,
             name: request.name, workspaceID: database.companionWorkspaceID())
+        // The setting may have changed while enrollment persisted its new token.
+        guard allowsLocalDevelopment else {
+            await revoke(request.deviceID)
+            throw CompanionAPIError(code: "development_disabled", message: "Local Dev clients are disabled.")
+        }
         await didPair()
         return .init(endpoint: endpoint, pairing: response)
     }
@@ -698,6 +741,7 @@ final class CompanionHostController {
 // listener, holds pairing secrets, and owns the Tailscale Serve child.
 enum CompanionHostAction: Codable, Sendable {
     case status, start, stop, createCode
+    case setLocalDevelopment(Bool)
     case revoke(String), approvePairing(String), denyPairing(String)
     case discover, invitePairing(CompanionDiscoveredPeer)
     case setExecutionAccess(deviceID: String, workspaceID: String, enabled: Bool)
@@ -719,6 +763,7 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
     let workspaceAccessPolicies: [CompanionWorkspaceAccessPolicy]
+    var allowsLocalDevelopment: Bool? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

@@ -82,8 +82,31 @@ struct CompanionHostLifecycleTests {
         #expect(fixture.host.endpoint == nil)
     }
 
+    @Test func localDevelopmentIsOptInAndDisablingItRevokesOnlyDevClients() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        fixture.model.companionHost = fixture.host
+        await fixture.host.start()
+        let ordinary = try await fixture.pairAndProvision(name: "Other Mac")
+        let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · local")
+        #expect(!fixture.host.allowsLocalDevelopment)
+        await #expect(throws: CompanionAPIError.self) { try await fixture.host.connectLocalDevelopment(request) }
+        await fixture.host.setAllowsLocalDevelopment(true)
+        #expect(fixture.host.localDevelopmentStatus.allowed)
+        let grant = try await fixture.host.connectLocalDevelopment(request)
+        #expect(grant.pairing.deviceID == request.deviceID)
+        #expect(fixture.host.pendingPairingRequests.isEmpty)
+        #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID && $0.isLocalDevelopment == true })
+        #expect(fixture.makeHost().allowsLocalDevelopment)
+        await fixture.host.setAllowsLocalDevelopment(false)
+        await #expect(throws: CompanionAPIError.self) { try await fixture.host.connectLocalDevelopment(request) }
+        #expect(!fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        #expect(fixture.host.pairedDevices.contains { $0.id == ordinary.deviceID })
+        #expect(!fixture.makeHost().allowsLocalDevelopment)
+    }
+
     @Test func foregroundHostServesDevelopmentEnrollmentAndRepeatedStartupKeepsTheEndpoint() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
+        fixture.defaults.set(true, forKey: CompanionHostController.localDevelopmentKey)
         try await fixture.model.configureCompanionFixture(directory: fixture.directory)
         fixture.model.companionHost = fixture.host
         await fixture.host.start()
@@ -94,6 +117,9 @@ struct CompanionHostLifecycleTests {
         defer { server.stop() }
         try fixture.model.startDevelopmentConnectionService(socketURL: socket)
         #expect(fixture.model.backendRPCServer === server)
+        let statusData = try await BackendRPCClient(socketURL: socket).call(method: "development.status")
+        let status = try JSONDecoder().decode(DevelopmentHostStatus.self, from: statusData)
+        #expect(status.allowed && status.ready)
         let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · fixture")
         let data = try await BackendRPCClient(socketURL: socket).call(method: "development.connect",
             payload: JSONEncoder().encode(request))

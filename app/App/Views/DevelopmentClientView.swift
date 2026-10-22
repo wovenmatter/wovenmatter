@@ -24,7 +24,12 @@ struct DevelopmentClientView: View {
                         }
                     }
             } else {
-                CentralLibraryClientSettings(model: client, application: application)
+                VStack(spacing: 16) {
+                    if client.errorMessage == nil { ProgressView("Connecting to your local library…") }
+                    if let error = client.errorMessage {
+                        Text(error).foregroundStyle(DashboardPalette.danger).textSelection(.enabled)
+                    }
+                }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .sheet(isPresented: $showsConnection) {
@@ -33,7 +38,7 @@ struct DevelopmentClientView: View {
         }
         .task { await client.run() }
         .alert("Woven Matter", isPresented: Binding(
-            get: { client.errorMessage != nil }, set: { if !$0 { client.errorMessage = nil } }
+            get: { client.localExecution != nil && client.errorMessage != nil }, set: { if !$0 { client.errorMessage = nil } }
         )) {
             Button("OK") { client.errorMessage = nil }
         } message: { Text(client.errorMessage ?? "") }

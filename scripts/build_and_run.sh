@@ -121,7 +121,14 @@ if [ -n "$signing_identity" ] && [ "$signing_identity" != - ]; then
 fi
 
 launch_app() {
+  if [ "$data_mode" = client ]; then
+    rm -f "$support_directory/development-client-startup.json"
+  fi
   /usr/bin/open -n "$app"
+  if [ "$data_mode" = client ]; then
+    python3 "$repo_root/scripts/dev-build.py" wait-client \
+      --status "$support_directory/development-client-startup.json" --executable "$executable"
+  fi
 }
 
 case "$mode" in

@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("dev_build", Path(__file__).resolve().parents[1] / "dev-build.py")
 dev = importlib.util.module_from_spec(spec)
@@ -14,6 +15,24 @@ spec.loader.exec_module(dev)
 
 
 class DevelopmentBuildTests(unittest.TestCase):
+    def test_client_launch_waits_for_connected_workspace_not_just_a_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status.json"
+            executable = Path(tmp) / "Dev.app/Contents/MacOS/Dev"
+            def report(state, executable_path=executable):
+                status.write_text(json.dumps(dict(pid=os.getpid(), executable=str(executable_path), state=state, error="disabled")))
+            report("ready")
+            dev.wait_for_client(status, executable, timeout=0.1)
+            report("failed")
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                dev.wait_for_client(status, executable, timeout=0.1)
+            report("ready", Path("/another/Dev"))
+            with self.assertRaises(TimeoutError):
+                dev.wait_for_client(status, executable, timeout=0.01)
+            report("connecting")
+            with patch.object(dev.time, "sleep", side_effect=lambda _: report("ready")):
+                dev.wait_for_client(status, executable, timeout=1)
+
     def test_power_helper_accepts_profiles_with_an_exact_client_allowlist(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
