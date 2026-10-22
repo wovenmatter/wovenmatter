@@ -39,7 +39,7 @@ jobs:
             app="$WOVENMATTER_COMPILER_BUILD_ROOT/DerivedData/Build/Products/Release/Woven Matter.app"
             python3 scripts/validate-release-metadata.py verify 0.0.0 1 "$(git rev-parse HEAD)" --plist "$app/Contents/Info.plist"
           done
-          grep -Eiq 'cache hit|cache-hit|replay' "$RUNNER_TEMP/release-proof-logs/warm.log"
+          grep -Eiq 'cache hit|cache-hit' "$RUNNER_TEMP/release-proof-logs/warm.log"
       - name: Preserve timings and diagnostics
         if: always()
         uses: actions/upload-artifact@main
