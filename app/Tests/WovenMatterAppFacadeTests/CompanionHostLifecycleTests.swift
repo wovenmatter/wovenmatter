@@ -92,8 +92,11 @@ struct CompanionHostLifecycleTests {
         await #expect(throws: CompanionAPIError.self) { try await fixture.host.connectLocalDevelopment(request) }
         await fixture.host.setAllowsLocalDevelopment(true)
         #expect(fixture.host.localDevelopmentStatus.allowed)
+        await fixture.host.createPairingCode()
+        let ordinaryOffer = try #require(fixture.host.pairingPayload)
         let grant = try await fixture.host.connectLocalDevelopment(request)
         #expect(grant.pairing.deviceID == request.deviceID)
+        #expect(fixture.host.pairingPayload?.token == ordinaryOffer.token)
         #expect(try await fixture.libraryStatus(grant.pairing) == 200)
         #expect(fixture.host.pendingPairingRequests.isEmpty)
         #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID && $0.isLocalDevelopment == true })

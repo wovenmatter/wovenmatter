@@ -732,7 +732,8 @@ final class CompanionHostController {
             await revoke(request.deviceID)
             throw CompanionAPIError(code: "development_disabled", message: "Local Dev clients are disabled.")
         }
-        await didPair()
+        // Automatic local enrollment must not cancel an ordinary device's pairing offer.
+        pairedDevices = await authentication.devices()
         return .init(endpoint: endpoint, pairing: response)
     }
 }
