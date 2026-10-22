@@ -89,9 +89,7 @@ are copied into the new profile; SQLite assets use online backup too. Project
 repositories and external working directories are not cloned or reused.
 
 The copy preserves content and history while removing connection grants, host
-identity, native session bindings, and pending execution. Copied local agent records
-remain available to history but are retired from the active catalog; startup creates
-one local agent for each harness under the snapshot's new device identity. Existing task definitions
+identity, native session bindings, and pending execution. Existing task definitions
 remain visible but have a detached owner; create a new schedule in the snapshot
 to test execution. Active goals and session timers are paused. Old chats are history; create a new
 session to test the branch's runtime. The snapshot is its own library host with

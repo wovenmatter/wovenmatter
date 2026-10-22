@@ -84,12 +84,6 @@ class DevelopmentBuildTests(unittest.TestCase):
               PRAGMA journal_mode=WAL;
               CREATE TABLE notes(id TEXT PRIMARY KEY, content TEXT);
               CREATE TABLE desktop_local_acp_sessions(id TEXT);
-              CREATE TABLE dashboard_agents(id TEXT PRIMARY KEY, governing_plane TEXT,
-                authority_kind TEXT, runtime_device_id TEXT, deleted_at TEXT, status TEXT);
-              CREATE TABLE dashboard_conversations(id TEXT PRIMARY KEY, agent_id TEXT REFERENCES dashboard_agents(id));
-              INSERT INTO dashboard_agents VALUES('local-pi','wovenmatter_macos','device_owned',NULL,NULL,'ready');
-              INSERT INTO dashboard_agents VALUES('remote-pi','remote_workspace','device_owned','remote',NULL,'ready');
-              INSERT INTO dashboard_conversations VALUES('history','local-pi');
               CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
@@ -108,10 +102,6 @@ class DevelopmentBuildTests(unittest.TestCase):
             with sqlite3.connect(target / "workspace.sqlite") as copy:
                 self.assertEqual(copy.execute("SELECT content FROM notes").fetchone()[0], "shared content")
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM desktop_local_acp_sessions").fetchone()[0], 0)
-                self.assertIsNotNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='local-pi'").fetchone()[0])
-                self.assertEqual(copy.execute("SELECT status FROM dashboard_agents WHERE id='local-pi'").fetchone()[0], "offline")
-                self.assertEqual(copy.execute("SELECT a.id FROM dashboard_conversations c JOIN dashboard_agents a ON c.agent_id=a.id").fetchone()[0], "local-pi")
-                self.assertIsNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='remote-pi'").fetchone()[0])
                 self.assertNotEqual(copy.execute("SELECT workspace_id FROM companion_workspace").fetchone()[0], "production-identity")
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM companion_calendar_owners").fetchone()[0], 1)
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM dashboard_calendar_items").fetchone()[0])
@@ -120,7 +110,6 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (1, None))
                 copy.execute("UPDATE notes SET content='private'"); copy.commit()
             self.assertEqual(writer.execute("SELECT content FROM notes").fetchone()[0], "shared content")
-            self.assertEqual(writer.execute("SELECT deleted_at,status FROM dashboard_agents WHERE id='local-pi'").fetchone(), (None, "ready"))
             self.assertEqual(writer.execute("SELECT status FROM dashboard_runs").fetchone()[0], "running")
             self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")

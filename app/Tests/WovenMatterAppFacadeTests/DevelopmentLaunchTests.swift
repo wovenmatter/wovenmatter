@@ -125,9 +125,6 @@ struct DevelopmentLaunchTests {
             nativeWorkingDirectory: fixture.directory.path, tools: .init(enabled: [.notes])))
         let event = try await fixture.database.saveCalendarEvent(draft: .init(title: "Copied schedule",
             startsAt: now, timeZoneID: "UTC", task: task), creating: true, now: now)
-        let localHistoryID = try await fixture.database.createLocalACPSession(
-            runtimeKind: .defaultAgent, title: "Copied Pi history",
-            ownerDeviceID: fixture.store.dashboardDeviceID())
         let originalIdentity = try await fixture.database.companionWorkspaceID()
         let identity = try await fixture.database.companionLibraryIdentity()
         let foreignOwner = UUID().uuidString.lowercased(), foreignID = UUID().uuidString.lowercased()
@@ -155,17 +152,6 @@ struct DevelopmentLaunchTests {
         #expect(process.terminationStatus == 0)
         let snapshot = try await WorkspaceDatabase(url: destination.appending(path: "workspace.sqlite"))
         #expect(try await snapshot.companionWorkspaceID() != originalIdentity)
-        let snapshotStore = try await DashboardStore(supportDirectory: destination)
-        try await snapshotStore.prepareLocalWorkspace()
-        let snapshotCatalog = try await snapshotStore.snapshot()
-        let localAgents = snapshotCatalog.agents.filter { $0.governingPlane == .wovenmatterMacOS }
-        let snapshotDeviceID = try await snapshotStore.dashboardDeviceID()
-        #expect(localAgents.filter { $0.runtimeKind == .defaultAgent }.count == 1)
-        #expect(localAgents.allSatisfy { $0.authorityDeviceID == snapshotDeviceID })
-        #expect(Set(localAgents.map(\.runtimeKind)).count == localAgents.count)
-        #expect(snapshotCatalog.workspace.conversations.contains { $0.id == localHistoryID && $0.isArchived })
-        let sourceCatalog = try await fixture.store.snapshot()
-        #expect(sourceCatalog.agents.filter { $0.runtimeKind == .defaultAgent }.count == 1)
         let snapshotOwner = try #require(try await snapshot.companionExecutionWorkspaces().first)
         #expect(snapshotOwner.endpoint == nil)
         #expect(snapshotOwner.libraryID == (try await snapshot.companionWorkspaceID()))
