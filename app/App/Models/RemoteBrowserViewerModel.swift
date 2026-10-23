@@ -64,7 +64,7 @@ final class RemoteBrowserViewerModel {
         action.tabID = selectedID
         if action.frameID.isEmpty { action.frameID = frameID }
         // Coalesce pointer motion and wheel bursts while preserving input order.
-        if let last = pendingInput.last, last.frameID == frameID, last.kind == action.kind,
+        if let last = pendingInput.last, last.frameID == action.frameID, last.kind == action.kind,
            ["move", "scroll", "text"].contains(action.kind),
            action.kind != "text" || ((last.text ?? "") + (action.text ?? "")).utf8.count <= 16384 {
             if action.kind == "scroll" {
