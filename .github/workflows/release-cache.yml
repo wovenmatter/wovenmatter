@@ -27,7 +27,7 @@ jobs:
       - name: Identify exact dependency and toolchain inputs
         id: inputs
         run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         id: cache
         with:
           path: |
@@ -39,7 +39,7 @@ jobs:
       - name: Prepare unsigned release dependencies
         if: steps.cache.outputs.cache-hit != 'true'
         run: scripts/prepare-release-cache.sh
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         if: steps.cache.outputs.cache-hit != 'true'
         with:
           path: |
@@ -48,7 +48,7 @@ jobs:
             ~/Library/Caches/WovenMatter/SourcePackages/repositories
             ~/.npm
           key: ${{ steps.inputs.outputs.key }}
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         id: compiler
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
@@ -61,7 +61,7 @@ jobs:
           WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
           WOVENMATTER_COMPILER_BUILD_ROOT=/private/tmp/wovenmatter-release-build \
             scripts/warm-release-compiler.sh
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         if: steps.compiler.outputs.cache-hit != 'true'
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
