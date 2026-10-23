@@ -124,7 +124,8 @@ private struct DictationHistoryRow: View {
                     do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
                 }
         }.frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 4)
+            // The 8-point row gap plus this 8-point top inset gives 16 points from copy button to next date.
+            .padding(.horizontal, 16).padding(.top, 8)
             .background(theme.palette.workspace).clipShape(DashboardShapes.card)
     }
 }

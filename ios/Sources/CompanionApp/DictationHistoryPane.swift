@@ -106,7 +106,8 @@ private struct MobileDictationHistoryRow: View {
           do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
         }
     }.frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 4)
+      // The 12-point list gap plus this 4-point top inset gives 16 points from copy button to next date.
+      .padding(.horizontal, 12).padding(.top, 4)
       .background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
   }
 }
