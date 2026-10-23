@@ -124,6 +124,7 @@ private struct DictationHistoryRow: View {
                     do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
                 }
         }.frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16).background(theme.palette.workspace).clipShape(DashboardShapes.card)
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 4)
+            .background(theme.palette.workspace).clipShape(DashboardShapes.card)
     }
 }

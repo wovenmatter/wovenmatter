@@ -106,6 +106,7 @@ private struct MobileDictationHistoryRow: View {
           do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
         }
     }.frame(maxWidth: .infinity, alignment: .leading)
-      .padding(12).background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+      .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 4)
+      .background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
   }
 }
