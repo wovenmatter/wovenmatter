@@ -87,6 +87,10 @@ struct DashboardAssetPane: View {
                     if let page = assets.pages[id] {
                         DashboardBrowserPane(page: page, revision: assets.pageRevision).id(id)
                     }
+                case .document(let id):
+                    if let url = assets.documents[id] {
+                        DashboardDocumentPane(url: url).id(id)
+                    }
                 case nil: EmptyView()
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,7 +107,11 @@ struct DashboardAssetPane: View {
     }
 
     private func icon(_ tab: WorkspaceAssetTabs.Tab) -> String {
-        if case .browser = tab { "globe" } else { "doc.text" }
+        switch tab {
+        case .browser: "globe"
+        case .note: "doc.text"
+        case .document: "doc.richtext"
+        }
     }
     private func close(_ tab: WorkspaceAssetTabs.Tab) {
         if case .note = tab {

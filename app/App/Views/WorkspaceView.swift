@@ -179,6 +179,14 @@ struct WorkspaceView: View {
 
     var body: some View {
         workspaceWithAttachments
+        .environment(\.openDocumentPreview) { url, identity in
+            do {
+                try assets.openDocument(url, identity: identity)
+                destination = .workspace
+                compactWorkspacePane = .note
+                chatPanels.presentAsset()
+            } catch { showNotice(error.localizedDescription) }
+        }
         .onChange(of: assets.notice) { _, message in
             if let message { showNotice(message); assets.notice = nil }
         }
@@ -758,8 +766,8 @@ struct WorkspaceView: View {
                 if destination == .workspace && !assets.tabs.isPresented {
                     Button {
                         let opened: Bool
-                        if let existing = assets.tabs.browserIDs.last {
-                            assets.tabs.select(.browser(existing))
+                        if let existing = assets.tabs.selected {
+                            assets.tabs.select(existing)
                             opened = true
                         } else {
                             opened = assets.openBrowser() != nil
@@ -769,11 +777,11 @@ struct WorkspaceView: View {
                             compactDrawer = .none
                         }
                     } label: {
-                        Image(systemName: "globe").font(.system(size: 16)).frame(width: 32, height: 32)
+                        Image(systemName: assets.tabs.selected == nil ? "globe" : "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
                     }
                     .buttonStyle(DashboardIconButtonStyle())
-                    .help("Open browser")
-                    .accessibilityLabel("Open browser")
+                    .help(assets.tabs.selected == nil ? "Open browser" : "Show assets")
+                    .accessibilityLabel(assets.tabs.selected == nil ? "Open browser" : "Show assets")
                 }
                 if showRightRailButton {
                     DashboardRevealRailButton(side: .right,

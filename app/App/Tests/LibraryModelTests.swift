@@ -41,6 +41,9 @@ struct LibraryModelTests {
         let decoded = try JSONDecoder().decode(BackendLibraryCommand.self, from: JSONEncoder().encode(command))
         let backend = BackendLibraryService(service: store.library)
         let opened = try await #require(backend.execute(decoded).url)
+        let prepared = try await LibraryModel(service: store.library).attachmentURL(
+            contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
+        #expect(prepared == opened)
         #expect(opened.lastPathComponent == "Screenshot.png")
         #expect(try Data(contentsOf: opened) == bytes)
         #expect(try await store.database.libraryPage(query: .init(), count: 1).items.isEmpty)
@@ -48,6 +51,38 @@ struct LibraryModelTests {
             try await backend.execute(.openAttachment(
                 contentHash: "../workspace.sqlite", fileName: "Screenshot.png", mimeType: "image/png"))
         }
+    }
+
+    @Test func generatedDocumentResolvesRetainedIdentityWithoutReadingTheOriginalAgain() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let chat = try await database.createLocalACPSession(runtimeKind: .codex, title: "Reports", ownerDeviceID: UUID())
+        let source = root.appending(path: "budget.csv")
+        let bytes = Data("Category,Amount\nTravel,120".utf8)
+        try bytes.write(to: source)
+        let reference = "./budget.csv"
+        let run = try await database.beginLocalACPRun(conversationID: chat, content: "Make a budget")
+        try await database.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Budget](\(reference))")
+        try await database.completeLocalACPRun(runID: run.runID)
+        let service = LibraryService(database: database)
+        try await service.synchronize(locations: [.init(conversationID: chat, name: "Local", root: root.path)], remoteWorkspace: { _ in nil })
+        let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: reference)
+        let item = try await #require(database.libraryItem(id: id))
+        #expect(item.contentHash != nil)
+        try FileManager.default.removeItem(at: source)
+        let model = LibraryModel(service: service)
+        let url = try await model.fileURL(id: id)
+        #expect(url.pathExtension == "csv")
+        #expect(try Data(contentsOf: url) == bytes)
+        let session = WorkspaceAssetSession()
+        try session.openDocument(url, identity: "library:" + id)
+        #expect(session.tabs.documentIDs == ["library:" + id])
+        await #expect(throws: (any Error).self) {
+            try await model.fileURL(id: WorkspaceLibraryItem.identifier(messageID: "another-message", source: reference))
+        }
+        await #expect(throws: (any Error).self) { try await model.fileURL(id: source.path) }
     }
 
     @Test func loadMoreReconcilesNewItemsAndPreservesActionErrors() async throws {

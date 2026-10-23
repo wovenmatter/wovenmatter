@@ -7,6 +7,25 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CompanionWorkspaceFeaturesTests {
+    @Test func libraryDownloadPreservesFileExtensionForPreview() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let chat = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Budget", ownerDeviceID: UUID())
+        let source = fixture.directory.appending(path: "budget.csv")
+        let bytes = Data("Category,Amount\nTravel,120".utf8)
+        try bytes.write(to: source)
+        let run = try await fixture.database.beginLocalACPRun(conversationID: chat, content: "Create a budget")
+        try await fixture.database.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Budget](./budget.csv)")
+        try await fixture.database.completeLocalACPRun(runID: run.runID)
+        try await fixture.store.library.synchronize(locations: [.init(conversationID: chat, name: "Local", root: fixture.directory.path)], remoteWorkspace: { _ in nil })
+        let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: "./budget.csv")
+        guard case .file(let file) = try await fixture.model.companionCommands.readWorkspace(.libraryFile(id: id)) else {
+            Issue.record("Missing retained download"); return
+        }
+        #expect(file.name == "Budget.csv")
+        #expect(file.data == bytes)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
     @Test func goalControlsUseTheOwningSessionAndPublishStatus() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let id = try await fixture.createConversation()
