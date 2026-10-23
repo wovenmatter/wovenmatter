@@ -113,18 +113,30 @@ struct RemoteHarnessInstallerConfirmation: ViewModifier {
     @Bindable var model: RemoteWorkspacesModel
     let workspaceID: UUID?
     var onCancel: () -> Void = {}
+    @State private var confirming = false
     func body(content: Content) -> some View {
         content.confirmationDialog("Review installer source", isPresented: Binding(
-            get: { workspaceID != nil && model.preparedHarnessAction?.configuration.id == workspaceID && model.preparedHarnessAction?.action == "install" },
-            set: { if !$0 { cancel() } }
+            get: { !confirming && workspaceID != nil && model.preparedHarnessAction?.configuration.id == workspaceID && model.preparedHarnessAction?.action == "install" },
+            set: { if !$0 && !confirming { cancel() } }
         ), titleVisibility: .visible) {
-            Button("Confirm and install") { model.confirmPreparedHarnessAction(workspaceID: workspaceID, action: "install") }
+            Button("Confirm and install") {
+                // Backend commands are asynchronous. Dismissing this dialog must
+                // not cancel the setup queue before the confirmation arrives.
+                confirming = true
+                model.confirmPreparedHarnessAction(workspaceID: workspaceID, action: "install")
+            }
             Button("Cancel", role: .cancel) { cancel() }
         } message: {
             if let preview = model.preparedHarnessAction?.preview {
                 Text("Source: \(preview.source)\n" + (preview.sha256.map { "SHA-256: \($0)" }
                     ?? "Package: \(preview.packageSpec ?? "") · Registry integrity verification applies."))
             }
+        }
+        .onChange(of: model.preparedHarnessAction == nil) { _, cleared in
+            if cleared { confirming = false }
+        }
+        .onChange(of: model.errorMessage) { _, error in
+            if error != nil { confirming = false }
         }
     }
     private func cancel() {
