@@ -19,14 +19,18 @@ final class RemoteBrowserViewerModel {
     private var refreshing = false
     private let loadTabs: () async throws -> RemoteBrowserTabs
     private let loadFrame: (String) async throws -> RemoteBrowserFrame
+    private let copyText: (String) -> Void
     private let sendAction: (RemoteBrowserAction) async throws -> RemoteBrowserActionResult
 
     init(loadTabs: @escaping () async throws -> RemoteBrowserTabs,
          loadFrame: @escaping (String) async throws -> RemoteBrowserFrame,
          sendAction: @escaping (RemoteBrowserAction) async throws -> RemoteBrowserActionResult = { action in
              .init(tabID: action.tabID, accepted: false)
+         }, copyText: @escaping (String) -> Void = { text in
+             NSPasteboard.general.clearContents()
+             NSPasteboard.general.setString(text, forType: .string)
          }) {
-        self.loadTabs = loadTabs; self.loadFrame = loadFrame; self.sendAction = sendAction
+        self.loadTabs = loadTabs; self.loadFrame = loadFrame; self.sendAction = sendAction; self.copyText = copyText
     }
 
     var selectedTab: RemoteBrowserTab? { tabs.first { $0.id == selectedID } }
@@ -90,9 +94,8 @@ final class RemoteBrowserViewerModel {
                 guard result.accepted, result.tabID == action.tabID else {
                     throw RemoteWorkspaceClientError.invalidResponse("The workspace did not accept this input.")
                 }
-                if action.kind == "copy", let text = result.text, text.utf8.count <= 65536 {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
+                if action.kind == "copy", let text = result.text, !text.isEmpty, text.utf8.count <= 65536 {
+                    copyText(text)
                 }
                 inputError = nil
             } catch {
@@ -102,7 +105,14 @@ final class RemoteBrowserViewerModel {
                 inputError = error.localizedDescription
             }
         }
-        if revision == drainRevision { await refresh() }
+        if revision == drainRevision {
+            // Refresh independently: input arriving during image loading must
+            // start draining immediately, without needing another gesture.
+            Task { [weak self] in
+                guard let self, self.revision == drainRevision else { return }
+                await self.refresh()
+            }
+        }
     }
 
     func refresh() async {

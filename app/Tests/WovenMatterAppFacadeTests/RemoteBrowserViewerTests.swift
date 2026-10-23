@@ -203,6 +203,33 @@ import WovenMatterClient
         #expect(viewer.inputError == nil)
     }
 
+    @Test func inputContinuesDuringFrameRefreshAndEmptyCopyPreservesClipboard() async throws {
+        var suspendFrame = false
+        var pendingFrame: CheckedContinuation<RemoteBrowserFrame, any Error>?
+        var sent = 0
+        var clipboardWrites: [String] = []
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id in
+            if suspendFrame { return try await withCheckedThrowingContinuation { pendingFrame = $0 } }
+            return try frame(id)
+        }, sendAction: { action in
+            sent += 1
+            return .init(tabID: action.tabID, accepted: true, text: "")
+        }, copyText: { clipboardWrites.append($0) })
+        await viewer.refresh()
+        suspendFrame = true
+        viewer.enqueue(.init(kind: "copy"))
+        for _ in 0..<100 where pendingFrame == nil { await Task.yield() }
+        let refresh = try #require(pendingFrame)
+        var text = RemoteBrowserAction(kind: "text"); text.text = "arrives while refresh is loading"
+        viewer.enqueue(text)
+        for _ in 0..<100 where sent < 2 { await Task.yield() }
+        #expect(sent == 2)
+        #expect(clipboardWrites.isEmpty)
+        suspendFrame = false
+        viewer.clear()
+        refresh.resume(returning: try frame("first"))
+    }
+
     @Test func nativeSurfaceCollaboratesWithRealBrowserWhenRequested() async throws {
         guard let endpoint = ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"],
               let url = URL(string: endpoint) else { return }
