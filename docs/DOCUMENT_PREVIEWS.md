@@ -9,7 +9,7 @@ The preview uses the macOS Quick Look renderer. Common documents, spreadsheets,
 PDFs, images, and other formats supported by the Mac's installed preview providers
 can be inspected inline. Quick Look provides a file summary when it cannot render
 a format; the toolbar always offers **Open in [app name]** and **Reveal in Finder**.
-Editing remains in the external application. **Reload preview** refreshes the view.
+Editing remains in the external application. Each attachment previews its retained version; open the agent’s newer attachment to see revisions.
 Spreadsheet formulas are not recalculated by Woven Matter; Quick Look may rely on
 the workbook's saved calculation results. Preview providers retain their native
 document appearance and scrolling controls.
@@ -38,7 +38,7 @@ Opening a preview does not add document contents to a new agent prompt.
 - Open eight documents, then a ninth. Confirm the capacity message; an existing
   document must remain selectable at capacity.
 - Check an unsupported format and a removed opening copy. Verify the fallback,
-  reload, external-open action, and error messages.
+  external-open action and error messages.
 - Check both themes and keyboard/accessibility labels for the document controls.
 
 Native previews vary by installed macOS preview providers. Manual acceptance of

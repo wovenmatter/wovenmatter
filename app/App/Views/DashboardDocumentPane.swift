@@ -17,7 +17,6 @@ extension EnvironmentValues {
 struct DashboardDocumentPane: View {
     let url: URL
     @Environment(\.dashboardTheme) private var theme
-    @State private var refreshID = UUID()
     @State private var available = true
     @State private var error: String?
 
@@ -28,7 +27,6 @@ struct DashboardDocumentPane: View {
                     .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                     .help("Read-only preview of \(url.lastPathComponent)")
                 Spacer(minLength: 4)
-                control("Reload preview", symbol: "arrow.clockwise") { refreshID = UUID() }
                 control("Reveal in Finder", symbol: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }.disabled(!available)
@@ -41,7 +39,7 @@ struct DashboardDocumentPane: View {
             .padding(.vertical, DashboardMetrics.assetToolbarVerticalPadding)
             Rectangle().fill(theme.palette.border).frame(height: 1)
             if available {
-                DocumentQuickLookView(url: url).id(refreshID)
+                DocumentQuickLookView(url: url).id(url)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("Preview of \(url.lastPathComponent)")
             } else {
@@ -50,8 +48,7 @@ struct DashboardDocumentPane: View {
             }
         }
         .background(theme.palette.workspace)
-        .task(id: refreshID) { available = FileManager.default.isReadableFile(atPath: url.path) }
-        .onChange(of: url) { refreshID = UUID() }
+        .task(id: url) { available = FileManager.default.isReadableFile(atPath: url.path) }
         .alert("Could not open file", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }
         )) { Button("OK") { error = nil } } message: { Text(error ?? "") }
