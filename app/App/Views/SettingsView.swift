@@ -63,13 +63,14 @@ struct SettingsView: View {
             case .general:
                 SettingsGeneralView(
                     model: applicationContext ?? model,
+                    executionModel: model,
                     clientAnalytics: clientContext?.analytics,
                     showsBackgroundExecution: clientContext == nil,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
             case .connections(let scope):
-                SettingsConnectionsView(model: model, initialScope: scope,
+                SettingsDefaultAgentView(model: model, initialScope: scope,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .harness(let runtimeKind, let workspaceID, let origin):
                 SettingsHarnessView(
@@ -108,11 +109,7 @@ struct SettingsView: View {
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
                     model: model.remoteWorkspaces,
-                    credentialDisclosureAcknowledged:
-                        model.hasAcknowledgedCredentialAccessDisclosure,
-                    onAcknowledgeCredentialDisclosure: {
-                        model.acknowledgeCredentialAccessDisclosure()
-                    },
+                    application: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onMoreRuntime: { kind, configuration in
                         section = harnessSettingsSection(
@@ -146,6 +143,7 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             section = .connections(event.object as? String ?? "global")
         }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-usage-settings"))) { _ in section = .usage }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
     }
 
@@ -156,7 +154,7 @@ struct SettingsView: View {
     }
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
-        section = .connections(scope); model.pendingConnectionsScope = nil
+        section = scope == "usage" ? .usage : .connections(scope); model.pendingConnectionsScope = nil
     }
 
     private var landing: some View {
@@ -173,51 +171,7 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 }
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Dictation",
-                    detail: "Read and copy your previous dictations.",
-                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
-                    action: { section = .dictation }
-                )
-                SettingsDestinationRow(
-                    title: "Devices",
-                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
-                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
-                    action: { section = .companion }
-                )
-                }
-                SettingsDestinationRow(
-                    title: "Connections",
-                    detail: "Shared accounts, API keys, and local model servers.",
-                    icon: {
-                        DashboardLucideIcon(glyph: .plug, size: 15)
-                            .rotationEffect(.degrees(45))
-                    },
-                    action: { section = .connections("global") }
-                )
-                SettingsDestinationRow(
-                    title: "Local Agent Workspace",
-                    detail: "Agents and files on this Mac.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: { section = .localWorkspace }
-                )
-                if !executionOnly && clientContext == nil {
-                SettingsDestinationRow(
-                    title: "Remote Agent Workspaces",
-                    detail: "Agents and files on remote Linux machines.",
-                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
-                    action: { section = .remoteWorkspaces }
-                )
-                }
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Usage",
-                    detail: "Accounts and usage tracking.",
-                    icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
-                    action: { section = .usage }
-                )
-                }
+
                 SettingsDestinationRow(
                     title: AgentRuntimeKind.defaultAgent.displayName,
                     detail: "Conversation defaults, subagents, providers, and models.",
@@ -248,6 +202,42 @@ struct SettingsView: View {
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Devices",
+                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
+                    action: { section = .companion }
+                )
+                }
+                SettingsDestinationRow(
+                    title: "Local Agent Workspace",
+                    detail: "Agents and files on this Mac.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .localWorkspace }
+                )
+                if !executionOnly && clientContext == nil {
+                SettingsDestinationRow(
+                    title: "Remote Agent Workspaces",
+                    detail: "Agents and files on remote Linux machines.",
+                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+                    action: { section = .remoteWorkspaces }
+                )
+                }
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Dictation",
+                    detail: "Read and copy your previous dictations.",
+                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    action: { section = .dictation }
+                )
+                SettingsDestinationRow(
+                    title: "Usage",
+                    detail: "Accounts and usage tracking.",
+                    icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
+                    action: { section = .usage }
+                )
+                }
             }
         }
     }
@@ -294,16 +284,12 @@ private struct SettingsHarnessView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsHarnessAccounts(model: model, runtimeKind: runtimeKind, initialWorkspaceID: workspaceID, fixedWorkspace: isWorkspaceScoped)
             SettingsAgentDefaultsSection(model: model, runtime: runtimeKind,
                 fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if runtimeKind == .codex {
                 codexIconCard
             }
-            SettingsHarnessRuntimeMaintenanceView(
-                model: model,
-                runtimeKind: runtimeKind,
-                workspaceID: workspaceID
-            )
         }
     }
 

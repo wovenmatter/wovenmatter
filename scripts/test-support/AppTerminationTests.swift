@@ -275,7 +275,24 @@ private struct AppTerminationTests {
         let suite = "wovenmatter.background-policy-tests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        precondition(LocalBackgroundExecution(defaults: defaults).isEnabled)
+        precondition(defaults.object(forKey: LocalBackgroundExecution.preferenceKey) == nil)
+        precondition(LocalExecutionRole.resolve(arguments: [],
+            backgroundEnabled: LocalBackgroundExecution.resolvedEnabled(defaults: defaults)) == .frontend)
+        defaults.set(false, forKey: LocalBackgroundExecution.preferenceKey)
         precondition(!LocalBackgroundExecution(defaults: defaults).isEnabled)
+        precondition(LocalExecutionRole.resolve(arguments: [],
+            backgroundEnabled: LocalBackgroundExecution.resolvedEnabled(defaults: defaults)) == .standalone)
+        defaults.set(true, forKey: LocalBackgroundExecution.preferenceKey)
+        precondition(LocalBackgroundExecution(defaults: defaults).isEnabled)
+        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+            precondition(!LocalBackgroundExecution(defaults: defaults, developmentMode: mode).isEnabled)
+        }
+        defaults.removeObject(forKey: LocalBackgroundExecution.preferenceKey)
+        precondition(!LocalBackgroundExecution(defaults: defaults, developmentMode: .snapshot).isEnabled)
+        // The termination probe models a foreground owner. Keep its process
+        // role explicit without persisting preferences or registering a job.
+        UserDefaults.standard.register(defaults: [LocalBackgroundExecution.preferenceKey: false])
         precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false) == .standalone)
         precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: true) == .frontend)
         precondition(LocalExecutionRole.resolve(arguments: ["--backend"], backgroundEnabled: false) == .backend)

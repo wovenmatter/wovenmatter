@@ -6,9 +6,12 @@ public enum DefaultAgentSupport {
     public static let settingsKey = "wovenmatter.default-agent.settings.v1"
     private static let settingsLock = NSLock()
     private static func readSettings() -> DefaultAgentSettingsScope {
-        UserDefaults.standard.data(forKey: settingsKey).flatMap {
+        var value = UserDefaults.standard.data(forKey: settingsKey).flatMap {
             try? JSONDecoder().decode(DefaultAgentSettingsScope.self, from: $0)
         } ?? .init()
+        value.global = value.global.withAvailableProviders
+        for key in value.workspaces.keys { value.workspaces[key] = value.workspaces[key]?.withAvailableProviders }
+        return value
     }
     public static var settings: DefaultAgentSettingsScope {
         get { settingsLock.withLock { readSettings() } }
@@ -45,7 +48,7 @@ public enum DefaultAgentSupport {
                 runtimeKind: .defaultAgent, displayName: AgentRuntimeKind.defaultAgent.displayName,
                 state: ready ? .ready : .executableUnavailable,
                 detail: ready
-                    ? "Included with Woven Matter. Manage connections in Settings → Connections."
+                    ? "Included with Woven Matter. Manage connections in Settings → Pi Durable."
                     : "The bundled Pi Durable helper is missing. Rebuild or reinstall Woven Matter.",
                 executablePath: executable?.path),
             launchConfiguration: ready
@@ -223,6 +226,11 @@ public enum DefaultAgentSupport {
             throw DefaultAgentError.message("The provider key could not be saved in Keychain (\(status)).")
         }
     }
+    public static func checkKeychainAccess(authorize: Bool = false, keychain: KeychainAccess = .init()) throws {
+        try keychain.checkStoredItems(services: [WovenMatterKeychainService.current + ".default-agent",
+            WovenMatterKeychainService.current + ".usage", "com.wovenmatter.remote-workspaces"], authorize: authorize)
+    }
+
     private static func keyQuery(_ provider: String, scope: String) -> [String: Any] {
         // The global OpenRouter key is the same item already used by Usage.
         let shared = provider == "openrouter" && scope == "global"

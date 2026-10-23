@@ -378,6 +378,7 @@ final class DefaultAgentSettingsModel {
             }
             guard generation == runID, !Task.isCancelled else { return false }
             notice = "Key saved."
+            invalidateConnection(provider)
             if ["anthropic", "xai-api"].contains(provider) { enableProvider(provider) }
             error = nil
             await loadAccountsAndWait()
@@ -506,6 +507,7 @@ final class DefaultAgentSettingsModel {
         var value = configuration
         if visible {
             if !value.models.contains(id) { value.models.append(id) }
+            if value.defaultModel == nil { value.defaultModel = id }
         } else {
             guard id != effectiveDefaultModel else { return }
             value.models.removeAll { $0 == id }
@@ -627,7 +629,10 @@ final class DefaultAgentSettingsModel {
     func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil, includeAllModels: Bool = false, provider: String? = nil, force: Bool = false) {
         forceCatalogRefresh = force
         if let provider { browsingProvider = provider }
-        if !configuration.providers.contains(browsingProvider) { browsingProvider = configuration.providers.first ?? "" }
+        if !configuration.providers.contains(browsingProvider)
+            || (provider == nil && !availableModelProviderIDs.contains(browsingProvider) && !availableModelProviderIDs.isEmpty) {
+            browsingProvider = configuration.providers.first(where: { availableModelProviderIDs.contains($0) }) ?? configuration.providers.first ?? ""
+        }
         let hasOtherOperation = busy && !catalogOnly
         let cacheKey = catalogKey(remote: remote)
         if publishedCatalogKey != cacheKey {

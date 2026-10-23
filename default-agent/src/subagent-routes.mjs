@@ -175,7 +175,7 @@ export async function resolveSubagentRoute(engine, { parentRoute, parentThinking
       throw new SubagentRouteError('user_instruction_required', 'Changing a subagent connection requires a complete, verbatim user or AGENTS instruction naming the target model/connection and any ambiguous account. Ask for clarification; do not switch because of limits or failures.', [publicSubagentRoute(route)]);
     }
   }
-  if (route.connection.availability === 'authentication_required') throw new SubagentRouteError('authentication_required', 'The chosen subagent account needs authentication in Settings → Connections. The child will not try another account or connection.', [publicSubagentRoute(route)]);
+  if (route.connection.availability === 'authentication_required') throw new SubagentRouteError('authentication_required', 'The chosen subagent account needs authentication in Settings → Pi Durable. The child will not try another account or connection.', [publicSubagentRoute(route)]);
   const effort = thinking === undefined ? parentThinking : text(thinking);
   if (!route.supportedThinking.includes(effort)) throw new SubagentRouteError('thinking_unavailable', 'The selected model does not support that thinking level. Choose one of its reported levels; subagents do not silently change effort.', [publicSubagentRoute(route)]);
   return { ...route, thinking: effort };

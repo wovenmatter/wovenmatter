@@ -1023,8 +1023,7 @@ struct DashboardNewFolderPopover: View {
 
     private var ownerIsAvailable: Bool {
         guard let workspaceID else { return localWorkspaceReady }
-        return remoteWorkspaces.isCredentialAccessEnabled
-            && remoteWorkspaces.statuses[workspaceID]?.running == true
+        return remoteWorkspaces.statuses[workspaceID]?.running == true
             && !remoteWorkspaces.busyWorkspaceIDs.contains(workspaceID)
     }
 

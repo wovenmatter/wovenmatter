@@ -178,7 +178,7 @@ struct ExecutorConversationApps: View {
                         Task { do { try await tools.controlExecutor(.refresh) } catch { self.error = error.localizedDescription } }
                     }
                 }.buttonStyle(SettingsQuietButtonStyle())
-            } else { Text("Set up Executor in Settings → Connections.").foregroundStyle(.secondary) }
+            } else { Text("Set up Executor in Settings → General.").foregroundStyle(.secondary) }
             if let error { Text(error).font(.callout).foregroundStyle(.secondary) }
         }
         .disabled(tools.executorBusy || tools.settings.executorSetup?.running == true)

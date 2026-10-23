@@ -7,6 +7,24 @@ import Testing
 @Suite("Noninteractive Keychain access")
 struct KeychainAccessTests {
 
+  @Test("Keychain readiness checks saved secrets and reports a denied item")
+  func checksEverySavedItem() throws {
+    let operations = KeychainOperations(copyMatching: { query in
+      #expect((query[kSecUseAuthenticationContext as String] as? LAContext)?.interactionNotAllowed == true)
+      if query[kSecReturnData as String] as? Bool == true { return (errSecInteractionNotAllowed, nil) }
+      return (errSecSuccess, [[kSecAttrAccount as String: "fixture"]] as CFArray)
+    }, getInteractionAllowed: { (errSecSuccess, true) }, setInteractionAllowed: { _ in errSecSuccess })
+    let keychain = KeychainAccess(operations: operations)
+    #expect(throws: DefaultAgentError.self) { try keychain.checkStoredItems(services: ["fixture"]) }
+  }
+
+  @Test("A new installation without stored provider credentials is not an access failure")
+  func missingItemsAreNotDenied() throws {
+    let operations = KeychainOperations(copyMatching: { _ in (errSecItemNotFound, nil) },
+      getInteractionAllowed: { (errSecSuccess, true) }, setInteractionAllowed: { _ in errSecSuccess })
+    try KeychainAccess(operations: operations).checkStoredItems(services: ["fixture"])
+  }
+
   @Test("reads and writes suppress both legacy and modern UI and restore after failures",
         arguments: [errSecSuccess, errSecAuthFailed])
   func allOperationsAreNoninteractive(status: OSStatus) {

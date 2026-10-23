@@ -6,6 +6,9 @@ import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
+    // A secondary Mac's library client owns app settings, while its local
+    // execution workspace owns sleep policies and live protection state.
+    var executionModel: ApplicationModel?
     var clientAnalytics: MobileAnalyticsModel?
     var showsBackgroundExecution = true
     var reservesRailControlSpace = false
@@ -17,6 +20,8 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
     @State private var showsCredentialDisclosure = false
     @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
+
+    private var sleepModel: ApplicationModel { executionModel ?? model }
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -39,7 +44,10 @@ struct SettingsGeneralView: View {
             harnessSetupCard
             appearanceCard
             sidebarLayoutCard
-            if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
+            if let tools = model.agentTools {
+                WorkspaceToolDefaultsCard(tools: tools)
+                DisclosureGroup("Connected apps · Executor") { ExecutorConnectionsCard(model: model, tools: tools) }
+            }
             dictationCard
             conversationTitlesCard
             if showsBackgroundExecution { backgroundExecutionCard }
@@ -50,6 +58,13 @@ struct SettingsGeneralView: View {
             } else {
                 ProductAnalyticsSettingsCard(analytics: model.analytics)
             }
+        }
+        .task { await model.checkSavedCredentialAccess() }
+        .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
+            model.keychainAccessNeedsAttention()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if !model.isReconnectingSavedCredentials { Task { await model.checkSavedCredentialAccess() } }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -115,32 +130,34 @@ struct SettingsGeneralView: View {
                 .toggleStyle(DashboardSwitchToggleStyle())
             Text("The screen can turn off and lock while work continues. At this level, closing the lid or choosing Sleep can still pause work.")
                 .font(.caption).foregroundStyle(.secondary)
-            if let message = model.idleSleepSettingsError {
+            if let message = sleepModel.idleSleepSettingsError {
                 Text(message).font(.caption).foregroundStyle(.red)
             }
         }
-        .disabled(model.isChangingIdleSleepPolicy)
+        .disabled(sleepModel.isChangingIdleSleepPolicy)
     }
 
     private func idleSleepBinding(externalPower: Bool) -> Binding<Bool> {
         Binding(get: {
-            let policy = model.activeWorkSleepPrevention.snapshot.policy
+            let policy = sleepModel.activeWorkSleepPrevention.snapshot.policy
             return externalPower ? policy.externalPower : policy.batteryPower
         }, set: { enabled in
-            var policy = model.activeWorkSleepPrevention.snapshot.policy
+            var policy = sleepModel.activeWorkSleepPrevention.snapshot.policy
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await model.setIdleSleepPolicyFromSettings(policy) }
+            Task { await sleepModel.setIdleSleepPolicyFromSettings(policy) }
         })
     }
 
     private var closedLidProtectionCard: some View {
-        let snapshot = model.closedLidProtection.snapshot
+        let snapshot = sleepModel.closedLidProtection.snapshot
         return SettingsCard(title: "Keep working when the lid is closed",
-                            detail: "A higher level that includes display-sleep protection while agent work is running.") {
+                            detail: "Keep this Mac awake during active work, even with the lid closed.") {
             Toggle("When connected to external power", isOn: closedLidBinding(externalPower: true))
                 .toggleStyle(DashboardSwitchToggleStyle())
+                .disabled(closedLidHelperSetup == .unavailable && !snapshot.policy.externalPower)
             Toggle("When running on battery", isOn: closedLidBinding(externalPower: false))
                 .toggleStyle(DashboardSwitchToggleStyle())
+                .disabled(closedLidHelperSetup == .unavailable && !snapshot.policy.batteryPower)
             Text("While active, this also prevents Sleep from the Apple menu. Stop the work or turn these settings off to allow sleep. The Mac stays awake internally; keep it ventilated.")
                 .font(.caption).foregroundStyle(.secondary)
             if closedLidHelperSetup == .unavailable {
@@ -157,19 +174,19 @@ struct SettingsGeneralView: View {
                     }
                 } else if closedLidHelperSetup == .notRegistered {
                     Button("Set up closed-lid protection") {
-                        Task { await model.setClosedLidPolicyFromSettings(snapshot.policy) }
+                        Task { await sleepModel.setClosedLidPolicyFromSettings(snapshot.policy) }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                } else {
+                } else if snapshot.message == nil && sleepModel.closedLidSettingsError == nil {
                     Text(snapshot.isProtecting ? "Closed-lid protection is active."
                          : "Protection will activate during work on the selected power sources.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let message = model.closedLidSettingsError ?? snapshot.message {
+            if let message = sleepModel.closedLidSettingsError ?? snapshot.message {
                 Text(message).font(.caption).foregroundStyle(.red)
             }
         }
-        .disabled(model.isChangingClosedLidPolicy)
+        .disabled(sleepModel.isChangingClosedLidPolicy)
         .task {
             while !Task.isCancelled {
                 closedLidHelperSetup = ClosedLidHelperRegistration.status
@@ -180,19 +197,19 @@ struct SettingsGeneralView: View {
 
     private func closedLidBinding(externalPower: Bool) -> Binding<Bool> {
         Binding(get: {
-            let policy = model.closedLidProtection.snapshot.policy
+            let policy = sleepModel.closedLidProtection.snapshot.policy
             return externalPower ? policy.externalPower : policy.batteryPower
         }, set: { enabled in
-            var policy = model.closedLidProtection.snapshot.policy
+            var policy = sleepModel.closedLidProtection.snapshot.policy
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await model.setClosedLidPolicyFromSettings(policy) }
+            Task { await sleepModel.setClosedLidPolicyFromSettings(policy) }
         })
     }
 
     private var harnessSetupCard: some View {
         SettingsCard(
             title: "Harness setup",
-            detail: "Install more harnesses or revisit Pi Durable setup."
+            detail: "Access the guided harness setup flow."
         ) {
             Button("Set up harnesses") {
                 openWindow(id: HarnessSetupPresentation.windowID)
@@ -203,24 +220,24 @@ struct SettingsGeneralView: View {
 
     private var credentialAccessCard: some View {
         SettingsCard(
-            title: "Credential access",
-            detail: "One saved permission for Woven Matter. Enabled features reuse credentials quietly."
+            title: "Keychain access",
+            detail: "Credentials are stored in Apple Keychain."
         ) {
             HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.hasAcknowledgedCredentialAccessDisclosure ? "Enabled" : "Not enabled")
-                        .font(.system(size: 13, weight: .medium))
-                    Text(model.credentialAccessStatus
-                         ?? "Automatic refreshes never request permission. Reconnect here if access to a saved credential changes.")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                SettingsPill(model.isReconnectingSavedCredentials ? "Checking…"
+                    : model.keychainAccessReady == true ? "Access ready"
+                    : model.keychainAccessReady == false ? "Access needs attention"
+                    : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled",
+                    tone: model.keychainAccessReady == false ? .warning : .neutral)
+                    .help(model.credentialAccessStatus ?? "Enable access to use saved credentials.")
                 Spacer(minLength: 12)
-                Button(model.isReconnectingSavedCredentials ? "Reconnecting…"
-                       : model.hasAcknowledgedCredentialAccessDisclosure
-                         ? "Reconnect saved credentials" : "Enable credential access") {
-                    if model.hasAcknowledgedCredentialAccessDisclosure {
+                Button(model.isReconnectingSavedCredentials ? "Checking…"
+                       : model.keychainAccessReady == true ? "Check access"
+                       : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
+                         ? "Restore Keychain access" : "Enable Keychain access") {
+                    if model.keychainAccessReady == true {
+                        Task { await model.checkSavedCredentialAccess() }
+                    } else if model.hasAcknowledgedCredentialAccessDisclosure {
                         Task { await model.reconnectSavedCredentials() }
                     } else {
                         showsCredentialDisclosure = true
@@ -228,6 +245,9 @@ struct SettingsGeneralView: View {
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
+            }
+            if model.keychainAccessReady != true {
+                SettingsNote("Choose Always Allow when macOS asks to avoid repeated prompts.")
             }
         }
     }

@@ -420,7 +420,7 @@ enum LocalUsageTranscriptParser {
       return (.openRouter, "OpenRouter", "OpenRouter API")
     }
     if provider == "openai" || provider.contains("openai-api") {
-      return (.unknown, "OpenAI", "OpenAI API")
+      return (.codex, "OpenAI", "OpenAI API")
     }
     if provider.contains("anthropic") || provider.contains("claude") {
       return (.claude, "Anthropic", "Claude account")

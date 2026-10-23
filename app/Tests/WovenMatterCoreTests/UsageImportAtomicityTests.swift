@@ -48,6 +48,39 @@ struct UsageImportAtomicityTests {
     #expect(try store.metadataDate("usage.local-import-at") == now)
   }
 
+  @Test("Device analytics is independent of account revision changes", arguments: [false, true])
+  func analyticsRevisionOwnership(sharedAccounts: Bool) async throws {
+    final class ChangingRevision: @unchecked Sendable {
+      private let lock = NSLock()
+      private var value: UInt64 = 0
+      func read() -> UInt64 { lock.withLock { value += 1; return value } }
+      var reads: UInt64 { lock.withLock { value } }
+    }
+    let fixture = try UsageSQLFixture()
+    let revision = ChangingRevision()
+    // Advancing on each read deterministically represents another account
+    // mutation between capture and validation, without process-global changes.
+    let service = fixture.service(sharedAccounts: sharedAccounts, revision: { revision.read() })
+    let result = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [],
+      allowCredentialAccess: false, now: now)
+    #expect(result.samples.isEmpty)
+    #expect(revision.reads == 1) // Initialization only; local analytics has no account ownership.
+
+  }
+
+  @Test("Local OpenCode activity includes every billing route with no enabled accounts")
+  func allRoutesWithoutAccountSetup() async throws {
+    let fixture = try UsageSQLFixture()
+    let source = try fixture.openCodeSource(now: now)
+    try fixture.execute(at: source, sql: "UPDATE message SET data = replace(data, 'opencode-go', 'openai');")
+    let result = try await fixture.service().analyticsSnapshot(range: .last24Hours,
+      enabledProviders: [], allowCredentialAccess: false, now: now)
+    #expect(result.samples.count == 1)
+    #expect(result.samples.first?.provider == .codex)
+    #expect(result.samples.first?.tokens.inputTokens == 8)
+  }
+
+
   private let now = Date(timeIntervalSince1970: 1_780_000_000)
 
   @Test("A caught source insertion failure rolls back its deletion and partial inserts")

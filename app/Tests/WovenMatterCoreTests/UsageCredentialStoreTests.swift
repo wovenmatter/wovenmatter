@@ -9,7 +9,7 @@ import WovenMatterCore
 @Suite("Usage credential prompt suppression")
 struct UsageCredentialStoreTests {
 
-  @Test("analytics reports inaccessible credentials without asking for a replacement key")
+  @Test("analytics never reads credentials, even when account access is unavailable")
   func deniedAnalyticsRefreshIsHonest() async throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -29,16 +29,13 @@ struct UsageCredentialStoreTests {
         enabledProviders: [.openRouter],
         now: Date(timeIntervalSince1970: 1_800_000_000)
       )
-      let source = try #require(snapshot.sources.first { $0.provider == .openRouter })
-      #expect(source.detail.contains("Keychain"))
-      #expect(!source.detail.contains("Add an OpenRouter"))
-      #expect(source.status != .available)
-      #expect(fixture.reads.filter(\.secret).count == 1)
-      #expect(fixture.reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
+      #expect(!snapshot.sources.contains { $0.id == "openrouter" })
+      #expect(fixture.reads.isEmpty)
+
     }
   }
 
-  @Test("one-time authorization is reused by analytics and limits; save and delete replace session access")
+  @Test("one-time authorization is reused by limits; device analytics never fetches account activity")
   func authorizedSessionDoesNotReadAgain() async throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -76,7 +73,7 @@ struct UsageCredentialStoreTests {
     #expect(credentials.authorizationCount == 1)
     #expect(credentials.readCount == 0)
     #expect(collector.limitKeys == ["original", "original"])
-    #expect(collector.activityKeys == ["original", "original"])
+    #expect(collector.activityKeys.isEmpty)
 
     credentials.denyAuthorization()
     await #expect(throws: UsageCredentialStoreError.self) {
@@ -84,21 +81,21 @@ struct UsageCredentialStoreTests {
     }
     try await refresh()
     #expect(collector.limitKeys.last == "original")
-    #expect(collector.activityKeys.last == "original")
+    #expect(collector.activityKeys.isEmpty)
     #expect(credentials.readCount == 0)
 
     try await service.saveOpenRouterAPIKey(" replacement ")
     revision.advance()
     try await refresh()
     #expect(collector.limitKeys.last == "replacement")
-    #expect(collector.activityKeys.last == "replacement")
+    #expect(collector.activityKeys.isEmpty)
     #expect(credentials.readCount == 0)
 
     try await service.deleteOpenRouterAPIKey()
     try await refresh()
     #expect(collector.limitKeys.last == "missing")
-    #expect(collector.activityKeys.count == 4)
-    #expect(credentials.readCount == 2)
+    #expect(collector.activityKeys.isEmpty)
+    #expect(credentials.readCount == 1) // Limits only; analytics never reads the key.
   }
 
   @Test("presence reads attributes only and secret reads never allow authentication")

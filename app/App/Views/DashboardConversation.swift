@@ -431,6 +431,13 @@ struct DashboardCloudConversation: View {
                     }
                     .padding(.bottom, DashboardComposer.verticalPadding)
                     VStack(spacing: 8) {
+                        if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
+                           model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
+                            Button("Choose models for chat") {
+                                let scope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                                model.pendingDefaultAgentSettingsScope = model.connections.settings.workspaces[scope] == nil ? "global" : scope
+                            }.buttonStyle(SettingsQuietButtonStyle())
+                        }
                         if let conversation, !conversation.isArchived,
                            WorkspaceGoal.supports(conversation.localRuntimeKind),
                            let tools = model.agentTools, tools.goals[conversation.id] != nil {

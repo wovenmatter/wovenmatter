@@ -160,6 +160,7 @@ public actor LocalUsageService {
   private let usesSharedConnections: Bool
   private let importPreparationWorker: DatabaseWorker?
   private let sharedConnectionRevision: @Sendable () -> UInt64
+  private let sharedConnectionChoices: @Sendable (Set<ProviderKind>) throws -> [UsageConnectionChoice]
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
   private var limitsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
@@ -199,8 +200,25 @@ public actor LocalUsageService {
     usesSharedConnections = true
     importPreparationWorker = nil
     sharedConnectionRevision = { DefaultAgentSupport.revision }
+    sharedConnectionChoices = { providers in
+      try ProviderKind.supportedAccounts.filter { providers.contains($0) }.flatMap { provider in
+        try UsageConnectionChoice.connectionTypes(for: provider).flatMap { type, title in
+          try ProviderConnectionAccounts.list(provider: type, scope: "global").map { account in
+            UsageConnectionChoice(provider: provider, connectionID: type, accountID: account.id,
+              label: "\(title) · \(account.label)", preferred: account.isSelected)
+          }
+        }
+      }
+    }
     openRouterCredentialRevision = DefaultAgentSupport.revision
     limitCollector = { request in
+      guard request.allowCredentialAccess else {
+        return request.enabledProviders.map { provider in
+          UsageLimitAccount(provider: provider, accountLabel: provider.displayName, status: .unavailable,
+            source: "Saved accounts", detail: "Enable Keychain access in Settings → General to check saved accounts.",
+            observedAt: request.now)
+        }
+      }
       var credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
       if request.allowCredentialAccess {
         for choice in request.selectedConnections.values {
@@ -212,6 +230,7 @@ public actor LocalUsageService {
         }
       }
       let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
+        && credentials["claude-subscription"] != nil
         ? try? await BuiltInClaudeSignIn.status(profile: credentials["claude-subscription"]?.accountId) : nil
       return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
     }
@@ -228,6 +247,7 @@ public actor LocalUsageService {
     usageDatabaseURL: URL,
     usesSharedConnections: Bool = false,
     sharedConnectionRevision: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
+    sharedConnectionChoices: @escaping @Sendable (Set<ProviderKind>) throws -> [UsageConnectionChoice] = { _ in [] },
     importPreparationWorker: DatabaseWorker? = nil,
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
@@ -242,6 +262,7 @@ public actor LocalUsageService {
     self.usesSharedConnections = usesSharedConnections
     self.importPreparationWorker = importPreparationWorker
     self.sharedConnectionRevision = sharedConnectionRevision
+    self.sharedConnectionChoices = sharedConnectionChoices
     openRouterCredentialRevision = sharedConnectionRevision()
     self.limitCollector = limitCollector
     self.openRouterActivityFetcher = openRouterActivityFetcher
@@ -308,17 +329,8 @@ public actor LocalUsageService {
     now: Date = Date()
   ) async throws -> LocalUsageLimitsSnapshot {
     try Task.checkCancellation()
-    var connectionChoices: [UsageConnectionChoice] = []
-    if usesSharedConnections && allowCredentialAccess {
-      for provider in ProviderKind.supportedAccounts where enabledProviders.contains(provider) {
-        for (type, title) in UsageConnectionChoice.connectionTypes(for: provider) {
-          for account in (try? ProviderConnectionAccounts.list(provider: type, scope: "global")) ?? [] {
-            connectionChoices.append(UsageConnectionChoice(provider: provider, connectionID: type,
-              accountID: account.id, label: "\(title) · \(account.label)", preferred: account.isSelected))
-          }
-        }
-      }
-    }
+    let connectionChoices = usesSharedConnections && allowCredentialAccess
+      ? try sharedConnectionChoices(enabledProviders) : []
     var resolvedConnections: [ProviderKind: UsageConnectionChoice] = [:]
     for provider in enabledProviders {
       resolvedConnections[provider] = UsageConnectionChoice.resolve(
@@ -365,14 +377,42 @@ public actor LocalUsageService {
       if refresh {
         var openRouterAPIKey: String?
         var credentialError: String?
-        if allowCredentialAccess && enabledProviders.contains(.openRouter) {
+        if !usesSharedConnections && allowCredentialAccess && enabledProviders.contains(.openRouter) {
           do {
             openRouterAPIKey = try loadOpenRouterAPIKey()
           } catch {
             credentialError = error.localizedDescription
           }
         }
-        let refreshed = await limitCollector(UsageLimitsRequest(
+        let refreshed: [UsageLimitAccount]
+        if usesSharedConnections {
+          let requests = enabledProviders.sorted(by: { $0.rawValue < $1.rawValue }).flatMap { provider in
+            let choices = connectionChoices.filter { $0.provider == provider }
+            let selections: [[ProviderKind: UsageConnectionChoice]] = choices.isEmpty
+              ? [[:]] : choices.map { [provider: $0] }
+            return selections.map { selection in
+              UsageLimitsRequest(homeDirectory: homeDirectory, allowCredentialAccess: allowCredentialAccess,
+                openRouterAPIKey: nil, enabledProviders: [provider], keychainInteraction: .noninteractive,
+                interactiveProvider: nil, codexWorkspaceSource: nil, codexWorkspaceCount: 0,
+                now: now, selectedConnections: selection)
+            }
+          }
+          let collector = limitCollector
+          refreshed = try await withThrowingTaskGroup(of: (Int, [UsageLimitAccount]).self) { group in
+            for (index, request) in requests.enumerated() {
+              group.addTask {
+                try generation.check()
+                let accounts = await collector(request)
+                try generation.check()
+                return (index, accounts)
+              }
+            }
+            var results: [(Int, [UsageLimitAccount])] = []
+            for try await value in group { results.append(value) }
+            return results.sorted { $0.0 < $1.0 }.flatMap(\.1)
+          }
+        } else {
+          refreshed = await limitCollector(UsageLimitsRequest(
           homeDirectory: homeDirectory,
           allowCredentialAccess: allowCredentialAccess,
           openRouterAPIKey: openRouterAPIKey,
@@ -384,6 +424,7 @@ public actor LocalUsageService {
           now: now,
           selectedConnections: resolvedConnections
         ))
+        }
         try checkCurrentLimits(generation, connectionRevision: connectionRevision)
         accounts = refreshed.map { refreshedAccount in
           let account: UsageLimitAccount
@@ -404,7 +445,7 @@ public actor LocalUsageService {
           else { return account }
           return prior.retainingLastGood(after: account)
         }
-        try? await store?.saveUsageLimitAccounts(accounts, storedAt: now, validating: { try generation.check() })
+        if !usesSharedConnections { try? await store?.saveUsageLimitAccounts(accounts, storedAt: now, validating: { try generation.check() }) }
         try checkCurrentLimits(generation, connectionRevision: connectionRevision)
         cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
       } else {
@@ -447,9 +488,11 @@ public actor LocalUsageService {
     now: Date = Date()
   ) async throws -> UsageAnalyticsSnapshot {
     try Task.checkCancellation()
-    let generation = makeRefreshOwnership()
+    let generation = UsageRefreshOwnership()
     analyticsGeneration = generation
     let interval = range.interval(relativeTo: now)
+    // Device analytics never depends on account-limit preferences or Keychain access.
+    let localProviders = Set(ProviderKind.allCases)
     guard let store = await openUsageStore() else {
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
       return UsageAnalyticsSnapshot(
@@ -484,7 +527,7 @@ public actor LocalUsageService {
       if await importLocalSources(
         store: store,
         cutoff: requestedImportCutoff,
-        enabledProviders: enabledProviders,
+        enabledProviders: localProviders,
         generation: generation,
         now: now
       ) {
@@ -501,19 +544,9 @@ public actor LocalUsageService {
       }
     }
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
-    if enabledProviders.contains(.openRouter),
-       allowCredentialAccess,
-       await shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
-      guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      await importOpenRouterActivity(store: store, generation: generation, now: now)
-      guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? await store.write(validating: { try generation.check() }) {
-        try $0.setMetadataDate(now, for: "usage.openrouter-attempt-at")
-      }
-    }
-    guard isCurrentAnalytics(generation) else { throw CancellationError() }
     let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
-      enabledProviders.contains($0.provider)
+      // Legacy account-wide API imports are not activity on this device.
+      !$0.sourceID.hasPrefix("openrouter:activity:")
     }
     let samples = Self.reconcileOpenRouter(
       deduplicated(storedSamples)
@@ -524,8 +557,8 @@ public actor LocalUsageService {
     let sources = await coverage(
       store: store,
       interval: interval,
-      enabledProviders: enabledProviders,
-      allowCredentialAccess: allowCredentialAccess
+      enabledProviders: localProviders,
+      allowCredentialAccess: false
     )
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
     return UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources)
@@ -538,7 +571,6 @@ public actor LocalUsageService {
     openRouterAPIKey = key
     openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UsageRefreshOwnership()
-    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "The new credential has not been checked yet."
@@ -559,7 +591,6 @@ public actor LocalUsageService {
     try credentialStore.deleteOpenRouterAPIKey()
     openRouterAPIKey = nil
     limitsGeneration = UsageRefreshOwnership()
-    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "Add an OpenRouter management key to import official account activity."
@@ -577,14 +608,12 @@ public actor LocalUsageService {
     guard let key = try credentialStore.authorizeOpenRouterAPIKey() else {
       openRouterAPIKey = nil
       limitsGeneration = UsageRefreshOwnership()
-      analyticsGeneration = UsageRefreshOwnership()
       cachedLimits = nil
       throw LocalUsageServiceError.missingCredential
     }
     openRouterAPIKey = key
     openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UsageRefreshOwnership()
-    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
   }
 
@@ -778,40 +807,6 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
     )) }
-    if enabledProviders.contains(.openRouter) {
-      let openRouterStats = try? await store.statistics(
-        sourceIDPrefix: "openrouter:activity:",
-        in: interval
-      )
-      let credentialPresence = Result {
-        try allowCredentialAccess && (openRouterAPIKey != nil || credentialStore.hasOpenRouterAPIKey())
-      }
-      let remoteStatus: UsageSourceStatus
-      let remoteDetail: String
-      switch credentialPresence {
-      case .success(true):
-        remoteStatus = openRouterStatus
-        remoteDetail = openRouterDetail
-      case .success(false):
-        remoteStatus = (openRouterStats?.events ?? 0) > 0 ? .partial : .unavailable
-        remoteDetail = allowCredentialAccess
-          ? "Add an OpenRouter management key to refresh account activity. Previously imported activity remains available."
-          : "Credential access is disabled. Previously imported OpenRouter activity remains available."
-      case .failure(let error):
-        remoteStatus = (openRouterStats?.events ?? 0) > 0 ? .partial : .unavailable
-        remoteDetail = error.localizedDescription
-      }
-      sources.append(UsageSourceCoverage(
-        id: "openrouter",
-        sourceName: "OpenRouter",
-        provider: .openRouter,
-        status: remoteStatus,
-        location: "OpenRouter Activity API",
-        discoveredSessions: openRouterStats?.sessions ?? 0,
-        attributedSamples: openRouterStats?.events ?? 0,
-        detail: remoteDetail
-      ))
-    }
     if !enabledProviders.isEmpty,
        (importOutcomes["wovenmatter:index"]?.failures ?? 0) > 0 {
       sources.append(UsageSourceCoverage(

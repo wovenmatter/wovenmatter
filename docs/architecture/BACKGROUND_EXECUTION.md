@@ -1,7 +1,9 @@
 # Background execution
 
 Background execution moves execution ownership out of the macOS window process.
-The local preference is off by default. Remote workspaces have independent
+The local preference is on by default; an explicitly saved off choice is preserved.
+Development profiles keep their foreground execution mode and never enable a
+background login job. Remote workspaces have independent
 preferences, enabled by default. The normal app remains the execution owner when
 local background execution is disabled.
 
@@ -50,6 +52,8 @@ system sleep. This does not end the work or its dispatch leases.
 Both levels apply in standalone and backend modes; the frontend never owns an
 assertion. Preferences and actual protection state are published by the execution
 owner. Keeping the backend awake lets active work continue after the frontend quits.
+On a secondary Mac, General settings targets that Mac's local execution model
+for both sleep levels, rather than its read-only central-library client model.
 
 A dispatch lease starts before asynchronous session preparation and ends on every
 return, error, or cancellation. Running conversation state retains the same
