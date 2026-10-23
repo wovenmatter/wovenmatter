@@ -16,10 +16,9 @@ cache="${TMPDIR:-/tmp}/wovenmatter-node-$version-$node_arch"
 if [ ! -x "$cache/bin/node" ]; then
   stage="$(mktemp -d)"
   trap 'rm -rf "$stage"' EXIT
-  curl --fail --silent --show-error --location "https://nodejs.org/dist/v$version/node-v$version-darwin-$node_arch.tar.gz" -o "$stage/node.tar.gz"
-  printf '%s  %s\n' "$checksum" "$stage/node.tar.gz" | shasum -a 256 -c -
+  archive="$(python3 "$repo_root/scripts/cached-download.py" "https://nodejs.org/dist/v$version/node-v$version-darwin-$node_arch.tar.gz" sha256 "$checksum")"
   mkdir -p "$cache"
-  tar -xzf "$stage/node.tar.gz" --strip-components=1 -C "$cache"
+  tar -xzf "$archive" --strip-components=1 -C "$cache"
 fi
 export PATH="$cache/bin:$PATH"
 lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch"

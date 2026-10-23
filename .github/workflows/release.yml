@@ -69,6 +69,26 @@ jobs:
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
+      - name: Identify exact dependency and toolchain inputs
+        id: cache-inputs
+        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+
+      # Read-only: only the main workflow saves reusable release inputs.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: |
+            ~/Library/Caches/WovenMatter/Downloads
+            ~/Library/Caches/WovenMatter/BrowserBuilds
+            ~/Library/Caches/WovenMatter/SourcePackages/repositories
+            ~/.npm
+          key: ${{ steps.cache-inputs.outputs.key }}
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: compiler-v1-${{ steps.cache-inputs.outputs.key }}-${{ github.sha }}
+          restore-keys: compiler-v1-${{ steps.cache-inputs.outputs.key }}-
+
       - name: Record available completed main CI
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,16 +149,18 @@ jobs:
           REFRESH: ${{ inputs.refresh || false }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$REFRESH" = true ]; then
-            if python3 scripts/stage-update.py dist "${{ steps.source.outputs.version }}" --restore-staged; then
-              echo "Reusing the original verified private artifacts for this build."
-              exit 0
-            else
-              status=$?
-              test "$status" -eq 3 || exit "$status"
-            fi
+          restore=--restore-tagged
+          if [ "$REFRESH" = true ]; then restore=--restore-staged; fi
+          if python3 scripts/stage-update.py dist "${{ steps.source.outputs.version }}" "$restore"; then
+            echo "Reusing the original verified private artifacts for this build."
+            exit 0
+          else
+            status=$?
+            test "$status" -eq 3 || exit "$status"
           fi
-          scripts/build-release.sh "${{ steps.source.outputs.version }}"
+          WOVENMATTER_RELEASE_WORK_DIR=/private/tmp/wovenmatter-release-build \
+          WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/Compiler" \
+          WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" scripts/build-release.sh "${{ steps.source.outputs.version }}"
 
       - name: Verify private draft and deliver authorized update refresh
         env:

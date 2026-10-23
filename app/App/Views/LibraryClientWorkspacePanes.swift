@@ -4,6 +4,7 @@ import CompanionClient
 import WovenMatterCompanion
 
 struct LibraryClientLibraryPane: View {
+  @Environment(\.openDocumentPreview) private var openPreview
   @Bindable var model: CentralLibraryClientModel
   @State private var items: [CompanionLibraryItem] = []
   @State private var search = ""
@@ -12,7 +13,6 @@ struct LibraryClientLibraryPane: View {
   @State private var loading = false
   @State private var loadGeneration = 0
   @State private var failure: String?
-  @State private var preview: URL?
   var body: some View {
     VStack(spacing: 0) {
       LibraryClientPaneHeader(title: "Library") { if loading { ProgressView() } }
@@ -30,7 +30,7 @@ struct LibraryClientLibraryPane: View {
           Group {
             ForEach(model.artifacts.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { artifact in
               Button(artifact.title) { Task {
-                do { preview = try await model.artifactURL(artifact) }
+                do { openPreview?(try await model.artifactURL(artifact), "artifact:" + artifact.id) }
                 catch { failure = error.localizedDescription }
               } }
             }
@@ -56,7 +56,6 @@ struct LibraryClientLibraryPane: View {
         if hasMore { Button("Load more") { Task { await load(more: true) } }.disabled(loading) }
       }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.task(id: model.online) { await load() }.onChange(of: kind) { Task { await load() } }
-      .quickLookPreview($preview)
   }
   private func load(more: Bool = false) async {
     guard model.online, !more || !loading else { return }
@@ -70,7 +69,7 @@ struct LibraryClientLibraryPane: View {
     } catch { if generation == loadGeneration, !Task.isCancelled { failure = error.localizedDescription } }
   }
   private func open(_ item: CompanionLibraryItem) async {
-    do { preview = try await model.exportFile(.libraryFile(id: item.id)) }
+    do { openPreview?(try await model.exportFile(.libraryFile(id: item.id)), "library:" + item.id) }
     catch { model.errorMessage = error.localizedDescription }
   }
 }

@@ -200,10 +200,11 @@ final class OpenCodeModel {
         // Login-shell discovery runs a subprocess. Never do it in a computed
         // property read by SwiftUI, where its run loop can reenter rendering.
         if !isInstalled { executable = nil }
-        if executable != nil { return }
+        if executable != nil { isEnabled = true; return }
         if let resolved = await Task.detached(priority: .utility, operation: {
             OpenCodeServiceLauncher.resolveExecutable()
         }).value { executable = resolved }
+        isEnabled = executable != nil
     }
 
     /// One local service using OpenCode's standard registration/environment.
@@ -276,6 +277,7 @@ final class OpenCodeModel {
             installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: true, selectedOpenCode: installed)
             guard installationInventory?.isInstalled == true else { throw RuntimeMaintenanceError.verification }
             installationFailures = 0
+            isEnabled = true
         } catch {
             installationFailures += 1
             installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: false, selectedOpenCode: executable)

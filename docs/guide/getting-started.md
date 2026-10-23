@@ -17,14 +17,14 @@ choose a harness supported by an account or API key you have.
    existing directory on your Mac.
 3. Choose a runtime under **Runtimes**; if it is missing, select **Install** and
    review the installer source before confirming.
-4. Enable the runtime and review the credential-access disclosure when shown.
+4. Installed harnesses appear in the sidebar automatically. Use **Sign in…** in setup or local runtime settings to connect a missing native account.
 5. Open its **Settings** to complete the sign-in or connection steps offered
    for that agent.
 6. Choose **New chat** or the plus beside your folder, select the agent, and
    check the folder in the composer before sending. The first message fixes
    that chat's folder and working directory.
 
-Installation, enabling, and authentication are separate steps. A downloaded
+Installation and authentication are separate steps. A downloaded
 runtime is not necessarily signed in or ready to send a message. See
 [Agent setup](agents.md) if a runtime is unavailable.
 

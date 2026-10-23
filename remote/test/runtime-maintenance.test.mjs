@@ -44,15 +44,10 @@ test('host state gates enable, persists visibility, checks latest only for enabl
   const service=createRuntimeMaintenance(f.options)
   const value=(await service.list()).runtimes[0]
   assert.equal(value.enabled,true);assert.equal(value.visible,false)
-})
-
-test('corrupt saved preferences fail closed instead of re-enabling runtimes', async t => {
-  const f = await fixture(t)
-  f.install()
-  await mkdir(resolve(f.root, '.wovenmatter'), { recursive: true })
   await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'invalid saved preferences')
   assert.equal(await createRuntimeMaintenance(f.options).isEnabled('opencode'), false)
 })
+
 test('duplicate operations share a reservation and verify actual installed result',async t=>{
   const f=await fixture(t)
   const [a,b]=await Promise.all([f.service.start(opencode,'install',{confirmed:true}),f.service.start(opencode,'install',{confirmed:true})])

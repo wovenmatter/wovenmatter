@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
+		E02200000000000000000003 /* HarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000004; };
         A03000000000000000000001 /* DesktopUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03000000000000000000002; };
         A03000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A03000000000000000000004; };
 		B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = B40A00000000000000000002 /* WovenMatterAutomation */; };
@@ -149,9 +151,13 @@
 		66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */; };
 		7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */; };
 		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
+		D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000001; };
+		D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000003; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
+		E02200000000000000000004 /* HarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/HarnessSetupView.swift"; sourceTree = SOURCE_ROOT; };
         A03000000000000000000002 /* DesktopUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopUpdater.swift; sourceTree = "<group>"; };
 		DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHTMLArtifactDocument.swift; sourceTree = "<group>"; };
 		DA4C00000000000000000002 /* DashboardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardColors.swift; sourceTree = "<group>"; };
@@ -292,6 +298,8 @@
 		51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLaunch.swift"; sourceTree = SOURCE_ROOT; };
 		EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLibraryProjection.swift"; sourceTree = SOURCE_ROOT; };
 		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000001 /* DashboardDocumentPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardDocumentPane.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000003 /* ConversationFilePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationFilePreviews.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -322,6 +330,8 @@
 			isa = PBXGroup;
 			children = (
 				4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */,
+				D0C000000000000000000003 /* ConversationFilePreviews.swift */,
+				D0C000000000000000000001 /* DashboardDocumentPane.swift */,
 				1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */,
 				D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */,
 				C67C8CBF1B7E40CA0F37A274 /* App */,
@@ -341,6 +351,8 @@
 		C67C8CBF1B7E40CA0F37A274 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				E02200000000000000000002 /* HarnessSetupModel.swift */,
+				E02200000000000000000004 /* HarnessSetupView.swift */,
 				A11C00000000000000000002 /* Assets.xcassets */,
 				D57200000000000000000002 /* SharedAssets.xcassets */,
 				5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */,
@@ -657,6 +669,8 @@
 				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
 				6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
+				D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */,
+				D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
 				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
@@ -750,6 +764,8 @@
 				DA4C00000000000000000001 /* DashboardColors.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
+				E02200000000000000000001 /* HarnessSetupModel.swift in Sources */,
+				E02200000000000000000003 /* HarnessSetupView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
 				A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */,
 				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,

@@ -8,7 +8,6 @@ struct SettingsLocalWorkspaceView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onMore: (AgentRuntimeKind) -> Void
-    @State private var pendingCredentialRuntime: AgentRuntimeKind?
 
     var body: some View {
         SettingsPage(
@@ -57,24 +56,6 @@ struct SettingsLocalWorkspaceView: View {
                             + "npm registry integrity verification applies to this exact package version."
                     )
                 }
-            }
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { pendingCredentialRuntime != nil },
-                set: { if !$0 { pendingCredentialRuntime = nil } }
-            )
-        ) {
-            if let runtimeKind = pendingCredentialRuntime {
-                CredentialAccessDisclosureView(
-                    purpose: "Allow Woven Matter to start \(runtimeKind.displayName) and check credentials managed by its CLI.",
-                    onEnable: {
-                        model.acknowledgeCredentialAccessDisclosure()
-                        pendingCredentialRuntime = nil
-                        model.enableLocalACPRuntimeCredentialAccess(runtimeKind)
-                    },
-                    onCancel: { pendingCredentialRuntime = nil }
-                )
             }
         }
     }
@@ -147,10 +128,6 @@ struct SettingsLocalWorkspaceView: View {
                                 SettingsPill(
                                     isChecking
                                         ? "Checking"
-                                        : !model.isLocalACPRuntimeCredentialAccessEnabled(
-                                            definition.runtimeKind
-                                        ) && availability?.executablePath != nil
-                                            ? "Not enabled"
                                         : availability?.isReady == true && !databaseIsReady
                                             ? "Workspace unavailable"
                                             : localACPRuntimeStatusLabel(availability),
@@ -207,40 +184,18 @@ struct SettingsLocalWorkspaceView: View {
                             )
                             .accessibilityHint(
                                 isShown
-                                    ? "Removes the runtime from the Local agent workspace sidebar without changing its enabled state."
-                                    : "Adds the runtime to the Local agent workspace sidebar without changing its enabled state."
+                                    ? "Removes the runtime from the Local agent workspace sidebar without uninstalling it."
+                                    : "Adds the runtime to the Local agent workspace sidebar without uninstalling it."
                             )
 
                             if inventory?.isInstalled != true {
-                                if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
-                                    Button("Disable") { model.disableLocalACPRuntimeCredentialAccess(definition.runtimeKind) }
-                                        .buttonStyle(SettingsQuietButtonStyle())
-                                }
-                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : model.runtimeFailures[definition.runtimeKind, default: 0] > 0 ? "Retry install" : "Install") {
+                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : "Install") {
                                     model.installLocalACPRuntimeComponent(definition.runtimeKind)
                                 }
                                 .buttonStyle(DashboardPrimaryButtonStyle())
-                                .disabled(inventory == nil || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty || model.localRuntimeMaintenanceHasActiveConversation)
-                            } else if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
-                                Button("Disable") {
-                                    model.disableLocalACPRuntimeCredentialAccess(
-                                        definition.runtimeKind
-                                    )
-                                }
-                                .buttonStyle(SettingsQuietButtonStyle())
+                                .disabled(inventory == nil || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty || model.preparedLocalACPRuntimeInstall != nil || model.localRuntimeMaintenanceHasActiveConversation)
                             } else {
-                                Button(isChecking ? "Checking…" : "Enable") {
-                                    if model.hasAcknowledgedCredentialAccessDisclosure {
-                                        model.enableLocalACPRuntimeCredentialAccess(
-                                            definition.runtimeKind
-                                        )
-                                    } else {
-                                        pendingCredentialRuntime =
-                                            definition.runtimeKind
-                                    }
-                                }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                                .disabled(isChecking || !model.installingLocalACPRuntimeKinds.isEmpty || inventory?.isInstalled != true)
+                                SettingsHarnessSignInControl(model: model, runtimeKind: definition.runtimeKind, compact: true)
                             }
                         }
                     }
@@ -261,8 +216,8 @@ struct SettingsLocalWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text("OpenCode").font(.system(size: 13, weight: .medium))
-                        SettingsPill(model.openCode?.isEnabled == true ? "Enabled" : "Not enabled",
-                            tone: model.openCode?.isEnabled == true ? .neutral : .warning)
+                        SettingsPill(model.openCode?.isInstalled == true ? "Installed" : "Not installed",
+                            tone: model.openCode?.isInstalled == true ? .neutral : .warning)
                     }
                     Text(model.runtimeInventories[.opencode]?.summary ?? "Checking the local OpenCode v2 installation…")
                         .font(.system(size: 11.5))
@@ -286,15 +241,14 @@ struct SettingsLocalWorkspaceView: View {
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
-                    Button(model.openCode?.isInstalling == true ? "Downloading…" : model.runtimeInventories[.opencode]?.isInstalled != true ? "Install" : model.openCode?.isEnabled == true ? "Disable" : "Enable") {
-                        guard let openCode = model.openCode else { return }
-                        openCode.perform {
-                            if model.runtimeInventories[.opencode]?.isInstalled != true { try await openCode.download(); model.refreshRuntimeInventory() }
-                            else if openCode.isEnabled { await openCode.disable() }
-                            else { try await openCode.connectLocal() }
+                    if model.runtimeInventories[.opencode]?.isInstalled == true {
+                        SettingsHarnessSignInControl(model: model, runtimeKind: .opencode, compact: true)
+                    } else {
+                        Button(model.openCode?.isInstalling == true ? "Installing…" : "Install") {
+                            model.installLocalACPRuntimeComponent(.opencode)
                         }
+                        .disabled(model.runtimeInventories[.opencode] == nil || model.runtimeMaintenanceBusy(.opencode) || model.localRuntimeMaintenanceHasActiveConversation)
                     }
-                    .disabled(model.runtimeInventories[.opencode] == nil || !model.installingLocalACPRuntimeKinds.isEmpty || model.openCode == nil || model.openCode?.isConnecting == true || model.openCode?.isInstalling == true || model.openCode?.isControllingServer == true)
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }

@@ -243,6 +243,30 @@ struct WorkspaceLibraryTests {
     await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: file.id) }
   }
 
+  @Test("generated document links retain message attachments after their source files disappear")
+  func generatedDocumentDelivery() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let chat = try await f.session()
+    let service = LibraryService(database: f.db)
+    for ext in ["xlsx", "docx", "pdf", "zip"] {
+      let source = f.root.appending(path: "Sample sales #1." + ext)
+      let bytes = Data([0, 255, 80, 75]) + Data(ext.utf8)
+      try bytes.write(to: source)
+      let link = source.absoluteString
+      let run = try await f.exchange(chat, text: "Hand me the file", reply: "[\(source.lastPathComponent)](<\(link)>)")
+      try await service.synchronize(
+        locations: [.init(conversationID: chat, name: "Local", root: f.root.path)], remoteWorkspace: { _ in nil })
+      let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: link)
+      let item = try await #require(f.db.libraryItem(id: id))
+      #expect(item.storage == .retained)
+      try FileManager.default.removeItem(at: source)
+      let delivered = try await service.openURL(id: id)
+      #expect(delivered.lastPathComponent == source.lastPathComponent)
+      #expect(try Data(contentsOf: delivered) == bytes)
+    }
+  }
+
   @Test("retained remote handback opens offline and copies deduplicate by content")
   func remoteRetention() async throws {
     let f = try await Fixture()

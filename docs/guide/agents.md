@@ -14,7 +14,7 @@ A **harness** is the software that runs the agent. Settings also calls it a
    **Remote Agent Workspaces**.
 2. Find the harness under **Runtimes**. If it is missing, select **Install**
    and review the installer before confirming.
-3. Enable the harness and complete its sign-in or connection setup.
+3. Installed local harnesses appear in the sidebar automatically. Choose **Sign in…** if its native account is not connected. Remote workspaces retain their own Enable controls.
 4. Choose **New chat** and select the agent in that workspace.
 
 Start with a harness you already use and have provider access for. WovenMatter

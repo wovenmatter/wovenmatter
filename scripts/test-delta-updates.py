@@ -60,7 +60,20 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-delta-test-') as temp:
         run('hdiutil', 'create', '-quiet', '-srcfolder', app.parent, '-format', 'UDZO', archives / f'WovenMatter_0.3.0_{build}_arm64.dmg')
     run(tools / 'bin/generate_appcast', '--ed-key-file', keyfile,
         '--download-url-prefix', 'https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.0/',
-        '--versions', '2', '--maximum-versions', '1', '-o', archives / 'appcast.xml', archives)
+        '--versions', '2', '--maximum-versions', '1', '--delta-compression', 'lzfse', '-o', archives / 'appcast.xml', archives)
+    # An early delta pass may overlap outer-container notarization. Rebuild the
+    # feed against changed final archive bytes while preserving the delta file.
+    prepared = next(archives.glob('*.delta'))
+    prepared_inode, prepared_bytes = prepared.stat().st_ino, prepared.read_bytes()
+    final_archive = archives / 'WovenMatter_0.3.0_2_arm64.dmg'
+    final_archive.unlink()
+    run('hdiutil', 'create', '-quiet', '-srcfolder', new.parent, '-format', 'UDZO',
+        '-volname', 'Final image', '-imagekey', 'zlib-level=1', final_archive)
+    (archives / 'appcast.xml').unlink()
+    run(tools / 'bin/generate_appcast', '--ed-key-file', keyfile,
+        '--download-url-prefix', 'https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.0/',
+        '--versions', '2', '--maximum-versions', '1', '--delta-compression', 'lzfse', '-o', archives / 'appcast.xml', archives)
+    assert prepared.stat().st_ino == prepared_inode and prepared.read_bytes() == prepared_bytes
     run('python3', ROOT / 'scripts/normalize-update-feed.py', archives, '0.3.0', '2')
     run(tools / 'bin/sign_update', '--ed-key-file', keyfile, archives / 'appcast.xml')
     run(tools / 'bin/sign_update', '--verify', '--ed-key-file', keyfile, archives / 'appcast.xml')
@@ -73,13 +86,10 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-delta-test-') as temp:
     patch = patches[0]
     shutil.copyfile(patch, output / patch.name)
     assert patch.stat().st_size < full.stat().st_size // 10, 'Unchanged runtime was downloaded again'
-    reconstructed = root / 'reconstructed/Woven Matter.app'
-    reconstructed.parent.mkdir()
-    run(tools / 'bin/BinaryDelta', 'apply', base, reconstructed, patch)
-    run('codesign', '--verify', '--deep', '--strict', reconstructed)
-    assert (reconstructed / 'Contents/Info.plist').read_bytes() == (new / 'Contents/Info.plist').read_bytes()
-    assert (reconstructed / 'Contents/Resources/config').read_text() == 'new'
-    assert assets.digest(reconstructed / 'Contents/Resources/runtime') == assets.digest(base / 'Contents/Resources/runtime')
+    path_spec = importlib.util.spec_from_file_location('update_paths', ROOT / 'scripts/verify-update-paths.py')
+    paths = importlib.util.module_from_spec(path_spec)
+    path_spec.loader.exec_module(paths)
+    paths.verify(output, archives, tools, notarized=False)
     run(ROOT / 'scripts/generate-release-manifest.sh', '0.3.0', '2', output / 'WovenMatter_0.3.0_arm64.dmg', output / 'latest-mac.json')
     assets.prepare(output, '0.3.0', 2, 'a' * 40)
     run('swift', ROOT / 'scripts/verify-update-signatures.swift', output, public)

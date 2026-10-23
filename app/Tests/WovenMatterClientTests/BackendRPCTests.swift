@@ -5,21 +5,6 @@ import Testing
 
 struct BackendRPCTests {
 
-    @Test func rejectsPublicDirectoryAndExistingSocket() async throws {
-        let url = endpoint()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        chmod(url.deletingLastPathComponent().path, 0o755)
-        let server = BackendRPCServer(socketURL: url)
-        #expect(throws: BackendRPCError.self) { try server.start { BackendRPCResponse(id: $0.id) } }
-        chmod(url.deletingLastPathComponent().path, 0o700)
-        try server.start { BackendRPCResponse(id: $0.id) }
-        defer { server.stop() }
-        let second = BackendRPCServer(socketURL: url)
-        #expect(throws: BackendRPCError.self) { try second.start { BackendRPCResponse(id: $0.id) } }
-        #expect(try await BackendRPCClient(socketURL: url).ping().processID == getpid())
-    }
-
     private func endpoint() -> URL {
         URL(fileURLWithPath: "/private/tmp/wm-rpc-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
     }
@@ -37,9 +22,15 @@ struct BackendRPCTests {
     @Test func authenticatedConcurrentRequestsAndRestartRemainIsolated() async throws {
         let url = endpoint()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        chmod(url.deletingLastPathComponent().path, 0o755)
         let server = BackendRPCServer(socketURL: url)
+        #expect(throws: BackendRPCError.self) { try server.start { BackendRPCResponse(id: $0.id) } }
+        chmod(url.deletingLastPathComponent().path, 0o700)
         try server.start { BackendRPCResponse(id: $0.id, result: $0.payload) }
         defer { server.stop() }
+        let second = BackendRPCServer(socketURL: url)
+        #expect(throws: BackendRPCError.self) { try second.start { BackendRPCResponse(id: $0.id) } }
         let identity = try await BackendRPCClient(socketURL: url).ping()
         #expect(identity.processID == getpid())
         #expect(identity.protocolVersion == 1)

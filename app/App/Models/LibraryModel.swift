@@ -112,7 +112,7 @@ final class LibraryModel {
         }
     }
 
-    func open(_ item: WorkspaceLibraryItem) {
+    func open(_ item: WorkspaceLibraryItem, onOpenFile: @escaping @MainActor (URL, String?) -> Void) {
         Task {
             do {
                 let url: URL?
@@ -122,12 +122,23 @@ final class LibraryModel {
                     url = try await service?.openURL(id: item.id)
                 }
                 guard let url else { return }
-                try openURL(url)
+                if url.isFileURL { onOpenFile(url, "library:" + item.id) }
+                else { try openURL(url) }
             } catch { self.error = error.localizedDescription }
         }
     }
 
-    func openAttachment(contentHash: String, fileName: String, mimeType: String) async throws {
+    func fileURL(id: String) async throws -> URL {
+        let url: URL?
+        if let backendExecutor { url = try await backendExecutor(.open(id: id)).url }
+        else { url = try await service?.openURL(id: id) }
+        guard let url, url.isFileURL else {
+            throw WorkspaceToolError.invalid("This file is not ready to preview. Try again after it has been saved in Library.")
+        }
+        return url
+    }
+
+    func attachmentURL(contentHash: String, fileName: String, mimeType: String) async throws -> URL {
         let url: URL?
         if let backendExecutor {
             url = try await backendExecutor(.openAttachment(
@@ -137,7 +148,7 @@ final class LibraryModel {
                 contentHash: contentHash, fileName: fileName, mimeType: mimeType)
         }
         guard let url else { throw WorkspaceToolError.invalid("The workspace is unavailable.") }
-        try openURL(url)
+        return url
     }
 
     private func openURL(_ url: URL) throws {
