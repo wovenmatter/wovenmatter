@@ -14,9 +14,9 @@ extension WorkspaceDatabaseConnection {
         [record.id, String(record.createdAt.timeIntervalSince1970), json])
     }
   }
-  func dictationHistory(limit: Int) throws -> [DictationRecord] {
-    try historyRowsUnlocked("SELECT payload_json FROM dictation_history ORDER BY created_at DESC, id DESC LIMIT ?",
-      values: [String(max(1, limit))]).map { row in
+  func dictationHistory(limit: Int, offset: Int) throws -> [DictationRecord] {
+    try historyRowsUnlocked("SELECT payload_json FROM dictation_history ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+      values: [String(max(1, limit)), String(max(0, offset))]).map { row in
         guard let json = row.objectValue?["payload_json"]?.stringValue else { throw WorkspaceDatabaseError.corruptRow }
         return try JSONDecoder().decode(DictationRecord.self, from: Data(json.utf8))
       }
@@ -38,6 +38,6 @@ extension WorkspaceDatabaseConnection {
 }
 extension WorkspaceDatabase {
   public func saveDictation(_ record: DictationRecord) async throws { try await write { try $0.saveDictation(record) } }
-  public func dictationHistory(limit: Int = 100) async throws -> [DictationRecord] { try await read { try $0.dictationHistory(limit: limit) } }
+  public func dictationHistory(limit: Int = 100, offset: Int = 0) async throws -> [DictationRecord] { try await read { try $0.dictationHistory(limit: limit, offset: offset) } }
   public func dictationChanges(after cursor: Int64) async throws -> DictationHistoryPage { try await read { try $0.dictationChanges(after: cursor) } }
 }

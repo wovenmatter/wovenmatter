@@ -19,9 +19,9 @@ public actor MobileDictationStore {
     try record.validate()
     try Self.access(file) { db in try Self.insert(db, record, pending: true) }
   }
-  public func records(limit: Int = 100) throws -> [DictationRecord] {
+  public func records(limit: Int = 100, offset: Int = 0) throws -> [DictationRecord] {
     try Self.access(file) { db in
-      try Self.rows(db, "SELECT payload FROM dictations ORDER BY created_at DESC, id DESC LIMIT ?", [String(max(1, limit))]).map { try Self.decode($0[0]) }
+      try Self.rows(db, "SELECT payload FROM dictations ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", [String(max(1, limit)), String(max(0, offset))]).map { try Self.decode($0[0]) }
     }
   }
   public func pending(workspaceID: String? = nil) throws -> [DictationRecord] {

@@ -8,7 +8,9 @@ struct SettingsDictationView: View {
     var reservesRailControlSpace = false
     let onBack: () -> Void
     @State private var records: [DictationRecord] = []
-    @State private var limit = 100
+    private let pageSize = 20
+    @State private var page = 0
+    @State private var hasNextPage = false
     @State private var loaded = false
     @State private var error: String?
 
@@ -30,11 +32,19 @@ struct SettingsDictationView: View {
             LazyVStack(spacing: 8) {
                 ForEach(records) { record in DictationHistoryRow(record: record) }
             }
-            if records.count == limit {
-                Button("Show more") { limit += 100 }.buttonStyle(SettingsQuietButtonStyle())
+            if !records.isEmpty || page > 0 {
+                HStack {
+                    Button("Previous") { changePage(to: page - 1) }.disabled(page == 0)
+                    Spacer()
+                    Text("Page \(page + 1)").font(.system(size: 12)).monospacedDigit()
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    Spacer()
+                    Button("Next") { changePage(to: page + 1) }.disabled(!hasNextPage)
+                }.buttonStyle(SettingsQuietButtonStyle())
             }
         }
-        .task(id: limit) {
+        .id(page)
+        .task(id: page) {
             repeat {
                 await reload()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -42,17 +52,28 @@ struct SettingsDictationView: View {
         }
         .onChange(of: DictationSession.shared.historyRevision) { _, _ in Task { await reload() } }
     }
+    private func changePage(to newPage: Int) {
+        records = []; loaded = false; hasNextPage = false; error = nil
+        page = newPage
+    }
     private func reload() async {
+        let requestedPage = page
         do {
+            let fetched: [DictationRecord]
             if let client {
                 guard let store = client.clientStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-                records = try await store.dictations.records(limit: limit)
+                fetched = try await store.dictations.records(limit: pageSize + 1, offset: requestedPage * pageSize)
             } else {
                 guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-                records = try await database.dictationHistory(limit: limit)
+                fetched = try await database.dictationHistory(limit: pageSize + 1, offset: requestedPage * pageSize)
             }
+            guard !Task.isCancelled, page == requestedPage else { return }
+            records = Array(fetched.prefix(pageSize)); hasNextPage = fetched.count > pageSize
             loaded = true; error = nil
-        } catch { self.error = error.localizedDescription; loaded = true }
+        } catch {
+            guard !Task.isCancelled, page == requestedPage else { return }
+            self.error = error.localizedDescription; loaded = true
+        }
     }
 }
 

@@ -4,6 +4,34 @@ import WovenMatterCompanion
 @testable import CompanionClient
 
 struct MobileDictationStoreTests {
+  @Test func historyPagesHaveStableOrderingAndBoundedResults() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try MobileDictationStore(file: directory.appending(path: "history.sqlite"))
+    #expect(try await store.records(limit: 21, offset: 0).isEmpty)
+    var expected: [DictationRecord] = []
+    for index in 0..<40 {
+      // Equal timestamps exercise the ID tie-breaker across page boundaries.
+      let record = DictationRecord(text: "Transcript \(index)\nFull text", createdAt: Date(timeIntervalSince1970: 1_800_000_000 + Double(index / 3)))
+      expected.append(record)
+      try await store.save(record)
+    }
+    expected.sort { $0.createdAt == $1.createdAt ? $0.id > $1.id : $0.createdAt > $1.createdAt }
+    let first = try await store.records(limit: 21, offset: 0)
+    let last = try await store.records(limit: 21, offset: 20)
+    #expect(first == Array(expected.prefix(21)))
+    #expect(last == Array(expected.suffix(20)), "An exact final page has no extra row and disables Next")
+    #expect(Array(first.prefix(20)) + last == expected)
+    #expect(try await store.records(limit: 21, offset: 40).isEmpty)
+    #expect(try await store.records(limit: 21, offset: 0) == first, "Previous returns to the same page")
+    let newest = DictationRecord(text: "A new dictation", createdAt: Date(timeIntervalSince1970: 1_800_000_100))
+    try await store.save(newest)
+    #expect(try await store.records(limit: 21, offset: 0).first == newest)
+    #expect(try await store.records(limit: 21, offset: 20).count == 21)
+    #expect(try await store.records(limit: 21, offset: 40) == [expected.last!])
+  }
+
   @Test func offlineHistorySurvivesRestartAndLostAcknowledgement() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
