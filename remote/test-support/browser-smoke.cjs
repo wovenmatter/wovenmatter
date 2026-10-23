@@ -108,6 +108,8 @@ async function main() {
 async function verifyInteraction(page, tabID, request) {
   const assert = require('node:assert/strict');
   const originalURL = page.url();
+  const otherTab = await page.context().newPage();
+  await otherTab.goto(originalURL + '?agent=another-tab');
   const frame = async () => {
     const response = await request('frame', { tabID });
     assert.equal(response.status, 200);
@@ -154,6 +156,8 @@ async function verifyInteraction(page, tabID, request) {
   await input({ kind: 'forward' });
   await page.waitForURL(originalURL + '?human=1', { waitUntil: 'commit' });
   await input({ kind: 'reload' });
+  assert.equal(await otherTab.getByRole('textbox', { name: 'Name' }).inputValue(), '');
+  await otherTab.close();
   console.log('Shared browser collaboration: user click, typing, Unicode, select/copy, dragging, scrolling, navigation, stale-input rejection and agent continuation passed.');
 }
 module.exports = { verifyInteraction };

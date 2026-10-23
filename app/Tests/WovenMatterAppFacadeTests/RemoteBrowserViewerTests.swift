@@ -104,7 +104,7 @@ import WovenMatterClient
         #expect(projection.browserIdentity(for: configuration) == nil)
     }
 
-    @Test func browserReadsBypassCommandReplayStorage() async throws {
+    @Test func browserOperationsBypassCommandReplayStorage() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let backend = BackendApplicationService(model: fixture.model)
         let requestID = UUID().uuidString
@@ -115,6 +115,14 @@ import WovenMatterClient
         let current = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
             payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(fixture.remote.id)))
         #expect(await backend.handle(current).error == "Enable credential access in Settings to connect.")
+        let inputRequestID = UUID().uuidString
+        var action = RemoteBrowserAction(kind: "text"); action.text = "ephemeral user input"
+        let firstInput = BackendRPCRequest(id: inputRequestID, method: "remoteWorkspaces.command",
+            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(UUID(), action)))
+        #expect(await backend.handle(firstInput).error == "This workspace is no longer configured.")
+        let currentInput = BackendRPCRequest(id: inputRequestID, method: "remoteWorkspaces.command",
+            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(fixture.remote.id, action)))
+        #expect(await backend.handle(currentInput).error == "Enable credential access in Settings to connect.")
     }
 
     @Test func nativeCanvasMapsLetterboxingAndEmitsRealPageGestures() throws {
