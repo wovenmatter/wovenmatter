@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCompanion
 import Testing
 import CompanionClient
 import WovenMatterCore
@@ -10,6 +11,27 @@ import WovenMatterDashboardStore
 @Suite("Companion complete flows", .serialized)
 @MainActor
 struct CompanionFlowTests {
+  @Test("dictation history crosses authenticated HTTP and survives lost acknowledgements")
+  func dictationHistoryRoundTrip() async throws {
+    let fixture = try await FlowFixture(); defer { fixture.remove() }
+    let desktop = DictationRecord(text: "From the Mac", createdAt: Date(timeIntervalSince1970: 100))
+    let phone = DictationRecord(text: "From the phone 🪡\nFull text", createdAt: Date(timeIntervalSince1970: 200))
+    try await fixture.database.saveDictation(desktop)
+    try await fixture.mobile.dictations.save(phone)
+    await fixture.transport.dropNextDictationAcknowledgement()
+    do { try await MobileSyncEngine(store: fixture.mobile, transport: fixture.transport).synchronize(); Issue.record("Expected lost reply") }
+    catch MobileConnectionError.offline { }
+    #expect(try await fixture.mobile.dictations.pendingCount() == 1)
+    let restarted = try MobileStore(file: fixture.mobileURL)
+    try await MobileSyncEngine(store: restarted, transport: fixture.transport).synchronize()
+    #expect(try await restarted.dictations.pendingCount() == 0)
+    #expect(try await restarted.dictations.records() == [phone, desktop])
+    #expect(try await fixture.database.dictationHistory() == [phone, desktop])
+    try await fixture.authentication.revoke(deviceID: fixture.credential.deviceID)
+    do { _ = try await fixture.transport.dictationChanges(after: 0); Issue.record("Expected revoked access") }
+    catch MobileConnectionError.http(401, _) { }
+  }
+
   @Test("QR re-pairing waits for durable phone setup and recovers a lost confirmation over HTTP")
   func qrRepairAndLostConfirmation() async throws {
     let fixture = try await FlowFixture(); defer { fixture.remove() }
@@ -437,7 +459,15 @@ private final class FlowHTTPServer: Sendable {
 /// URLSession drives the actual HTTP parser, mount routing and response framing.
 /// An injected reply loss occurs after those layers commit/return, before the
 /// mobile engine can durably acknowledge the result.
-private actor APITransport: CompanionTransport {
+private actor APITransport: CompanionTransport, CompanionDictationTransport {
+  var dropDictation = false
+  func dropNextDictationAcknowledgement() { dropDictation = true }
+  func dictationChanges(after: Int64) async throws -> DictationHistoryPage { try await request("/v1/dictations?after=\(after)") }
+  func publishDictation(_ record: DictationRecord) async throws -> DictationRecord {
+    let saved: DictationRecord = try await request("/v1/dictations", method: "POST", body: JSONEncoder().encode(record))
+    if dropDictation { dropDictation = false; throw MobileConnectionError.offline }
+    return saved
+  }
   let serverURL: URL
   let session: URLSession
   let credential: MobileCredential

@@ -93,7 +93,7 @@ public actor MobileSyncEngine {
       local.transcripts[id] == nil || local.dirtyTranscriptIDs?.contains(id) == true ||
         (local.pinnedTranscriptIDs?.contains(id) == true && local.transcripts[id]?.olderCursor != nil)
     }.count
-    let counts: [MobileSyncLane: Int] = [.library: local.outbox.count,
+    let counts: [MobileSyncLane: Int] = [.dictation: (try? await store.dictations.pendingCount()) ?? 0, .library: local.outbox.count,
       .calendar: await store.calendar.pendingCount() + store.calendar.pendingRuns().count,
       .journal: journal.count + registrations, .artifacts: await store.artifacts.pendingUploadCount(),
       .offlineCache: local.uncachedNoteIDs.count + transcriptPending + (await store.artifacts.pendingDownloadCount())]
@@ -157,6 +157,9 @@ public actor MobileSyncEngine {
     }
     var errors: [any Error] = []
     if let error = await synchronizeLane(.library, { try await self.synchronizeLibrary() }) { errors.append(error) }
+    if let dictation = transport as? any CompanionDictationTransport {
+      if let error = await synchronizeLane(.dictation, { try await self.synchronizeDictations(using: dictation, identity: identity) }) { errors.append(error) }
+    } else { status.lanes[.dictation, default: .init()].phase = .unsupported }
     if let calendar = transport as? any CompanionCalendarTransport {
       if let error = await synchronizeLane(.calendar, { try await self.synchronizeCalendar(using: calendar, identity: identity) }) { errors.append(error) }
     } else { status.lanes[.calendar, default: .init()].phase = .unsupported }

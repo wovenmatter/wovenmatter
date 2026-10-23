@@ -55,6 +55,7 @@ struct DashboardLucideGlyph: Hashable, Sendable {
 
     static let close = Self("x", stroke: "s175")
     static let chevronDown = Self("chevron-down", stroke: "s175")
+    static let chevronsLeft = Self("chevrons-left", stroke: "s175")
     static let arrowLeft = Self("arrow-left", stroke: "s175")
     static let arrowRight = Self("arrow-right", stroke: "s175")
     static let panelLeftOpen = Self("panel-left-open", stroke: "s175")

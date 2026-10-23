@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MobileSyncLane: String, Codable, CaseIterable, Sendable { case library, calendar, journal, artifacts, offlineCache }
+public enum MobileSyncLane: String, Codable, CaseIterable, Sendable { case library, calendar, journal, artifacts, offlineCache, dictation }
 public struct MobileSyncLaneStatus: Codable, Equatable, Sendable {
   public enum Phase: String, Codable, Sendable { case idle, syncing, current, pending, blocked, unsupported }
   public var phase: Phase = .idle

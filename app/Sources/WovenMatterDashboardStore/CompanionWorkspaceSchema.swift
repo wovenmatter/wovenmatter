@@ -10,6 +10,11 @@ extension WorkspaceDatabaseConnection {
     try executeUnlocked("""
       CREATE INDEX IF NOT EXISTS desktop_cache_runs_active_conversation
         ON dashboard_runs(conversation_id, status, created_at DESC, id DESC);
+      CREATE TABLE IF NOT EXISTS dictation_history (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+        created_at REAL NOT NULL, payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS dictation_history_date ON dictation_history(created_at DESC, id DESC);
       CREATE TABLE IF NOT EXISTS companion_workspace (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1), workspace_id TEXT NOT NULL
       );

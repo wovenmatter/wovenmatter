@@ -166,6 +166,18 @@ public final class CompanionWorkspaceAPI {
                 if request.method == "POST", response.status == 200 { onMutation() }
                 return response
             }
+            if path == "/v1/dictations", request.method == "GET" {
+                guard let after = Int64(query("after") ?? "0"), after >= 0 else {
+                    return .error("invalid_cursor", "The dictation cursor is invalid.", status: 400)
+                }
+                return try .json(try await database.dictationChanges(after: after))
+            }
+            if path == "/v1/dictations", request.method == "POST" {
+                guard request.body.count <= 8_388_608 else { return .error("too_large", "The dictation is too large.", status: 413) }
+                let record = try JSONDecoder().decode(DictationRecord.self, from: request.body)
+                try await database.saveDictation(record)
+                onMutation(); return try .json(record)
+            }
             if path == "/v1/calendar", request.method == "GET" {
                 return try .json(try await database.companionCalendarSnapshot())
             }
