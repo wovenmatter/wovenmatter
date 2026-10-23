@@ -15,6 +15,33 @@ final class CompanionUITests: XCTestCase {
       // at half the reported accessibility coordinates.
       XCUIDevice.shared.orientation = .landscapeLeft
       XCUIDevice.shared.orientation = .portrait
+      // Orientation notifications can precede the accessibility transform. A
+      // rotated sidebar row can still exist and report itself hittable while
+      // its frame is vertical or outside the portrait window.
+      let sidebar = [app.buttons["tab-home"], app.buttons["tab-folders"], app.buttons["tab-library"]]
+      var previousGeometry: [CGRect]?
+      let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+        let window = app.windows.firstMatch
+        guard window.exists, app.frame.height > app.frame.width else {
+          previousGeometry = nil
+          return false
+        }
+        let bounds = window.frame
+        let rows = sidebar.map(\.frame)
+        guard sidebar.allSatisfy(\.isHittable), rows.allSatisfy({
+          $0.width > $0.height && $0.height > 0 && bounds.contains($0)
+        }), zip(rows, rows.dropFirst()).allSatisfy({
+          abs($0.0.minX - $0.1.minX) < 1 && $0.0.maxY <= $0.1.minY
+        }) else {
+          previousGeometry = nil
+          return false
+        }
+        let geometry = [app.frame, bounds] + rows
+        defer { previousGeometry = geometry }
+        return previousGeometry == geometry
+      }, object: app)
+      XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed,
+        "The iPad sidebar must settle into the portrait window before the first tap")
     }
     return app
   }
@@ -182,13 +209,26 @@ final class CompanionUITests: XCTestCase {
 
   @MainActor func testOfflineWritingSurvivesTerminationAndRestart() {
     let app = launch(tab: "Notes")
+    let bodyEditors = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
+    guard bodyEditors.firstMatch.waitForExistence(timeout: 5) else {
+      XCTFail("The fixture note editor must be visible before creating a new note")
+      return
+    }
+    let originalEditorID = bodyEditors.firstMatch.identifier
     app.buttons["action-new-note"].tap()
     let title = app.descendants(matching: .any)["note-title"].firstMatch
-    XCTAssertTrue(title.waitForExistence(timeout: 5))
+    let body = bodyEditors.firstMatch
+    let created = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      title.exists && title.value as? String == "Untitled note"
+        && body.exists && body.identifier != originalEditorID && (body.value as? String ?? "").isEmpty
+    }, object: app)
+    guard XCTWaiter.wait(for: [created], timeout: 5) == .completed else {
+      XCTFail("One New note tap must select a new, empty note before editing")
+      return
+    }
     title.tap()
     let marker = " Restart proof " + String(UUID().uuidString.prefix(6))
     title.typeText(marker)
-    let body = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
     XCTAssertTrue(body.waitForExistence(timeout: 5))
     body.tap()
     let bodyText = "Offline body survives restart.\nSecond line retains the exact writing."
