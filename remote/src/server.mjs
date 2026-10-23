@@ -172,6 +172,7 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') return json(response,200,await workspaceBrowser.tabs())
     if (url.pathname === '/v1/browser/connect' && request.method === 'POST') return json(response,200,await workspaceBrowser.connect())
+    if (url.pathname === '/v1/browser/action' && request.method === 'POST') return json(response,200,await workspaceBrowser.action(await readJSON(request, 131072)))
     if (url.pathname === '/v1/browser/frame' && request.method === 'POST') {
       const body = await readJSON(request, 1024)
       return json(response,200,await workspaceBrowser.frame(body.tabID))

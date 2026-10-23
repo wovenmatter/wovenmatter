@@ -40,10 +40,19 @@ installing packages or downloading a browser.
 
 Right-click a remote workspace heading in the sidebar and choose **View browser**,
 or open **Settings → Remote Agent Workspaces → Manage → View browser**. Select a
-tab to watch its live viewport. **Pause** holds the current image; **Done** closes
-the viewer without closing the agent's tabs. Viewing does not send clicks or
-keystrokes to the remote page. Images refresh roughly once a second while the
-app is active, and are not saved in the library or history.
+tab to interact with its live page. Click, type, scroll, select text or drag on the
+page while the agent keeps the same tab open. Use the address field and Back,
+Forward and Reload controls to navigate. Mac shortcuts include Command-A,
+Command-C, Command-V and Command-Z; committed text from input methods is sent
+to the remote page. **Done** closes the window without closing the agent's tabs.
+There is no Pause/Resume control: changes from either participant appear live.
+
+The page is shared, so coordinate in chat when taking over from the agent.
+Input is ordered and is discarded if the tab closes or the agent navigates to a
+new document before it arrives. Uncertain input is never automatically repeated.
+Images refresh while the app is active and are not saved in the library or history.
+This controls the remote webpage; OS file pickers and local-file uploads are not
+forwarded from the Mac.
 
 Agents use the shared workspace browser for tabs you can watch. For example,
 run this inside the remote workspace:

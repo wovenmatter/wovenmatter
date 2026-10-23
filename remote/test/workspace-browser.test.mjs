@@ -18,8 +18,9 @@ function fixture() {
     async detach() { detached++ },
   })
   const addPage = () => {
-    const page = { closed: false, isClosed() { return this.closed }, title: async () => 'Remote tab',
-      url: () => 'http://127.0.0.1:3000', context: () => context }
+    const page = Object.assign(new EventEmitter(), { closed: false, isClosed() { return this.closed }, title: async () => 'Remote tab',
+      url: () => 'http://127.0.0.1:3000', context: () => context })
+    page.mainFrame = () => page
     pages.push(page)
     return page
   }
@@ -78,5 +79,36 @@ test('failed and overlapping frames do not wedge future viewing', async () => {
   await assert.rejects(pending, /page navigated/)
   f.context.newCDPSession = async () => { throw new Error('next capture attempted') }
   await assert.rejects(f.service.frame(tab.id), /next capture attempted/)
+  await f.service.close()
+})
+
+const uuid = () => globalThis.crypto.randomUUID()
+test('input targets the captured page, maps coordinates, serializes and refuses stale or duplicate gestures', async () => {
+  const f = fixture(); await f.service.connect(); const page = f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], frame = await f.service.frame(tab.id)
+  const action = { actionID: uuid(), tabID: tab.id, frameID: frame.frameID, kind: 'click', x: 0.5, y: 0.25 }
+  assert.equal((await f.service.action(action)).accepted, true)
+  const down = f.commands.find(c => c.method === 'Input.dispatchMouseEvent' && c.params.type === 'mousePressed')
+  assert.equal(down.params.x, 960); assert.equal(down.params.y, 300)
+  assert.equal(f.commands.at(-1).params.type, 'mouseReleased')
+  await assert.rejects(f.service.action(action), {statusCode: 409})
+  page.emit('framenavigated', page)
+  await assert.rejects(f.service.action({...action, actionID: uuid()}), {statusCode: 409})
+  await assert.rejects(f.service.action({...action, x: 2}), {statusCode: 400})
+  await assert.rejects(f.service.action({...action, kind: 'navigate', text: 'javascript:alert(1)'}), {statusCode: 400})
+  await f.service.close()
+})
+
+test('keyboard modifiers and text are sent only to the explicit live tab', async () => {
+  const f = fixture(); await f.service.connect(); f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], frame = await f.service.frame(tab.id)
+  const action = { actionID: uuid(), tabID: tab.id, frameID: frame.frameID, kind: 'key', key: 'a', modifiers: 2 }
+  await f.service.action(action)
+  assert.equal(f.commands.at(-2).params.type, 'keyDown')
+  assert.deepEqual(f.commands.at(-2).params.commands, ['selectAll'])
+  assert.equal(f.commands.at(-1).params.type, 'keyUp')
+  await f.service.action({...action, actionID: uuid(), kind: 'text', text: 'A person and agent share this input'})
+  assert.equal(f.commands.at(-1).method, 'Input.insertText')
+  await assert.rejects(f.service.action({...action, actionID: uuid(), kind: 'text', text: 'x'.repeat(16385)}), {statusCode: 400})
   await f.service.close()
 })

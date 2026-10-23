@@ -22,11 +22,11 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case signIn(UUID, AgentRuntimeKind, String), authorizationCode(UUID, String), cancelSignIn(UUID)
     case databases(UUID), createDatabase(UUID, name: String, preference: AgentDatabasePreference)
     case databaseData(UUID, DatabaseArtifactLink)
-    case browserTabs(UUID), browserFrame(UUID, tabID: String)
+    case browserTabs(UUID), browserFrame(UUID, tabID: String), browserAction(UUID, RemoteBrowserAction)
 
-    var isBrowserRead: Bool {
+    var isBrowserOperation: Bool {
         switch self {
-        case .browserTabs, .browserFrame: true
+        case .browserTabs, .browserFrame, .browserAction: true
         default: false
         }
     }
@@ -39,6 +39,7 @@ struct BackendRemoteWorkspaceResponse: Codable {
     var databaseData: RemoteDatabaseData?
     var browserTabs: RemoteBrowserTabs?
     var browserFrame: RemoteBrowserFrame?
+    var browserAction: RemoteBrowserActionResult?
 }
 
 @MainActor
@@ -52,6 +53,7 @@ struct BackendRemoteWorkspaceService {
         var data: RemoteDatabaseData?
         var tabs: RemoteBrowserTabs?
         var frame: RemoteBrowserFrame?
+        var actionResult: RemoteBrowserActionResult?
         switch command {
         case .synchronizeDefaultAgent(let id): try await model.synchronizeDefaultAgent(workspace(id))
         case .enableCredentialAccess: model.enableCredentialAccess()
@@ -96,10 +98,11 @@ struct BackendRemoteWorkspaceService {
         case .databases(let id): databases = try await model.databases(for: workspace(id))
         case .createDatabase(let id, let name, let preference): database = try await model.createDatabase(name: name, preference: preference, in: workspace(id))
         case .browserTabs(let id): tabs = try await model.browserTabs(for: workspace(id))
+        case .browserAction(let id, let action): actionResult = try await model.browserAction(action, for: workspace(id))
         case .browserFrame(let id, let tabID): frame = try await model.browserFrame(tabID: tabID, for: workspace(id))
         case .databaseData(let id, let link): data = try await model.databaseData(for: link, in: workspace(id))
         }
-        return .init(snapshot: model.backendSnapshot(), databases: databases, database: database, databaseData: data, browserTabs: tabs, browserFrame: frame)
+        return .init(snapshot: model.backendSnapshot(), databases: databases, database: database, databaseData: data, browserTabs: tabs, browserFrame: frame, browserAction: actionResult)
     }
 
     private func workspace(_ id: UUID) throws -> RemoteWorkspaceConfiguration {

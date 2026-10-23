@@ -21,6 +21,7 @@ async function main() {
   assert.ok(chromium.executablePath().startsWith('/opt/ms-playwright/'));
   const html = `<!doctype html><title>Workspace browser</title>
     <label>Name <input aria-label="Name"></label>
+    <input id=range type=range min=0 max=100 value=0 aria-label=Level>
     <button onclick="document.querySelector('output').textContent =
       'Hello ' + document.querySelector('input').value">Greet</button><output></output>`;
   const server = createServer((request, response) => {
@@ -87,11 +88,12 @@ async function main() {
     await sharedPage.getByRole('button', { name: 'Greet' }).click();
     const changedFrame = await (await request('frame', { tabID: sharedTab.id })).json();
     assert.notEqual(changedFrame.imageBase64, firstFrame.imageBase64);
+    await verifyInteraction(sharedPage, sharedTab.id, request);
     await browser.close(); browser = undefined;
     assert.ok((await (await request('tabs')).json()).tabs.some(tab => tab.id === sharedTab.id));
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);
     browser = await chromium.connectOverCDP(stdout.trim());
-    await browser.contexts()[0].pages().find(page => page.url() === url).close();
+    await browser.contexts()[0].pages().find(page => page.url() === sharedPage.url()).close();
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 410);
     await browser.close(); browser = undefined;
     console.log('Workspace Chromium: navigation, forms, screenshots, CLI, shared live view and bundled core passed.');
@@ -103,4 +105,56 @@ async function main() {
     await rm(directory, { recursive: true, force: true });
   }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+async function verifyInteraction(page, tabID, request) {
+  const assert = require('node:assert/strict');
+  const originalURL = page.url();
+  const frame = async () => {
+    const response = await request('frame', { tabID });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const input = async (gesture) => {
+    const capture = await frame();
+    const response = await request('action', { ...gesture, tabID, frameID: capture.frameID, actionID: require('node:crypto').randomUUID() });
+    assert.equal(response.status, 200, JSON.stringify(gesture));
+    const result = await response.json();
+    assert.equal(result.accepted, true);
+    return result;
+  };
+  const position = async (selector, fraction = 0.5) => {
+    const box = await page.locator(selector).boundingBox();
+    return { x: (box.x + box.width * fraction) / 1280, y: (box.y + box.height / 2) / 800 };
+  };
+  await input({ kind: 'click', ...await position('input[aria-label="Name"]') });
+  await input({ kind: 'key', key: 'a', modifiers: 2 });
+  await input({ kind: 'text', text: 'Human collaboration 日本語' });
+  assert.equal(await page.getByRole('textbox', { name: 'Name' }).inputValue(), 'Human collaboration 日本語');
+  await input({ kind: 'click', ...await position('button') });
+  assert.equal(await page.locator('output').textContent(), 'Hello Human collaboration 日本語');
+  // The agent retains this exact page/context and can continue after human input.
+  await page.getByRole('textbox', { name: 'Name' }).fill('agent continued');
+  await input({ kind: 'click', ...await position('input[aria-label="Name"]') });
+  await input({ kind: 'key', key: 'a', modifiers: 2 });
+  assert.equal((await input({ kind: 'copy' })).text, 'agent continued');
+  await input({ kind: 'text', text: 'human returned' });
+  assert.equal(await page.getByRole('textbox', { name: 'Name' }).inputValue(), 'human returned');
+  const start = await position('#range', 0.05), end = await position('#range', 0.95);
+  await input({ kind: 'drag', ...start, endX: end.x, endY: end.y });
+  assert.ok(Number(await page.locator('#range').inputValue()) > 80);
+  await page.evaluate(() => { document.body.style.minHeight = '3000px'; });
+  await input({ kind: 'scroll', x: 0.5, y: 0.5, deltaX: 0, deltaY: 500 });
+  await page.waitForFunction(() => window.scrollY > 0);
+  const beforeNavigation = await frame();
+  await input({ kind: 'navigate', text: originalURL + '?human=1' });
+  await page.waitForURL(originalURL + '?human=1', { waitUntil: 'commit' });
+  assert.equal((await request('action', { kind: 'text', text: 'stale input must not land', tabID,
+    frameID: beforeNavigation.frameID, actionID: require('node:crypto').randomUUID() })).status, 409);
+  await input({ kind: 'back' });
+  await page.waitForURL(originalURL, { waitUntil: 'commit' });
+  await input({ kind: 'forward' });
+  await page.waitForURL(originalURL + '?human=1', { waitUntil: 'commit' });
+  await input({ kind: 'reload' });
+  console.log('Shared browser collaboration: user click, typing, Unicode, select/copy, dragging, scrolling, navigation, stale-input rejection and agent continuation passed.');
+}
+module.exports = { verifyInteraction };
+if (!module.parent) main().catch(error => { console.error(error); process.exitCode = 1; });

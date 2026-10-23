@@ -21,7 +21,7 @@ import WovenMatterClient
         let tiff = try #require(image.tiffRepresentation)
         let bitmap = try #require(NSBitmapImageRep(data: tiff))
         let jpeg = try #require(bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.6]))
-        return .init(tabID: id, imageBase64: jpeg.base64EncodedString())
+        return .init(tabID: id, imageBase64: jpeg.base64EncodedString(), frameID: "frame-" + id)
     }
 
     @Test func selectionChangesAndViewerDismissalRejectLateFrames() async throws {
@@ -115,6 +115,132 @@ import WovenMatterClient
         let current = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
             payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(fixture.remote.id)))
         #expect(await backend.handle(current).error == "Enable credential access in Settings to connect.")
+    }
+
+    @Test func nativeCanvasMapsLetterboxingAndEmitsRealPageGestures() throws {
+        let canvas = RemoteBrowserInputView(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))
+        canvas.image = NSImage(size: NSSize(width: 1280, height: 800))
+        #expect(canvas.normalizedPoint(NSPoint(x: 500, y: 360)) == NSPoint(x: 0.5, y: 0.5))
+        #expect(canvas.normalizedPoint(NSPoint(x: 500, y: 20)) == nil)
+        let window = NSWindow(contentRect: canvas.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = canvas
+        var actions: [RemoteBrowserAction] = []
+        canvas.frameID = "pressed-frame"
+        canvas.send = { actions.append($0) }
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: NSPoint(x: 500, y: 360), modifierFlags: [],
+                timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            if type == .leftMouseDown { canvas.mouseDown(with: event); canvas.frameID = "newer-frame" } else { canvas.mouseUp(with: event) }
+        }
+        #expect(actions.first?.kind == "click")
+        #expect(actions.first?.frameID == "pressed-frame")
+        #expect(actions.first?.x == 0.5 && actions.first?.y == 0.5)
+        canvas.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(actions.count == 1) // Composition remains local until committed.
+        canvas.insertText("日本語", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(actions.last?.text == "日本語")
+        #expect(!canvas.hasMarkedText())
+        let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 2,
+            windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        canvas.keyDown(with: enter)
+        #expect(actions.last?.key == "Enter")
+        canvas.resetInput()
+    }
+
+    @Test func queuedInputIsOrderedAndDismissalDiscardsUnsentText() async throws {
+        var pending: CheckedContinuation<RemoteBrowserActionResult, any Error>?
+        var sent: [RemoteBrowserAction] = []
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { try frame($0) },
+            sendAction: { action in
+                sent.append(action)
+                return try await withCheckedThrowingContinuation { pending = $0 }
+            })
+        await viewer.refresh()
+        var click = RemoteBrowserAction(kind: "click"); click.x = 0.5; click.y = 0.5
+        viewer.enqueue(click)
+        for _ in 0..<100 where pending == nil { await Task.yield() }
+        let completion = try #require(pending)
+        var text = RemoteBrowserAction(kind: "text"); text.text = "must not arrive after dismissal"
+        viewer.enqueue(text)
+        #expect(sent.count == 1)
+        #expect(sent.first?.tabID == "first")
+        #expect(sent.first?.frameID == "frame-first")
+        viewer.clear()
+        completion.resume(returning: .init(tabID: "first", accepted: true))
+        for _ in 0..<20 { await Task.yield() }
+        #expect(sent.count == 1)
+        #expect(viewer.image == nil)
+        #expect(viewer.tabs.isEmpty)
+    }
+
+    @Test func uncertainInputIsNotRetriedAndCannotDrainIntoAnotherTab() async throws {
+        var pending: CheckedContinuation<RemoteBrowserActionResult, any Error>?
+        var sent: [RemoteBrowserAction] = []
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { try frame($0) },
+            sendAction: { action in
+                sent.append(action)
+                return try await withCheckedThrowingContinuation { pending = $0 }
+            })
+        await viewer.refresh()
+        var text = RemoteBrowserAction(kind: "text"); text.text = "first"
+        viewer.enqueue(text)
+        for _ in 0..<100 where pending == nil { await Task.yield() }
+        let completion = try #require(pending)
+        text.text = "discarded"; viewer.enqueue(text)
+        viewer.select("second")
+        completion.resume(throwing: URLError(.timedOut))
+        for _ in 0..<20 { await Task.yield() }
+        #expect(sent.count == 1)
+        #expect(viewer.selectedID == "second")
+        #expect(viewer.inputError == nil)
+    }
+
+    @Test func nativeSurfaceCollaboratesWithRealBrowserWhenRequested() async throws {
+        guard let endpoint = ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"],
+              let url = URL(string: endpoint) else { return }
+        let client = RemoteWorkspaceServiceClient(baseURL: url, token: "fixture")
+        let catalog = try await client.browserTabs()
+        let tab = try #require(catalog.tabs.first { $0.title == "Shared collaboration fixture" })
+        let viewer = RemoteBrowserViewerModel(loadTabs: { try await client.browserTabs() },
+            loadFrame: { try await client.browserFrame(tabID: $0) }, sendAction: { try await client.browserAction($0) })
+        viewer.select(tab.id); await viewer.refresh()
+        #expect(viewer.frameID != nil)
+        let canvas = RemoteBrowserInputView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        canvas.image = viewer.image; canvas.frameID = viewer.frameID; canvas.tabID = tab.id; canvas.send = viewer.enqueue
+        let window = NSWindow(contentRect: canvas.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = canvas
+        func click(_ x: CGFloat, _ y: CGFloat) throws {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 800 - y), modifierFlags: [],
+                    timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                if type == .leftMouseDown { canvas.mouseDown(with: event) } else { canvas.mouseUp(with: event) }
+            }
+        }
+        try click(100, 40)
+        let selectAll = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 2,
+            windowNumber: window.windowNumber, context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+        #expect(canvas.performKeyEquivalent(with: selectAll))
+        for character in ["h", "i"] {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 2,
+                windowNumber: window.windowNumber, context: nil, characters: character, charactersIgnoringModifiers: character,
+                isARepeat: false, keyCode: 4))
+            canvas.keyDown(with: event)
+        }
+        canvas.insertText(" 日本語", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try click(60, 100)
+        var state: [String: String] = [:]
+        for _ in 0..<100 {
+            var request = URLRequest(url: url.appendingPathComponent("fixture/state"))
+            request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization")
+            let (data, _) = try await URLSession.shared.data(for: request)
+            state = try JSONDecoder().decode([String: String].self, from: data)
+            if state["output"] == "Hello hi 日本語" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(state["name"] == "hi 日本語")
+        #expect(state["output"] == "Hello hi 日本語")
+        #expect(viewer.inputError == nil)
+        viewer.clear()
     }
 
     @Test func renderViewerWhenRequested() async throws {

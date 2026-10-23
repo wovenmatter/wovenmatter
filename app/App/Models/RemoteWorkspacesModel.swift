@@ -536,6 +536,16 @@ final class RemoteWorkspacesModel {
         return try await databaseRequest(configuration) { try await $0.browserTabs() }
     }
 
+    func browserAction(_ action: RemoteBrowserAction, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserActionResult {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserAction(configuration.id, action), configuration: configuration).browserAction else {
+                throw BackendRPCError.remote("The background service returned no browser input acknowledgement.")
+            }
+            return value
+        }
+        return try await databaseRequest(configuration) { try await $0.browserAction(action) }
+    }
+
     func browserFrame(tabID: String, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserFrame {
         if isBackendProjection {
             guard let value = try await browserBackend(.browserFrame(configuration.id, tabID: tabID), configuration: configuration).browserFrame else {

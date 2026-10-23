@@ -13,7 +13,8 @@ struct RemoteBrowserView: View {
         self.workspaces = workspaces; self.configuration = configuration
         _viewer = State(initialValue: RemoteBrowserViewerModel(
             loadTabs: { try await workspaces.browserTabs(for: configuration) },
-            loadFrame: { try await workspaces.browserFrame(tabID: $0, for: configuration) }))
+            loadFrame: { try await workspaces.browserFrame(tabID: $0, for: configuration) },
+            sendAction: { try await workspaces.browserAction($0, for: configuration) }))
     }
 
     var body: some View {
@@ -21,8 +22,8 @@ struct RemoteBrowserView: View {
             .task(id: workspaces.browserIdentity(for: configuration)) {
                 viewer.clear()
                 while !Task.isCancelled {
-                    if (!viewer.paused || viewer.needsRefresh), scenePhase == .active { await viewer.refresh() }
-                    do { try await Task.sleep(for: .seconds(reduceMotion ? 3 : 1)) }
+                    if scenePhase == .active { await viewer.refresh() }
+                    do { try await Task.sleep(for: .milliseconds(reduceMotion ? 1000 : 200)) }
                     catch { break }
                 }
             }
@@ -34,6 +35,8 @@ struct RemoteBrowserContent: View {
     @Bindable var viewer: RemoteBrowserViewerModel
     let workspaceName: String
     let onClose: () -> Void
+    @State private var address = ""
+    @FocusState private var addressFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,11 +46,7 @@ struct RemoteBrowserContent: View {
                     Text(workspaceName).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 Spacer()
-                Button(viewer.paused ? "Resume" : "Pause") { viewer.paused.toggle() }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .help("Pause or resume live images")
                 Button("Done", action: onClose).buttonStyle(SettingsQuietButtonStyle())
-                    .keyboardShortcut(.cancelAction)
             }
             .padding(16)
             Divider()
@@ -69,10 +68,24 @@ struct RemoteBrowserContent: View {
                     }.padding(8)
                 }.scrollIndicators(.never)
                 Divider()
-                Text(viewer.selectedTab?.url ?? "")
-                    .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 10)
+                HStack(spacing: 8) {
+                    Button { viewer.enqueue(.init(kind: "back")) } label: { Image(systemName: "chevron.left") }.help("Back")
+                    Button { viewer.enqueue(.init(kind: "forward")) } label: { Image(systemName: "chevron.right") }.help("Forward")
+                    Button { viewer.enqueue(.init(kind: "reload")) } label: { Image(systemName: "arrow.clockwise") }.help("Reload")
+                    TextField("Address", text: $address).textFieldStyle(.plain).dashboardQuietTextInput()
+                        .focused($addressFocused)
+                        .onSubmit {
+                            var action = RemoteBrowserAction(kind: "navigate")
+                            action.text = address.contains("://") ? address : "https://" + address
+                            viewer.enqueue(action); addressFocused = false
+                        }
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 8)
+                .onChange(of: viewer.selectedTab?.url, initial: true) { _, url in
+                    if !addressFocused { address = url ?? "" }
+                }
+                .onChange(of: viewer.selectedID) { _, _ in address = viewer.selectedTab?.url ?? ""; addressFocused = false }
                 Divider()
             }
             ZStack {
@@ -81,11 +94,9 @@ struct RemoteBrowserContent: View {
                     ContentUnavailableView("Browser unavailable", systemImage: "globe",
                         description: Text(error))
                 } else if let image = viewer.image {
-                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-                        .accessibilityLabel("Live view of \(viewer.selectedTab?.title ?? "remote browser tab")")
-                } else if viewer.paused && !viewer.needsRefresh {
-                    ContentUnavailableView("Live view paused", systemImage: "pause",
-                        description: Text("Resume to see the workspace’s current browser tabs."))
+                    RemoteBrowserCanvas(image: image, tabID: viewer.selectedID ?? "", frameID: viewer.frameID, send: viewer.enqueue,
+                        focusAddress: { addressFocused = true })
+                        .accessibilityLabel("Shared remote browser: \(viewer.selectedTab?.title ?? "tab"). Click to interact.")
                 } else if viewer.hasLoaded && viewer.tabs.isEmpty {
                     ContentUnavailableView("No shared browser tabs", systemImage: "globe",
                         description: Text("Ask your agent to use the shared workspace browser. Its tabs will appear here."))
@@ -95,7 +106,8 @@ struct RemoteBrowserContent: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack {
-                Text(viewer.paused ? "Paused" : "Live view · View only")
+                Text(viewer.inputError ?? "Shared with your agent · Click, type and scroll")
+                    .lineLimit(2)
                 Spacer()
                 if let date = viewer.updatedAt { Text(date, style: .time).monospacedDigit() }
             }

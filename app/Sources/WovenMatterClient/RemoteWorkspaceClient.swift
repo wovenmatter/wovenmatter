@@ -1130,6 +1130,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/browser/tabs", method: "GET", body: nil)
     }
 
+    public func browserAction(_ action: RemoteBrowserAction) async throws -> RemoteBrowserActionResult {
+        try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action))
+    }
+
     public func browserFrame(tabID: String) async throws -> RemoteBrowserFrame {
         struct Payload: Encodable { let tabID: String }
         return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID)))
@@ -1323,7 +1327,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 switch (response as? HTTPURLResponse)?.statusCode {
                 case 404: message = "Update this workspace container in Settings to view its browser."
                 case 410: message = "This tab has closed. Waiting for the workspace’s current tabs."
-                case 409: message = "The browser is busy. The live view will retry shortly."
+                case 409: message = "The page changed or another input is finishing. Check the refreshed page and try again."
                 default: message = "The remote browser is unavailable. Reconnect to the workspace and try again."
                 }
                 throw RemoteWorkspaceClientError.invalidResponse(message)
