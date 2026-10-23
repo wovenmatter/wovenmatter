@@ -74,4 +74,27 @@ struct WorkspaceExecutionRootTests {
     await #expect(throws: (any Error).self) { try await reopened.setFolderReferences(id: folder, paths: ["relative/path"]) }
   }
 
+  @Test func draftMovesWithinItsWorkspaceAndLocksAfterFirstMessage() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let first = try await f.db.createFolder(name: "First", location: f.location("First"))
+    let second = try await f.db.createFolder(name: "Second", location: f.location("Second"))
+    let foreign = try await f.db.createFolder(name: "Remote", location: .init(workspaceID: "remote:other", rootPath: "/home/project", managed: true))
+    let id = try await f.draft()
+    #expect(try await f.db.moveConversation(id: id, toFolderID: first))
+    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("First").rootPath)
+    await #expect(throws: (any Error).self) { try await f.db.moveConversation(id: id, toFolderID: foreign) }
+    #expect(try await f.db.moveConversation(id: id, toFolderID: second))
+    #expect(try await f.db.moveConversation(id: id, toFolderID: nil))
+    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("Ungrouped").rootPath)
+    #expect(try await f.db.moveConversation(id: id, toFolderID: first))
+    try await f.db.lockSessionFolder(id: id)
+    let run = try await f.db.beginLocalACPRun(conversationID: id, content: "First message")
+    try await f.db.completeLocalACPRun(runID: run.runID)
+    await #expect(throws: (any Error).self) { try await f.db.moveConversation(id: id, toFolderID: second) }
+    await #expect(throws: (any Error).self) { try await f.db.moveConversation(id: id, toFolderID: nil) }
+    _ = try await f.db.deleteFolder(id: first)
+    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("First").rootPath)
+    #expect(try await f.db.conversationContent(id: id).messages.first?.content == "First message")
+  }
+
 }

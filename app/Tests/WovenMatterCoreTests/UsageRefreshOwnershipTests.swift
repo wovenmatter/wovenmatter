@@ -6,6 +6,70 @@ import WovenMatterCore
 @Suite("Usage refresh ownership")
 struct UsageRefreshOwnershipTests {
 
+  @Test("Late provider limits cannot overwrite latest memory or persistent snapshot")
+  func serviceLimitsOwnership() async throws {
+    let fixture = try UsageOwnershipDirectory()
+    let gate = UsageCompletionGate<[UsageLimitAccount]>()
+    let service = LocalUsageService(
+      homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
+      usageDatabaseURL: fixture.databaseURL, limitCollector: { _ in await gate.load() }
+    )
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    let old = Task { try await service.limitsSnapshot(refresh: true, enabledProviders: [.cursor], allowCredentialAccess: false, now: now) }
+    await gate.waitForStarts(1)
+    let current = Task { try await service.limitsSnapshot(refresh: true, enabledProviders: [.cursor], allowCredentialAccess: false, now: now.addingTimeInterval(1)) }
+    await gate.waitForStarts(2)
+    let newest = account("new", now: now.addingTimeInterval(1))
+    await gate.release(2, value: [newest])
+    #expect(try await current.value.accounts == [newest])
+    await gate.release(1, value: [account("old", now: now)])
+    await #expect(throws: CancellationError.self) { try await old.value }
+    let cached = try await service.limitsSnapshot(refresh: false, enabledProviders: [.cursor], allowCredentialAccess: false, now: now.addingTimeInterval(2))
+    #expect(cached.accounts == [newest])
+    let store = try UsageStore(databaseURL: fixture.databaseURL)
+    #expect(try store.usageLimitAccounts(providers: [.cursor]) == [newest])
+  }
+
+  @Test("Queued limits cannot persist after credential or shared-account invalidation", arguments: [false, true])
+  func queuedLimitsOwnership(sharedAccountChange: Bool) async throws {
+    final class Revision: @unchecked Sendable {
+      private let lock = NSLock()
+      private var value: UInt64 = 0
+      func read() -> UInt64 { lock.withLock { value } }
+      func advance() { lock.withLock { value += 1 } }
+    }
+    let fixture = try UsageOwnershipDirectory()
+    let revision = Revision()
+    let gate = UsageCompletionGate<[UsageLimitAccount]>()
+    let service = LocalUsageService(homeDirectory: fixture.url, fileManager: .default,
+      credentialStore: UsageNoCredentials(), usageDatabaseURL: fixture.databaseURL,
+      usesSharedConnections: sharedAccountChange, sharedConnectionRevision: { revision.read() },
+      limitCollector: { _ in await gate.load() })
+    _ = try await service.limitsSnapshot(refresh: false, enabledProviders: [.cursor], allowCredentialAccess: false)
+    let pending = Task { try await service.limitsSnapshot(refresh: true,
+      enabledProviders: [.cursor], allowCredentialAccess: false) }
+    await gate.waitForStarts(1)
+    let store = try await AsyncUsageStore(databaseURL: fixture.databaseURL)
+    let workers = DatabaseWorkers.shared(url: fixture.databaseURL)
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await store.write { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 10) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    await gate.release(1, value: [account("obsolete", now: Date())])
+    try await waitForUsageJob { workers.writer.metrics.pending == 2 }
+    if sharedAccountChange { revision.advance() }
+    else { try await service.saveOpenRouterAPIKey("synthetic") }
+    release.signal()
+    try await blocked.value
+    await #expect(throws: CancellationError.self) { try await pending.value }
+    #expect(try await store.usageLimitAccounts(providers: [.cursor]).isEmpty)
+  }
+
   @Test("Live observations allocate their sequence from the current writer cursor")
   func recorderUsesCurrentCursor() async throws {
     let fixture = try UsageOwnershipDirectory()
@@ -74,6 +138,14 @@ struct UsageRefreshOwnershipTests {
     #expect(result.accounts.first?.accountLabel == "current-account")
     #expect(result.accounts.first?.status == .unavailable)
     #expect(result.codexWorkspaces.isEmpty)
+  }
+
+  private func waitForUsageJob(_ ready: () -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(5)
+    while !ready() {
+      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+      try await Task.sleep(for: .milliseconds(1))
+    }
   }
 
   private func account(_ label: String, now: Date) -> UsageLimitAccount {

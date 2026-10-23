@@ -75,6 +75,24 @@ struct WorkspaceNoteActionsTests {
     func close() { try? FileManager.default.removeItem(at: root) }
   }
 
+  @Test func staleRevisionCannotRenameTrashOrExportNewerContent() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let id = try await f.db.createNote(folderID: nil, title: "Original", content: "Original content")
+    let stale = try await f.db.noteActionRevision(id: id)
+    _ = try await f.db.updateNote(id: id, title: "Newer title", content: "Newer content")
+    for mutation in [WorkspaceNoteMutation.rename("Stale name"), .moveToTrash] {
+      await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+        try await f.db.mutateNote(id: id, mutation: mutation, expectedRevision: stale)
+      }
+    }
+    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+      try await f.db.noteExport(id: id, format: .standard, expectedRevision: stale)
+    }
+    let saved = try await f.db.readNoteForEditing(id: id)
+    #expect(saved.title == "Newer title" && saved.document?.plainText == "Newer content")
+    #expect(try await f.db.trashedNotes().isEmpty)
+  }
+
   @Test func readableExportsEscapeContentAndDocumentExportRetainsStructure() throws {
     let rich = NoteRichTextBlock(style: .heading2, runs: [
       .init(text: "A [link]", bold: true, link: "https://example.org/a(b)?q=two words")

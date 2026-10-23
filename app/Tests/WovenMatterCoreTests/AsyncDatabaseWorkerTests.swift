@@ -6,6 +6,25 @@ import WovenMatterCore
 @Suite("Async internal database workers", .serialized)
 struct AsyncDatabaseWorkerTests {
 
+  @Test func startedWriteReportsCommitEvenAfterCallerCancels() async throws {
+    let (database, root, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let task = Task { try await database.write { connection in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+      return try connection.createFolder(name: "Committed")
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    task.cancel()
+    release.signal()
+    let id = try await task.value
+    #expect(try await database.workspaceOverview().folders.contains { $0.id == id })
+  }
+
   @Test func streamFlushDoesNotLoseChunksAcrossDatabaseSuspension() async throws {
     let (database, root, owner) = try await fixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -48,6 +67,28 @@ struct AsyncDatabaseWorkerTests {
       guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
       try await Task.sleep(for: .milliseconds(1))
     }
+  }
+
+  @Test func cancelledQueuedWriteNeverRunsAndCapacityIsBounded() async throws {
+    let worker = DatabaseWorker(label: "wm.test.bounded", capacity: 2)
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let first = Task { try await worker.perform { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    let queued = Task { try await worker.perform { _ in Issue.record("Cancelled job executed") } }
+    try await waitUntil { worker.metrics.pending == 2 }
+    await #expect(throws: DatabaseWorkerError.atCapacity) { try await worker.perform { _ in 1 } }
+    queued.cancel()
+    await #expect(throws: CancellationError.self) { try await queued.value }
+    #expect(worker.metrics.pending == 1)
+    #expect(worker.metrics.highWaterMark == 2)
+    release.signal()
+    try await first.value
   }
 
 }

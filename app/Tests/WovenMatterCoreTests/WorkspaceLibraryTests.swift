@@ -197,6 +197,75 @@ struct WorkspaceLibraryTests {
     }
   }
 
+  @Test("activation excludes existing messages and old imported history, including later rewrites")
+  func forwardOnly() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let chat = try await f.session()
+    let old = try await f.exchange(chat, text: "https://before.example")
+    try await f.db.write { connection in try connection.transaction {
+      try connection.executeUnlocked("DROP TRIGGER library_new_message")
+      try connection.executeUnlocked("DELETE FROM library_items; DELETE FROM library_messages")
+     } }
+    // Simulate a database predating feature activation: migration never scans its messages.
+    try await f.db.write { try $0.migrateLibrary() }
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "UPDATE dashboard_messages SET content='https://old-rewritten.example' WHERE id=?", [old.assistantMessageID])
+     } }
+    try await f.db.indexLibraryMessages()
+    #expect(try await f.db.libraryItems().isEmpty)
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "INSERT INTO dashboard_messages(id,conversation_id,role,content,created_at) VALUES('imported',?,'assistant','https://old-import.example','2020-01-01T00:00:00Z')",
+        [chat])
+     } }
+    let fresh = try await f.exchange(chat, text: "https://new.example")
+    let rows = try await f.db.libraryItems()
+    #expect(rows.count == 1)
+    #expect(rows.first?.messageID == fresh.userMessageID)
+    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
+    try await reopened.indexLibraryMessages()
+    #expect(try await reopened.libraryItems() == rows)
+  }
+
+  @Test("attachments appear only after send; notes stay out; streaming links wait until completion")
+  func attachmentLifecycle() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let chat = try await f.session()
+    let url = f.root.appending(path: "photo.png")
+    try Data([1, 2, 3]).write(to: url)
+    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: url, mimeType: "image/png")
+    #expect(try await f.db.libraryItems().isEmpty)
+    let run = try await f.db.beginLocalACPRun(
+      conversationID: chat,
+      input: .init(
+        text: "",
+        attachments: [
+          .file(draft),
+          .reference(
+            .init(
+              kind: .note, resourceID: "note", titleSnapshot: "Note", contentSnapshot: "https://private-note.example",
+              revisionSnapshot: "1")),
+        ]))
+    try await f.db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "[Incomplete](https://stream.example")
+    try await f.db.indexLibraryMessages()
+    #expect(try await f.db.libraryItems().map(\.kind) == [.photo])
+    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Complete](https://stream.example)")
+    try await f.db.completeLocalACPRun(runID: run.runID)
+    try await f.db.indexLibraryMessages()
+    let rows = try await f.db.libraryItems()
+    #expect(rows.count == 2)
+    #expect(rows.first(where: { $0.kind == .photo })?.contentHash == draft.contentHash)
+    #expect(rows.allSatisfy { $0.source != "https://private-note.example" })
+    let files = LibraryFileStore(supportDirectory: f.root)
+    let file = try #require(rows.first(where: { $0.kind == .photo }))
+    let opened = try files.url(for: file)
+    #expect(opened.pathExtension == "png")
+    #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
+  }
+
   @Test("retained remote handback opens offline and copies deduplicate by content")
   func remoteRetention() async throws {
     let f = try await Fixture()

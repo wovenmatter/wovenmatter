@@ -105,4 +105,51 @@ struct RuntimeMaintenanceTests {
         #expect(RuntimeMaintenance.version("2026.09.09-abc", precedes: "2026.09.10-def"))
     }
 
+    @Test func failedVerificationPreservesThePreviousLauncherAndDependencyTree() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let npm = root.appending(path: "npm")
+        try Data("""
+        #!/bin/sh
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = '--prefix' ]; then shift; prefix="$1"; fi
+          shift
+        done
+        mkdir -p "$prefix/bin"
+        printf '#!/bin/sh\\necho 1.2.3\\n' > "$prefix/bin/fixture"
+        chmod 700 "$prefix/bin/fixture"
+        """.utf8).write(to: npm)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: npm.path)
+        let prefix = root.appending(path: "managed")
+        let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { _ in Data(#"{"version":"1.2.3","bin":{"fixture":"bin.js"}}"#.utf8) })
+        func definition(_ version: String) -> LocalACPRuntimeDefinition {
+            LocalACPRuntimeDefinition(runtimeKind: .codex, displayName: "Fixture", commandName: "fixture",
+                arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil,
+                adapterPackage: "@example/fixture", minimumAdapterVersion: version, adapterDescription: "Fixture")
+        }
+        let launcher = try await installer.install(definition("1.2.3"), component: .adapter)
+        let firstTree = launcher.resolvingSymlinksInPath()
+        let updated = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { _ in Data(#"{"version":"1.2.4","bin":{"fixture":"bin.js"}}"#.utf8) })
+        await #expect(throws: (any Error).self) {
+            try await updated.install(definition("1.2.4"), component: .adapter)
+        }
+        #expect(launcher.resolvingSymlinksInPath() == firstTree)
+        #expect(FileManager.default.isExecutableFile(atPath: firstTree.path))
+        let installed = try FileManager.default.contentsOfDirectory(at: prefix.appending(path: "Installations"), includingPropertiesForKeys: nil)
+        #expect(installed.count == 1)
+    }
+
+    @Test func timesOutWithoutLeavingAChildWriter() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = root.appending(path: "late-write")
+        #expect(throws: (any Error).self) {
+            try LocalACPProcessRunner.run(executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "(sleep 1; touch '\(marker.path)') & wait"], timeout: 0.05)
+        }
+        Thread.sleep(forTimeInterval: 1.1)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
 }

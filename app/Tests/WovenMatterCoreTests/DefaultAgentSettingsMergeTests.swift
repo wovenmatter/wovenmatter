@@ -21,4 +21,27 @@ struct DefaultAgentSettingsMergeTests {
         #expect(merged.defaultModel == "openai/two")
     }
 
+    @Test func settingsEditDoesNotRestoreRemovedServerOrItsModelChoices() {
+        var base = DefaultAgentSettings()
+        base.providers.append("local-old")
+        base.models = ["openai/one", "local-old/model", "openai/two"]
+        base.fallbackModels = ["local-old/model", "openai/one", "openai/two"]
+        base.defaultModel = "local-old/model"
+        var saved = base
+        saved.providers.removeAll { $0 == "local-old" }
+        saved.models.removeAll { $0.hasPrefix("local-old/") }
+        saved.fallbackModels.removeAll { $0.hasPrefix("local-old/") }
+        saved.defaultModel = nil
+        var edited = base
+        edited.providers.removeAll { $0 == "anthropic" }
+        edited.models.swapAt(0, 2)
+        edited.fallbackModels.swapAt(1, 2)
+        let merged = saved.applyingChanges(from: base, to: edited)
+        #expect(!merged.providers.contains("local-old"))
+        #expect(!merged.providers.contains("anthropic"))
+        #expect(merged.models == ["openai/two", "openai/one"])
+        #expect(merged.fallbackModels == ["openai/two", "openai/one"])
+        #expect(merged.defaultModel == nil)
+    }
+
 }

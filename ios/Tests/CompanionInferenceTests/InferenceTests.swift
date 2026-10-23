@@ -230,4 +230,19 @@ final class InferenceTests: XCTestCase {
     } catch { XCTAssertEqual(error as? InferenceError, .interrupted) }
     XCTAssertFalse(capture.events.contains { $0["type"] as? String == "done" })
   }
+  func testAdapterPreservesExactAccountScopeAndDoesNotForwardProviderKeys() async throws {
+    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m", hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3))
+    let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
+    let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
+    try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]},\"scope\":{\"conversationID\":\"c\",\"requestID\":\"c:task\"}}", emit: { _ in })
+    let requests = await transport.requests, request = try XCTUnwrap(requests.first)
+    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
+    XCTAssertEqual(body["accountID"] as? String, "account-b")
+    XCTAssertEqual(inferenceObject(body["scope"])["requestID"] as? String, "c:task")
+    XCTAssertEqual(request.url?.path, "/v1/inference/stream")
+    XCTAssertNil(body["apiKey"])
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Device"), "phone")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Library"), "library")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Protocol"), "3")
+  }
 }

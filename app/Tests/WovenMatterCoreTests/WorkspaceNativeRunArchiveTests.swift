@@ -27,6 +27,30 @@ struct WorkspaceNativeRunArchiveTests {
     }
   }
 
+  @Test func interruptedBatchAdmissionRollsBackEveryRecordAndItsSearchIndexBeforeRetry() async throws {
+    let (db, directory) = try await database()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let conversation = try await session(db)
+    var batch = WorkspaceNativeRunRecordBatch(sourceID: "local:store", nativeSessionID: "s", records: [
+      .init(id: "first", kind: "event", payload: #"{"text":"rollback-violet-marker"}"#),
+      .init(id: "invalid", kind: "event", payload: #"{"text":"second"}"#, contentMode: "invalid-mode")])
+    await #expect(throws: (any Error).self) {
+      try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
+    }
+    #expect(rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event"))).isEmpty)
+    #expect(rows(try await db.queryHistory(.init(command: "search", search: "rollback-violet-marker", conversationID: conversation))).isEmpty)
+    batch.records[1].contentMode = "event"
+    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
+    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
+    let first = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event", limit: 1))
+    #expect(rows(first).count == 1 && first.objectValue?["hasMore"]?.boolValue == true)
+    let next = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event",
+      after: Int64(first.objectValue?["nextCursor"]?.intValue ?? 0), limit: 1))
+    #expect(rows(next).count == 1 && next.objectValue?["hasMore"]?.boolValue == false)
+    #expect(rows(try await reopened.queryHistory(.init(command: "search", search: "rollback-violet-marker", conversationID: conversation))).count == 1)
+  }
+
   @Test func nativeContentKeepsTokenFieldsAndFormattingWhileCredentialTransportIsRedacted() async throws {
     let (db, directory) = try await database()
     defer { try? FileManager.default.removeItem(at: directory) }

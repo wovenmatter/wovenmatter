@@ -8,6 +8,54 @@ import WovenMatterCore
 struct CompanionToolBridgeTests {
 
 
+  @Test func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let dispatcher = CompanionToolDispatcher(database: fixture.database)
+    let request = fixture.request(["notes", "create", "--title", "Retained work"])
+    var executions = 0
+    var continuation: CheckedContinuation<Void, Never>?
+    let initial = Task {
+      try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, caller in
+        executions += 1
+        #expect(caller == fixture.conversationID)
+        await withCheckedContinuation { continuation = $0 }
+        #expect(!Task.isCancelled)
+        return .init(result: .string("completed"), requestID: request.request.requestID)
+      }
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while continuation == nil, Date() < deadline { await Task.yield() }
+    let release = try #require(continuation)
+    initial.cancel()
+    let retry = Task {
+      try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, _ in
+        executions += 1; return .init(success: false)
+      }
+    }
+    // Both calls join the same retained work regardless of which waiter resumes first.
+    release.resume()
+    #expect(try await initial.value.result == .string("completed"))
+    #expect(try await retry.value.result == .string("completed"))
+    #expect(executions == 1)
+  }
+
+
+  @Test func desktopResponsesAreNotStoredInTransportReceiptsOrReexecuted() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let request = fixture.request(["browser", "call", "--json", "{\"action\":\"tabs\"}"])
+    let dispatcher = CompanionToolDispatcher(database: fixture.database)
+    var executions = 0
+    let result = try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, _ in
+      executions += 1; return .init(result: .string("synthetic page capture"))
+    }
+    #expect(result.result == .string("synthetic page capture"))
+    let restarted = CompanionToolDispatcher(database: try await WorkspaceDatabase(url: fixture.url))
+    let retry = try await restarted.execute(request, deviceID: fixture.deviceID) { _, _ in
+      executions += 1; return .init()
+    }
+    #expect(executions == 1 && retry.code == "automation_outcome_recorded" && retry.result == nil)
+  }
+
   @Test func ongoingAutomationRechecksDeviceExecutionAccess() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }
     let identity = try await fixture.database.companionLibraryIdentity()
@@ -23,6 +71,44 @@ struct CompanionToolBridgeTests {
     await #expect(throws: (any Error).self) {
       try await fixture.database.requireCompanionAutomationAccess(callerID: fixture.conversationID)
     }
+  }
+
+  @Test func acceptedWorkWithoutRecordedOutcomeIsNotReexecuted() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let request = fixture.request(["notes", "create", "--title", "Unknown outcome"])
+    #expect(try await fixture.database.reserveCompanionTool(request, deviceID: fixture.deviceID).isNew)
+    let restarted = CompanionToolDispatcher(database: try await WorkspaceDatabase(url: fixture.url))
+    var executed = false
+    let response = try await restarted.execute(request, deviceID: fixture.deviceID) { _, _ in
+      executed = true; return .init()
+    }
+    #expect(!executed && response.code == "outcome_unknown")
+  }
+
+  @Test func importedMacToolCallerRejectsAnotherDevice() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let caller = try await fixture.importSession(kind: .mac, executionDeviceID: fixture.deviceID)
+    var request = fixture.request(["notes", "list"])
+    request.conversationID = caller
+    let dispatcher = CompanionToolDispatcher(database: fixture.database)
+    var executions = 0
+    let allowed = try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, authorizedCaller in
+      executions += 1
+      #expect(authorizedCaller == caller)
+      return .init(result: .string("owner result"))
+    }
+    #expect(allowed.success && executions == 1)
+    // The caller and policy remain valid; only the authenticated device differs.
+    do {
+      _ = try await dispatcher.execute(request, deviceID: UUID().uuidString.lowercased()) { _, _ in
+        executions += 1
+        return .init()
+      }
+      Issue.record("Another device acquired the imported Mac caller's tool authority")
+    } catch let error as CompanionAPIError {
+      #expect(error.code == "wrong_owner")
+    }
+    #expect(executions == 1)
   }
 
   private struct Fixture {
