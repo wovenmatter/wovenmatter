@@ -71,6 +71,8 @@ when an intentional design change is accepted.
   workspace and preserve operation state when a remote row is collapsed.
 - **Settings disclosures:** use `SettingsDisclosureGroupStyle` throughout settings
   editors so the chevron, label, and remaining header width all toggle expansion.
+  `SettingsPage` supplies this by default; standalone settings sheets apply it
+  explicitly. Keep this behavior for new sections, including nested Executor controls.
   The style propagates to nested provider, credential, account, and Executor
   defaults disclosures, workspace overrides, local model servers, fallback models,
   and workspace synchronization.

@@ -202,7 +202,7 @@ struct SettingsGeneralView: View {
     private var harnessSetupCard: some View {
         SettingsCard(
             title: "Harness setup",
-            detail: "Install more harnesses or revisit Pi Durable setup."
+            detail: "Access the guided harness setup flow."
         ) {
             Button("Set up harnesses") {
                 openWindow(id: HarnessSetupPresentation.windowID)

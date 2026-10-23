@@ -54,6 +54,7 @@ struct SettingsPage<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.never)
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .contentShape(Rectangle())
         .onTapGesture {
             NSApp.keyWindow?.makeFirstResponder(nil)
@@ -958,6 +959,7 @@ struct CredentialAccessDisclosureView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 6)
             }
+            .disclosureGroupStyle(SettingsDisclosureGroupStyle())
 
             HStack {
                 Spacer()

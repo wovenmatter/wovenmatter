@@ -165,36 +165,6 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 }
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Devices",
-                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
-                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
-                    action: { section = .companion }
-                )
-                }
-                SettingsDestinationRow(
-                    title: "Local Agent Workspace",
-                    detail: "Agents and files on this Mac.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: { section = .localWorkspace }
-                )
-                if !executionOnly && clientContext == nil {
-                SettingsDestinationRow(
-                    title: "Remote Agent Workspaces",
-                    detail: "Agents and files on remote Linux machines.",
-                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
-                    action: { section = .remoteWorkspaces }
-                )
-                }
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Usage",
-                    detail: "Accounts and usage tracking.",
-                    icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
-                    action: { section = .usage }
-                )
-                }
                 SettingsDestinationRow(
                     title: AgentRuntimeKind.defaultAgent.displayName,
                     detail: "Conversation defaults, subagents, providers, and models.",
@@ -225,6 +195,36 @@ struct SettingsView: View {
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Devices",
+                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
+                    action: { section = .companion }
+                )
+                }
+                SettingsDestinationRow(
+                    title: "Local Agent Workspace",
+                    detail: "Agents and files on this Mac.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .localWorkspace }
+                )
+                if !executionOnly && clientContext == nil {
+                SettingsDestinationRow(
+                    title: "Remote Agent Workspaces",
+                    detail: "Agents and files on remote Linux machines.",
+                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+                    action: { section = .remoteWorkspaces }
+                )
+                }
+                if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Usage",
+                    detail: "Accounts and usage tracking.",
+                    icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
+                    action: { section = .usage }
+                )
+                }
             }
         }
     }
