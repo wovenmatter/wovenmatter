@@ -34,6 +34,13 @@ struct SettingsDictationView: View {
             }
             if !records.isEmpty || page > 0 {
                 HStack(spacing: 8) {
+                    if page > 0 {
+                        Button { changePage(to: 0) } label: {
+                            DashboardLucideIcon(glyph: .chevronsLeft, size: 16).frame(width: 32, height: 32)
+                        }.accessibilityLabel("First page").help("First page")
+                    } else {
+                        Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
+                    }
                     Button { changePage(to: page - 1) } label: {
                         DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
                     }.disabled(page == 0).accessibilityLabel("Previous page").help("Previous page")
@@ -42,6 +49,8 @@ struct SettingsDictationView: View {
                     Button { changePage(to: page + 1) } label: {
                         DashboardLucideIcon(glyph: .arrowRight, size: 16).frame(width: 32, height: 32)
                     }.disabled(!hasNextPage).accessibilityLabel("Next page").help("Next page")
+                    // Balance the first-page slot so the page number stays centered.
+                    Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
                 }.buttonStyle(DashboardIconButtonStyle()).frame(maxWidth: .infinity)
             }
         }
