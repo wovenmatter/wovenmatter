@@ -1,10 +1,36 @@
 @testable import WovenMatterAppFacade
 import Foundation
+import UniformTypeIdentifiers
 import Testing
 import WovenMatterCore
 
 @MainActor
 struct DocumentPreviewTests {
+    @Test func dragTransfersActualFileOnlyWhenRequested() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "Sample.csv")
+        let bytes = Data("Name,Amount\nAlpha,10".utf8)
+        try bytes.write(to: file)
+        var resolutions = 0
+        let provider = DocumentAttachmentDrag.provider(filename: file.lastPathComponent, type: .commaSeparatedText,
+            resolve: { resolutions += 1; return file }, onError: { Issue.record("Unexpected drag error: \($0)") })
+        #expect(resolutions == 0)
+        let delivered: Data = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.commaSeparatedText.identifier) { url, error in
+                do {
+                    if let error { throw error }
+                    guard let url else { throw CocoaError(.fileNoSuchFile) }
+                    continuation.resume(returning: try Data(contentsOf: url))
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+        #expect(resolutions == 1)
+        #expect(delivered == bytes)
+        #expect(try Data(contentsOf: file) == bytes)
+    }
+
     @Test func reopeningDocumentReusesTabAndReplacesDownloadedCopy() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

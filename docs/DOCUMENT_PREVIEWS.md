@@ -19,7 +19,7 @@ Opening an existing file selects its tab. Hiding the pane and switching chats ke
 those tabs; closing a tab releases its preview, without deleting the retained file.
 Tabs are window-session state and are not restored after app restart.
 
-Generated handbacks appear as file attachments beneath the response. Click the filename to preview it in the side pane, drag it into Finder or another app to copy the file, or use **Save** to choose a destination. The file menu also offers **Open in [app name]** and **Reveal in Finder**. Attachments wait briefly for Library retention and expose Retry with a concrete error when unavailable.
+Generated handbacks appear as file attachments beneath the response. Click the filename to preview it in the side pane, drag it into Finder or another app to copy the file, or use **Save** to choose a destination. The file menu also offers **Open in [app name]** and **Reveal in Finder**. Files are prepared only on an explicit preview, save, open, or drag action. Merely viewing a conversation does not download its attachments. Actions wait briefly for Library retention and show a concrete error when unavailable; the action can be retried.
 These actions resolve the original message/file identity through Library. They never read
 a path directly from agent text. The file must have been retained by Library; a
 pending, unavailable, removed, or inaccessible item reports an error. Existing
