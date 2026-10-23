@@ -6,16 +6,6 @@ final class MobileStoreTests: XCTestCase {
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
-  func testCacheBudgetDoesNotEvictUnsyncedNotes() async throws {
-    let store = try MobileStore(file: file(), budget: .init(noteBytes: 1_600))
-    let note = try await store.createNote(folderID: nil, title: "Unsynced", content: content("keep"))
-    let remote = (0..<20).map { CompanionNote(id: "remote-\($0)", title: "Remote", content: String(repeating: "r", count: 150)) }
-    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: remote))
-    let state = await store.snapshot()
-    XCTAssertEqual(state.notes[note.id], note)
-    XCTAssertTrue(state.isDirty(note.id))
-  }
-
   func testRichEditPreservesUnchangedTablesUnknownKeysLinksAndIDs() throws {
     let document = NoteDocument(blocks: [.richText(.init(id: "text", style: .heading2, runs: [.init(text: "Hello", bold: true, link: "https://example.com")])), .table(.init(rows: 2, columns: 2, headerRow: true))])
     var raw = try JSONSerialization.jsonObject(with: Data(document.encoded().utf8)) as! [String: Any]
@@ -74,20 +64,16 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertTrue(html.contains("form-action 'none'"))
   }
 
-  func testOfflinePinsPreserveHistoryBeyondCacheBudgetAndRestart() async throws {
-    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
-    let store = try MobileStore(file: location, budget: .init(transcriptCount: 1, transcriptBytes: 512))
-    try await store.setTranscriptPinned("pinned", true)
-    let text = String(repeating: "all history ", count: 200)
-    try await store.cache(.init(conversationID: "pinned", messages: [.init(id: "older", conversationID: "pinned", role: "assistant", content: text)]))
-    try await store.cache(.init(conversationID: "other", messages: [.init(id: "other", conversationID: "other", role: "user", content: "recent")]))
-    let restarted = try MobileStore(file: location, budget: .init(transcriptCount: 1, transcriptBytes: 512))
-    let state = await restarted.snapshot()
-    XCTAssertEqual(state.pinnedTranscriptIDs, ["pinned"])
-    XCTAssertEqual(state.transcripts["pinned"]?.messages.first?.content, text)
-  }
-  func testSettledTranscriptReplacesStreamingRowsWithoutReorderingUserOrDroppingHistory() async throws {
-    let location = file(), store = try MobileStore(file: location)
+  func testCachePressurePreservesDirtyNotesAndSettledPinnedHistoryAcrossRestart() async throws {
+    let location = file()
+    let budget = MobileStore.Budget(transcriptCount: 1, transcriptBytes: 512, noteBytes: 1_600)
+    let store = try MobileStore(file: location, budget: budget)
+    let note = try await store.createNote(folderID: nil, title: "Unsynced", content: content("keep"))
+    let remote = (0..<20).map { CompanionNote(id: "remote-\($0)", title: "Remote", content: String(repeating: "r", count: 150)) }
+    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: remote))
+    let dirty = await store.snapshot()
+    XCTAssertEqual(dirty.notes[note.id], note)
+    XCTAssertTrue(dirty.isDirty(note.id))
     try await store.setTranscriptPinned("chat", true)
     let older = CompanionMessage(id: "older", conversationID: "chat", role: "user", content: "Earlier turn")
     let user = CompanionMessage(id: "u", conversationID: "chat", runID: "r", role: "user", content: "Weather?", sequence: 0)
@@ -95,13 +81,19 @@ final class MobileStoreTests: XCTestCase {
     let transient = CompanionActivity(id: "thinking-live", runID: "r", title: "Thinking", status: "running", isTransient: true)
     try await store.cache(.init(conversationID: "chat", messages: [older, user, streaming], activities: [transient]))
     // The final SDK entry gets a durable ID, unlike the temporary streaming row.
-    let final = CompanionMessage(id: "answer", conversationID: "chat", runID: "r", role: "assistant", content: "Sunny and breezy.", sequence: 1)
+    let text = "Sunny and breezy. " + String(repeating: "all history ", count: 200)
+    let final = CompanionMessage(id: "answer", conversationID: "chat", runID: "r", role: "assistant", content: text, sequence: 1)
     try await store.cache(.init(conversationID: "chat", messages: [user, final]))
-    let restarted = try MobileStore(file: location)
+    try await store.cache(.init(conversationID: "other", messages: [.init(id: "other", conversationID: "other", role: "user", content: "recent")]))
+    let restarted = try MobileStore(file: location, budget: budget)
     let state = await restarted.snapshot()
+    XCTAssertEqual(state.notes[note.id], note)
+    XCTAssertTrue(state.isDirty(note.id))
     let transcript = try XCTUnwrap(state.transcripts["chat"])
     XCTAssertEqual(transcript.messages.map(\.id), ["older", "u", "answer"])
     XCTAssertTrue(transcript.activities.isEmpty)
+    XCTAssertEqual(state.pinnedTranscriptIDs, ["chat"])
+    XCTAssertEqual(transcript.messages.last?.content, text)
   }
 
 }

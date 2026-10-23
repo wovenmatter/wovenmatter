@@ -121,12 +121,15 @@ final class PiDurableRuntimeTests: XCTestCase {
     try await runtime.close()
   }
 
-  func testRealSDKRunsNativeToolAndReopensWithoutDuplicatingSubmission() async throws {
+  func testRealSDKOwnsJournalAndRecoversTornTailWithoutDuplicatingSubmission() async throws {
     let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
     let host = ControlledHost()
     var events: [String] = []
     let first = try runtime(path, host: host) { events.append($0) }
     _ = try await first.open()
+    let competing = try runtime(path, host: host)
+    do { _ = try await competing.open(); XCTFail("Two SDK writers opened one journal") }
+    catch PiDurableRuntimeError.storageInUse { }
     let accepted = try object(await first.submit(text: "Save this note", requestID: "stable-request"))
     let id = try XCTUnwrap(accepted["id"] as? Int)
     let settled = try object(await first.wait(submissionID: id))
@@ -138,8 +141,14 @@ final class PiDurableRuntimeTests: XCTestCase {
     try await first.close()
     XCTAssertTrue(FileManager.default.fileExists(atPath: path.appendingPathComponent("main.jsonl").path))
 
+    let main = path.appendingPathComponent("main.jsonl")
+    let before = try Data(contentsOf: main)
+    var torn = before; torn.append(Data("{\"format\":1,\"type\":\"commit\"".utf8)); try torn.write(to: main)
     let second = try runtime(path, host: host)
     _ = try await second.open()
+    let after = try Data(contentsOf: main)
+    XCTAssertTrue(after.starts(with: before))
+    XCTAssertEqual(after.last, 10, "SDK removes an incomplete uncommitted tail")
     let recoveredReceipt = try await second.submission(requestID: "stable-request")
     XCTAssertEqual(try object(XCTUnwrap(recoveredReceipt))["id"] as? Int, id)
     let missingReceipt = try await second.submission(requestID: "never-admitted")
@@ -298,26 +307,7 @@ final class PiDurableRuntimeTests: XCTestCase {
     try await reopened.close()
   }
 
-  func testCodeModeUsesDurableNestedToolAndStoresConversationValues() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.code)
-    let engine = try runtime(path, host: host)
-    _ = try await engine.open()
-    let receipt = try object(await engine.submit(text: "Use code to save note", requestID: "code-request"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    let settled = try object(await engine.wait(submissionID: id))
-    XCTAssertEqual(settled["status"] as? String, "done")
-    let history = try await engine.history()
-    XCTAssertTrue(history.contains("woven.ios-codemode-store"), history)
-    XCTAssertTrue(history.contains("wovenNestedCall"), history)
-    let counts = await host.counts()
-    XCTAssertEqual(counts.1, 1, history)
-    let requests = await host.toolsSeen
-    XCTAssertTrue(try object(XCTUnwrap(requests.first))["toolCallID"] as? String == "call-code/nested/1")
-    try await engine.close()
-  }
-
-  func testCodeModeSDKTasksRunBeyondFormerConcurrencyCeiling() async throws {
+  func testCodeModePersistsNestedCallIdentityAndStoreBeyondFormerConcurrencyCeiling() async throws {
     let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
     let host = ControlledHost(); await host.mode(.toolFanout)
     let engine = try runtime(path, host: host)
@@ -330,9 +320,11 @@ final class PiDurableRuntimeTests: XCTestCase {
     XCTAssertEqual(requests.count, 32)
     XCTAssertEqual(peak, 32)
     let ids = try requests.compactMap { try object($0)["toolCallID"] as? String }
-    XCTAssertEqual(Set(ids).count, 32, "Each nested SDK task retains its own durable call identity")
+    XCTAssertEqual(Set(ids), Set((1...32).map { "call-code/nested/\($0)" }),
+      "Each nested SDK task retains its exact durable call identity")
     let history = try await engine.history()
     XCTAssertTrue(history.contains("woven.ios-codemode-store"), history)
+    XCTAssertTrue(history.contains("wovenNestedCall"), history)
     try await engine.close()
   }
 
@@ -447,23 +439,4 @@ final class PiDurableRuntimeTests: XCTestCase {
     catch { XCTAssertTrue(error.localizedDescription.contains("limit"), error.localizedDescription) }
   }
 
-  func testSingleWriterAndTruncatedTailRecovery() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost()
-    let first = try runtime(path, host: host)
-    _ = try await first.open()
-    let competing = try runtime(path, host: host)
-    do { _ = try await competing.open(); XCTFail("Two SDK writers opened one journal") }
-    catch PiDurableRuntimeError.storageInUse { }
-    try await first.close()
-    let main = path.appendingPathComponent("main.jsonl")
-    let before = try Data(contentsOf: main)
-    var torn = before; torn.append(Data("{\"format\":1,\"type\":\"commit\"".utf8)); try torn.write(to: main)
-    let recovered = try runtime(path, host: host)
-    _ = try await recovered.open()
-    let after = try Data(contentsOf: main)
-    XCTAssertTrue(after.starts(with: before))
-    XCTAssertEqual(after.last, 10, "SDK removes an incomplete uncommitted tail")
-    try await recovered.close()
-  }
 }

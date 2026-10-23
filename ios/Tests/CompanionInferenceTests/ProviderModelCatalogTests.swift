@@ -55,29 +55,33 @@ final class ProviderModelCatalogTests: XCTestCase {
   }
   private func data(_ models: [InferenceModel]) throws -> Data { try JSONEncoder().encode(models) }
 
-  func testColdWarmRestartStale304AndPublicRequestPrivacy() async throws {
+  func testCatalogRecoversInitialFailuresRevalidatesAndPreservesSavedModelsDuringOutage() async throws {
     let directory = root(), clock = CatalogClock(), body = try data([model()])
-    let transport = CatalogFixture([.init(status: 200, data: body, etag: "\"fixture\"", lastModified: "Thu, 01 Oct 2026 12:00:00 GMT"), .init(status: 304)])
+    let transport = CatalogFixture([.init(status: 304), .init(status: 503), .init(status: 200, data: body, etag: "\"fixture\"", lastModified: "Thu, 01 Oct 2026 12:00:00 GMT"), .init(status: 304)])
     let cache = ProviderModelCatalog(directory: directory, transport: transport, now: { clock.now() })
     let empty = await cache.cached(provider: "openai")
     XCTAssertTrue(empty.isEmpty)
-    let cold = try await cache.load(provider: "openai")
+    do { _ = try await cache.load(provider: "openai"); XCTFail("Unbacked 304 accepted") } catch {}
+    do { _ = try await cache.load(provider: "openai"); XCTFail("HTTP failure accepted") } catch {}
+    let stillEmpty = await cache.cached(provider: "openai"); XCTAssertTrue(stillEmpty.isEmpty)
+    let cold = try await cache.load(provider: "openai", force: true)
+    XCTAssertEqual(cold.count, 1)
     let warm = try await cache.load(provider: "openai")
     XCTAssertEqual(cold, warm)
     let restarted = ProviderModelCatalog(directory: directory, transport: transport, now: { clock.now() })
     let restored = try await restarted.load(provider: "openai")
     XCTAssertEqual(restored, cold)
     let beforeStale = await transport.requests
-    XCTAssertEqual(beforeStale.count, 1)
+    XCTAssertEqual(beforeStale.count, 3)
     clock.advance()
     let cached = await restarted.cached(provider: "openai")
     XCTAssertEqual(cached, cold)
     let revalidated = try await restarted.load(provider: "openai")
     XCTAssertEqual(revalidated, cold)
     let requests = await transport.requests
-    XCTAssertEqual(requests.count, 2)
-    XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-None-Match"), "\"fixture\"")
-    XCTAssertEqual(requests[1].value(forHTTPHeaderField: "If-Modified-Since"), "Thu, 01 Oct 2026 12:00:00 GMT")
+    XCTAssertEqual(requests.count, 4)
+    XCTAssertEqual(requests[3].value(forHTTPHeaderField: "If-None-Match"), "\"fixture\"")
+    XCTAssertEqual(requests[3].value(forHTTPHeaderField: "If-Modified-Since"), "Thu, 01 Oct 2026 12:00:00 GMT")
     for request in requests {
       XCTAssertEqual(request.url?.absoluteString, "https://pi.dev/api/models/providers/openai?types=chat&pi-version=\(ProviderModelCatalog.piVersion)")
       XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "pi/\(ProviderModelCatalog.piVersion)")
@@ -87,37 +91,23 @@ final class ProviderModelCatalogTests: XCTestCase {
     }
     let roundTrip = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cold[0])) as? NSDictionary
     XCTAssertEqual(roundTrip, try JSONSerialization.jsonObject(with: JSONEncoder().encode(model())) as? NSDictionary)
-  }
-  func testOutagePreservesSavedDescriptorsAndDoesNotChangeTheirFreshness() async throws {
-    let directory = root(), clock = CatalogClock()
-    let transport = CatalogFixture([.init(status: 200, data: try data([model()]))])
-    let cache = ProviderModelCatalog(directory: directory, transport: transport, now: { clock.now() })
-    let initial = try await cache.load(provider: "openai")
-    clock.advance()
-    do { _ = try await cache.load(provider: "openai"); XCTFail("Offline load succeeded") } catch {}
-    let retained = await cache.cached(provider: "openai")
-    XCTAssertEqual(retained, initial)
-    let saved = InferenceConnection(name: "Saved", provider: "openai", route: .direct, modelID: initial[0].id, selectedModel: initial[0])
+      clock.advance()
+    do { _ = try await restarted.load(provider: "openai"); XCTFail("Offline load succeeded") } catch {}
+    let retained = await restarted.cached(provider: "openai")
+    XCTAssertEqual(retained, cold)
+    let saved = InferenceConnection(name: "Saved", provider: "openai", route: .direct, modelID: cold[0].id, selectedModel: cold[0])
     let persisted = try JSONDecoder().decode(InferenceConnection.self, from: JSONEncoder().encode(saved))
-    let empty = ProviderModelCatalog(directory: root(), transport: CatalogFixture([]))
-    let service = CompanionInferenceService(connection: persisted, catalogLoader: empty)
+    let emptyCatalog = ProviderModelCatalog(directory: root(), transport: CatalogFixture([]))
+    let service = CompanionInferenceService(connection: persisted, catalogLoader: emptyCatalog)
     let resolved = try await service.model()
-    XCTAssertEqual(resolved, initial[0])
+    XCTAssertEqual(resolved, cold[0])
     var changed = model(); changed.name = "Changed"
     let replacement = ProviderModelCatalog(directory: directory, transport: CatalogFixture([.init(status: 200, data: try data([changed]))]))
     _ = try await replacement.load(provider: "openai", force: true)
     let pinned = try await service.model()
-    XCTAssertEqual(pinned, initial[0])
+    XCTAssertEqual(pinned, cold[0])
   }
-  func testFirstLoadFailureCanRetryAndUnbacked304Fails() async throws {
-    let transport = CatalogFixture([.init(status: 503), .init(status: 200, data: try data([model()]))])
-    let cache = ProviderModelCatalog(directory: root(), transport: transport)
-    do { _ = try await cache.load(provider: "openai"); XCTFail("HTTP failure accepted") } catch {}
-    let empty = await cache.cached(provider: "openai"); XCTAssertTrue(empty.isEmpty)
-    let loaded = try await cache.load(provider: "openai", force: true); XCTAssertEqual(loaded.count, 1)
-    let invalid = ProviderModelCatalog(directory: root(), transport: CatalogFixture([.init(status: 304)]))
-    do { _ = try await invalid.load(provider: "openai"); XCTFail("Unbacked 304 accepted") } catch {}
-  }
+
   func testTypeAPIFilteringAndXAIConnectionIdentity() throws {
     var image = model(); image.metadata["type"] = .string("image"); image.api = "image-generation"
     var classifier = model(); classifier.metadata["type"] = .string("classifier")

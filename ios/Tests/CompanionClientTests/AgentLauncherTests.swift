@@ -18,7 +18,7 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(agents.map(\.isAvailable), [true, false, false])
   }
 
-  func testDirectAndCentralRoutesAppearOnceAndUseReachableRoute() {
+  func testDiscoveredRoutesDeduplicateAndSelectOnlyTheLatestMatchingSession() throws {
     let central = CompanionProvider(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
     func agents(centralOnline: Bool, directOnline: Bool) -> [CompanionAgentLauncher] {
       CompanionAgentLauncher.list(deviceName: "Phone", centralOnline: centralOnline, providers: [central], workspaces: [workspace],
@@ -29,6 +29,16 @@ final class AgentLauncherTests: XCTestCase {
     let offline = agents(centralOnline: false, directOnline: false)
     XCTAssertEqual(offline.map(\.workspaceID), ["local", workspaceID])
     XCTAssertFalse(offline[1].isAvailable)
+      let launcher = try XCTUnwrap(agents(centralOnline: true, directOnline: true).first { $0.workspaceID == workspaceID })
+    let conversations: [CompanionConversation] = [
+      .init(id: "pinned", title: "Pinned", providerID: "pi", updatedAt: "2026-10-11T12:00:00Z", isPinned: true),
+      .init(id: "latest", title: "Latest", providerID: "pi", updatedAt: "2026-10-11T12:00:00.500Z"),
+      .init(id: "other-workspace", title: "Other", providerID: "pi", updatedAt: "2026-10-11T15:00:00Z"),
+      .init(id: "other-agent", title: "Other", providerID: "another-pi", runtimeKind: "pi", updatedAt: "2026-10-11T16:00:00Z")
+    ]
+    let latest = launcher.latestConversation(in: conversations) { $0 == "other-workspace" ? "another-workspace" : self.workspaceID }
+    XCTAssertEqual(try XCTUnwrap(latest).id, "latest")
+    XCTAssertNil(launcher.latestConversation(in: conversations) { _ in "another-workspace" })
   }
 
   func testCentralMacAppearsOnceByItsNameAndEmptyLinuxWorkspaceRemainsVisible() {
@@ -49,16 +59,4 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(groups.last?.workspace?.kind, .linux)
   }
 
-  func testLatestSessionUsesExactOwnerAndProviderIgnoringPinsAndTimestampFormatting() throws {
-    let launcher = CompanionAgentLauncher(workspaceID: workspaceID, workspaceName: "Remote", providerID: "pi", name: "Pi Durable", runtimeKind: "pi")
-    let conversations: [CompanionConversation] = [
-      .init(id: "pinned", title: "Pinned", providerID: "pi", updatedAt: "2026-10-11T12:00:00Z", isPinned: true),
-      .init(id: "latest", title: "Latest", providerID: "pi", updatedAt: "2026-10-11T12:00:00.500Z"),
-      .init(id: "other-workspace", title: "Other", providerID: "pi", updatedAt: "2026-10-11T15:00:00Z"),
-      .init(id: "other-agent", title: "Other", providerID: "another-pi", runtimeKind: "pi", updatedAt: "2026-10-11T16:00:00Z")
-    ]
-    let latest = launcher.latestConversation(in: conversations) { $0 == "other-workspace" ? "another-workspace" : self.workspaceID }
-    XCTAssertEqual(try XCTUnwrap(latest).id, "latest")
-    XCTAssertNil(launcher.latestConversation(in: conversations) { _ in "another-workspace" })
-  }
 }

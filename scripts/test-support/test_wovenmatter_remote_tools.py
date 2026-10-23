@@ -98,9 +98,10 @@ class RemoteToolTests(unittest.TestCase):
     def test_literal_flags_are_values_and_retry_id_is_preserved(self):
         request_id = "10000000-0000-4000-8000-000000000001"
         args = ["sessions", "send", "target", "--text", "--file", "--request-id", request_id]
-        request = json.loads(tools.build_request(args, {}))
+        request = json.loads(tools.build_request(args, {"WOVENMATTER_CONTEXT_ID": "captured-input"}))
         self.assertEqual(request["arguments"], args)
         self.assertEqual(request["requestID"], request_id)
+        self.assertEqual(request["contextID"], "captured-input")
         args = ["notes", "append", "--text", "--note-id", "--request-id", request_id]
         request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "note-a"}))
         self.assertEqual(request["arguments"], args)
@@ -117,11 +118,6 @@ class RemoteToolTests(unittest.TestCase):
         self.assertEqual(request["arguments"], args)
         with self.assertRaises(ValueError):
             tools.build_request(["notes", "list"] + [""] * 1023, {})
-
-    def test_context_binding_is_carried_outside_command_arguments(self):
-        request = json.loads(tools.build_request(["context"], {"WOVENMATTER_CONTEXT_ID": "captured-input"}))
-        self.assertEqual(request["arguments"], ["context"])
-        self.assertEqual(request["contextID"], "captured-input")
 
     def test_receive_deadline_cannot_be_extended_by_trickle_input(self):
         class TrickleConnection:
@@ -223,28 +219,25 @@ class RemoteToolTests(unittest.TestCase):
                 for connection in connections:
                     connection.close()
 
-    def test_relay_rejects_invalid_envelopes_without_forwarding(self):
-        with self.relay_fixture() as (relay_dir, relay):
-            for request in [b'{}', json.dumps({"requestID": "x" * 100_000}).encode(),
-                            b'[' * 2000 + b']' * 2000]:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                    connection.settimeout(5)
-                    connection.connect(str(relay_dir / "rpc.sock"))
-                    connection.sendall(request)
-                    connection.shutdown(socket.SHUT_WR)
-                    raw = tools.receive_all(connection, tools.RESPONSE_LIMIT, timeout=5)
-                reply = json.loads(raw)
-                self.assertEqual(reply["code"], "invalid_request")
-                self.assertIsNone(reply.get("requestID"))
-                self.assertLess(len(raw), 1024)
-            self.assertFalse(select.select([relay.stdout], [], [], 0)[0])
-
     def test_relay_binds_private_endpoint_and_closes_with_app(self):
         with self.relay_fixture() as (relay_dir, relay):
             child = None
             try:
                 self.assertEqual(relay_dir.stat().st_mode & 0o777, 0o700)
                 self.assertEqual((relay_dir / "rpc.sock").stat().st_mode & 0o777, 0o700)
+                for request in [b'{}', json.dumps({"requestID": "x" * 100_000}).encode(),
+                                b'[' * 2000 + b']' * 2000]:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                        connection.settimeout(5)
+                        connection.connect(str(relay_dir / "rpc.sock"))
+                        connection.sendall(request)
+                        connection.shutdown(socket.SHUT_WR)
+                        raw = tools.receive_all(connection, tools.RESPONSE_LIMIT, timeout=5)
+                    reply = json.loads(raw)
+                    self.assertEqual(reply["code"], "invalid_request")
+                    self.assertIsNone(reply.get("requestID"))
+                    self.assertLess(len(raw), 1024)
+                self.assertFalse(select.select([relay.stdout], [], [], 0)[0])
                 environment = dict(os.environ)
                 environment.pop("WOVENMATTER_SOCKET", None)
                 child = subprocess.Popen([sys.executable, str(relay_dir / "wovenmatter"), "sessions", "list"],

@@ -9,26 +9,18 @@ import WovenMatterCore
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
 
-  @Test func sessionEndpointCapabilitiesAreRedactedWithoutChangingOtherProtocolContent() throws {
-    let a = String(repeating: "a", count: 32), b = String(repeating: "b", count: 32)
-    let socket = "/private/tmp/wmtools-\(a)/\(b).sock"
-    let cli = "/home/.wmt/\(a)/\(b)/wovenmatter"
-    for path in [socket, cli, socket.replacingOccurrences(of: "/", with: "\\/")] {
-      let raw = "{\"prompt\":\"Use \(path)\",\"future_field\":true}"
-      let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(raw)
-      #expect(!redacted.contains(a))
-      #expect(redacted.contains("future_field"))
-      #expect(try JSONSerialization.jsonObject(with: Data(redacted.utf8)) is [String: Any])
-    }
-    let ordinary = #"{"path":"/workspace/example/a.swift","text":"preserved"}"#
-    #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
-  }
-
-  @Test func nestedHTTPHistoryRedactsSessionEndpoints() async throws {
+  @Test func directAndNestedHistoryRedactEndpointsWhilePreservingOtherContent() async throws {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
     let owner = String(repeating: "a", count: 32), endpoint = String(repeating: "b", count: 32)
     for path in ["/private/tmp/wmtools-\(owner)/\(endpoint).sock", "/home/.wmt/\(owner)/\(endpoint)/wovenmatter"] {
+      for spelling in [path, path.replacingOccurrences(of: "/", with: "\\/")] {
+        let raw = "{\"prompt\":\"Use \(spelling)\",\"future_field\":true}"
+        let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(raw)
+        #expect(!redacted.contains(owner))
+        #expect(redacted.contains("future_field"))
+        #expect(try JSONSerialization.jsonObject(with: Data(redacted.utf8)) is [String: Any])
+      }
       // HTTP observations wrap the original JSON response as a JSON string.
       let body = String(decoding: try JSONEncoder().encode(["text": "Use " + path, "other": "preserved"]), as: UTF8.self)
       let frame = WorkspaceHTTPObservation(method: "GET", path: "/api/session/ses_a/message", query: [:], status: 200, body: body)
@@ -46,6 +38,8 @@ struct WorkspaceHistoryTests {
       #expect(decoded["other"] == "preserved")
       #expect(decoded["text"] == "Use [Woven Matter session tool endpoint]")
     }
+      let ordinary = #"{"path":"/workspace/example/a.swift","text":"preserved"}"#
+    #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
   }
 
 

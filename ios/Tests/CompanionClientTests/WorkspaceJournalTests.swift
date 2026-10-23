@@ -30,12 +30,6 @@ final class WorkspaceJournalTests: XCTestCase {
     .init(eventID: "event-\(workspace)-\(sequence)", workspaceID: workspace, originSequence: sequence,
       conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Version \(sequence)"))
   }
-  func testOwnerHistoryCannotBeReassignedToAnotherWorkspace() async throws {
-    let journal = try WorkspaceJournal(file: path())
-    try await journal.record(entry(1))
-    do { try await journal.record(entry(1, workspace: "other")); XCTFail() } catch WorkspaceJournal.Failure.reusedIdentity {}
-    let state = await journal.snapshot(); XCTAssertEqual(state.conversationWorkspaceIDs["chat"], "phone")
-  }
   func testDirectControlCommandsPersistOwnerBeforeDispatchAndRejectMismatches() async throws {
     let store = try MobileStore(file: path()), transport = OfflineWorkspace(loseReply: false)
     let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)
@@ -83,8 +77,13 @@ final class WorkspaceJournalTests: XCTestCase {
     XCTAssertEqual(state.conversations["chat"], conversation); XCTAssertEqual(state.transcripts["chat"], transcript)
     XCTAssertTrue(state.commands.isEmpty)
   }
-  func testNativeRecordAndCommandIDsCannotBeReusedForDifferentTargets() async throws {
+  func testConversationNativeRecordAndCommandIdentitiesRemainBoundToOwnerAndPayload() async throws {
     let journal = try WorkspaceJournal(file: path())
+    try await journal.record(entry(1, workspace: "owner", id: "first"))
+    do { try await journal.record(entry(1, workspace: "other", id: "first")); XCTFail() }
+    catch WorkspaceJournal.Failure.reusedIdentity {}
+    let owner = await journal.snapshot().conversationWorkspaceIDs["first"]
+    XCTAssertEqual(owner, "owner")
     _ = try await journal.appendNativeRecord(workspaceID: "owner", conversationID: "first", runID: "run", recordID: "native-entry", format: "fixture", data: Data("identical bytes".utf8))
     do {
       _ = try await journal.appendNativeRecord(workspaceID: "owner", conversationID: "second", runID: "run", recordID: "native-entry", format: "fixture", data: Data("identical bytes".utf8))
@@ -96,9 +95,12 @@ final class WorkspaceJournalTests: XCTestCase {
     do { _ = try await journal.rememberCommand(changed, workspaceID: "owner"); XCTFail("A command identity must keep its original payload") }
     catch WorkspaceJournal.Failure.reusedIdentity { }
     let state = await journal.snapshot()
-    XCTAssertEqual(state.entries.count, 1)
+    XCTAssertEqual(state.entries.count, 2)
+    XCTAssertEqual(state.entries.values.filter { $0.kind == .conversation }.count, 1)
+    XCTAssertEqual(state.entries.values.filter { $0.kind == .nativeRecord }.count, 1)
     XCTAssertEqual(state.commands.values.first?.command, command)
   }
+
   func testNativeToolCASRejectsSameRevisionEditorChangesAndCancellation() async throws {
     let store = try MobileStore(file: path())
     let initial = CompanionNote(id: "note", title: "Shared", content: "Initial", revision: 5)

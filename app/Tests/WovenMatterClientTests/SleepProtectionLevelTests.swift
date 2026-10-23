@@ -25,26 +25,7 @@ struct SleepProtectionLevelTests {
         }
     }
 
-    @Test func batteryOnlyAndUnknownPowerDoNotLeakAnIdleSleepAssertion() {
-        var source = WorkPowerSource.external
-        let activities = Activities()
-        let owner = activities.owner(policy: .init(batteryPower: true), source: { source })
-        _ = owner.beginDispatch()
-        #expect(!activities.preventsIdleSleep)
-        source = .battery
-        owner.powerSourceChanged()
-        #expect(activities.preventsIdleSleep)
-        source = .unknown
-        owner.powerSourceChanged()
-        #expect(!activities.preventsIdleSleep)
-        owner.stop()
-        source = .battery
-        owner.powerSourceChanged()
-        owner.setPolicy(.displaySleepDefault)
-        #expect(activities.active.isEmpty)
-    }
-
-    @Test func higherLevelIncludesNormalProtectionOnlyOnItsSelectedSources() {
+    @Test func higherAndNormalPoliciesFollowPowerChangesAndStayStopped() {
         var source = WorkPowerSource.external
         let activities = Activities()
         let owner = activities.owner(policy: .init(), higher: .init(batteryPower: true), source: { source })
@@ -61,7 +42,19 @@ struct SleepProtectionLevelTests {
         owner.setClosedLidPolicy(.init(batteryPower: true))
         owner.setClosedLidPolicy(.init())
         #expect(activities.preventsIdleSleep) // Downgrade retains the selected normal level.
+        source = .external
+        owner.powerSourceChanged()
+        #expect(!activities.preventsIdleSleep)
+        source = .battery
+        owner.powerSourceChanged()
+        #expect(activities.preventsIdleSleep)
+        source = .unknown
+        owner.powerSourceChanged()
+        #expect(!activities.preventsIdleSleep)
         owner.stop()
+        source = .battery
+        owner.powerSourceChanged()
+        owner.setPolicy(.displaySleepDefault)
         #expect(activities.active.isEmpty)
     }
 

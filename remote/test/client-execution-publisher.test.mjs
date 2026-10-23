@@ -52,9 +52,15 @@ function fixture(t,{automatic=false}={}) {
   return {directory,events,artifacts,requests,grant,createSession,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
 }
 test('owner executes offline and restart retries original immutable events without any observer',async t=>{
-  const f=fixture(t,{automatic:true});const local=await f.createSession();assert.equal(local.status,'completed')
+  const f=fixture(t,{automatic:true})
+  assert.throws(()=>f.service.configurePublisher({...f.grant,workspaceID:randomUUID()}),{statusCode:400})
+  assert.throws(()=>f.service.configurePublisher({...f.grant,executionDeviceID:randomUUID()}),{statusCode:400})
+  assert.throws(()=>f.service.configurePublisher({...f.grant,endpoint:'https://example.com'}),{statusCode:400})
+  for(const suffix of ['', '-wal']){let data;try{data=readFileSync(join(f.directory,'execution.sqlite'+suffix))}catch{continue};assert.equal(data.includes(Buffer.from(f.grant.token)),false)}
+  const local=await f.createSession();assert.equal(local.status,'completed')
   await until(()=>f.requests.length>0);assert.equal(f.events.size,0)
   const before=f.service.events().entries;await f.restart();f.online=true
+  assert.equal(f.service.publisherStatus().configured,true);assert.equal(f.service.publisherStatus().grantID,f.grant.grantID)
   await until(()=>f.events.size===before.length)
   assert.deepEqual([...f.events.values()],before)
   assert.ok(f.requests.every(x=>x.url.includes('/v1/federation/publisher/')))
@@ -67,15 +73,6 @@ test('lost acknowledgement and restart re-send the same IDs then advance durable
   assert.deepEqual([...f.events.values()],accepted)
   const calls=f.requests.length;await f.restart();await f.service.synchronizePublisher();assert.equal(f.requests.length,calls)
 })
-test('publisher grants are encrypted on disk and bound to workspace execution identity',async t=>{
-  const f=fixture(t)
-  assert.throws(()=>f.service.configurePublisher({...f.grant,workspaceID:randomUUID()}),{statusCode:400})
-  assert.throws(()=>f.service.configurePublisher({...f.grant,executionDeviceID:randomUUID()}),{statusCode:400})
-  assert.throws(()=>f.service.configurePublisher({...f.grant,endpoint:'https://example.com'}),{statusCode:400})
-  for(const suffix of ['', '-wal']){let data;try{data=readFileSync(join(f.directory,'execution.sqlite'+suffix))}catch{continue};assert.equal(data.includes(Buffer.from(f.grant.token)),false)}
-  await f.restart();assert.equal(f.service.publisherStatus().configured,true);assert.equal(f.service.publisherStatus().grantID,f.grant.grantID)
-})
-
 test('retained origin importer deduplicates immutable IDs and rejects foreign or changed entries',async t=>{
   const f=fixture(t),id=randomUUID(),conversationID=randomUUID()
   const entry={eventID:id,conversationID,kind:'conversation',conversation:{id:conversationID,title:'Retained',updatedAt:''}}

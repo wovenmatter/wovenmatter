@@ -92,8 +92,9 @@ import Speech
   private func preferences() -> UserDefaults { UserDefaults(suiteName: "dictation-fixture-\(UUID())")! }
 
   @Test func defaultIsReadyWithoutProviderAndLanguageIsCapturedPerRecording() async throws {
-    let engine = NativeEngineFixture()
-    let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine })
+    let defaults = preferences(), engine = NativeEngineFixture()
+    defaults.set(false, forKey: "wovenmatter.dictation.enabled")
+    let session = DictationSession(preferences: defaults, permission: { true }, makeEngine: { engine })
     session.languageIdentifier = "de-DE"
     session.start()
     try await settle { session.phase == .recording }
@@ -190,17 +191,6 @@ import Speech
     #expect(inserted == "Current")
   }
 
-  @Test func legacyDisabledPreferenceDoesNotBlockDictation() async throws {
-    let defaults = preferences(), engine = NativeEngineFixture()
-    defaults.set(false, forKey: "wovenmatter.dictation.enabled")
-    let session = DictationSession(preferences: defaults, permission: { true }, makeEngine: { engine })
-    session.start()
-    try await settle { session.phase == .recording }
-    session.cancel()
-    #expect(engine.captureStopped)
-    #expect(session.phase == .idle)
-  }
-
   @Test func stalledFinalizationRetainsCompletedTextAndStopsCapture() async throws {
     let engine = NativeEngineFixture(); engine.finalizes = false
     let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine },
@@ -245,6 +235,8 @@ import Speech
     try await settle { session.phase == .recording }
     #expect(creations == 2)
     session.cancel()
+    #expect(current.captureStopped)
+    #expect(session.phase == .idle)
   }
 }
 #endif

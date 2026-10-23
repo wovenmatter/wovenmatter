@@ -57,28 +57,22 @@ struct WorkspaceExecutionRootTests {
     }
   }
 
-  @Test func renameAndReferencesPreserveOneOwningRootAcrossReopen() async throws {
-    let f = try await Fixture(); defer { f.remove() }
-    let location = f.location("Initial directory")
-    let folder = try await f.db.createFolder(name: "Initial directory", location: location)
-    _ = try await f.db.renameFolder(id: folder, name: "Display title")
-    try await f.db.setFolderReferences(id: folder, paths: ["/other/project", "/reference", "/reference"])
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "history.sqlite"))
-    let record = try #require(try await reopened.workspaceOverview().folders.first)
-    #expect(record.name == "Display title" && record.rootPath == location.rootPath)
-    #expect(record.executionWorkspaceID == f.owner)
-    #expect(record.referencePaths == ["/other/project", "/reference"])
-    try await reopened.setFolderReferences(id: folder, paths: [])
-    #expect(try await reopened.workspaceOverview().folders.first?.rootPath == location.rootPath)
-    #expect(try await reopened.workspaceOverview().folders.first?.referencePaths.isEmpty == true)
-    await #expect(throws: (any Error).self) { try await reopened.setFolderReferences(id: folder, paths: ["relative/path"]) }
-  }
-
-  @Test func draftMovesWithinItsWorkspaceAndLocksAfterFirstMessage() async throws {
+  @Test func folderMetadataAndDraftMovesPreserveRootBeforeAndAfterFirstMessage() async throws {
     let f = try await Fixture(); defer { f.remove() }
     let first = try await f.db.createFolder(name: "First", location: f.location("First"))
     let second = try await f.db.createFolder(name: "Second", location: f.location("Second"))
     let foreign = try await f.db.createFolder(name: "Remote", location: .init(workspaceID: "remote:other", rootPath: "/home/project", managed: true))
+    _ = try await f.db.renameFolder(id: first, name: "Display title")
+    try await f.db.setFolderReferences(id: first, paths: ["/other/project", "/reference", "/reference"])
+    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "history.sqlite"))
+    let record = try #require(try await reopened.workspaceOverview().folders.first { $0.id == first })
+    #expect(record.name == "Display title" && record.rootPath == f.location("First").rootPath)
+    #expect(record.executionWorkspaceID == f.owner)
+    #expect(record.referencePaths == ["/other/project", "/reference"])
+    try await reopened.setFolderReferences(id: first, paths: [])
+    let cleared = try #require(try await reopened.workspaceOverview().folders.first { $0.id == first })
+    #expect(cleared.rootPath == f.location("First").rootPath && cleared.referencePaths.isEmpty)
+    await #expect(throws: (any Error).self) { try await reopened.setFolderReferences(id: first, paths: ["relative/path"]) }
     let id = try await f.draft()
     #expect(try await f.db.moveConversation(id: id, toFolderID: first))
     #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("First").rootPath)

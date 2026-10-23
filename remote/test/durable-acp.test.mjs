@@ -93,6 +93,7 @@ test('only pending server callbacks survive attachment; duplicate replies never 
 
 test('disabling during asynchronous admission fences process creation and stopAll', async t => {
   const f = await fixture(t)
+  await assert.rejects(f.call('attach', { harnessID: 'arbitrary-shell' }), /Unknown/)
   let release, reached
   const gate = new Promise(resolve => { release = resolve })
   const entered = new Promise(resolve => { reached = resolve })
@@ -107,6 +108,7 @@ test('disabling during asynchronous admission fences process creation and stopAl
   await stopped
   assert.equal(f.launches(), 0)
   assert.equal(relay.hasActiveRuntime(), false)
+  await assert.rejects(f.call('attach'), /disabled/)
 })
 
 test('stream output batches disk sync while terminal receipt flushes the complete recovery', async t => {
@@ -333,14 +335,6 @@ for (const notifyOnly of [false]) {
     assert.match(result.error.message, /still running/)
   })
 }
-
-test('disabled mode and unknown commands cannot launch a process', async t => {
-  const f = await fixture(t)
-  await assert.rejects(f.call('attach', { harnessID: 'arbitrary-shell' }), /Unknown/)
-  f.disable()
-  await assert.rejects(f.call('attach'), /disabled/)
-  assert.equal(f.launches(), 0)
-})
 
 test('natural process exit settles interrupted prompts and survives service restart', async t => {
   const f = await fixture(t)

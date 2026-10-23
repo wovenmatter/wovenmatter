@@ -18,7 +18,7 @@ struct ManagedDatabaseCatalogTests {
     func remove() { try? FileManager.default.removeItem(at: root) }
   }
 
-  @Test func completeBackupsIncludeCommittedWALAndRejectStaleReplicas() throws {
+  @Test func backupsPreserveCommittedWALAndSeparateReplicaFromCopyAuthority() throws {
     let source = try Fixture(), replica = try Fixture(); defer { source.remove(); replica.remove() }
     let row = try AgentDatabaseCatalog.create(named: "Events", in: source.root, owner: "remote:owner")
     var writer: OpaquePointer?
@@ -44,19 +44,12 @@ struct ManagedDatabaseCatalogTests {
     #expect(throws: AgentDatabaseCatalogError.databaseUnavailable) {
       try AgentDatabaseCatalog.execute(id: row.id, sql: "DELETE FROM events", in: replica.root, owner: "device:viewer")
     }
-  }
-
-  @Test func copyingSnapshotCreatesIndependentIdentityAndDestinationAuthority() throws {
-    let source = try Fixture(), destination = try Fixture(); defer { source.remove(); destination.remove() }
-    let original = try AgentDatabaseCatalog.create(named: "Original", in: source.root, owner: "remote:one")
-    _ = try AgentDatabaseCatalog.execute(id: original.id, sql: "CREATE TABLE values_table(value); INSERT INTO values_table VALUES(1)", in: source.root, owner: "remote:one")
-    let snapshot = try AgentDatabaseCatalog.snapshot(id: original.id, in: source.root)
-    let copy = try AgentDatabaseCatalog.importSnapshot(snapshot, in: destination.root, sourceOwner: "remote:one", copyName: "Copy", destinationOwner: "device:two")
-    #expect(copy.id != original.id && copy.owner == "device:two" && copy.revision == 1)
-    #expect(try AgentDatabaseCatalog.list(at: destination.root).first?.revision == 1)
-    #expect(try AgentDatabaseCatalog.execute(id: copy.id, sql: "INSERT INTO values_table VALUES(2)", in: destination.root, owner: "device:two").revision == 2)
-    #expect(try AgentDatabaseCatalog.query(id: original.id, sql: "SELECT value FROM values_table", in: source.root).rows == [["1"]])
-    #expect(try AgentDatabaseCatalog.query(id: copy.id, sql: "SELECT value FROM values_table ORDER BY value", in: destination.root).rows == [["1"], ["2"]])
+      let copy = try AgentDatabaseCatalog.importSnapshot(newer, in: replica.root, sourceOwner: "remote:owner", copyName: "Copy", destinationOwner: "device:viewer")
+    #expect(copy.id != row.id && copy.owner == "device:viewer" && copy.revision == 1)
+    #expect(try AgentDatabaseCatalog.list(at: replica.root).first { $0.id == copy.id }?.revision == 1)
+    #expect(try AgentDatabaseCatalog.execute(id: copy.id, sql: "INSERT INTO events VALUES(44,'copy')", in: replica.root, owner: "device:viewer").revision == 2)
+    #expect(try AgentDatabaseCatalog.query(id: row.id, sql: "SELECT value FROM events ORDER BY value", in: source.root).rows == [["42"], ["43"]])
+    #expect(try AgentDatabaseCatalog.query(id: copy.id, sql: "SELECT value FROM events ORDER BY value", in: replica.root).rows == [["42"], ["43"], ["44"]])
   }
 
 }

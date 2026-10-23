@@ -57,9 +57,14 @@ struct ClosedLidProtectionTests {
     }
 
 
-    @Test func powerTransitionsAndLastLeaseReleaseRestoreSleep() {
+    @Test func externalSettingsPowerTransitionsReleaseAndExpiryPreserveSleepOwnership() {
         let power = FakePower(), first = UUID(), second = UUID()
         let controller = power.controller()
+        power.disabled = true
+        controller.renew(first, policy: .init(batteryPower: true), now: -2, source: .battery)
+        controller.remove(first, now: -1, source: .battery)
+        #expect(power.disabled && power.operations.isEmpty)
+        power.disabled = false
         controller.renew(first, policy: .init(externalPower: true), now: 0, source: .external)
         #expect(power.operations == ["journal:true", "sleep:true"])
         controller.tick(now: 1, source: .battery)
@@ -69,6 +74,12 @@ struct ClosedLidProtectionTests {
         controller.remove(first, now: 3, source: .battery)
         #expect(power.disabled)
         controller.remove(second, now: 4, source: .battery)
+        #expect(!power.disabled && !power.journal)
+        controller.renew(first, policy: .init(externalPower: true), now: 5, source: .external)
+        controller.renew(first, policy: .init(externalPower: true), now: 15, source: .external)
+        controller.tick(now: 29, source: .external)
+        #expect(power.disabled)
+        controller.tick(now: 30, source: .external)
         #expect(!power.disabled && !power.journal)
     }
 
@@ -84,25 +95,6 @@ struct ClosedLidProtectionTests {
         #expect(!power.disabled && !power.journal && controller.errorMessage == nil)
     }
 
-
-    @Test func stalledOrCrashedClientExpiresWithoutAnyAppCallback() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
-        controller.renew(id, policy: .init(externalPower: true), now: 10, source: .external)
-        controller.tick(now: 24, source: .external)
-        #expect(power.disabled)
-        controller.tick(now: 25, source: .external)
-        #expect(!power.disabled && !power.journal)
-    }
-
-    @Test func existingExternalSleepSettingIsNeverClaimedOrUndone() {
-        let power = FakePower(), controller = power.controller(), id = UUID()
-        power.disabled = true
-        controller.renew(id, policy: .init(batteryPower: true), now: 0, source: .battery)
-        controller.remove(id, now: 1, source: .battery)
-        #expect(power.disabled)
-        #expect(power.operations.isEmpty)
-    }
 
     @Test func failedJournalCannotDisableSleepAndFailedMutationRetainsRecovery() {
         let power = FakePower(), controller = power.controller(), id = UUID()

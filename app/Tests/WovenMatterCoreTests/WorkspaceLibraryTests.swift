@@ -9,34 +9,6 @@ import WovenMatterCore
 struct WorkspaceLibraryTests {
 
 
-  @Test("Library uses the workspace's ownership scope for listing, opening and source access")
-  func ownership() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    _ = try await f.exchange(chat, text: "https://private.example", reply: "[File](./report.pdf)")
-    let item = try await #require(f.db.libraryItems().first)
-    // Keep the workspace's inferred operator stable while this one chat changes owner.
-    _ = try await f.db.createFolder(name: "Local work")
-    _ = try await f.db.createFolder(name: "More local work")
-    let visibleRevision = try await f.db.libraryRevision()
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET desktop_owned=0,user_id='different-operator' WHERE id=?", [chat])
-     } }
-    #expect(try await f.db.libraryRevision() > visibleRevision)
-    #expect(try await f.db.libraryItems().isEmpty)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET desktop_owned=1,governing_plane='platform' WHERE id=?", [chat])
-     } }
-    #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.libraryFacets().isEmpty)
-    #expect(try await f.db.pendingLibraryFiles().isEmpty)
-    #expect(try await f.db.libraryItem(id: item.id) == nil)
-    await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: item.id) }
-  }
-
 
   @Test("local retention confines reads and cleanup removes only unreferenced managed files")
   func localFiles() async throws {
@@ -123,39 +95,6 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: LibraryFileStore(supportDirectory: f.root).url(for: image)) == Data([1, 2, 3]))
   }
 
-  @Test("native attachment echoes reuse uploads and complete an already discovered file")
-  func nativeReconciliation() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let url = f.root.appending(path: "image.png")
-    try Data([1, 2, 3]).write(to: url)
-    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: url, mimeType: "image/png")
-    let run = try await f.db.beginLocalACPRun(conversationID: chat, input: .init(text: "Look", attachments: [.file(draft)]))
-    let payload: GatewayJSONValue = .object([
-      "content": .array([
-        .object([
-          "type": .string("image"), "url": .string("./image.png"), "fileName": .string("image.png"),
-          "mimeType": .string("image/png"), "data": .string("AQID"),
-        ])
-      ])
-    ])
-    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.userMessageID, conversationID: chat)
-    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Image](./image.png)")
-    try await f.db.completeLocalACPRun(runID: run.runID)
-    try await f.db.indexLibraryMessages()
-    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.assistantMessageID, conversationID: chat)
-    let rows = try await f.db.libraryItems()
-    #expect(rows.count == 2)
-    #expect(rows.first { $0.sender == .me }?.storage == .attachment)
-    let returned = try #require(rows.first { $0.sender == .agent })
-    #expect(returned.storage == .retained)
-    #expect(returned.contentHash == draft.contentHash)
-    // A queued filesystem copy cannot overwrite a native attachment that won the race.
-    try await f.db.finishLibraryFile(id: returned.id, hash: nil, error: "late read failed")
-    #expect(try await f.db.libraryItem(id: returned.id)?.storage == .retained)
-  }
-
   @Test("URL discovery preserves citations and filenames, ignores code, and deduplicates within a message")
   func links() {
     let links = LibraryLinkDiscovery.links(
@@ -229,8 +168,8 @@ struct WorkspaceLibraryTests {
     #expect(try await reopened.libraryItems() == rows)
   }
 
-  @Test("attachments appear only after send; notes stay out; streaming links wait until completion")
-  func attachmentLifecycle() async throws {
+  @Test("sent attachments reconcile native echoes and remain scoped to their owning workspace")
+  func attachmentLifecycleReconcilesNativeEchoesAndEnforcesOwnership() async throws {
     let f = try await Fixture()
     defer { f.close() }
     let chat = try await f.session()
@@ -249,21 +188,59 @@ struct WorkspaceLibraryTests {
               kind: .note, resourceID: "note", titleSnapshot: "Note", contentSnapshot: "https://private-note.example",
               revisionSnapshot: "1")),
         ]))
+    let payload: GatewayJSONValue = .object([
+      "content": .array([
+        .object([
+          "type": .string("image"), "url": .string("./photo.png"), "fileName": .string("photo.png"),
+          "mimeType": .string("image/png"), "data": .string("AQID"),
+        ])
+      ])
+    ])
+    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.userMessageID, conversationID: chat)
     try await f.db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "[Incomplete](https://stream.example")
     try await f.db.indexLibraryMessages()
     #expect(try await f.db.libraryItems().map(\.kind) == [.photo])
-    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Complete](https://stream.example)")
+    try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Complete](https://stream.example) [Image](./photo.png)")
     try await f.db.completeLocalACPRun(runID: run.runID)
     try await f.db.indexLibraryMessages()
+    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.assistantMessageID, conversationID: chat)
     let rows = try await f.db.libraryItems()
-    #expect(rows.count == 2)
+    #expect(rows.count == 3)
+    #expect(rows.filter { $0.sender == .me && $0.kind == .photo }.count == 1)
+    #expect(rows.filter { $0.sender == .agent && $0.kind == .photo }.count == 1)
+    #expect(rows.filter { $0.source == "https://stream.example" }.count == 1)
     #expect(rows.first(where: { $0.kind == .photo })?.contentHash == draft.contentHash)
     #expect(rows.allSatisfy { $0.source != "https://private-note.example" })
+    #expect(rows.first { $0.sender == .me }?.storage == .attachment)
+    let returned = try #require(rows.first { $0.sender == .agent && $0.kind == .photo })
+    #expect(returned.storage == .retained)
+    #expect(returned.contentHash == draft.contentHash)
+    try await f.db.finishLibraryFile(id: returned.id, hash: nil, error: "late read failed")
+    #expect(try await f.db.libraryItem(id: returned.id)?.storage == .retained)
     let files = LibraryFileStore(supportDirectory: f.root)
     let file = try #require(rows.first(where: { $0.kind == .photo }))
     let opened = try files.url(for: file)
     #expect(opened.pathExtension == "png")
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
+      // Keep the workspace's inferred operator stable while this one chat changes owner.
+    _ = try await f.db.createFolder(name: "Local work")
+    _ = try await f.db.createFolder(name: "More local work")
+    let visibleRevision = try await f.db.libraryRevision()
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "UPDATE dashboard_conversations SET desktop_owned=0,user_id='different-operator' WHERE id=?", [chat])
+     } }
+    #expect(try await f.db.libraryRevision() > visibleRevision)
+    #expect(try await f.db.libraryItems().isEmpty)
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "UPDATE dashboard_conversations SET desktop_owned=1,governing_plane='platform' WHERE id=?", [chat])
+     } }
+    #expect(try await f.db.libraryItems().isEmpty)
+    #expect(try await f.db.libraryFacets().isEmpty)
+    #expect(try await f.db.pendingLibraryFiles().isEmpty)
+    #expect(try await f.db.libraryItem(id: file.id) == nil)
+    await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: file.id) }
   }
 
   @Test("retained remote handback opens offline and copies deduplicate by content")

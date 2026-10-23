@@ -31,7 +31,7 @@ private actor FixtureTransport: InferenceHTTPTransport {
 final class InferenceTests: XCTestCase {
   let connection = InferenceConnection(id: "phone-key", name: "API", provider: "openai", route: .direct, modelID: "gpt-4")
   let model = InferenceModel(id: "gpt-4", name: "GPT", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
-  func testThinkingChoicesFollowSelectedModelCapabilities() {
+  func testThinkingChoicesAndRequestsFollowSelectedModelCapabilities() throws {
     var model = InferenceModel(id: "test", name: "Test", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
     XCTAssertEqual(model.supportedThinkingLevels, ["off"])
     XCTAssertEqual(model.middleThinkingLevel, "off")
@@ -46,13 +46,10 @@ final class InferenceTests: XCTestCase {
     model.thinkingLevelMap = ["minimal": nil, "xhigh": "xhigh", "max": nil]
     XCTAssertEqual(model.supportedThinkingLevels, ["off", "low", "medium", "high", "xhigh"])
     XCTAssertEqual(model.middleThinkingLevel, "high")
-  }
-
-  func testThinkingMappingKeepsImplicitLevelsAndTranslatesExtendedLevels() throws {
-    var descriptor = model; descriptor.reasoning = true
-    descriptor.thinkingLevelMap = ["minimal": nil, "max": "ultra"]
+      model.thinkingLevelMap = ["minimal": nil, "max": "ultra"]
+    let connection = InferenceConnection(name: "API", provider: model.provider, route: .direct, modelID: model.id)
     for (level, expected) in [("high", "high"), ("max", "ultra"), ("minimal", nil), ("off", nil)] {
-      let request = try InferenceRequestBuilder(connection: connection, model: descriptor).request(
+      let request = try InferenceRequestBuilder(connection: connection, model: model).request(
         ["context": ["messages": [["role": "user", "content": "hello"]]], "options": ["reasoning": level]], secret: "fixture")
       let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
       XCTAssertEqual(inferenceObject(body["reasoning"])["effort"] as? String, expected)
@@ -120,17 +117,6 @@ final class InferenceTests: XCTestCase {
     let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
     XCTAssertEqual(inferenceObjects(inferenceObjects(body["messages"]).first?["reasoning_details"]).first?["data"] as? String, "opaque")
   }
-  func testServiceUsesSelectedConnectionAndRejectsProviderMismatchBeforeSending() async throws {
-    let transport = FixtureTransport([.response(200), .line("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{}}}"), .line("")])
-    let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
-    let capture = CapturedEvents()
-    try await service.stream(requestJSON: "{\"model\":{\"id\":\"gpt-4\",\"provider\":\"openai\"},\"context\":{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}}", emit: capture.append)
-    XCTAssertEqual(capture.events.last?["type"] as? String, "done")
-    do { try await service.stream(requestJSON: "{\"model\":{\"id\":\"gpt-4\",\"provider\":\"anthropic\"}}", emit: capture.append); XCTFail("wrong provider accepted") }
-    catch { XCTAssertEqual(error as? InferenceError, .modelUnavailable) }
-    let requests = await transport.requests
-    XCTAssertEqual(requests.count, 1)
-  }
   private let firstImage = "Zmlyc3QtaW1hZ2U="
   private let secondImage = "c2Vjb25kLWltYWdl"
   private func imageToolTranscript() -> [InferenceObject] {
@@ -147,7 +133,7 @@ final class InferenceTests: XCTestCase {
       ]]
     ]
   }
-  func testResponsesToolImagesUseSelectedConnectionAndPreserveToolIdentity() async throws {
+  func testSelectedConnectionPreservesToolImagesAndRejectsForeignProvider() async throws {
     let model = fixture()
     let connection = InferenceConnection(id: "selected-connection", name: "Selected", provider: model.provider, accountID: "selected-account", route: .direct, modelID: model.id)
     let credentials = SelectedCredentials()
@@ -155,7 +141,13 @@ final class InferenceTests: XCTestCase {
     let service = CompanionInferenceService(connection: connection, credentials: credentials, transport: transport, model: model)
     let input: InferenceObject = ["model": ["id": model.id, "provider": model.provider, "baseUrl": "https://unrelated.example/v1"],
       "accountID": "unrelated-account", "options": ["apiKey": "unrelated-secret"], "context": ["messages": imageToolTranscript()]]
-    try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in })
+    let capture = CapturedEvents()
+    try await service.stream(requestJSON: inferenceJSONString(input), emit: capture.append)
+    XCTAssertEqual(capture.events.last?["type"] as? String, "done")
+    do {
+      try await service.stream(requestJSON: inferenceJSONString(["model": ["id": model.id, "provider": "anthropic"]]), emit: capture.append)
+      XCTFail("wrong provider accepted")
+    } catch { XCTAssertEqual(error as? InferenceError, .modelUnavailable) }
     let requests = await transport.requests, requestedIDs = await credentials.requestedIDs
     XCTAssertEqual(requests.count, 1); XCTAssertEqual(requestedIDs, ["selected-connection"])
     let request = try XCTUnwrap(requests.first)
@@ -174,6 +166,7 @@ final class InferenceTests: XCTestCase {
     XCTAssertEqual(imageOnly.count, 1)
     XCTAssertEqual(imageOnly[0]["image_url"] as? String, "data:image/jpeg;base64,\(secondImage)")
   }
+
   func testChatToolImageCompatibilitySeparatorPrecedesFollowingUserMessage() throws {
     var model = fixture("openrouter", api: "openai-completions")
     model.metadata["compat"] = .object(["requiresAssistantAfterToolResult": .bool(true), "requiresToolResultName": .bool(true)])

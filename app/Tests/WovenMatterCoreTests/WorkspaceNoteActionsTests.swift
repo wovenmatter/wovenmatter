@@ -6,7 +6,7 @@ import WovenMatterCore
 @Suite("Note menu revisions, retention and export")
 struct WorkspaceNoteActionsTests {
 
-  @Test func nestedListsPersistThroughDatabaseAndStyleChanges() async throws {
+  @Test func nestedListsPersistAndStaleMenuActionsCannotOverwriteTheirNewRevision() async throws {
     let f = try await Fixture(); defer { f.close() }
     let parent = NoteTextList(id: "parent-list", markerFormat: "{decimal}.", startingItemNumber: 5)
     let child = NoteTextList(id: "child-list", markerFormat: "{hyphen}")
@@ -17,10 +17,23 @@ struct WorkspaceNoteActionsTests {
                      list: .init(levels: [parent], headIndent: 28, firstLineHeadIndent: 6))),
       .richText(.init(id: "child", style: .numberedList, text: "Layers", list: nested))
     ])
-    let id = try await f.db.createNote(folderID: nil, title: "Nested", content: document.encoded())
+    let original = NoteDocument(blocks: [.richText(.init(id: "original", text: "Original content"))])
+    let id = try await f.db.createNote(folderID: nil, title: "Original", content: original.encoded())
+    let stale = try await f.db.noteActionRevision(id: id)
     _ = try await f.db.updateNote(id: id, title: "Nested", content: document.encoded())
     let stored = try await f.db.readNoteForEditing(id: id)
-    #expect(stored.document == document)
+    #expect(stored.document == document && stored.title == "Nested")
+    for mutation in [WorkspaceNoteMutation.rename("Stale name"), .moveToTrash] {
+      await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+        try await f.db.mutateNote(id: id, mutation: mutation, expectedRevision: stale)
+      }
+    }
+    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+      try await f.db.noteExport(id: id, format: .standard, expectedRevision: stale)
+    }
+    let after = try await f.db.readNoteForEditing(id: id)
+    #expect(after.title == "Nested" && after.document == document)
+    #expect(try await f.db.trashedNotes().isEmpty)
     let exported = try document.exported(title: "Nested", format: .document)
     #expect(try JSONDecoder().decode(NoteDocument.self, from: exported.data) == document)
 
@@ -73,24 +86,6 @@ struct WorkspaceNoteActionsTests {
       db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
     }
     func close() { try? FileManager.default.removeItem(at: root) }
-  }
-
-  @Test func staleRevisionCannotRenameTrashOrExportNewerContent() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let id = try await f.db.createNote(folderID: nil, title: "Original", content: "Original content")
-    let stale = try await f.db.noteActionRevision(id: id)
-    _ = try await f.db.updateNote(id: id, title: "Newer title", content: "Newer content")
-    for mutation in [WorkspaceNoteMutation.rename("Stale name"), .moveToTrash] {
-      await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-        try await f.db.mutateNote(id: id, mutation: mutation, expectedRevision: stale)
-      }
-    }
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await f.db.noteExport(id: id, format: .standard, expectedRevision: stale)
-    }
-    let saved = try await f.db.readNoteForEditing(id: id)
-    #expect(saved.title == "Newer title" && saved.document?.plainText == "Newer content")
-    #expect(try await f.db.trashedNotes().isEmpty)
   }
 
   @Test func readableExportsEscapeContentAndDocumentExportRetainsStructure() throws {

@@ -30,24 +30,29 @@ async function setup(t, stream) {
 }
 
 test('completed request replays after process recreation without new provider inference', async t => {
-  const fixture = await setup(t);
-  await fixture.adapter.stream(request(), { principalID: 'device' });
+  const fixture = await setup(t), initialEvents = [];
+  const value = await fixture.adapter.catalog();
+  assert.deepEqual(value.accounts.map(account => account.id), ['first', 'second']);
+  assert.equal(JSON.stringify(value).includes('fixture-two'), false);
+  assert.equal(value.accounts[1].connected, true);
+  await fixture.adapter.stream(request(), { principalID: 'device', onEvent: event => initialEvents.push(event) });
+  assert.deepEqual(fixture.selected, ['second']);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(initialEvents.at(-1).message.content[0].name, 'write');
+  assert.equal(initialEvents.at(-1).message.wovenNativeAuthIdentity, undefined);
+  assert.equal(fixture.calls[0].options.maxRetries, 0);
   const restarted = createInferenceAdapter(fixture.engine), events = [];
   await restarted.stream(request(), { principalID: 'device', onEvent: event => events.push(event) });
   assert.equal(fixture.calls.length, 1); assert.equal(events.at(-1).type, 'done');
   const changed = request(); changed.context.messages[0].content = 'Different input';
   await assert.rejects(restarted.stream(changed, { principalID: 'device' }), /different input/);
-});
-
-test('account removal and credential replacement fail closed without fallback', async t => {
-  const fixture = await setup(t);
-  await fixture.adapter.stream(request(), { principalID: 'device' });
   fixture.accounts[1].credential.access = 'replacement';
   await assert.rejects(fixture.adapter.stream(request(), { principalID: 'device' }), /different input or credentials/);
   fixture.accounts.splice(1);
   await assert.rejects(fixture.adapter.stream(request(), { principalID: 'device' }), /No account fallback/);
   assert.equal(fixture.calls.length, 1);
 });
+
 test('uncertain interrupted receipt is not replayed and error does not disclose provider data', async t => {
   const fixture = await setup(t, async function* () { throw Error('token=private-provider-secret https://sensitive.invalid'); });
   await assert.rejects(fixture.adapter.stream(request(), { principalID: 'device' }), error => !error.message.includes('private-provider-secret'));
@@ -104,16 +109,6 @@ test('client vault unlock after restart preserves accounts and rejects an incorr
   assert.equal((await vault.read()).shared.openai.key, 'fixture-only-key');
 });
 
-test('adapter pins account and returns tool calls without executing tools or creating an agent', async t => {
-  const fixture = await setup(t), events = [];
-  await fixture.adapter.stream(request(), { principalID: 'device', onEvent: event => events.push(event) });
-  assert.deepEqual(fixture.selected, ['second']);
-  assert.equal(fixture.calls.length, 1);
-  assert.equal(events.at(-1).message.content[0].name, 'write');
-  assert.equal(events.at(-1).message.wovenNativeAuthIdentity, undefined);
-  assert.equal(fixture.calls[0].options.maxRetries, 0);
-});
-
 test('generation-aware inference helper returns catalog without agent execution or persistent credentials', async t => {
   const { spawn } = await import('node:child_process');
   const { readdir, readFile } = await import('node:fs/promises');
@@ -130,12 +125,4 @@ test('generation-aware inference helper returns catalog without agent execution 
   assert.equal(code, 0); assert.deepEqual(JSON.parse(output), { models: [], accounts: [] });
   assert.equal(output.includes('fixture-transient-secret'), false);
   for (const name of await readdir(directory)) if (name.endsWith('.json')) assert.equal((await readFile(join(directory, name), 'utf8')).includes('fixture-transient-secret'), false);
-});
-
-test('catalog exposes identities and supported models without credential material', async t => {
-  const fixture = await setup(t);
-  const value = await fixture.adapter.catalog();
-  assert.deepEqual(value.accounts.map(account => account.id), ['first', 'second']);
-  assert.equal(JSON.stringify(value).includes('fixture-two'), false);
-  assert.equal(value.accounts[1].connected, true);
 });
