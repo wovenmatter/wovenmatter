@@ -6,6 +6,9 @@ import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
+    // A secondary Mac's library client owns app settings, while its local
+    // execution workspace owns sleep policies and live protection state.
+    var executionModel: ApplicationModel?
     var clientAnalytics: MobileAnalyticsModel?
     var showsBackgroundExecution = true
     var reservesRailControlSpace = false
@@ -17,6 +20,8 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
     @State private var showsCredentialDisclosure = false
     @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
+
+    private var sleepModel: ApplicationModel { executionModel ?? model }
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -125,32 +130,34 @@ struct SettingsGeneralView: View {
                 .toggleStyle(DashboardSwitchToggleStyle())
             Text("The screen can turn off and lock while work continues. At this level, closing the lid or choosing Sleep can still pause work.")
                 .font(.caption).foregroundStyle(.secondary)
-            if let message = model.idleSleepSettingsError {
+            if let message = sleepModel.idleSleepSettingsError {
                 Text(message).font(.caption).foregroundStyle(.red)
             }
         }
-        .disabled(model.isChangingIdleSleepPolicy)
+        .disabled(sleepModel.isChangingIdleSleepPolicy)
     }
 
     private func idleSleepBinding(externalPower: Bool) -> Binding<Bool> {
         Binding(get: {
-            let policy = model.activeWorkSleepPrevention.snapshot.policy
+            let policy = sleepModel.activeWorkSleepPrevention.snapshot.policy
             return externalPower ? policy.externalPower : policy.batteryPower
         }, set: { enabled in
-            var policy = model.activeWorkSleepPrevention.snapshot.policy
+            var policy = sleepModel.activeWorkSleepPrevention.snapshot.policy
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await model.setIdleSleepPolicyFromSettings(policy) }
+            Task { await sleepModel.setIdleSleepPolicyFromSettings(policy) }
         })
     }
 
     private var closedLidProtectionCard: some View {
-        let snapshot = model.closedLidProtection.snapshot
+        let snapshot = sleepModel.closedLidProtection.snapshot
         return SettingsCard(title: "Keep working when the lid is closed",
-                            detail: "A higher level that includes display-sleep protection while agent work is running.") {
+                            detail: "Keep this Mac awake during active work, even with the lid closed.") {
             Toggle("When connected to external power", isOn: closedLidBinding(externalPower: true))
                 .toggleStyle(DashboardSwitchToggleStyle())
+                .disabled(closedLidHelperSetup == .unavailable && !snapshot.policy.externalPower)
             Toggle("When running on battery", isOn: closedLidBinding(externalPower: false))
                 .toggleStyle(DashboardSwitchToggleStyle())
+                .disabled(closedLidHelperSetup == .unavailable && !snapshot.policy.batteryPower)
             Text("While active, this also prevents Sleep from the Apple menu. Stop the work or turn these settings off to allow sleep. The Mac stays awake internally; keep it ventilated.")
                 .font(.caption).foregroundStyle(.secondary)
             if closedLidHelperSetup == .unavailable {
@@ -167,19 +174,19 @@ struct SettingsGeneralView: View {
                     }
                 } else if closedLidHelperSetup == .notRegistered {
                     Button("Set up closed-lid protection") {
-                        Task { await model.setClosedLidPolicyFromSettings(snapshot.policy) }
+                        Task { await sleepModel.setClosedLidPolicyFromSettings(snapshot.policy) }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                } else {
+                } else if snapshot.message == nil && sleepModel.closedLidSettingsError == nil {
                     Text(snapshot.isProtecting ? "Closed-lid protection is active."
                          : "Protection will activate during work on the selected power sources.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let message = model.closedLidSettingsError ?? snapshot.message {
+            if let message = sleepModel.closedLidSettingsError ?? snapshot.message {
                 Text(message).font(.caption).foregroundStyle(.red)
             }
         }
-        .disabled(model.isChangingClosedLidPolicy)
+        .disabled(sleepModel.isChangingClosedLidPolicy)
         .task {
             while !Task.isCancelled {
                 closedLidHelperSetup = ClosedLidHelperRegistration.status
@@ -190,12 +197,12 @@ struct SettingsGeneralView: View {
 
     private func closedLidBinding(externalPower: Bool) -> Binding<Bool> {
         Binding(get: {
-            let policy = model.closedLidProtection.snapshot.policy
+            let policy = sleepModel.closedLidProtection.snapshot.policy
             return externalPower ? policy.externalPower : policy.batteryPower
         }, set: { enabled in
-            var policy = model.closedLidProtection.snapshot.policy
+            var policy = sleepModel.closedLidProtection.snapshot.policy
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await model.setClosedLidPolicyFromSettings(policy) }
+            Task { await sleepModel.setClosedLidPolicyFromSettings(policy) }
         })
     }
 

@@ -150,13 +150,23 @@ public final class ClosedLidWorkProtection {
     // Internal for deterministic tests; no real timer or power operations needed.
     func beat() {
         guard ownsExecution, !stopped, isWorking, snapshot.policy.isEnabled else { return }
-        guard helperStatus() == .ready else {
+        let setup = helperStatus()
+        guard setup == .ready else {
             connection?.close()
             connection = nil
             requestStarted = nil
             generation = UUID()
             snapshot.isProtecting = false
-            snapshot.message = "Approve the power helper in macOS Login Items & Extensions to enable closed-lid protection."
+            switch setup {
+            case .approvalRequired:
+                snapshot.message = "Approve the power helper in macOS Login Items & Extensions to enable closed-lid protection."
+            case .notRegistered:
+                snapshot.message = "Set up closed-lid protection in General settings."
+            case .unavailable:
+                snapshot.message = "Closed-lid protection is unavailable in this build."
+            case .ready:
+                break
+            }
             return
         }
         if let requestStarted {
