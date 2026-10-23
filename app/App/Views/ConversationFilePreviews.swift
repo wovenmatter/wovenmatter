@@ -49,12 +49,12 @@ private struct ConversationFileAttachment: View {
                     .accessibilityLabel("Save \(url.lastPathComponent)")
                     Menu {
                         Button("Save As…") { Task { await save(url) } }
-                        Button("Open in Default App") {
+                        Button(DocumentExternalApplication.openTitle(for: url)) {
                             if !NSWorkspace.shared.open(url) { error = "No application could open this file." }
                         }
                         Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                     } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton).fixedSize()
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .accessibilityLabel("File actions for \(url.lastPathComponent)")
                 } else {
                     label.foregroundStyle(DashboardPalette.mutedForeground)

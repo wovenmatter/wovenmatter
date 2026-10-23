@@ -32,7 +32,7 @@ struct DashboardDocumentPane: View {
                 control("Reveal in Finder", symbol: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }.disabled(!available)
-                control("Open in default app", symbol: "arrow.up.forward.square") {
+                control(DocumentExternalApplication.openTitle(for: url), symbol: "arrow.up.forward.square") {
                     if !NSWorkspace.shared.open(url) { error = "No application could open this file." }
                 }.disabled(!available)
             }
@@ -85,5 +85,19 @@ struct DocumentQuickLookView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) {
         view.close()
+    }
+}
+
+/// Use Launch Services so the label names the same app that a normal file open uses.
+@MainActor
+enum DocumentExternalApplication {
+    static func openTitle(for file: URL) -> String {
+        guard let application = NSWorkspace.shared.urlForApplication(toOpen: file) else {
+            return "Open in Another App…"
+        }
+        let name = FileManager.default.displayName(atPath: application.path)
+        let displayName = (name as NSString).pathExtension.lowercased() == "app"
+            ? (name as NSString).deletingPathExtension : name
+        return "Open in " + displayName
     }
 }

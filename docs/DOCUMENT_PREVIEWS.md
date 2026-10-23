@@ -8,7 +8,7 @@ pane. Web links keep their existing behavior.
 The preview uses the macOS Quick Look renderer. Common documents, spreadsheets,
 PDFs, images, and other formats supported by the Mac's installed preview providers
 can be inspected inline. Quick Look provides a file summary when it cannot render
-a format; the toolbar always offers **Open in default app** and **Reveal in Finder**.
+a format; the toolbar always offers **Open in [app name]** and **Reveal in Finder**.
 Editing remains in the external application. **Reload preview** refreshes the view.
 Spreadsheet formulas are not recalculated by Woven Matter; Quick Look may rely on
 the workbook's saved calculation results. Preview providers retain their native
@@ -19,7 +19,7 @@ Opening an existing file selects its tab. Hiding the pane and switching chats ke
 those tabs; closing a tab releases its preview, without deleting the retained file.
 Tabs are window-session state and are not restored after app restart.
 
-Generated handbacks appear as file attachments beneath the response. Click the filename to preview it in the side pane, drag it into Finder or another app to copy the file, or use **Save** to choose a destination. The file menu also offers **Open in Default App** and **Reveal in Finder**. Attachments wait briefly for Library retention and expose Retry with a concrete error when unavailable.
+Generated handbacks appear as file attachments beneath the response. Click the filename to preview it in the side pane, drag it into Finder or another app to copy the file, or use **Save** to choose a destination. The file menu also offers **Open in [app name]** and **Reveal in Finder**. Attachments wait briefly for Library retention and expose Retry with a concrete error when unavailable.
 These actions resolve the original message/file identity through Library. They never read
 a path directly from agent text. The file must have been retained by Library; a
 pending, unavailable, removed, or inaccessible item reports an error. Existing
