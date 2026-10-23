@@ -13,7 +13,7 @@ struct SettingsAgentDefaultsSection: View {
     var showsThinking = true
     var showsTools = true
     var showsPermissions = true
-    var title = "New conversations"
+    var title = "Defaults for new chats"
     @State private var selectedScope = "global"
     @State private var stored = SessionSelections()
     @State private var resolved = SessionSelections()
@@ -48,11 +48,8 @@ struct SettingsAgentDefaultsSection: View {
                 .frame(maxWidth: 440, alignment: .leading)
             }
             SettingsCard(title: title,
-                detail: "New conversations with \(runtime.displayName) start with these settings. Changes within a conversation apply only to that conversation.") {
+                detail: "Starting settings for \(runtime.displayName). You can change them in each chat.") {
                 VStack(alignment: .leading, spacing: 14) {
-                    SettingsNote(scope == "global"
-                        ? "Native options are read from the local agent workspace. Workspace overrides can use the options available on that host."
-                        : "These choices override this agent’s All workspaces defaults.")
                     if showsPermissions { selectionRow("Permissions", field: .permission, value: stored.permission,
                         effective: resolved.permission, options: metadata?.permissionOptions ?? [],
                         labels: metadata?.permissionOptionMetadata ?? [:]) }
@@ -63,19 +60,19 @@ struct SettingsAgentDefaultsSection: View {
                         effective: resolved.thinking, options: metadata?.selectableThinkingLevels ?? [],
                         labels: metadata?.thinkingOptionMetadata ?? [:]) }
                     HStack(spacing: 10) {
-                        Button(loading ? "Reading native options…" : "Refresh native options") { Task { await loadOptions() } }
+                        Button(loading ? "Refreshing…" : "Refresh options") { Task { await loadOptions() } }
                             .buttonStyle(SettingsQuietButtonStyle()).disabled(loading || saving || !scopeAvailable)
                         if loading { ProgressView().controlSize(.small) }
                     }
                     if showsPermissions, metadata != nil, metadata?.permissionOptions?.isEmpty != false {
-                        SettingsNote("This agent does not expose a selectable permission policy.")
+                        SettingsNote("Permissions are managed by this agent.")
                     }
                     if showsThinking, metadata != nil, metadata?.selectableThinkingLevels.isEmpty != false {
-                        SettingsNote("The selected model does not expose a thinking level control.")
+                        SettingsNote("This model has no thinking-level options.")
                     }
                 }
             }.disabled(!scopeAvailable)
-            if showsTools { SettingsCard(title: "Woven Matter CLI", detail: "Default tools for new conversations. Change tools within a conversation using Tools.") {
+            if showsTools { SettingsCard(title: "Woven Matter CLI", detail: "Tools available in new chats. Adjust them from Tools in any chat.") {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Enable Woven Matter CLI", isOn: Binding(get: { !enabledTools.subtracting(["goals"]).isEmpty }, set: { enabled in
                         save(.tools, selections: SessionSelections(tools: enabled

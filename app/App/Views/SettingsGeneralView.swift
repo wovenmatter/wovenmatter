@@ -214,23 +214,23 @@ struct SettingsGeneralView: View {
     private var credentialAccessCard: some View {
         SettingsCard(
             title: "Keychain access",
-            detail: "Woven Matter saves your credentials in Apple Keychain. Enable access to use your saved accounts and API keys. When macOS asks, choose Always Allow to avoid repeated prompts for that item."
+            detail: "Credentials are stored in Apple Keychain."
         ) {
             HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.isReconnectingSavedCredentials ? "Checking…" : model.keychainAccessReady == true ? "Access ready" : model.keychainAccessReady == false ? "Access needs attention" : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled")
-                        .font(.system(size: 13, weight: .medium))
-                    Text(model.credentialAccessStatus
-                         ?? "Automatic refreshes never request permission. Restore access here if a saved credential becomes unavailable.")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                SettingsPill(model.isReconnectingSavedCredentials ? "Checking…"
+                    : model.keychainAccessReady == true ? "Access ready"
+                    : model.keychainAccessReady == false ? "Access needs attention"
+                    : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled",
+                    tone: model.keychainAccessReady == false ? .warning : .neutral)
+                    .help(model.credentialAccessStatus ?? "Enable access to use saved credentials.")
                 Spacer(minLength: 12)
                 Button(model.isReconnectingSavedCredentials ? "Checking…"
+                       : model.keychainAccessReady == true ? "Check access"
                        : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
                          ? "Restore Keychain access" : "Enable Keychain access") {
-                    if model.hasAcknowledgedCredentialAccessDisclosure {
+                    if model.keychainAccessReady == true {
+                        Task { await model.checkSavedCredentialAccess() }
+                    } else if model.hasAcknowledgedCredentialAccessDisclosure {
                         Task { await model.reconnectSavedCredentials() }
                     } else {
                         showsCredentialDisclosure = true
@@ -238,6 +238,9 @@ struct SettingsGeneralView: View {
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
+            }
+            if model.keychainAccessReady != true {
+                SettingsNote("Choose Always Allow when macOS asks to avoid repeated prompts.")
             }
         }
     }

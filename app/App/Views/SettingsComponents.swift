@@ -223,6 +223,47 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
+/// One compact harness header; maintenance controls stay in labeled rows below it.
+struct SettingsHarnessDisclosure<Content: View>: View {
+    @Environment(\.dashboardTheme) private var theme
+    let runtime: AgentRuntimeKind
+    let status: String
+    var tone: SettingsPillTone = .neutral
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) { content }
+                .padding(.top, 10)
+        } label: {
+            HStack(spacing: 10) {
+                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtime), size: 22)
+                Text(runtime.displayName).font(.system(size: 13, weight: .medium))
+                Spacer(minLength: 8)
+                SettingsPill(status, tone: tone)
+            }
+        }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+        .padding(12)
+        .background(theme.palette.themeWhisper)
+        .clipShape(DashboardShapes.card)
+    }
+}
+
+struct SettingsHarnessControlRow<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            Spacer(minLength: 8)
+            content
+        }
+        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+    }
+}
+
 struct SettingsHarnessRuntimeMaintenanceView: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind

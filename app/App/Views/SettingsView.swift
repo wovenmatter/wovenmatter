@@ -107,11 +107,6 @@ struct SettingsView: View {
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
                     model: model.remoteWorkspaces,
-                    credentialDisclosureAcknowledged:
-                        model.hasAcknowledgedCredentialAccessDisclosure,
-                    onAcknowledgeCredentialDisclosure: {
-                        model.acknowledgeCredentialAccessDisclosure()
-                    },
                     reservesRailControlSpace: reservesRailControlSpace,
                     onMoreRuntime: { kind, configuration in
                         section = harnessSettingsSection(

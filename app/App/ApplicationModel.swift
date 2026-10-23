@@ -2232,11 +2232,9 @@ final class ApplicationModel {
         try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
             try DefaultAgentSupport.checkKeychainAccess(authorize: true)
         }
-        if remoteWorkspaces.isCredentialAccessEnabled {
-            for workspace in remoteWorkspaces.workspaces {
-                try Task.checkCancellation()
-                try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
-            }
+        for workspace in remoteWorkspaces.workspaces {
+            try Task.checkCancellation()
+            try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
         }
 
     }

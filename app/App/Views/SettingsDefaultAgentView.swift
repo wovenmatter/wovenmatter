@@ -57,11 +57,9 @@ struct SettingsDefaultAgentView: View {
                 SettingsAgentModelsView(agent: agent, editable: editable,
                     browsingAllModels: browsingAllModels, setBrowsingAllModels: showCatalog,
                     selectDefault: selectDefault)
-                SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope,
-                    showsModel: false, showsTools: false, showsPermissions: false, title: "Thinking level")
             }.id("pi-models")
             SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope,
-                showsModel: false, showsThinking: false, title: "New conversations")
+                showsModel: false)
             SettingsCard(title: "Code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
                 Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
                     var config = agent.configuration; config.codeMode = $0; agent.configuration = config
@@ -99,6 +97,7 @@ struct SettingsDefaultAgentView: View {
             }
 
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
     }
     private var piDurableIconCard: some View {
         HStack(alignment: .center, spacing: 16) {
@@ -318,7 +317,7 @@ private struct SettingsAgentModelsView: View {
                 }
             }
             DisclosureGroup("Fallback models", isExpanded: $showsFallbacks) {
-            Text("Fallbacks run in the numbered order when a connection loses sign-in or available usage. Switching updates the model selector and shows a notification.").font(.callout).foregroundStyle(.secondary)
+            SettingsNote("Used in this order if the current model loses access or reaches its limit.")
             if agent.configuration.fallbackModels.count > pageSize {
                 SettingsAgentCatalogPageControls(count: agent.configuration.fallbackModels.count, pageSize: pageSize, page: $fallbackPage)
             }
@@ -326,8 +325,12 @@ private struct SettingsAgentModelsView: View {
                 HStack {
                     Text(index.byID[id].map { "\($0.model.name) · \($0.model.providerName)" } ?? id).font(.callout)
                     Spacer()
-                    Button("Earlier") { agent.moveFallback(id, by: -1) }
-                    Button("Later") { agent.moveFallback(id, by: 1) }
+                    Button { agent.moveFallback(id, by: -1) } label: { Image(systemName: "arrow.up") }
+                        .accessibilityLabel("Move \(index.byID[id]?.model.name ?? id) earlier")
+                        .disabled(agent.configuration.fallbackModels.first == id)
+                    Button { agent.moveFallback(id, by: 1) } label: { Image(systemName: "arrow.down") }
+                        .accessibilityLabel("Move \(index.byID[id]?.model.name ?? id) later")
+                        .disabled(agent.configuration.fallbackModels.last == id)
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable)
             }
             }
@@ -339,7 +342,7 @@ private struct SettingsAgentModelsView: View {
                 requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                 loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
             if showingAllModels {
-                TextField("Find a model or provider", text: $filter.query).textFieldStyle(.roundedBorder)
+                TextField("Find a model or provider", text: $filter.query).settingsInput()
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) { modelFilters }
                     VStack(alignment: .leading, spacing: 8) { modelFilters }

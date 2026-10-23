@@ -95,8 +95,7 @@ final class OpenCodeModel {
     var hasServerRegistration: Bool {
         if isBackendProjection { return projectedRegistration }
         if let configuration = remoteConfiguration {
-            guard remoteWorkspaces?.isCredentialAccessEnabled == true,
-                  remoteWorkspaces?.configuration(id: configuration.id) == configuration else { return false }
+            guard remoteWorkspaces?.configuration(id: configuration.id) == configuration else { return false }
             let status = remoteWorkspaces?.workspaceInstances[configuration.id]?[.opencode]
             return isReady || status?.state == "running" || status?.pid != nil
         }

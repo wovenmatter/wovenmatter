@@ -4,7 +4,7 @@ import WovenMatterCore
 
 /// Commands resolve existing workspace and harness identities on the execution owner.
 enum BackendRemoteWorkspaceCommand: Codable {
-    case enableCredentialAccess, disableCredentialAccess, refreshAll, discoverMachines
+    case refreshAll, discoverMachines
     case synchronizeDefaultAgent(UUID)
     case reconnect(UUID), refresh(UUID), refreshSignIn(UUID), refreshTaskGateway(UUID)
     case checkRuntimeUpdates(UUID, AgentRuntimeKind)
@@ -42,8 +42,6 @@ struct BackendRemoteWorkspaceService {
         var data: RemoteDatabaseData?
         switch command {
         case .synchronizeDefaultAgent(let id): try await model.synchronizeDefaultAgent(workspace(id))
-        case .enableCredentialAccess: model.enableCredentialAccess()
-        case .disableCredentialAccess: model.disableCredentialAccess()
         case .refreshAll: model.refreshAll()
         case .discoverMachines: model.discoverMachines()
         case .reconnect(let id): model.reconnect(try workspace(id))

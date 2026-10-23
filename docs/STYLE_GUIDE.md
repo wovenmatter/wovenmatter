@@ -53,7 +53,15 @@ when an intentional design change is accepted.
 - **Tool defaults:** settings say Woven Matter CLI and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
 - **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
-  Access ready, and Access needs attention. Consent is not verification.
+  Access ready, and Access needs attention. Keep one storage sentence, a status
+  pill, and an action; show the Always Allow hint only when access is not ready.
+  Consent is not verification.
+- **Harness lists:** local and remote workspaces use compact expandable harness
+  rows. Keep versions and labeled maintenance controls inside the expanded row,
+  rather than a horizontal strip of actions. Remote workspaces have no global
+  enable switch; saved workspaces reconnect using silent Keychain reads.
+- **Chat defaults:** use Defaults for new chats on every harness page. Group
+  thinking level and permissions together, with one short explanation.
 - **Pi Durable SDK settings:** place SDK management directly below the workspace
   scope controls. The local workspace uses a fixed heading with Pi Durable SDK and Claude
   SDK versions and explicit check/update actions always visible. Remote workspaces
@@ -61,10 +69,11 @@ when an intentional design change is accepted.
   All workspaces lists the local location and configured remote workspaces; an
   individual scope shows only that location. Keep progress and errors with their
   workspace and preserve operation state when a remote row is collapsed.
-- **Settings disclosures:** use `SettingsDisclosureGroupStyle` in provider account
+- **Settings disclosures:** use `SettingsDisclosureGroupStyle` throughout settings
   editors so the chevron, label, and remaining header width all toggle expansion.
   The style propagates to nested provider, credential, account, and Executor
-  defaults disclosures.
+  defaults disclosures, workspace overrides, local model servers, fallback models,
+  and workspace synchronization.
   OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
   OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
   Keep their content and Cursor's controls at the same indentation as the content
