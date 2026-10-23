@@ -507,6 +507,45 @@ final class RemoteWorkspacesModel {
         try await databaseRequest(configuration) { try await $0.createProject(name: name, reuseExisting: reuseExisting) }
     }
 
+    func browserIdentity(for configuration: RemoteWorkspaceConfiguration) -> RemoteWorkspaceRequestIdentity? {
+        guard isCredentialAccessEnabled, self.configuration(id: configuration.id) == configuration,
+              !invalidatingWorkspaceIDs.contains(configuration.id) else { return nil }
+        return .init(configuration: configuration, credentialEpoch: credentialEpoch,
+                     workspaceEpoch: workspaceEpochs[configuration.id] ?? configuration.id)
+    }
+
+    private func browserBackend(_ command: BackendRemoteWorkspaceCommand,
+                                configuration: RemoteWorkspaceConfiguration) async throws -> BackendRemoteWorkspaceResponse {
+        guard let identity = browserIdentity(for: configuration), let backendRequest else {
+            throw RemoteWorkspaceClientError.invalidResponse("Reconnect to this workspace in Settings to view its browser.")
+        }
+        let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
+        guard identity == browserIdentity(for: configuration), !Task.isCancelled else { throw CancellationError() }
+        // A live frame must never apply an older administration snapshot over a
+        // credential disable or workspace edit that arrived while it was loading.
+        return try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
+    }
+
+    func browserTabs(for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserTabs {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserTabs(configuration.id), configuration: configuration).browserTabs else {
+                throw BackendRPCError.remote("The background service returned no browser tabs.")
+            }
+            return value
+        }
+        return try await databaseRequest(configuration) { try await $0.browserTabs() }
+    }
+
+    func browserFrame(tabID: String, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserFrame {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserFrame(configuration.id, tabID: tabID), configuration: configuration).browserFrame else {
+                throw BackendRPCError.remote("The background service returned no browser image.")
+            }
+            return value
+        }
+        return try await databaseRequest(configuration) { try await $0.browserFrame(tabID: tabID) }
+    }
+
     func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
         if isBackendProjection {
             let response = try await requestBackend(.databases(configuration.id))

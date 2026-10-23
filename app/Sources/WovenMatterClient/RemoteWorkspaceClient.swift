@@ -1126,6 +1126,15 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
     }
 
+    public func browserTabs() async throws -> RemoteBrowserTabs {
+        try await request(path: "v1/browser/tabs", method: "GET", body: nil)
+    }
+
+    public func browserFrame(tabID: String) async throws -> RemoteBrowserFrame {
+        struct Payload: Encodable { let tabID: String }
+        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID)))
+    }
+
     public func health() async throws -> RemoteWorkspaceHealth {
         try await request(path: "v1/health", method: "GET", body: nil)
     }
@@ -1299,6 +1308,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.httpMethod = method
         request.httpBody = body
         if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
+        if path.hasPrefix("v1/browser/") { request.timeoutInterval = 10 }
         if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
@@ -1308,6 +1318,16 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
+            if path.hasPrefix("v1/browser/") {
+                let message: String
+                switch (response as? HTTPURLResponse)?.statusCode {
+                case 404: message = "Update this workspace container in Settings to view its browser."
+                case 410: message = "This tab has closed. Waiting for the workspace’s current tabs."
+                case 409: message = "The browser is busy. The live view will retry shortly."
+                default: message = "The remote browser is unavailable. Reconnect to the workspace and try again."
+                }
+                throw RemoteWorkspaceClientError.invalidResponse(message)
+            }
             if path == "v1/default-agent/sdks" {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
@@ -1332,6 +1352,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             throw RemoteWorkspaceClientError.invalidResponse(
                 String(decoding: data, as: UTF8.self)
             )
+        }
+        if path.hasPrefix("v1/browser/"), data.count > 3 * 1024 * 1024 {
+            throw RemoteWorkspaceClientError.invalidResponse("The browser response is too large.")
         }
         let decoder = JSONDecoder()
         if path.hasPrefix("v1/task-gateway") {

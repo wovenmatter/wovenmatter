@@ -554,6 +554,13 @@ test('direct client grants expose only execution routes and enforce revocation',
   assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
   assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
   assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
+  for (const [path, method] of [['tabs', 'GET'], ['connect', 'POST'], ['frame', 'POST']]) {
+    assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
+    assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
+  }
+  const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token'}})
+  assert.deepEqual(await tabs.json(), {running:false,tabs:[]})
+  assert.equal(tabs.headers.get('cache-control'), 'no-store')
   assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
   const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
   assert.equal(foreign.status,400)

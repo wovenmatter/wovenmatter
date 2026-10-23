@@ -151,6 +151,8 @@
 		66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */; };
 		7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */; };
 		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
+		63885F9DFDCFCD1D12455E37 /* RemoteBrowserViewerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */; };
+		3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -296,6 +298,8 @@
 		51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLaunch.swift"; sourceTree = SOURCE_ROOT; };
 		EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLibraryProjection.swift"; sourceTree = SOURCE_ROOT; };
 		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
+		8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/RemoteBrowserViewerModel.swift"; sourceTree = SOURCE_ROOT; };
+		A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserView.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -325,6 +329,8 @@
 		614FCD38F579029AF08B9221 = {
 			isa = PBXGroup;
 			children = (
+				8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */,
+				A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */,
 				4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */,
 				1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */,
 				D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */,
@@ -662,6 +668,8 @@
 				BCECE46E3EDF1ED432CB56A8 /* CentralLibraryClientModel.swift in Sources */,
 				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
 				6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */,
+				63885F9DFDCFCD1D12455E37 /* RemoteBrowserViewerModel.swift in Sources */,
+				3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,

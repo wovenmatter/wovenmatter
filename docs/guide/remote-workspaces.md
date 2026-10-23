@@ -34,19 +34,49 @@ your SSH account's Docker group membership for you.
 
 Every workspace image includes Chromium, the Playwright CLI, and the Playwright
 JavaScript library. Agents can run headless browsing from their shell without
-installing packages or downloading a browser. For example:
+installing packages or downloading a browser.
+
+### See the agent's tabs in Woven Matter
+
+Right-click a remote workspace heading in the sidebar and choose **View browser**,
+or open **Settings → Remote Agent Workspaces → Manage → View browser**. Select a
+tab to watch its live viewport. **Pause** holds the current image; **Done** closes
+the viewer without closing the agent's tabs. Viewing does not send clicks or
+keystrokes to the remote page. Images refresh roughly once a second while the
+app is active, and are not saved in the library or history.
+
+Agents use the shared workspace browser for tabs you can watch. For example,
+run this inside the remote workspace:
 
 ```sh
-playwright screenshot https://example.com /home/example.png
-node -e 'const { chromium } = require("playwright"); (async () => {
-  const browser = await chromium.launch();
+node <<'JS'
+const { chromium } = require('playwright');
+const { execFileSync } = require('node:child_process');
+(async () => {
+  const endpoint = execFileSync('woven-browser', ['endpoint'], { encoding: 'utf8' }).trim();
+  const browser = await chromium.connectOverCDP(endpoint);
   try {
-    const page = await browser.newPage();
-    await page.goto("https://example.com");
+    const page = await browser.contexts()[0].newPage();
+    await page.goto('https://example.com');
     console.log(await page.title());
-  } finally { await browser.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });'
+  } finally {
+    await browser.close(); // Disconnect; leave the shared tab open for viewing.
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+JS
 ```
+
+`woven-browser endpoint` starts the browser on demand or reuses the running one.
+`woven-browser tabs` lists its tabs without starting it. Use the existing default
+context (`browser.contexts()[0]`) for shared pages. Independent `chromium.launch()`
+instances and private contexts are not shown. They remain available for isolated
+automation, including `playwright screenshot URL /home/example.png`.
+
+The shared profile, cookies, and site storage stay in the workspace's persistent
+home. Open tabs are runtime state and may close on a workspace restart or update.
+Each workspace has its own browser; viewing uses the existing authenticated SSH
+connection. The browser-control endpoint is container-loopback-only and is never
+forwarded to the Mac or published on the host.
 
 CommonJS scripts can use `require("playwright")` from any workspace directory.
 ES modules can import from `/usr/local/lib/node_modules/playwright/index.mjs`.

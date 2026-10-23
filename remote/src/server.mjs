@@ -12,6 +12,7 @@ import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
 import { createDurableACP } from './durable-acp.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
+import { createWorkspaceBrowser } from './workspace-browser.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -92,6 +93,8 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
+const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
+
 const server = createServer(async (request, response) => {
   try {
     const administrator = authorized(request)
@@ -128,6 +131,7 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/v1/execution/retained-history' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'scope_not_granted'})
+
       return json(response,200,retainedExecution.status())
     }
     if (url.pathname === '/v1/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
@@ -165,6 +169,13 @@ const server = createServer(async (request, response) => {
     // Device grants never convey workspace administration, credentials, SDK
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})
+
+    if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') return json(response,200,await workspaceBrowser.tabs())
+    if (url.pathname === '/v1/browser/connect' && request.method === 'POST') return json(response,200,await workspaceBrowser.connect())
+    if (url.pathname === '/v1/browser/frame' && request.method === 'POST') {
+      const body = await readJSON(request, 1024)
+      return json(response,200,await workspaceBrowser.frame(body.tabID))
+    }
 
     if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
     if (url.pathname === '/v1/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
@@ -351,7 +362,7 @@ if (runningAsService) {
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
+    try { await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
 }

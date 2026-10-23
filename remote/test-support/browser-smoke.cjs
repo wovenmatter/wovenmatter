@@ -56,7 +56,45 @@ async function main() {
     browser = await core.chromium.launch({ timeout: 15000 });
     await browser.close();
     browser = undefined;
-    console.log('Workspace Chromium: navigation, forms, screenshots, CLI and bundled core passed.');
+    console.log('Checking shared browser discovery, live frames and agent disconnect.');
+    const serviceURL = 'http://127.0.0.1:' + (process.env.WOVENMATTER_LISTEN_PORT || '7337');
+    const request = async (path, body) => {
+      const response = await fetch(serviceURL + '/v1/browser/' + path, {
+        method: body ? 'POST' : 'GET',
+        headers: { Authorization: 'Bearer ' + process.env.WOVENMATTER_API_TOKEN, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      return response;
+    };
+    assert.equal((await (await request('tabs')).json()).running, false);
+    const { stdout } = await exec('woven-browser', ['endpoint'], { timeout: 20000 });
+    assert.match(stdout.trim(), /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//);
+    const endpoint = new URL(stdout.trim());
+    const interfaces = Object.values(require('node:os').networkInterfaces()).flat();
+    for (const address of interfaces.filter(value => value.family === 'IPv4' && !value.internal)) {
+      await assert.rejects(fetch(`http://${address.address}:${endpoint.port}/json/version`, { signal: AbortSignal.timeout(1500) }));
+    }
+    browser = await chromium.connectOverCDP(stdout.trim());
+    const sharedPage = await browser.contexts()[0].newPage();
+    await sharedPage.goto(url);
+    const sharedTab = (await (await request('tabs')).json()).tabs.find(tab => tab.url === url);
+    assert.ok(sharedTab);
+    const firstFrame = await (await request('frame', { tabID: sharedTab.id })).json();
+    assert.equal(firstFrame.tabID, sharedTab.id);
+    assert.equal(Buffer.from(firstFrame.imageBase64, 'base64').readUInt16BE(), 0xffd8);
+    await sharedPage.getByRole('textbox', { name: 'Name' }).fill('visible in the Mac app');
+    await sharedPage.getByRole('button', { name: 'Greet' }).click();
+    const changedFrame = await (await request('frame', { tabID: sharedTab.id })).json();
+    assert.notEqual(changedFrame.imageBase64, firstFrame.imageBase64);
+    await browser.close(); browser = undefined;
+    assert.ok((await (await request('tabs')).json()).tabs.some(tab => tab.id === sharedTab.id));
+    assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);
+    browser = await chromium.connectOverCDP(stdout.trim());
+    await browser.contexts()[0].pages().find(page => page.url() === url).close();
+    assert.equal((await request('frame', { tabID: sharedTab.id })).status, 410);
+    await browser.close(); browser = undefined;
+    console.log('Workspace Chromium: navigation, forms, screenshots, CLI, shared live view and bundled core passed.');
   } finally {
     await browser?.close();
     server.closeAllConnections();
