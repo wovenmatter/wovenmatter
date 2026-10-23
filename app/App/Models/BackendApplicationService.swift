@@ -109,6 +109,11 @@ final class BackendApplicationService {
     }
 
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
+        // Browser images are ephemeral reads, never command receipts. Retaining
+        // them would keep old screens in memory and could replay after revocation.
+        if request.method == "remoteWorkspaces.command",
+           let command = try? JSONDecoder().decode(BackendRemoteWorkspaceCommand.self, from: request.payload),
+           command.isBrowserRead { return await perform(request) }
         guard ["application.command", "remoteWorkspaces.command"].contains(request.method) else { return await perform(request) }
         let identity = BackendRPCCommandIdentity(request)
         if let saved = completed[request.id] {

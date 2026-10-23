@@ -23,6 +23,13 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case databases(UUID), createDatabase(UUID, name: String, preference: AgentDatabasePreference)
     case databaseData(UUID, DatabaseArtifactLink)
     case browserTabs(UUID), browserFrame(UUID, tabID: String)
+
+    var isBrowserRead: Bool {
+        switch self {
+        case .browserTabs, .browserFrame: true
+        default: false
+        }
+    }
 }
 
 struct BackendRemoteWorkspaceResponse: Codable {

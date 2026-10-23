@@ -104,6 +104,19 @@ import WovenMatterClient
         #expect(projection.browserIdentity(for: configuration) == nil)
     }
 
+    @Test func browserReadsBypassCommandReplayStorage() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let backend = BackendApplicationService(model: fixture.model)
+        let requestID = UUID().uuidString
+        let missing = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
+            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(UUID())))
+        #expect(await backend.handle(missing).error == "This workspace is no longer configured.")
+        fixture.model.remoteWorkspaces.disableCredentialAccess()
+        let current = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
+            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(fixture.remote.id)))
+        #expect(await backend.handle(current).error == "Enable credential access in Settings to connect.")
+    }
+
     @Test func renderViewerWhenRequested() async throws {
         guard let output = ProcessInfo.processInfo.environment["WOVENMATTER_REMOTE_BROWSER_PREVIEW"] else { return }
         let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { try frame($0) })
