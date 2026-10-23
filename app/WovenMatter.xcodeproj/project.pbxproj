@@ -154,6 +154,8 @@
 		63885F9DFDCFCD1D12455E37 /* RemoteBrowserViewerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */; };
 		3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */; };
 		A6F6CE2A68949F541CAEF101 /* RemoteBrowserCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */; };
+		D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000001; };
+		D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000003; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -302,6 +304,8 @@
 		8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/RemoteBrowserViewerModel.swift"; sourceTree = SOURCE_ROOT; };
 		A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserView.swift"; sourceTree = SOURCE_ROOT; };
 		A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserCanvas.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000001 /* DashboardDocumentPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardDocumentPane.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000003 /* ConversationFilePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationFilePreviews.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -335,6 +339,8 @@
 				8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */,
 				A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */,
 				4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */,
+				D0C000000000000000000003 /* ConversationFilePreviews.swift */,
+				D0C000000000000000000001 /* DashboardDocumentPane.swift */,
 				1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */,
 				D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */,
 				C67C8CBF1B7E40CA0F37A274 /* App */,
@@ -675,6 +681,8 @@
 				63885F9DFDCFCD1D12455E37 /* RemoteBrowserViewerModel.swift in Sources */,
 				3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
+				D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */,
+				D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
 				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,

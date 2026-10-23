@@ -48,8 +48,8 @@ final class SavedArtifactsModel {
         }
     }
 
-    func open(_ item: SavedArtifactLibraryItem) async {
+    func open(_ item: SavedArtifactLibraryItem, onOpenFile: @MainActor (URL, String?) -> Void) async {
         guard let url = await prepare(item) else { return }
-        if !NSWorkspace.shared.open(url) { error = "No application could open this saved artifact." }
+        onOpenFile(url, "artifact:" + item.id)
     }
 }
