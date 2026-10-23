@@ -33,14 +33,16 @@ struct SettingsDictationView: View {
                 ForEach(records) { record in DictationHistoryRow(record: record) }
             }
             if !records.isEmpty || page > 0 {
-                HStack {
-                    Button("Previous") { changePage(to: page - 1) }.disabled(page == 0)
-                    Spacer()
+                HStack(spacing: 8) {
+                    Button { changePage(to: page - 1) } label: {
+                        DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
+                    }.disabled(page == 0).accessibilityLabel("Previous page").help("Previous page")
                     Text("Page \(page + 1)").font(.system(size: 12)).monospacedDigit()
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                    Spacer()
-                    Button("Next") { changePage(to: page + 1) }.disabled(!hasNextPage)
-                }.buttonStyle(SettingsQuietButtonStyle())
+                        .foregroundStyle(DashboardPalette.mutedForeground).fixedSize()
+                    Button { changePage(to: page + 1) } label: {
+                        DashboardLucideIcon(glyph: .arrowRight, size: 16).frame(width: 32, height: 32)
+                    }.disabled(!hasNextPage).accessibilityLabel("Next page").help("Next page")
+                }.buttonStyle(DashboardIconButtonStyle()).frame(maxWidth: .infinity)
             }
         }
         .id(page)

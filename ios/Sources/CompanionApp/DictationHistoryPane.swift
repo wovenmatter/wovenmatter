@@ -27,14 +27,16 @@ struct DictationHistoryPane: View {
         }
         ForEach(records) { record in MobileDictationHistoryRow(record: record) }
         if !records.isEmpty || page > 0 {
-          HStack {
-            Button("Previous") { changePage(to: page - 1) }.disabled(page == 0)
-            Spacer()
+          HStack(spacing: 8) {
+            Button { changePage(to: page - 1) } label: {
+              DashboardLucideIcon(glyph: .arrowLeft, size: 18).frame(width: 44, height: 44)
+            }.disabled(page == 0).accessibilityLabel("Previous page")
             Text("Page \(page + 1)").font(.subheadline).monospacedDigit()
-              .foregroundStyle(DashboardPalette.mutedForeground)
-            Spacer()
-            Button("Next") { changePage(to: page + 1) }.disabled(!hasNextPage)
-          }.buttonStyle(DashboardQuietButtonStyle())
+              .foregroundStyle(DashboardPalette.mutedForeground).fixedSize()
+            Button { changePage(to: page + 1) } label: {
+              DashboardLucideIcon(glyph: .arrowRight, size: 18).frame(width: 44, height: 44)
+            }.disabled(!hasNextPage).accessibilityLabel("Next page")
+          }.buttonStyle(DashboardIconButtonStyle()).frame(maxWidth: .infinity)
         }
       }.padding(16)
     }.scrollIndicators(.never).mobileNavigationPage("Dictation")
