@@ -208,7 +208,10 @@ final class CompanionUITests: XCTestCase {
   }
 
   @MainActor func testOfflineWritingSurvivesTerminationAndRestart() {
-    let app = launch(tab: "Notes")
+    // CI stalled in XCTest's launch-rotation animation wait with Notes open.
+    // Settle the Folders fixture before entering the editor.
+    let app = launch()
+    app.buttons["tab-notes"].tap()
     let bodyEditors = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
     guard bodyEditors.firstMatch.waitForExistence(timeout: 5) else {
       XCTFail("The fixture note editor must be visible before creating a new note")
