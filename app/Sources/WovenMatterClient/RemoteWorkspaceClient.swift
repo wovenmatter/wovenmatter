@@ -1126,6 +1126,26 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
     }
 
+    public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
+        var components = URLComponents(url: baseURL.appending(path: "v1/browser/stream"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "tabID", value: tabID)]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let configuration = session.configuration
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let decoder = RemoteBrowserStreamDecoder(continuation)
+            let session = URLSession(configuration: configuration, delegate: decoder, delegateQueue: nil)
+            let task = session.dataTask(with: request)
+            continuation.onTermination = { @Sendable _ in task.cancel(); session.invalidateAndCancel() }
+            task.resume()
+        }
+    }
+
     public func browserTabs() async throws -> RemoteBrowserTabs {
         try await request(path: "v1/browser/tabs", method: "GET", body: nil)
     }
@@ -1134,9 +1154,14 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action))
     }
 
-    public func browserFrame(tabID: String) async throws -> RemoteBrowserFrame {
-        struct Payload: Encodable { let tabID: String }
-        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID)))
+    public func browserActions(_ actions: [RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult {
+        struct Payload: Encodable { let actions: [RemoteBrowserAction] }
+        return try await request(path: "v1/browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)))
+    }
+
+    public func browserFrame(tabID: String, previousFrameID: String? = nil) async throws -> RemoteBrowserFrame {
+        struct Payload: Encodable { let tabID: String; let previousFrameID: String? }
+        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)))
     }
 
     public func health() async throws -> RemoteWorkspaceHealth {

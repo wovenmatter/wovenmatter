@@ -12,7 +12,7 @@ import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
 import { createDurableACP } from './durable-acp.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
-import { createWorkspaceBrowser } from './workspace-browser.mjs'
+import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -170,12 +170,16 @@ const server = createServer(async (request, response) => {
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})
 
+    if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
+      await streamBrowserFrames(workspaceBrowser, url.searchParams.get('tabID'), response); return
+    }
     if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') return json(response,200,await workspaceBrowser.tabs())
     if (url.pathname === '/v1/browser/connect' && request.method === 'POST') return json(response,200,await workspaceBrowser.connect())
+    if (url.pathname === '/v1/browser/actions' && request.method === 'POST') return json(response,200,await workspaceBrowser.actions((await readJSON(request, 65536)).actions))
     if (url.pathname === '/v1/browser/action' && request.method === 'POST') return json(response,200,await workspaceBrowser.action(await readJSON(request, 131072)))
     if (url.pathname === '/v1/browser/frame' && request.method === 'POST') {
       const body = await readJSON(request, 1024)
-      return json(response,200,await workspaceBrowser.frame(body.tabID))
+      return json(response,200,await workspaceBrowser.frame(body.tabID, body.previousFrameID))
     }
 
     if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())

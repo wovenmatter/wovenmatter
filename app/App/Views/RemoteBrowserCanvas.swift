@@ -13,7 +13,8 @@ struct RemoteBrowserCanvas: NSViewRepresentable {
     func makeNSView(context: Context) -> RemoteBrowserInputView { RemoteBrowserInputView() }
     func updateNSView(_ view: RemoteBrowserInputView, context: Context) {
         if view.tabID != tabID { view.resetInput(); view.tabID = tabID }
-        view.image = image; view.frameID = frameID; view.send = send; view.focusAddress = focusAddress; view.needsDisplay = true
+        if view.image !== image { view.image = image; view.needsDisplay = true }
+        view.frameID = frameID; view.send = send; view.focusAddress = focusAddress
     }
     static func dismantleNSView(_ view: RemoteBrowserInputView, coordinator: ()) {
         view.resetInput(); view.send = { _ in }

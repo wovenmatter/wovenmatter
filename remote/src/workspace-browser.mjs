@@ -35,20 +35,35 @@ async function launchBrowser(profile) {
 // One workspace-owned browser: agents and people operate the same pages.
 // Opening the app viewer is passive; only explicit input changes a page. CDP stays on loopback.
 export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
-  let active, starting, closed = false, capturing = false
+  let active, starting, closed = false
+  const capturing = new Set()
   const pages = new Map(), ids = new WeakMap(), documents = new WeakMap(), frames = new Map(), receipts = new Map()
-  const acting = new Set()
+  const acting = new Set(), sessions = new Map()
+  async function sessionFor(page) {
+    if (!sessions.has(page)) {
+      const pending = page.context().newCDPSession(page)
+      sessions.set(page, pending)
+      pending.catch(() => { if (sessions.get(page) === pending) sessions.delete(page) })
+    }
+    return sessions.get(page)
+  }
+  function discardSession(page) {
+    const pending = sessions.get(page)
+    sessions.delete(page)
+    void pending?.then(cdp => cdp.detach()).catch(() => {})
+  }
   function forget(session) {
     if (active !== session) return
     active = undefined
-    pages.clear(); frames.clear(); receipts.clear()
+    pages.clear(); frames.clear(); receipts.clear(); sessions.clear()
   }
   function inventory() {
     const current = active?.context.pages().filter(page => !page.isClosed()).slice(0, 64) ?? []
-    for (const [id, page] of pages) if (!current.includes(page)) pages.delete(id)
+    for (const [id, page] of pages) if (!current.includes(page)) { pages.delete(id); discardSession(page) }
     return current.map(page => {
       if (!ids.has(page)) {
         ids.set(page, randomUUID()); documents.set(page, randomUUID())
+        page.once('close', () => discardSession(page))
         page.on('framenavigated', frame => {
           if (frame === page.mainFrame()) documents.set(page, randomUUID())
         })
@@ -58,7 +73,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       return { id, page }
     })
   }
-  return {
+  const api = {
     async connect() {
       if (closed) throw failure(503, 'browser_unavailable')
       if (!active && !starting) {
@@ -80,17 +95,17 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       })))
       return active === session ? { running: !!session, tabs } : { running: false, tabs: [] }
     },
-    async frame(tabID) {
+    async frame(tabID, previousFrameID) {
       if (typeof tabID !== 'string' || !/^[0-9a-f-]{36}$/.test(tabID)) throw failure(400, 'invalid_browser_tab')
       inventory()
       const page = pages.get(tabID)
       if (!page) throw failure(410, 'browser_tab_closed')
-      if (capturing) throw failure(409, 'browser_busy')
-      capturing = true
-      let cdp, expired = false
+      if (capturing.has(page)) throw failure(409, 'browser_busy')
+      capturing.add(page)
+      let cdp, expired = false, succeeded = false
       try {
         return await deadline(async () => {
-          cdp = await page.context().newCDPSession(page)
+          cdp = await sessionFor(page)
           if (expired) { await cdp.detach().catch(() => {}); throw failure(503, 'browser_timed_out') }
           const { cssVisualViewport: viewport } = await cdp.send('Page.getLayoutMetrics')
           if (!viewport || ![viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight].every(Number.isFinite)
@@ -98,7 +113,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
           if (expired) throw failure(503, 'browser_timed_out')
           const document = documents.get(page)
           const { data } = await cdp.send('Page.captureScreenshot', {
-            format: 'jpeg', quality: 65, captureBeyondViewport: false,
+            format: 'jpeg', quality: 65, optimizeForSpeed: true, captureBeyondViewport: false,
             clip: { x: viewport.pageX, y: viewport.pageY, width: Math.min(viewport.clientWidth, 1920),
               height: Math.min(viewport.clientHeight, 1200), scale: 1 },
           })
@@ -106,17 +121,45 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
           if (page.isClosed() || pages.get(tabID) !== page) throw failure(410, 'browser_tab_closed')
           if (document !== documents.get(page)) throw failure(409, 'browser_page_changed')
           const frameID = randomUUID()
-          frames.set(frameID, { page, document, viewport, created: Date.now() })
-          while (frames.size > 256) frames.delete(frames.keys().next().value)
-          return { tabID, frameID, imageBase64: data }
+          const digest = createHash('sha256').update(data).digest('hex')
+          const previous = frames.get(previousFrameID)
+          const unchanged = previous?.page === page && previous.document === document && previous.digest === digest
+          frames.set(frameID, { page, document, viewport, digest, created: Date.now() })
+          // Four live viewers can produce 120 frames/sec. Retain their input
+          // identities for the full 30s gesture window, without retaining JPEGs.
+          while (frames.size > 4096 || frames.values().next().value.created < Date.now() - 30000) {
+            frames.delete(frames.keys().next().value)
+          }
+          succeeded = true
+          return { tabID, frameID, imageID: document + ':' + digest, imageBase64: unchanged ? '' : data }
         })
       } finally {
         expired = true
-        if (cdp) await deadline(() => cdp.detach(), 1000).catch(() => {})
-        capturing = false
+        if (!succeeded) discardSession(page)
+        capturing.delete(page)
       }
     },
-    async action(request) {
+    async actions(requests) {
+      if (!Array.isArray(requests) || !requests.length || requests.length > 32
+          || Buffer.byteLength(JSON.stringify(requests)) > 65536) throw failure(400, 'invalid_browser_actions')
+      requests.forEach(validateAction)
+      if (requests.some(r => r.tabID !== requests[0].tabID)) throw failure(400, 'invalid_browser_actions')
+      inventory()
+      const page = pages.get(requests[0].tabID)
+      if (!page) throw failure(410, 'browser_tab_closed')
+      if (acting.has(page)) throw failure(409, 'browser_busy')
+      acting.add(page)
+      try {
+        const results = [], expires = performance.now() + 5000
+        // Stop at the first rejected gesture. Never replay a partially delivered batch.
+        for (const request of requests) {
+          if (performance.now() >= expires) throw failure(503, 'browser_timed_out')
+          results.push(await api.action(request, page, expires))
+        }
+        return { results }
+      } finally { acting.delete(page) }
+    },
+    async action(request, batchPage, expires = performance.now() + 5000) {
       validateAction(request)
       inventory()
       const { tabID, frameID, actionID } = request, page = pages.get(tabID)
@@ -131,14 +174,14 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
         // Never repeat an input whose acknowledgement may have been lost.
         throw failure(409, 'browser_action_already_submitted')
       }
-      if (acting.has(page)) throw failure(409, 'browser_busy')
+      if (acting.has(page) && batchPage !== page) throw failure(409, 'browser_busy')
       receipts.set(actionID, digest)
       while (receipts.size > 1024) receipts.delete(receipts.keys().next().value)
       acting.add(page)
-      let cdp, expired = false, heldButton, heldKey
+      let cdp, expired = false, heldButton, heldKey, succeeded = false
       try {
         return await deadline(async () => {
-          cdp = await page.context().newCDPSession(page)
+          cdp = await sessionFor(page)
           if (expired) { await cdp.detach().catch(() => {}); throw failure(503, 'browser_timed_out') }
           const send = async (method, params) => {
             if (expired || page.isClosed() || documents.get(page) !== frame.document) throw failure(409, 'browser_page_changed')
@@ -189,6 +232,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
               if (selection) { text = selection; break }
             }
             if (expired || documents.get(page) !== frame.document) throw failure(409, 'browser_page_changed')
+            succeeded = true
             return { tabID, accepted: true, text }
           } else if (kind === 'text') {
             await send('Input.insertText', { text: request.text })
@@ -208,18 +252,19 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
           } else if (kind === 'reload') {
             await page.reload({ waitUntil: 'commit', timeout: 4000 })
           }
+          succeeded = true
           return { tabID, accepted: true }
-        })
+        }, Math.max(1, expires - performance.now()))
       } finally {
         expired = true
         if (cdp) {
           await deadline(async () => {
             if (heldButton) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...heldButton, buttons: 0 }).catch(() => {})
             if (heldKey) await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...heldKey }).catch(() => {})
-            await cdp.detach()
+            if (!succeeded) discardSession(page)
           }, 1000).catch(() => {})
         }
-        acting.delete(page)
+        if (!batchPage) acting.delete(page)
       }
     },
     async close() {
@@ -227,10 +272,11 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       await starting?.catch(() => {})
       const session = active
       active = undefined
-      pages.clear()
+      pages.clear(); frames.clear(); receipts.clear(); sessions.clear()
       await session?.context.close()
     },
   }
+  return api
 }
 
 function keyInfo(key) {
@@ -272,5 +318,61 @@ function validateAction(r) {
     let url
     try { url = new URL(r.text) } catch { invalid() }
     if (!['http:', 'https:'].includes(url.protocol) || r.text.length > 4096) invalid()
+  }
+}
+
+// Keep video independent of network round trips. Never accumulate a video backlog:
+// a slow receiver is disconnected rather than shown seconds of obsolete frames.
+const streams = new WeakMap()
+export async function streamBrowserFrames(browser, tabID, response) {
+  if (!streams.has(browser)) streams.set(browser, new Set())
+  const viewers = streams.get(browser)
+  if (viewers.size >= 4) throw failure(429, 'browser_viewer_limit')
+  viewers.add(response)
+  let stopped = false, wake, previous, sentAt = 0
+  const stop = () => { stopped = true; wake?.() }
+  response.once('close', stop)
+  try {
+    let busy = 0
+    while (!stopped) {
+      const started = performance.now()
+      let frame
+      try { frame = await browser.frame(tabID, previous); busy = 0 }
+      catch (error) {
+        if (error.statusCode !== 409 || ++busy > 100) throw error
+      }
+      if (stopped) break
+      if (frame && (frame.imageBase64 || Date.now() - sentAt >= 2000)) {
+        if (!response.headersSent) {
+          response.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' })
+          response.flushHeaders()
+        }
+        if (response.writableLength > 3 * 1024 * 1024) break
+        const writable = response.write(JSON.stringify(frame) + '\n')
+        previous = frame.frameID; sentAt = Date.now()
+        if (!writable && !stopped) {
+          // Wait before capturing again, so a slow link never queues old frames.
+          const drained = await new Promise(resolve => {
+            const finish = value => {
+              clearTimeout(timer); response.off('drain', ready); response.off('close', gone); resolve(value)
+            }
+            const ready = () => finish(true), gone = () => finish(false)
+            const timer = setTimeout(gone, 1500)
+            response.once('drain', ready); response.once('close', gone)
+          })
+          if (!drained) break
+        }
+      }
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, Math.max(1, 33 - (performance.now() - started)))
+        wake = () => { clearTimeout(timer); resolve() }
+      })
+    }
+  } catch (error) {
+    if (!response.headersSent) throw error
+  } finally {
+    viewers.delete(response)
+    response.off('close', stop)
+    if (response.headersSent) response.destroy()
   }
 }

@@ -89,6 +89,24 @@ async function main() {
     const changedFrame = await (await request('frame', { tabID: sharedTab.id })).json();
     assert.notEqual(changedFrame.imageBase64, firstFrame.imageBase64);
     await verifyInteraction(sharedPage, sharedTab.id, request);
+    await sharedPage.getByRole('textbox', { name: 'Name' }).fill('');
+    const batchFrame = await (await request('frame', { tabID: sharedTab.id })).json();
+    const actions = Array.from({ length: 30 }, () => ({ kind: 'key', key: 'a', text: 'a', tabID: sharedTab.id,
+      frameID: batchFrame.frameID, actionID: require('node:crypto').randomUUID() }));
+    const batch = await request('actions', { actions });
+    assert.equal(batch.status, 200); assert.equal((await batch.json()).results.length, 30);
+    assert.equal(await sharedPage.getByRole('textbox', { name: 'Name' }).inputValue(), 'a'.repeat(30));
+    const stream = await fetch(serviceURL + '/v1/browser/stream?tabID=' + sharedTab.id, {
+      headers: { Authorization: 'Bearer ' + process.env.WOVENMATTER_API_TOKEN }, signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(stream.status, 200); assert.equal(stream.headers.get('cache-control'), 'no-store');
+    const reader = stream.body.getReader(); let line = '';
+    while (!line.includes('\n')) { const { value, done } = await reader.read(); assert.ok(!done); line += Buffer.from(value).toString(); }
+    const streamed = JSON.parse(line.split('\n')[0]);
+    assert.equal(streamed.tabID, sharedTab.id); assert.ok(streamed.frameID);
+    assert.equal(Buffer.from(streamed.imageBase64, 'base64').readUInt16BE(), 0xffd8);
+    await reader.cancel();
+    console.log('Shared browser performance transport: ordered 30-key batch and authenticated live stream passed.');
     await browser.close(); browser = undefined;
     assert.ok((await (await request('tabs')).json()).tabs.some(tab => tab.id === sharedTab.id));
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);

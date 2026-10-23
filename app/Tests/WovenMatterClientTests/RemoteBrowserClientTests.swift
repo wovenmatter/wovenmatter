@@ -16,6 +16,23 @@ struct RemoteBrowserClientTests {
             try await old.browserTabs()
         }
     }
+    @Test func fragmentedStreamKeepsOnlyTheLatestImageAndRejectsOversizedFrames() async throws {
+        let pair = AsyncThrowingStream<RemoteBrowserFrame, any Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let decoder = RemoteBrowserStreamDecoder(pair.continuation)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "http://127.0.0.1:1")!)
+        let first = Data(#"{"tabID":"tab","frameID":"one","imageBase64":"anBlZw==","imageID":"image"}"#.utf8)
+        decoder.urlSession(session, dataTask: task, didReceive: first.prefix(17))
+        decoder.urlSession(session, dataTask: task, didReceive: first.dropFirst(17) + Data([10]))
+        decoder.urlSession(session, dataTask: task, didReceive: Data(#"{"tabID":"tab","frameID":"two","imageBase64":"","imageID":"image"}"#.utf8) + Data([10]))
+        var iterator = pair.stream.makeAsyncIterator()
+        let latest = try #require(try await iterator.next())
+        #expect(latest.frameID == "two" && latest.imageBase64 == "anBlZw==")
+        decoder.urlSession(session, dataTask: task, didReceive: Data(repeating: 65, count: 3 * 1024 * 1024 + 1))
+        await #expect(throws: BackendRPCError.self) { try await iterator.next() }
+    }
+
 }
 
 private final class BrowserFixtureProtocol: URLProtocol, @unchecked Sendable {

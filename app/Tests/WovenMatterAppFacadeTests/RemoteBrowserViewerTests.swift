@@ -27,7 +27,7 @@ import WovenMatterClient
     @Test func selectionChangesAndViewerDismissalRejectLateFrames() async throws {
         var pending: CheckedContinuation<RemoteBrowserFrame, any Error>?
         let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) },
-            loadFrame: { _ in try await withCheckedThrowingContinuation { pending = $0 } })
+            loadFrame: { _, _ in try await withCheckedThrowingContinuation { pending = $0 } })
         let loading = Task { await viewer.refresh() }
         for _ in 0..<100 where pending == nil { await Task.yield() }
         let first = try #require(pending)
@@ -54,7 +54,7 @@ import WovenMatterClient
         let viewer = RemoteBrowserViewerModel(loadTabs: {
             if offline { throw URLError(.notConnectedToInternet) }
             return .init(running: true, tabs: catalog)
-        }, loadFrame: { try frame($0) })
+        }, loadFrame: { id, _ in try frame(id) })
         await viewer.refresh()
         #expect(viewer.image != nil)
         catalog = [tabs[1]]
@@ -70,7 +70,7 @@ import WovenMatterClient
 
     @Test func frameIdentityMustMatchSelectedTab() async throws {
         let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) },
-            loadFrame: { _ in try frame("different-tab") })
+            loadFrame: { _, _ in try frame("different-tab") })
         await viewer.refresh()
         #expect(viewer.image == nil)
         #expect(viewer.error != nil)
@@ -158,7 +158,7 @@ import WovenMatterClient
     @Test func queuedInputIsOrderedAndDismissalDiscardsUnsentText() async throws {
         var pending: CheckedContinuation<RemoteBrowserActionResult, any Error>?
         var sent: [RemoteBrowserAction] = []
-        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { try frame($0) },
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id, _ in try frame(id) },
             sendAction: { action in
                 sent.append(action)
                 return try await withCheckedThrowingContinuation { pending = $0 }
@@ -184,7 +184,7 @@ import WovenMatterClient
     @Test func uncertainInputIsNotRetriedAndCannotDrainIntoAnotherTab() async throws {
         var pending: CheckedContinuation<RemoteBrowserActionResult, any Error>?
         var sent: [RemoteBrowserAction] = []
-        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { try frame($0) },
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id, _ in try frame(id) },
             sendAction: { action in
                 sent.append(action)
                 return try await withCheckedThrowingContinuation { pending = $0 }
@@ -208,7 +208,7 @@ import WovenMatterClient
         var pendingFrame: CheckedContinuation<RemoteBrowserFrame, any Error>?
         var sent = 0
         var clipboardWrites: [String] = []
-        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id in
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id, _ in
             if suspendFrame { return try await withCheckedThrowingContinuation { pendingFrame = $0 } }
             return try frame(id)
         }, sendAction: { action in
@@ -236,8 +236,12 @@ import WovenMatterClient
         let client = RemoteWorkspaceServiceClient(baseURL: url, token: "fixture")
         let catalog = try await client.browserTabs()
         let tab = try #require(catalog.tabs.first { $0.title == "Shared collaboration fixture" })
+        let identity = RemoteWorkspaceRequestIdentity(configuration: .init(name: "Fixture", workspaceID: "fixture", hostName: "localhost"), credentialEpoch: UUID(), workspaceEpoch: UUID())
+        let feed = RemoteBrowserFrameFeed(tabID: tab.id, identity: identity, frames: client.browserFrames(tabID: tab.id))
+        defer { feed.stop() }
         let viewer = RemoteBrowserViewerModel(loadTabs: { try await client.browserTabs() },
-            loadFrame: { try await client.browserFrame(tabID: $0) }, sendAction: { try await client.browserAction($0) })
+            loadFrame: { _, previous in try await feed.latest(previousFrameID: previous) },
+            sendBatch: { try await client.browserActions($0) }, sendAction: { try await client.browserAction($0) })
         viewer.select(tab.id); await viewer.refresh()
         #expect(viewer.frameID != nil)
         let canvas = RemoteBrowserInputView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
@@ -278,9 +282,59 @@ import WovenMatterClient
         viewer.clear()
     }
 
+    @Test func queuedKeysCrossTheNetworkInBoundedOrderedBatches() async throws {
+        var batches: [[RemoteBrowserAction]] = []
+        var pending: CheckedContinuation<RemoteBrowserActionBatchResult, any Error>?
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) },
+            loadFrame: { id, _ in try frame(id) }, sendBatch: { actions in
+                batches.append(actions)
+                if batches.count == 1 { return try await withCheckedThrowingContinuation { pending = $0 } }
+                return .init(results: actions.map { .init(tabID: $0.tabID, accepted: true) })
+            })
+        await viewer.refresh()
+        var key = RemoteBrowserAction(kind: "key"); key.key = "a"; key.text = "a"
+        viewer.enqueue(key)
+        for _ in 0..<100 where pending == nil { await Task.yield() }
+        let completion = try #require(pending)
+        for _ in 0..<70 { viewer.enqueue(key) }
+        completion.resume(returning: .init(results: [.init(tabID: "first", accepted: true)]))
+        for _ in 0..<100 where batches.count < 4 { await Task.yield() }
+        #expect(batches.map(\.count) == [1, 32, 32, 6])
+        #expect(batches.flatMap { $0 }.allSatisfy { $0.key == "a" && $0.frameID == "frame-first" })
+        viewer.clear()
+    }
+
+    @Test func imageRefreshDoesNotWaitForSlowTabMetadataOrRedecodeUnchangedFrames() async throws {
+        var tabReads = 0, frameReads = 0
+        let viewer = RemoteBrowserViewerModel(loadTabs: { tabReads += 1; return .init(running: true, tabs: tabs) },
+            loadFrame: { id, previous in
+                frameReads += 1
+                if previous != nil { return .init(tabID: id, imageBase64: "", frameID: previous) }
+                return try frame(id)
+            })
+        await viewer.refresh()
+        let original = try #require(viewer.image)
+        for _ in 0..<10 { await viewer.refresh(includeTabs: false) }
+        #expect(tabReads == 1 && frameReads == 11)
+        #expect(viewer.image === original)
+    }
+
+    @Test func latestFrameFeedDropsObsoleteFramesAndStopsAfterItsLease() async throws {
+        let pair = AsyncThrowingStream<RemoteBrowserFrame, any Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let identity = RemoteWorkspaceRequestIdentity(configuration: .init(name: "Fixture", workspaceID: "fixture", hostName: "localhost"), credentialEpoch: UUID(), workspaceEpoch: UUID())
+        let feed = RemoteBrowserFrameFeed(tabID: "first", identity: identity, frames: pair.stream)
+        for i in 0..<100 { pair.continuation.yield(.init(tabID: "first", imageBase64: "fixture", frameID: String(i), imageID: "same-image")) }
+        let latest = try await feed.latest(previousFrameID: nil)
+        #expect(latest.frameID == "99")
+        #expect(try await feed.latest(previousFrameID: "99").imageBase64.isEmpty)
+        try await Task.sleep(for: .milliseconds(4200))
+        #expect(feed.stopped)
+        await #expect(throws: CancellationError.self) { try await feed.latest(previousFrameID: nil) }
+    }
+
     @Test func renderViewerWhenRequested() async throws {
         guard let output = ProcessInfo.processInfo.environment["WOVENMATTER_REMOTE_BROWSER_PREVIEW"] else { return }
-        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { try frame($0) })
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id, _ in try frame(id) })
         await viewer.refresh()
         for (theme, appearance, width) in [(DashboardTheme.green, NSAppearance.Name.aqua, 1000), (.cognac, .aqua, 700), (.dark, .darkAqua, 700)] {
             let view = NSHostingView(rootView: RemoteBrowserContent(viewer: viewer, workspaceName: "Development workspace", onClose: {}).environment(\.dashboardTheme, theme))

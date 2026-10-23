@@ -13,17 +13,28 @@ struct RemoteBrowserView: View {
         self.workspaces = workspaces; self.configuration = configuration
         _viewer = State(initialValue: RemoteBrowserViewerModel(
             loadTabs: { try await workspaces.browserTabs(for: configuration) },
-            loadFrame: { try await workspaces.browserFrame(tabID: $0, for: configuration) },
+            loadFrame: { try await workspaces.browserFrame(tabID: $0, previousFrameID: $1, for: configuration) },
+            sendBatch: { try await workspaces.browserActions($0, for: configuration) },
             sendAction: { try await workspaces.browserAction($0, for: configuration) }))
     }
 
     var body: some View {
         RemoteBrowserContent(viewer: viewer, workspaceName: configuration.name, onClose: { dismiss() })
-            .task(id: workspaces.browserIdentity(for: configuration)) {
+            .task(id: BrowserViewerLifecycle(identity: workspaces.browserIdentity(for: configuration), active: scenePhase == .active, reduceMotion: reduceMotion)) {
                 viewer.clear()
+                let catalogs = Task { @MainActor in
+                    while !Task.isCancelled {
+                        if scenePhase == .active { await viewer.refreshTabs() }
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                    }
+                }
+                defer { catalogs.cancel() }
                 while !Task.isCancelled {
-                    if scenePhase == .active { await viewer.refresh() }
-                    do { try await Task.sleep(for: .milliseconds(reduceMotion ? 1000 : 200)) }
+                    let started = ContinuousClock.now
+                    if scenePhase == .active { await viewer.refresh(includeTabs: false) }
+                    let interval: Duration = scenePhase != .active || reduceMotion ? .seconds(1)
+                        : viewer.image == nil ? .milliseconds(250) : .milliseconds(33)
+                    do { try await Task.sleep(until: started.advanced(by: interval), clock: .continuous) }
                     catch { break }
                 }
             }
@@ -117,4 +128,10 @@ struct RemoteBrowserContent: View {
         .background(DashboardPalette.background)
         .frame(minWidth: 640, idealWidth: 1000, maxWidth: .infinity, minHeight: 480, idealHeight: 720, maxHeight: .infinity)
     }
+}
+
+private struct BrowserViewerLifecycle: Equatable {
+    let identity: RemoteWorkspaceRequestIdentity?
+    let active: Bool
+    let reduceMotion: Bool
 }

@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import Observation
 import WovenMatterClient
 
@@ -17,19 +18,23 @@ final class RemoteBrowserViewerModel {
     private var sendingInput = false
     private var revision = UUID()
     private var refreshing = false
+    private var refreshingTabs = false
     private let loadTabs: () async throws -> RemoteBrowserTabs
-    private let loadFrame: (String) async throws -> RemoteBrowserFrame
+    private let loadFrame: (String, String?) async throws -> RemoteBrowserFrame
+    private let sendBatch: (([RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult)?
     private let copyText: (String) -> Void
     private let sendAction: (RemoteBrowserAction) async throws -> RemoteBrowserActionResult
 
     init(loadTabs: @escaping () async throws -> RemoteBrowserTabs,
-         loadFrame: @escaping (String) async throws -> RemoteBrowserFrame,
+         loadFrame: @escaping (String, String?) async throws -> RemoteBrowserFrame,
+         sendBatch: (([RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult)? = nil,
          sendAction: @escaping (RemoteBrowserAction) async throws -> RemoteBrowserActionResult = { action in
              .init(tabID: action.tabID, accepted: false)
          }, copyText: @escaping (String) -> Void = { text in
              NSPasteboard.general.clearContents()
              NSPasteboard.general.setString(text, forType: .string)
          }) {
+        self.sendBatch = sendBatch
         self.loadTabs = loadTabs; self.loadFrame = loadFrame; self.sendAction = sendAction; self.copyText = copyText
     }
 
@@ -88,14 +93,25 @@ final class RemoteBrowserViewerModel {
         while !pendingInput.isEmpty {
             let action = pendingInput.removeFirst(), requestRevision = revision
             guard selectedID == action.tabID else { continue }
+            var batch = [action], bytes = action.text?.utf8.count ?? 0
+            if sendBatch != nil {
+                // No batching timer: send the first gesture immediately, then
+                // amortize the next network round trip over input already queued.
+                while batch.count < 32, let next = pendingInput.first, next.tabID == action.tabID,
+                      bytes + (next.text?.utf8.count ?? 0) < 48000 {
+                    batch.append(pendingInput.removeFirst()); bytes += next.text?.utf8.count ?? 0
+                }
+            }
             do {
-                let result = try await sendAction(action)
+                let results: [RemoteBrowserActionResult]
+                if let sendBatch { results = try await sendBatch(batch).results }
+                else { results = [try await sendAction(action)] }
                 guard requestRevision == revision, selectedID == action.tabID else { continue }
-                guard result.accepted, result.tabID == action.tabID else {
+                guard results.count == batch.count, results.allSatisfy({ $0.accepted && $0.tabID == action.tabID }) else {
                     throw RemoteWorkspaceClientError.invalidResponse("The workspace did not accept this input.")
                 }
-                if action.kind == "copy", let text = result.text, !text.isEmpty, text.utf8.count <= 65536 {
-                    copyText(text)
+                for (gesture, result) in zip(batch, results) {
+                    if gesture.kind == "copy", let text = result.text, !text.isEmpty, text.utf8.count <= 65536 { copyText(text) }
                 }
                 inputError = nil
             } catch {
@@ -110,44 +126,72 @@ final class RemoteBrowserViewerModel {
             // start draining immediately, without needing another gesture.
             Task { [weak self] in
                 guard let self, self.revision == drainRevision else { return }
-                await self.refresh()
+                await self.refresh(includeTabs: false)
             }
         }
     }
 
-    func refresh() async {
-        guard !refreshing else { return }
-        refreshing = true
-        defer { refreshing = false }
+    func refreshTabs() async {
+        guard !refreshingTabs else { return }
+        refreshingTabs = true
+        defer { refreshingTabs = false }
         let requestRevision = revision
         do {
             let result = try await loadTabs()
             guard !Task.isCancelled, requestRevision == revision else { return }
-            tabs = result.running ? Array(result.tabs.prefix(64)) : []
+            let current = result.running ? Array(result.tabs.prefix(64)) : []
+            if tabs != current { tabs = current }
             hasLoaded = true
             if !tabs.contains(where: { $0.id == selectedID }) {
+                revision = UUID()
                 selectedID = tabs.first?.id; image = nil; updatedAt = nil; frameID = nil; pendingInput.removeAll()
-            }
-            error = nil
-            guard let id = selectedID else { image = nil; frameID = nil; return }
-            do {
-                let frame = try await loadFrame(id)
-                guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
-                guard frame.tabID == id, frame.imageBase64.utf8.count <= 2 * 1024 * 1024,
-                      let bytes = Data(base64Encoded: frame.imageBase64), let decoded = NSImage(data: bytes),
-                      decoded.size.width > 0, decoded.size.height > 0,
-                      decoded.size.width <= 1920, decoded.size.height <= 1200 else {
-                    throw RemoteWorkspaceClientError.invalidResponse("The workspace returned an invalid browser image.")
-                }
-                image = decoded; updatedAt = .now; frameID = frame.frameID
-            } catch {
-                guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
-                image = nil; updatedAt = nil; self.error = error.localizedDescription; frameID = nil; pendingInput.removeAll()
             }
         } catch {
             guard !Task.isCancelled, requestRevision == revision else { return }
             tabs = []; selectedID = nil; image = nil; updatedAt = nil; hasLoaded = true
             self.error = error.localizedDescription; frameID = nil; pendingInput.removeAll()
         }
+    }
+
+    func refresh(includeTabs: Bool = true) async {
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        if includeTabs { await refreshTabs() }
+        guard let id = selectedID else { return }
+        let requestRevision = revision, previousFrameID = frameID
+        do {
+            let frame = try await loadFrame(id, previousFrameID)
+            guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
+            guard frame.tabID == id, frame.imageBase64.utf8.count <= 2 * 1024 * 1024 else { throw BackendRPCError.invalidFrame }
+            if frame.imageBase64.isEmpty {
+                guard image != nil, previousFrameID != nil else { throw BackendRPCError.invalidFrame }
+            } else {
+                let decoded = try await Self.decodeImage(frame.imageBase64)
+                guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
+                image = NSImage(cgImage: decoded, size: NSSize(width: decoded.width, height: decoded.height))
+                updatedAt = .now
+            }
+            if frameID != frame.frameID { frameID = frame.frameID }
+            error = nil
+        } catch {
+            guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
+            image = nil; updatedAt = nil; self.error = error.localizedDescription; frameID = nil; pendingInput.removeAll()
+        }
+    }
+
+    /// Decode and decompress away from AppKit's event/drawing thread.
+    nonisolated private static func decodeImage(_ base64: String) async throws -> CGImage {
+        try await Task.detached(priority: .userInitiated) {
+            guard let bytes = Data(base64Encoded: base64),
+                  let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  width > 0, height > 0, width <= 1920, height <= 1200,
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+            else { throw RemoteWorkspaceClientError.invalidResponse("The workspace returned an invalid browser image.") }
+            return image
+        }.value
     }
 }

@@ -554,7 +554,7 @@ test('direct client grants expose only execution routes and enforce revocation',
   assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
   assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
   assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
-  for (const [path, method] of [['tabs', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST']]) {
+  for (const [path, method] of [['tabs', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
   }

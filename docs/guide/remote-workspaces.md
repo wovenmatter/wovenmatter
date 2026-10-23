@@ -83,6 +83,12 @@ automation, including `playwright screenshot URL /home/example.png`.
 
 The shared profile, cookies, and site storage stay in the workspace's persistent
 home. Open tabs are runtime state and may close on a workspace restart or update.
+The live image stream targets 30 updates per second and keeps the latest image
+when the connection is slow. Input is sent immediately, with queued gestures
+batched in order. Closing the viewer stops image capture and leaves agent tabs
+open. See [performance validation](../reference/REMOTE_BROWSER_PERFORMANCE.md)
+for measurements and limits.
+
 Each workspace has its own browser; viewing uses the existing authenticated SSH
 connection. The browser-control endpoint is container-loopback-only and is never
 forwarded to the Mac or published on the host.
