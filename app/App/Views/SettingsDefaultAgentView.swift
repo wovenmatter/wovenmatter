@@ -137,7 +137,7 @@ struct SettingsDefaultAgentView: View {
                     agent.setInherits($0)
                     agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
                 }))
-                Text(agent.inherits ? "Providers, keys, search, and model preferences follow your global settings. Choose Shared to manage accounts, or turn off inheritance for workspace-specific setup." : "This workspace has its own settings. Claude subscriptions need sign-in on each host; other accounts can be shared.").font(.callout).foregroundStyle(.secondary)
+                Text(agent.inherits ? "Uses shared providers, search, and model preferences. Manage accounts in Shared settings." : "This workspace has its own settings. Claude subscriptions require sign-in on this host.").font(.callout).foregroundStyle(.secondary)
             }
         }
     }
@@ -599,39 +599,5 @@ private struct SettingsAgentDefaultModelChooser: View {
               let selectedID, let position = matches.firstIndex(where: { $0.id == selectedID }) else { return }
         page = position / pageSize
         locatedInitialSelection = true
-    }
-}
-
-
-struct SettingsSignInStatusCard: View {
-    let statuses: [AgentSignInStatus]
-    let checking: Bool
-    let error: String?
-    var scope = "global"
-    let refresh: () -> Void
-    var body: some View {
-        SettingsCard(title: "Sign-in status", detail: "Check Pi Durable connections and independently installed harnesses.") {
-            HStack {
-                Button(checking ? "Checking sign-in status…" : "Refresh sign-in status", action: refresh)
-                    .buttonStyle(SettingsQuietButtonStyle()).disabled(checking)
-                if checking { ProgressView().controlSize(.small) }
-            }
-            if let error { SettingsError(error) }
-            ForEach(statuses) { status in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(status.displayName).font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        if ProviderConnectionID(rawValue: status.id) != nil || status.id.hasPrefix("local-server-") {
-                            ConnectionsLink(title: status.label, scope: scope)
-                        } else { Text(status.label).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
-                    }
-                    Text(status.detail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }.padding(.vertical, 4)
-            }
-        }
     }
 }

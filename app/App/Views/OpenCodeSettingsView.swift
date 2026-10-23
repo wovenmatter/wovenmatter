@@ -135,6 +135,7 @@ struct SettingsOpenCodeView: View {
     var body: some View {
         SettingsPage(title: "Open Code",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsHarnessAccounts(model: model, runtimeKind: .opencode, initialWorkspaceID: workspaceID, fixedWorkspace: isWorkspaceScoped)
             SettingsAgentDefaultsSection(model: model, runtime: .opencode,
                 fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if !isWorkspaceScoped || workspaceID == nil {

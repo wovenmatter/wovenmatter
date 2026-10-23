@@ -60,6 +60,11 @@ when an intentional design change is accepted.
   rows. Keep versions and labeled maintenance controls inside the expanded row,
   rather than a horizontal strip of actions. Remote workspaces have no global
   enable switch; saved workspaces reconnect using silent Keychain reads.
+- **Harness accounts:** sign-in belongs to each harness settings page, scoped to
+  This Mac or a saved remote workspace. Workspace inventory shows status and links
+  to that scoped page. Never label credentials present as verified sign-in.
+  New remote workspaces offer skippable, reopenable setup with only Pi Durable
+  selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
 - **Pi Durable SDK settings:** place SDK management directly below the workspace

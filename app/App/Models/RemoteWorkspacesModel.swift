@@ -65,6 +65,8 @@ final class RemoteWorkspacesModel {
     private(set) var authenticationSessions: [UUID: RemoteHarnessAuthenticationSession] = [:]
     private(set) var preparedHarnessAction: PreparedHarnessAction?
     private(set) var pendingHostPreparation: PendingHostPreparation?
+    private(set) var pendingHarnessSetupIDs: Set<UUID> = []
+    private let harnessSetupKey = "wovenmatter.remote-workspaces.pending-harness-setup"
     private(set) var busyWorkspaceIDs: Set<UUID> = []
     private(set) var isDiscovering = false
     private(set) var isCheckingHost = false
@@ -145,6 +147,25 @@ final class RemoteWorkspacesModel {
         // Configured workspaces are always available. Keychain reads remain silent;
         // explicit reconnect or General settings handles permission recovery.
         load()
+        pendingHarnessSetupIDs = Set((defaults.stringArray(forKey: harnessSetupKey) ?? []).compactMap(UUID.init(uuidString:)))
+            .intersection(workspaces.map(\.id))
+    }
+
+    /// Called only after a newly created workspace is durably configured.
+    func requestHarnessSetup(_ id: UUID) {
+        guard !isBackendProjection, configuration(id: id) != nil else { return }
+        pendingHarnessSetupIDs.insert(id)
+        saveHarnessSetupRequests()
+    }
+
+    func dismissHarnessSetup(_ id: UUID) {
+        if forwardToBackend(.dismissHarnessSetup(id)) { return }
+        pendingHarnessSetupIDs.remove(id)
+        saveHarnessSetupRequests()
+    }
+
+    private func saveHarnessSetupRequests() {
+        defaults.set(pendingHarnessSetupIDs.map(\.uuidString).sorted(), forKey: harnessSetupKey)
     }
 
     #if COMPANION_FACADE_TESTS
@@ -893,6 +914,7 @@ final class RemoteWorkspacesModel {
             self.tunnels.removeValue(forKey: configuration.id)
             try await self.credentials.deleteToken(for: configuration.id)
             self.workspaces.removeAll { $0.id == configuration.id }
+            self.dismissHarnessSetup(configuration.id)
             self.statuses.removeValue(forKey: configuration.id)
             self.harnesses.removeValue(forKey: configuration.id)
             self.authenticationSessions.removeValue(forKey: configuration.id)
@@ -1283,6 +1305,7 @@ final class RemoteWorkspacesModel {
         workspaces.sort { $0.createdAt < $1.createdAt }
         statuses[configuration.id] = status
         save()
+        requestHarnessSetup(configuration.id)
         await refreshService(configuration)
     }
 
@@ -1376,6 +1399,7 @@ final class RemoteWorkspacesModel {
         let credentialEpoch: UUID
         let preparedHarnessAction: PreparedHarnessAction?
         let pendingHostPreparation: PendingHostPreparation?
+        let pendingHarnessSetupIDs: Set<UUID>?
         let isDiscovering: Bool
         let isCheckingHost: Bool
         let isCreating: Bool
@@ -1413,6 +1437,7 @@ final class RemoteWorkspacesModel {
             credentialEpoch: credentialEpoch,
             preparedHarnessAction: preparedHarnessAction,
             pendingHostPreparation: pendingHostPreparation,
+            pendingHarnessSetupIDs: pendingHarnessSetupIDs,
             isDiscovering: isDiscovering,
             isCheckingHost: isCheckingHost,
             isCreating: isCreating,
@@ -1450,6 +1475,7 @@ final class RemoteWorkspacesModel {
         credentialEpoch = snapshot.credentialEpoch
         preparedHarnessAction = snapshot.preparedHarnessAction
         pendingHostPreparation = snapshot.pendingHostPreparation
+        pendingHarnessSetupIDs = snapshot.pendingHarnessSetupIDs ?? []
         isDiscovering = snapshot.isDiscovering
         isCheckingHost = snapshot.isCheckingHost
         isCreating = snapshot.isCreating

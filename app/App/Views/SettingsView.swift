@@ -109,6 +109,7 @@ struct SettingsView: View {
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
                     model: model.remoteWorkspaces,
+                    application: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onMoreRuntime: { kind, configuration in
                         section = harnessSettingsSection(
@@ -283,16 +284,12 @@ private struct SettingsHarnessView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsHarnessAccounts(model: model, runtimeKind: runtimeKind, initialWorkspaceID: workspaceID, fixedWorkspace: isWorkspaceScoped)
             SettingsAgentDefaultsSection(model: model, runtime: runtimeKind,
                 fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if runtimeKind == .codex {
                 codexIconCard
             }
-            SettingsHarnessRuntimeMaintenanceView(
-                model: model,
-                runtimeKind: runtimeKind,
-                workspaceID: workspaceID
-            )
         }
     }
 

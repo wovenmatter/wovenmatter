@@ -265,172 +265,6 @@ struct SettingsHarnessControlRow<Content: View>: View {
     }
 }
 
-struct SettingsHarnessRuntimeMaintenanceView: View {
-    @Bindable var model: ApplicationModel
-    let runtimeKind: AgentRuntimeKind
-    var workspaceID: UUID?
-
-    private var localAvailability: LocalACPRuntimeAvailability? {
-        model.localACPRuntimeAvailability.first { $0.runtimeKind == runtimeKind }
-    }
-
-    private var remoteWorkspace: RemoteWorkspaceConfiguration? {
-        workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
-    }
-
-    private var remoteRuntime: RemoteRuntimeMaintenance? {
-        guard let workspaceID else { return nil }
-        return model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first {
-            $0.id == runtimeKind
-        }
-    }
-
-    private var remoteHarness: RemoteHarnessStatus? {
-        guard let remoteWorkspace else { return nil }
-        return model.remoteWorkspaces.currentHarnesses(for: remoteWorkspace).first {
-            $0.id == runtimeKind
-        }
-    }
-
-    var body: some View {
-        SettingsCard(
-            title: workspaceID == nil
-                ? "Local agent workspace"
-                : remoteWorkspace?.name ?? "Remote agent workspace"
-        ) {
-            SettingsInset {
-                HStack(alignment: .center, spacing: 12) {
-                    DashboardHarnessLogoIcon(
-                        logo: DashboardHarnessLogo(runtimeKind: runtimeKind),
-                        size: 24
-                    )
-                    .frame(width: 28, height: 28)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(runtimeKind.displayName)
-                            .font(.system(size: 13, weight: .medium))
-                        Text(runtimeDetail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    SettingsPill(
-                        runtimeStatus,
-                        tone: runtimeIsReady ? .neutral : .warning
-                    )
-
-                    if let workspaceID {
-                        if let remoteWorkspace, let remoteHarness {
-                            SettingsRemoteRuntimeUpdateButton(
-                                model: model.remoteWorkspaces,
-                                harness: remoteHarness,
-                                configuration: remoteWorkspace
-                            )
-                        } else {
-                            Button("Unavailable") {}
-                                .buttonStyle(SettingsQuietButtonStyle())
-                                .disabled(true)
-                                .accessibilityLabel("Runtime controls unavailable for remote workspace \(workspaceID.uuidString)")
-                        }
-                    } else {
-                        SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
-                    }
-                }
-            }
-            if workspaceID == nil, runtimeKind != .defaultAgent {
-                SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
-            }
-
-            if let error = runtimeError {
-                SettingsError(error)
-            }
-        }
-    }
-
-    private var runtimeIsReady: Bool {
-        if workspaceID != nil {
-            guard let remoteWorkspace else { return false }
-            return model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace)
-        }
-        if runtimeKind == .opencode {
-            return model.openCode?.isInstalled == true
-        }
-        return !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
-            && localAvailability?.isReady == true
-            && model.isLocalACPAgentReady(runtimeKind)
-    }
-
-    private var runtimeStatus: String {
-        if let workspaceID {
-            if model.remoteWorkspaces.checkingRuntimeIDs[workspaceID]?.contains(runtimeKind) == true {
-                return "Checking"
-            }
-            guard let remoteWorkspace, let remoteRuntime else { return "Not checked" }
-            if model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace) {
-                return "Ready"
-            }
-            if !remoteRuntime.installed
-                || model.remoteWorkspaces.isRuntimeInventoryUnavailable(
-                    runtimeKind,
-                    configuration: remoteWorkspace
-                )
-                || remoteRuntime.operation?.status == "running" {
-                return "Unavailable"
-            }
-            if !remoteRuntime.enabled { return "Not enabled" }
-            let state = remoteHarness?.state
-                .replacingOccurrences(of: "_", with: " ")
-                .capitalized
-            return state == "Ready" ? "Unavailable" : state ?? "Not checked"
-        }
-        if runtimeKind == .opencode {
-            guard let openCode = model.openCode else { return "Checking" }
-            return openCode.isInstalled ? "Installed" : "Not installed"
-        }
-        if model.checkingLocalACPRuntimeKinds.contains(runtimeKind) { return "Checking" }
-        if localAvailability?.isReady == true,
-           !model.isLocalACPAgentReady(runtimeKind) {
-            return "Workspace unavailable"
-        }
-        guard let localAvailability else { return "Checking" }
-        return switch localAvailability.state {
-        case .ready: "Ready"
-        case .cliMissing: "CLI required"
-        case .adapterMissing: "Adapter required"
-        case .adapterOutdated: "Update required"
-        case .authenticationRequired: "Sign in required"
-        case .executableUnavailable: "Setup required"
-        }
-    }
-
-    private var runtimeDetail: String {
-        if workspaceID != nil {
-            guard let remoteRuntime else { return "Runtime inventory unavailable." }
-            return remoteRuntime.components.map { component in
-                let installed = component.installed
-                    ? component.installedVersion ?? "version unavailable"
-                    : "missing"
-                let newer = component.availableUpdateVersion.map { " → \($0)" } ?? ""
-                return "\(component.displayName) \(installed)\(newer)"
-            }.joined(separator: " · ")
-        }
-        if let inventory = model.runtimeInventories[runtimeKind] {
-            return inventory.summary
-        }
-        return localAvailability?.detail ?? "Checking the local runtime…"
-    }
-
-    private var runtimeError: String? {
-        if let workspaceID {
-            return model.remoteWorkspaces.runtimeMaintenanceError(runtimeKind, workspaceID: workspaceID)
-        }
-        return model.runtimeFailureDetails[runtimeKind]
-    }
-}
-
 struct SettingsLocalRuntimeInventoryRow: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
@@ -1005,6 +839,12 @@ struct SettingsHarnessSignInControl: View {
                     Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
+                    if !compact {
+                        Spacer()
+                        Button("Change sign-in…") { signIn.signIn(runtimeKind) }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                            .disabled(model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind))
+                    }
                 } else {
                     if compact, signIn.statuses[runtimeKind]?.state == "credentials_present" {
                         Text("Credentials found").font(.system(size: 11.5))

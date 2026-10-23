@@ -14,6 +14,7 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case checkHost(hostName: String, userName: String)
     case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String)
     case authorizeHostPreparation, cancelHostPreparation
+    case dismissHarnessSetup(UUID)
     case lifecycle(UUID, String), updateContainer(UUID)
     case resources(UUID, memoryLimit: String, swapLimit: String)
     case delete(UUID, removePersistentData: Bool)
@@ -59,6 +60,7 @@ struct BackendRemoteWorkspaceService {
         case .checkHost(let host, let user): model.checkHost(hostName: host, userName: user)
         case .create(let name, let id, let host, let user, let port, let memory, let swap):
             model.create(name: name, workspaceID: id, hostName: host, userName: user, port: port, memoryLimit: memory, swapLimit: swap)
+        case .dismissHarnessSetup(let id): model.dismissHarnessSetup(id)
         case .authorizeHostPreparation: model.authorizeHostPreparation()
         case .cancelHostPreparation: model.cancelHostPreparation()
         case .lifecycle(let id, let value):

@@ -5,10 +5,12 @@ import WovenMatterCore
 
 struct SettingsRemoteWorkspacesView: View {
     @Bindable var model: RemoteWorkspacesModel
+    let application: ApplicationModel
     var reservesRailControlSpace = false
     var onMoreRuntime: (AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void
     var onBack: () -> Void
     @State private var selectedWorkspaceID: UUID?
+    @State private var setupWorkspace: RemoteWorkspaceConfiguration?
     @State private var name = ""
     @State private var workspaceID = ""
     @State private var hostName = ""
@@ -17,7 +19,6 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var memoryLimit = ""
     @State private var swapLimit = ""
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
-    @State private var authorizationCode = ""
     @State private var managedMemoryLimit = ""
     @State private var managedSwapLimit = ""
 
@@ -41,9 +42,6 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
-                    SettingsSignInStatusCard(statuses: model.signInStatuses[selectedWorkspace.id] ?? [], checking: model.checkingSignIn.contains(selectedWorkspace.id), error: model.signInErrors[selectedWorkspace.id], scope: selectedWorkspace.id.uuidString.lowercased()) {
-                        Task { await model.refreshSignInStatus(selectedWorkspace) }
-                    }
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
@@ -72,6 +70,14 @@ struct SettingsRemoteWorkspacesView: View {
             if let selectedWorkspaceID,
                !workspaceIDs.contains(selectedWorkspaceID) {
                 self.selectedWorkspaceID = nil
+            }
+        }
+        .onAppear { presentPendingSetup() }
+        .onChange(of: model.pendingHarnessSetupIDs) { _, _ in presentPendingSetup() }
+        .sheet(item: $setupWorkspace) { workspace in
+            RemoteHarnessSetupView(application: application, workspace: workspace) {
+                model.dismissHarnessSetup(workspace.id)
+                setupWorkspace = nil
             }
         }
         .confirmationDialog(
@@ -123,9 +129,9 @@ struct SettingsRemoteWorkspacesView: View {
         .confirmationDialog(
             "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
             isPresented: Binding(
-                get: { model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
+                get: { setupWorkspace == nil && model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
                 set: {
-                    if !$0, let prepared = model.preparedHarnessAction,
+                    if !$0, setupWorkspace == nil, let prepared = model.preparedHarnessAction,
                        prepared.action != "update" {
                         model.cancelPreparedHarnessAction(
                             workspaceID: prepared.configuration.id,
@@ -166,6 +172,12 @@ struct SettingsRemoteWorkspacesView: View {
                 }
             }
         }
+    }
+
+    private func presentPendingSetup() {
+        guard setupWorkspace == nil,
+              let workspace = model.workspaces.first(where: { model.pendingHarnessSetupIDs.contains($0.id) }) else { return }
+        setupWorkspace = workspace
     }
 
     private var selectedWorkspace: RemoteWorkspaceConfiguration? {
@@ -475,6 +487,8 @@ struct SettingsRemoteWorkspacesView: View {
         _ workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         SettingsCard(title: "Harnesses") {
+            Button("Set up harnesses") { setupWorkspace = workspace }
+                .buttonStyle(SettingsQuietButtonStyle())
             let harnesses = model.currentHarnesses(for: workspace)
             if harnesses.isEmpty {
                 SettingsEmpty("Start the workspace or refresh to check for agents.")
@@ -491,7 +505,15 @@ struct SettingsRemoteWorkspacesView: View {
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .accessibilityLabel("Open \(harness.displayName) settings")
                         }
-                        if harness.id != .defaultAgent { runtimeButtons(harness, workspace: workspace) }
+                        if harness.id == .defaultAgent {
+                            SettingsHarnessControlRow(title: "Account") {
+                                Text(HarnessAccountPresentation.providerSummary(model.signInStatuses[workspace.id] ?? []))
+                                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                                Button("Manage sign-in") { onMoreRuntime(harness.id, workspace) }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                            }
+                            if let error = model.signInErrors[workspace.id] { SettingsNote(error) }
+                        } else { runtimeButtons(harness, workspace: workspace) }
                     }
                 }
             }
@@ -499,11 +521,8 @@ struct SettingsRemoteWorkspacesView: View {
                 SettingsNote("Runtime inventory unavailable. Check for updates to retry.")
             }
 
-            if let session = model.authenticationSessions[workspace.id] {
-                signInCard(session, workspace: workspace)
-            }
-
         }
+        .task(id: workspace.id) { await model.refreshSignInStatus(workspace) }
     }
 
     @ViewBuilder
@@ -535,8 +554,10 @@ struct SettingsRemoteWorkspacesView: View {
             }
             if runtime.installed {
                 SettingsHarnessControlRow(title: "Account") {
-                    HStack(spacing: 8) { harnessButtons(harness, workspace: workspace) }
-                        .disabled(busy || unavailable)
+                    Text(HarnessAccountPresentation.remoteLabel(harness))
+                        .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    Button("Manage sign-in") { onMoreRuntime(harness.id, workspace) }
+                        .buttonStyle(SettingsQuietButtonStyle())
                 }
             }
         }
@@ -569,176 +590,6 @@ struct SettingsRemoteWorkspacesView: View {
         let installed = component.installed ? (component.installedVersion ?? "version unavailable") : "missing"
         let newer = component.availableUpdateVersion
         return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
-    }
-
-    @ViewBuilder
-    private func harnessButtons(
-        _ harness: RemoteHarnessStatus,
-        workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        if harness.state == "cli_missing" || harness.state == "adapter_missing" {
-            Button("Install") {
-                model.prepareHarnessAction("install", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(DashboardPrimaryButtonStyle())
-        } else if harness.state == "authentication_required" {
-            if harness.setupMethods.count == 1,
-               let method = harness.setupMethods.first {
-                Button("Set up") {
-                    startSignIn(harness, method: method, workspace: workspace)
-                }
-                .buttonStyle(DashboardPrimaryButtonStyle())
-            } else if !harness.setupMethods.isEmpty {
-                Menu("Set up…") {
-                    ForEach(harness.setupMethods) { method in
-                        Button(method.displayName) {
-                            startSignIn(harness, method: method, workspace: workspace)
-                        }
-                    }
-                }
-                .buttonStyle(DashboardPrimaryButtonStyle())
-            } else {
-                Text("No supported sign-in methods")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
-        } else {
-            Button("Recheck") {
-                model.performHarnessAction("recheck", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            if !harness.setupMethods.isEmpty {
-                Menu("Change Sign-In…") {
-                    ForEach(harness.setupMethods) { method in
-                        Button(method.displayName) {
-                            startSignIn(harness, method: method, workspace: workspace)
-                        }
-                    }
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-            }
-        }
-    }
-
-    private func startSignIn(
-        _ harness: RemoteHarnessStatus,
-        method: RemoteHarnessSetupMethod,
-        workspace: RemoteWorkspaceConfiguration
-    ) {
-        authorizationCode = ""
-        model.startHarnessSignIn(
-            harness: harness,
-            method: method,
-            configuration: workspace
-        )
-    }
-
-    private func signInCard(
-        _ session: RemoteHarnessAuthenticationSession,
-        workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        SettingsInset {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(session.methodName)
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Spacer()
-                    SettingsPill(
-                        session.state.replacingOccurrences(of: "_", with: " ").capitalized,
-                        tone: session.state == "waiting_for_user" ? .warning : .neutral
-                    )
-                    if session.state == "waiting_for_user" {
-                        Button("Cancel") {
-                            model.cancelHarnessSignIn(configuration: workspace)
-                        }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }
-                Text(session.message)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-
-                if let notice = session.notice {
-                    SettingsNote(notice)
-                }
-
-                if let url = session.verificationURL {
-                    Button("Open sign-in page") {
-                        NSWorkspace.shared.open(url)
-                    }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                }
-
-                if let userCode = session.userCode {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("One-time code")
-                                .font(.system(size: 11))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                            Text(userCode)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        Spacer()
-                        Button("Copy code") { copy(userCode) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }
-
-                if session.state == "waiting_for_user",
-                   session.acceptsAuthorizationCode {
-                    HStack {
-                        credentialInput(session, workspace: workspace)
-                        Button("Submit") {
-                            submitAuthorizationCode(workspace)
-                        }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(
-                            authorizationCode.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ).isEmpty
-                        )
-                    }
-                }
-
-                if let error = session.error {
-                    SettingsError(error)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func credentialInput(
-        _ session: RemoteHarnessAuthenticationSession,
-        workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        let label = session.credentialInputLabel ?? "Authorization code"
-        if session.credentialInputSecret == true {
-            SecureField(label, text: $authorizationCode)
-                .settingsInput()
-                .onSubmit { submitAuthorizationCode(workspace) }
-        } else {
-            TextField(label, text: $authorizationCode)
-                .settingsInput()
-                .onSubmit { submitAuthorizationCode(workspace) }
-        }
-    }
-
-    private func submitAuthorizationCode(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) {
-        let code = authorizationCode.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard !code.isEmpty else { return }
-        model.submitAuthorizationCode(code, configuration: workspace)
-        authorizationCode = ""
-    }
-
-    private func copy(_ value: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
     }
 
     private func resourceLabel(_ bytes: Int64) -> String {

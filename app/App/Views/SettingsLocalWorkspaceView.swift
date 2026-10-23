@@ -18,9 +18,6 @@ struct SettingsLocalWorkspaceView: View {
             SettingsWorkspaceSidebarVisibilityControl(.localWorkspace)
             workspaceCard
             runtimesCard
-            SettingsSignInStatusCard(statuses: model.localSignInStatuses, checking: model.checkingLocalSignIn, error: model.localSignInError, scope: "local") {
-                Task { await model.refreshLocalSignInStatus() }
-            }
         }
         .task { await model.openCode?.resolveExecutable(); model.refreshRuntimeInventory() }
         .confirmationDialog(
@@ -122,6 +119,12 @@ struct SettingsLocalWorkspaceView: View {
                     .buttonStyle(SettingsQuietButtonStyle())
                     .accessibilityLabel("Open \(kind.displayName) settings")
             }
+            if included {
+                SettingsHarnessControlRow(title: "Account") {
+                    Text(HarnessAccountPresentation.providerSummary(model.localSignInStatuses)).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    Button("Manage sign-in") { onMore(kind) }.buttonStyle(SettingsQuietButtonStyle())
+                }
+            }
             if !included {
                 SettingsHarnessControlRow(title: "Software") {
                     if installed {
@@ -139,7 +142,9 @@ struct SettingsLocalWorkspaceView: View {
                 }
                 if installed {
                     SettingsHarnessControlRow(title: "Account") {
-                        SettingsHarnessSignInControl(model: model, runtimeKind: kind, compact: true)
+                        Text(model.harnessSignIn.statuses[kind]?.label ?? "Not checked")
+                            .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                        Button("Manage sign-in") { onMore(kind) }.buttonStyle(SettingsQuietButtonStyle())
                     }
                 }
                 SettingsHarnessControlRow(title: "Sidebar") {
@@ -158,6 +163,10 @@ struct SettingsLocalWorkspaceView: View {
                     }.buttonStyle(SettingsQuietButtonStyle())
                 }
             }
+        }
+        .task {
+            if kind == .defaultAgent { await model.refreshLocalSignInStatus() }
+            else { await model.refreshHarnessSignIn(kind) }
         }
     }
 
