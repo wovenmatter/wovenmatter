@@ -19,29 +19,20 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func catalogRemovalDisablesPermissionSetter() async throws {
-        var removed = configuration(permission: "default")
-        removed["configOptions"] = (removed["configOptions"] as? [[String: Any]])?.filter { $0["id"] as? String != "mode" }
-        try await withClient(state: configuration(permission: "default"), handlers: [
-            "session/set_config_option": respond(removed),
-        ]) { client, _, _ async throws in
-            let result = try await client.setSessionConfiguration(model: "other")
-            #expect(result.permission == nil && result.permissionOptions.isEmpty)
-            #expect(result.permissionOptionMetadata.isEmpty)
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("Removed permission options remained selectable")
-            } catch LocalACPClientError.unsupportedConfiguration { }
-        }
-    }
-
 
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], ["mode", "permission_mode", "approval_mode"])
-    func nativeConfigurationAndLabelsSurviveOtherSelections(kind: AgentRuntimeKind, id: String) async throws {
+    func nativeSelectionsPreserveLabelsAndRemovedOptionsBecomeUnavailable(kind: AgentRuntimeKind, id: String) async throws {
         let state = configuration(permission: "default", id: id)
         let selected = configuration(permission: "full", id: id)
+        var removed = selected
+        removed["configOptions"] = (removed["configOptions"] as? [[String: Any]])?.filter { $0["id"] as? String != id }
         try await withClient(kind: kind, state: state, handlers: [
-            "session/set_config_option": respond(selected),
+            "session/set_config_option": """
+                case "$request" in
+                  *'"value":"other"'*) \(respond(removed)) ;;
+                  *) \(respond(selected)) ;;
+                esac
+                """,
         ]) { client, fixture, initialized async throws in
             let initial = initialized.configuration
             #expect(initial.permission == "default")
@@ -60,6 +51,13 @@ struct ACPSessionPermissionTests {
             #expect(params?["sessionId"] as? String == "permission-session")
             #expect(params?["configId"] as? String == id)
             #expect(params?["value"] as? String == "full")
+            let withoutPermission = try await client.setSessionConfiguration(model: "other")
+            #expect(withoutPermission.permission == nil && withoutPermission.permissionOptions.isEmpty)
+            #expect(withoutPermission.permissionOptionMetadata.isEmpty)
+            do {
+                _ = try await client.setSessionPermission("full")
+                Issue.record("Removed permission options remained selectable")
+            } catch LocalACPClientError.unsupportedConfiguration { }
         }
     }
 
@@ -146,35 +144,6 @@ struct ACPSessionPermissionTests {
         #expect(try LocalACPSessionPermissions.prepareLaunch(resolved).arguments == resolved.arguments)
     }
 
-
-    @Test func cancellingFixtureOwnerReapsAPeerBlockedDuringInitialization() async throws {
-        let markerRoot = FileManager.default.temporaryDirectory.appending(path: "permission-owner-\(UUID())")
-        try FileManager.default.createDirectory(at: markerRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: markerRoot) }
-        let marker = markerRoot.appending(path: "waiting")
-        let request = Task {
-            try await withClient(state: [:], sessionPrelude: """
-                printf '%s\\n' "$$" > '\(marker.path).pending'
-                mv '\(marker.path).pending' '\(marker.path)'
-                IFS= read -r owner_shutdown
-                """) { _, _, _ in
-                Issue.record("A cancelled initialization unexpectedly reached the test body")
-            }
-        }
-        defer { request.cancel() }
-        while !FileManager.default.fileExists(atPath: marker.path) {
-            try Task.checkCancellation()
-            await Task.yield()
-        }
-        let pid = try #require(Int32(try String(contentsOf: marker, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)))
-        request.cancel()
-        await #expect(throws: CancellationError.self) { try await request.value }
-        // The helper does not finish cancellation until its own peer is reaped.
-        let alive = kill(pid, 0)
-        let processError = errno
-        #expect(alive == -1 && processError == ESRCH)
-    }
 
     @Test(arguments: [false, true]) func codexReceivesSessionBoundAutomationMCP(loading: Bool) async throws {
         let fixture = try PermissionFixture(kind: .codex, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")

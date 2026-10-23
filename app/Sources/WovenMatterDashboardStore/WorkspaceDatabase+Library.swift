@@ -151,8 +151,7 @@ extension WorkspaceDatabaseConnection {
     hash: String? = nil, size: Int64? = nil, storage: LibraryStorage? = nil, error: String? = nil
   ) throws {
     guard !asset.source.isEmpty, asset.source.utf8.count <= 8192 else { return }
-    let key = SHA256.hash(data: Data((messageID + "\u{0}" + asset.source).utf8)).map { String(format: "%02x", $0) }
-      .joined()
+    let key = WorkspaceLibraryItem.identifier(messageID: messageID, source: asset.source)
     let state = storage ?? (LibraryLinkDiscovery.isFileReference(asset.source) ? .pending : .link)
     try toolsExecuteUnlocked(
       """

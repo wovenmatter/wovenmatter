@@ -3,6 +3,7 @@ import WovenMatterCore
 
 struct DashboardLibrarySurface: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.openDocumentPreview) private var openPreview
     @Bindable var library: LibraryModel
     let configuredWorkspaces: [(id: String, name: String)]
     let onOpenMessage: (WorkspaceLibraryItem) -> Void
@@ -63,7 +64,7 @@ struct DashboardLibrarySurface: View {
                         LazyVStack(spacing: 8) {
                             ForEach(library.items) { item in
                                 DashboardLibraryRow(
-                                    item: item, onOpen: { library.open(item) },
+                                    item: item, onOpen: { if let openPreview { library.open(item, onOpenFile: openPreview) } },
                                     onSource: { onOpenMessage(item) }, onRetry: { library.retry(item) })
                             }
                             if library.hasMore {

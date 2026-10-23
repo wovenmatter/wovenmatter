@@ -11,6 +11,7 @@ import WovenMatterClient
 @MainActor @Observable
 final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelegate {
     var tabs = WorkspaceAssetTabs()
+    private(set) var documents: [String: URL] = [:]
     private(set) var pages: [UUID: WMBrowserPage] = [:]
     private(set) var pageRevision = 0
     private(set) var browserPresentationRevision = 0
@@ -26,6 +27,19 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
 
     func openNote(_ id: String) {
         do { try tabs.open(.note(id)) } catch { notice = error.localizedDescription }
+    }
+
+    /// URLs must be prepared by the Library/attachment service, never taken from message text.
+    func openDocument(_ url: URL, identity: String? = nil) throws {
+        guard url.isFileURL,
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+              FileManager.default.isReadableFile(atPath: url.path) else {
+            throw WorkspaceToolError.invalid("This file is no longer available. Open it again from the conversation or Library.")
+        }
+        let url = url.standardizedFileURL
+        let id = documents.first(where: { $0.value == url })?.key ?? identity ?? url.path
+        try tabs.open(.document(id))
+        documents[id] = url
     }
 
     @discardableResult
@@ -55,6 +69,9 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     func close(_ tab: WorkspaceAssetTabs.Tab) {
         switch tab {
         case .note: tabs.close(tab)
+        case .document(let id):
+            documents.removeValue(forKey: id)
+            tabs.close(tab)
         case .browser(let id): pages[id]?.close()
         }
     }
@@ -66,6 +83,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
 
     func title(for tab: WorkspaceAssetTabs.Tab, notes: [WorkspaceNoteRecord]) -> String {
         switch tab {
+        case .document(let id): documents[id]?.lastPathComponent ?? "Document"
         case .note(let id): notes.first { $0.id == id }?.title ?? "Note"
         case .browser(let id):
             pages[id].map { $0.title.isEmpty ? "New tab" : $0.title } ?? "New tab"

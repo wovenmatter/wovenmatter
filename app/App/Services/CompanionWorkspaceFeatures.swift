@@ -24,7 +24,7 @@ extension CompanionCommandService {
                 throw CompanionAPIError(code: "file_unavailable", message: "This file is not retained on your Mac. Retry it from the Library.")
             }
             let url = try await store.library.openURL(id: id)
-            return .file(try await Self.readRetainedFile(url, name: item.title, mimeType: item.mimeType ?? "application/octet-stream"))
+            return .file(try await Self.readRetainedFile(url, name: url.lastPathComponent, mimeType: item.mimeType ?? "application/octet-stream"))
         case let .calendar(from, to):
             guard from.timeIntervalSince1970.isFinite, to.timeIntervalSince1970.isFinite,
                   to > from, to.timeIntervalSince(from) <= 93 * 86_400 else { throw CommandError.invalidCommand }

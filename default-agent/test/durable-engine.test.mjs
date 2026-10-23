@@ -48,11 +48,16 @@ async function fixture(t, options = {}) {
 test('native owner lock excludes a second runtime and released identities can reopen', async t => {
   const { engine, open } = await fixture(t);
   const record = await engine.create(), other = await open();
+  await engine.select(record, 'high', 'thinking');
+  await engine.select(record, 'full', 'permission_mode');
   await assert.rejects(other.create(record.session.sessionId), /already owned/);
   await record.session.dispose();
   const reopened = await other.create(record.session.sessionId);
   assert.equal(reopened.manifest.storeID, record.manifest.storeID);
   assert.equal(reopened.conversation.id, record.conversation.id);
+  assert.equal(reopened.selected, 'claude-subscription/sonnet');
+  assert.equal(reopened.session.thinkingLevel, 'high');
+  assert.equal(reopened.permission, 'full');
 });
 
 for (const scope of ['root', 'child']) test(`a sleeping ${scope} task keeps its execution group owned until it is aborted`, { timeout: 10000 }, async t => {

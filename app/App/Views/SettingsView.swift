@@ -29,6 +29,7 @@ private enum SettingsSection: Equatable {
     case localWorkspace
     case remoteWorkspaces
     case usage
+    case dictation
 }
 
 struct SettingsView: View {
@@ -118,6 +119,9 @@ struct SettingsView: View {
                     },
                     onBack: { section = .landing }
                 )
+            case .dictation:
+                SettingsDictationView(model: applicationContext ?? model, client: clientContext,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .usage:
                 SettingsUsageView(
                     model: model,
@@ -166,6 +170,7 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 }
+
                 SettingsDestinationRow(
                     title: AgentRuntimeKind.defaultAgent.displayName,
                     detail: "Conversation defaults, subagents, providers, and models.",
@@ -219,6 +224,12 @@ struct SettingsView: View {
                 )
                 }
                 if !executionOnly {
+                SettingsDestinationRow(
+                    title: "Dictation",
+                    detail: "Read and copy your previous dictations.",
+                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    action: { section = .dictation }
+                )
                 SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",

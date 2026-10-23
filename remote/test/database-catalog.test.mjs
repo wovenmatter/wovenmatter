@@ -24,37 +24,25 @@ test('named datasets have distinct identities and workspace-owned schema and dat
   assert.equal(row.preference, 'sqlite')
   assert.equal(fileURLToPath(row.url), join(first, row.id + '.sqlite'))
   assert.equal((await execute(first, row.id, 'CREATE TABLE events(value); INSERT INTO events VALUES(42);')).revision, 2)
-  assert.deepEqual((await data(first, row.id, 'SELECT value FROM events')).query.rows, [['42']])
+  for (const sql of ['INSERT INTO events VALUES(1); INSERT INTO missing VALUES(2)',
+    'CREATE TABLE transient(value); SELECT * FROM missing', 'BEGIN; INSERT INTO events VALUES(3); COMMIT',
+    "ATTACH '/tmp/wovenmatter-forbidden.sqlite' AS foreign_db", 'PRAGMA writable_schema=ON']) {
+    await assert.rejects(execute(first, row.id, sql))
+  }
+  assert.deepEqual((await data(first, row.id, "SELECT count(*) AS count FROM sqlite_master WHERE name='transient'")).query.rows, [['0']])
+  assert.equal((await databaseOperation(first, { action: 'list' })).databases[0].revision, 2)
+  for (const sql of ["ATTACH '/tmp/foreign' AS foreign_db", 'DELETE FROM events', 'PRAGMA writable_schema=ON',
+    'SELECT 1; SELECT 2', "SELECT load_extension('bad')", 'SELECT 1 AS same, 2 AS same']) {
+    await assert.rejects(data(first, row.id, sql))
+  }
+  assert.deepEqual((await data(first, row.id, 'SELECT value FROM events')).query,
+    { contractVersion: 1, columns: ['value'], rows: [['42']] })
   await assert.rejects(execute(second, row.id, 'DELETE FROM events'), /owner is unavailable/)
   assert.deepEqual((await databaseOperation(first, { action: 'list' })).databases.map(r => r.id), [row.id])
   await mkdir(join(first, 'Unregistered user files'))
   assert.equal((await databaseOperation(first, { action: 'list' })).databases.length, 1)
   await assert.rejects(create(first, 'sales / q1'), /already exists/)
   for (const invalid of ['', 'a'.repeat(129), 'bad\0name']) await assert.rejects(create(first, invalid), /database name/)
-})
-
-test('failed multi-statement SQL rolls back data, schema and revision', async t => {
-  const root = await fixture(t), row = await create(root)
-  await execute(root, row.id, 'CREATE TABLE events(value)')
-  for (const sql of ['INSERT INTO events VALUES(1); INSERT INTO missing VALUES(2)',
-    'CREATE TABLE transient(value); SELECT * FROM missing', 'BEGIN; INSERT INTO events VALUES(3); COMMIT',
-    "ATTACH '/tmp/wovenmatter-forbidden.sqlite' AS foreign_db", 'PRAGMA writable_schema=ON']) {
-    await assert.rejects(execute(root, row.id, sql))
-  }
-  assert.deepEqual((await data(root, row.id, 'SELECT count(*) AS count FROM events')).query.rows, [['0']])
-  assert.deepEqual((await data(root, row.id, "SELECT count(*) AS count FROM sqlite_master WHERE name='transient'")).query.rows, [['0']])
-  assert.equal((await databaseOperation(root, { action: 'list' })).databases[0].revision, 2)
-})
-
-test('queries reject writes, attachments, transaction controls, duplicate names and multiple statements', async t => {
-  const root = await fixture(t), row = await create(root)
-  await execute(root, row.id, 'CREATE TABLE events(value); INSERT INTO events VALUES(42)')
-  for (const sql of ["ATTACH '/tmp/foreign' AS foreign_db", 'DELETE FROM events', 'PRAGMA writable_schema=ON',
-    'SELECT 1; SELECT 2', "SELECT load_extension('bad')", 'SELECT 1 AS same, 2 AS same']) {
-    await assert.rejects(data(root, row.id, sql))
-  }
-  assert.deepEqual((await data(root, row.id, 'SELECT value FROM events')).query,
-    { contractVersion: 1, columns: ['value'], rows: [['42']] })
 })
 
 test('SQLite backups include committed WAL and copy makes an independent writable destination', async t => {

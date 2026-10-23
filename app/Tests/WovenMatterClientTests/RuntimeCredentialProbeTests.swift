@@ -7,8 +7,8 @@ import WovenMatterCore
 struct RuntimeCredentialProbeTests {
   private static let kinds: [AgentRuntimeKind] = [.codex, .claudeCode, .grokBuild]
 
-  @Test("passive discovery preserves chat launch without starting provider sessions", arguments: Self.kinds)
-  func passiveDiscovery(kind: AgentRuntimeKind) async throws {
+  @Test("discovery stays passive and explicit verification starts only the selected provider", arguments: Self.kinds)
+  func passiveDiscoveryAndScopedExplicitVerification(kind: AgentRuntimeKind) async throws {
     let definition = try #require(LocalACPRuntimeCatalog.definition(for: kind))
     let discovered = resolution(kind)
     let result = await LocalACPRuntimeVerifier.refresh(
@@ -22,12 +22,6 @@ struct RuntimeCredentialProbeTests {
     )
     #expect(result.availability == discovered.availability)
     #expect(result.launchConfiguration?.executableURL == discovered.launchConfiguration?.executableURL)
-  }
-
-  @Test("an explicit runtime check cannot start other enabled providers", arguments: Self.kinds)
-  func scopedExplicitCheck(kind: AgentRuntimeKind) async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: kind))
-    let discovered = resolution(kind)
     let calls = RuntimeProbeCalls()
     for selected in Self.kinds {
       _ = await LocalACPRuntimeVerifier.refresh(

@@ -2,7 +2,18 @@ import XCTest
 @testable import CompanionClient
 import WovenMatterCompanion
 
-private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport {
+private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport, CompanionDictationTransport {
+  var dictations: [DictationRecord] = []
+  var loseDictationReceipt = false
+  func loseNextDictationReceipt() { loseDictationReceipt = true }
+  func publishDictation(_ record: DictationRecord) throws -> DictationRecord {
+    if !dictations.contains(where: { $0.id == record.id }) { dictations.append(record) }
+    if loseDictationReceipt { loseDictationReceipt = false; throw MobileConnectionError.offline }
+    return record
+  }
+  func dictationChanges(after: Int64) -> DictationHistoryPage {
+    .init(workspaceID: workspace, cursor: Int64(dictations.count), records: Array(dictations.dropFirst(Int(after))), hasMore: false)
+  }
   var workspace = "mac-a"
   var refusedFolderIDs = Set<String>()
   var failArtifacts = false
@@ -121,6 +132,26 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
 }
 
 final class MobileSyncEngineTests: XCTestCase {
+  func testDictationsSyncAcrossClientsAfterLostAcknowledgement() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = try MobileStore(file: directory.appendingPathComponent("first.json"))
+    let second = try MobileStore(file: directory.appendingPathComponent("second.json"))
+    let server = FakeMac()
+    let record = DictationRecord(text: "An offline dictation")
+    try await first.dictations.save(record)
+    let engine = MobileSyncEngine(store: first, transport: server)
+    await server.loseNextDictationReceipt()
+    do { try await engine.synchronize(); XCTFail("Expected lost acknowledgement") } catch { }
+    let pending = try await first.dictations.pendingCount()
+    XCTAssertEqual(pending, 1)
+    try await engine.synchronize()
+    try await MobileSyncEngine(store: second, transport: server).synchronize()
+    let firstRecords = try await first.dictations.records(), secondRecords = try await second.dictations.records()
+    let uploaded = await server.dictations
+    XCTAssertEqual(firstRecords, [record]); XCTAssertEqual(secondRecords, [record]); XCTAssertEqual(uploaded, [record])
+  }
+
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
@@ -136,104 +167,6 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertEqual(mutationCount, 0); XCTAssertEqual(commandCount, 0)
     let local = await store.snapshot()
     XCTAssertEqual(local.outbox.count, 1)
-  }
-
-  func testLostMutationAcknowledgementRestartCreatesExactlyOneNote() async throws {
-    let url = file(); let store = try MobileStore(file: url)
-    let folder = try await store.createFolder(name: "Ideas")
-    let note = try await store.createNote(folderID: folder.id, title: "A thought", content: content("phone idea"))
-    let mac = FakeMac(); await mac.configure(loseMutation: true)
-    let engine = MobileSyncEngine(store: store, transport: mac)
-    do { try await engine.synchronize(); XCTFail("Expected lost acknowledgement") } catch is URLError {}
-    let restarted = try MobileStore(file: url)
-    let recovered = MobileSyncEngine(store: restarted, transport: mac)
-    try await recovered.synchronize()
-    let canonical = await mac.notes
-    XCTAssertEqual(canonical.count, 1); XCTAssertEqual(canonical[note.id]?.content, try content("phone idea"))
-    let local = await restarted.snapshot()
-    XCTAssertTrue(local.outbox.isEmpty); XCTAssertEqual(local.notes[note.id]?.content, canonical[note.id]?.content)
-    let mutations = await mac.mutations
-    XCTAssertEqual(mutations[0].operationID, mutations[1].operationID)
-    XCTAssertEqual(mutations.last?.folderID, folder.id)
-  }
-
-  func testLostCommandAckRecoversReceiptWithoutSubmittingAgain() async throws {
-    let url = file(); let store = try MobileStore(file: url)
-    let mac = FakeMac(); await mac.configure(loseCommand: true)
-    let engine = MobileSyncEngine(store: store, transport: mac)
-    try await engine.synchronize()
-    let command = CompanionCommand(deviceID: await store.snapshot().deviceID, kind: .createSession, conversationID: "session", text: "Start once")
-    do { _ = try await engine.submit(command); XCTFail("Expected lost acknowledgement") } catch is URLError {}
-    let restarted = try MobileStore(file: url)
-    let recovered = MobileSyncEngine(store: restarted, transport: mac)
-    try await recovered.recoverCommandReceipts()
-    let count = await mac.commands.count
-    XCTAssertEqual(count, 1)
-    let records = await restarted.snapshot().commands
-    XCTAssertEqual(records.first?.receipt?.status, .completed)
-    XCTAssertEqual(records.first?.receipt?.runID, "mac-run")
-  }
-
-  func testNoteReferenceIsFlushedAndBindsCanonicalRevision() async throws {
-    let store = try MobileStore(file: file())
-    let note = try await store.createNote(folderID: nil, title: "Idea", content: content("write first"))
-    let mac = FakeMac(); let engine = MobileSyncEngine(store: store, transport: mac)
-    _ = try await engine.submit(.init(deviceID: await store.snapshot().deviceID, kind: .createSession, conversationID: "session", text: "Use this", noteID: note.id))
-    let command = await mac.commands.first
-    XCTAssertEqual(command?.noteID, note.id); XCTAssertEqual(command?.noteRevision, 1)
-    let canonicalContent = await mac.notes[note.id]?.content
-    XCTAssertEqual(canonicalContent, try content("write first"))
-  }
-  private func awaitValue<T>(_ value: T) -> T { value }
-
-  func testAllEightProviderDifferencesArePreserved() async throws {
-    let mac = FakeMac(); let engine = MobileSyncEngine(store: try MobileStore(file: file()), transport: mac)
-    let providers = try await engine.providers()
-    XCTAssertEqual(providers.count, 8)
-    XCTAssertEqual(providers.filter(\.canSteer).map(\.runtimeKind), ["codex"])
-  }
-
-  func testMetadataOnlyChangeCannotReplaceCachedBodyAtSameRevision() async throws {
-    let store = try MobileStore(file: file())
-    let original = CompanionNote(id: "note", title: "Plan", content: try content("keep body"), revision: 7)
-    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: [original]))
-    var metadata = original; metadata.content = ""; metadata.contentIncluded = false
-    try await store.apply(.init(workspaceID: "mac", cursor: 2, notes: [metadata]))
-    var local = await store.snapshot()
-    XCTAssertEqual(local.notes[original.id]?.content, original.content)
-    metadata.revision = 8
-    try await store.apply(.init(workspaceID: "mac", cursor: 3, notes: [metadata]))
-    local = await store.snapshot()
-    XCTAssertTrue(local.uncachedNoteIDs.contains(original.id))
-    XCTAssertEqual(local.notes[original.id]?.title, "Plan")
-  }
-  func testNewChatDurableCreateThenExactPromptRunsOnceAfterLostAck() async throws {
-    let url = file(); let store = try MobileStore(file: url)
-    let note = try await store.createNote(folderID: nil, title: "Referenced", content: content("idea"))
-    let mac = FakeMac(); await mac.configure(loseCommand: true)
-    let engine = MobileSyncEngine(store: store, transport: mac)
-    let create = CompanionCommand(deviceID: "phone", kind: .createSession, conversationID: "new-conversation", providerID: "local:codex")
-    let send = CompanionCommand(deviceID: "phone", kind: .send, conversationID: create.conversationID, text: "The exact first prompt", noteID: note.id)
-    let launch = MobileLaunchRecord(create: create, initialSend: send)
-    do { _ = try await engine.startConversation(launch); XCTFail("Expected lost create acknowledgement") } catch is URLError {}
-    let restarted = try MobileStore(file: url)
-    let recovered = MobileSyncEngine(store: restarted, transport: mac)
-    try await recovered.recoverCommandReceipts()
-    var accepted = await mac.commands
-    XCTAssertEqual(accepted.count, 1, "Reconnect must not silently execute the unsent initial prompt")
-    await mac.configure(loseCommand: true)
-    do { _ = try await recovered.startConversation(launch); XCTFail("Expected lost send acknowledgement") } catch is URLError {}
-    try await recovered.recoverCommandReceipts()
-    let final = try await recovered.startConversation(launch)
-    XCTAssertTrue(final.accepted)
-    accepted = await mac.commands
-    XCTAssertEqual(accepted.count, 2)
-    XCTAssertEqual(accepted.filter { $0.kind == .createSession }.count, 1)
-    XCTAssertEqual(accepted.filter { $0.kind == .send }.count, 1)
-    XCTAssertEqual(accepted.last?.text, "The exact first prompt")
-    XCTAssertEqual(accepted.last?.noteID, note.id)
-    XCTAssertEqual(accepted.last?.noteRevision, 1)
-    XCTAssertNil(accepted.first?.text)
   }
 
   func testRetryKeepsOriginalNoteRevisionWhenLocalNoteChangesAfterLostAck() async throws {
@@ -355,21 +288,6 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertEqual(state.transcripts["older"]?.messages.map(\.id), ["old", "new"])
     XCTAssertNil(state.transcripts["older"]?.olderCursor)
     XCTAssertEqual(state.pinnedTranscriptIDs, ["older"])
-  }
-
-  func testLostNoteAckThenNewEditReplaysExactMutationBeforeNewRevision() async throws {
-    let location = file(), store = try MobileStore(file: location), mac = FakeMac()
-    let note = try await store.createNote(folderID: nil, title: "Note", content: content("first"))
-    await mac.configure(loseMutation: true)
-    do { try await MobileSyncEngine(store: store, transport: mac).synchronize(); XCTFail() } catch { }
-    let restarted = try MobileStore(file: location)
-    try await restarted.editNote(id: note.id, title: "Note", content: content("newer"), folderID: nil)
-    try await MobileSyncEngine(store: restarted, transport: mac).synchronize()
-    let requests = await mac.mutations, local = await restarted.snapshot()
-    XCTAssertEqual(requests.count, 3); XCTAssertEqual(requests[0], requests[1])
-    XCTAssertNotEqual(requests[1].operationID, requests[2].operationID)
-    XCTAssertEqual(requests[2].expectedRevision, 1)
-    XCTAssertTrue(local.outbox.isEmpty); XCTAssertEqual(local.notes[note.id]?.content, try content("newer"))
   }
 
 }

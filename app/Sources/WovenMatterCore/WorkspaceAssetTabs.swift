@@ -5,21 +5,25 @@ public struct WorkspaceAssetTabs: Equatable, Sendable {
   public enum Tab: Hashable, Identifiable, Sendable {
     case note(String)
     case browser(UUID)
+    case document(String)
     public var id: String {
       switch self {
       case .note(let id): "note:" + id
       case .browser(let id): "browser:" + id.uuidString
+      case .document(let id): "document:" + id
       }
     }
   }
   public static let maximumNotes = 4
   public static let maximumBrowsers = 8
+  public static let maximumDocuments = 8
   public private(set) var tabs: [Tab] = []
   public private(set) var selected: Tab?
   public private(set) var isPresented = false
   public init() {}
   public var noteIDs: [String] { tabs.compactMap { if case .note(let id) = $0 { id } else { nil } } }
   public var browserIDs: [UUID] { tabs.compactMap { if case .browser(let id) = $0 { id } else { nil } } }
+  public var documentIDs: [String] { tabs.compactMap { if case .document(let id) = $0 { id } else { nil } } }
   public var selectedNoteID: String? { if case .note(let id) = selected { id } else { nil } }
 
   public mutating func open(_ tab: Tab) throws {
@@ -27,6 +31,7 @@ public struct WorkspaceAssetTabs: Equatable, Sendable {
       switch tab {
       case .note where noteIDs.count >= Self.maximumNotes: throw Capacity.notes
       case .browser where browserIDs.count >= Self.maximumBrowsers: throw Capacity.browsers
+      case .document where documentIDs.count >= Self.maximumDocuments: throw Capacity.documents
       default: tabs.append(tab)
       }
     }
@@ -44,10 +49,11 @@ public struct WorkspaceAssetTabs: Equatable, Sendable {
   }
   public mutating func hide() { isPresented = false }
   public enum Capacity: LocalizedError {
-    case notes, browsers
+    case notes, browsers, documents
     public var errorDescription: String? {
       switch self {
-      case .notes: "You have 4 assets open. Close an asset tab before opening another."
+      case .notes: "You have 4 note tabs open. Close a note tab before opening another."
+      case .documents: "You have 8 document tabs open. Close a document tab before opening another."
       case .browsers: "You have 8 browser tabs open. Close a browser tab before opening another."
       }
     }

@@ -92,8 +92,9 @@ import Speech
   private func preferences() -> UserDefaults { UserDefaults(suiteName: "dictation-fixture-\(UUID())")! }
 
   @Test func defaultIsReadyWithoutProviderAndLanguageIsCapturedPerRecording() async throws {
-    let engine = NativeEngineFixture()
-    let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine })
+    let defaults = preferences(), engine = NativeEngineFixture()
+    defaults.set(false, forKey: "wovenmatter.dictation.enabled")
+    let session = DictationSession(preferences: defaults, permission: { true }, makeEngine: { engine })
     session.languageIdentifier = "de-DE"
     session.start()
     try await settle { session.phase == .recording }
@@ -108,6 +109,59 @@ import Speech
     try await settle { session.phase == .idle }
     #expect(inserted == "Guten Tag.")
     #expect(session.error == nil)
+  }
+
+  @Test func completionSavesOnceEvenWhenInsertionIsRetried() async throws {
+    let engine = NativeEngineFixture()
+    let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine })
+    var saved: [DictationRecord] = []
+    session.saveHistory = { saved.append($0) }
+    session.start(); try await settle { session.phase == .recording }
+    engine.emit("Complete transcript 🪡")
+    try await settle { session.preview == "Complete transcript 🪡" }
+    session.stop { _ in false }
+    try await settle { session.phase == .idle && saved.count == 1 }
+    #expect(saved[0].text == "Complete transcript 🪡")
+    #expect(session.retainedTranscript == saved[0].text)
+    session.insertRetained { _ in true }
+    session.retrySavingHistory()
+    for _ in 0..<10 { await Task.yield() }
+    #expect(saved.count == 1)
+  }
+
+  @Test func failedHistorySaveDoesNotChangeInsertionAndRetriesSameIdentity() async throws {
+    let engine = NativeEngineFixture()
+    let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine })
+    var attempts: [DictationRecord] = [], inserted = ""
+    session.saveHistory = { record in
+      attempts.append(record)
+      if attempts.count == 1 { throw CocoaError(.fileWriteOutOfSpace) }
+    }
+    session.start(); try await settle { session.phase == .recording }
+    engine.emit("Keep the insertion")
+    try await settle { !session.preview.isEmpty }
+    session.stop { inserted = $0; return true }
+    try await settle { session.phase == .idle && session.historyError != nil }
+    #expect(inserted == "Keep the insertion")
+    #expect(session.error == nil)
+    session.retrySavingHistory()
+    try await settle { session.historyRevision == 1 }
+    #expect(attempts.count == 2 && attempts[0] == attempts[1])
+    #expect(session.historyError == nil)
+  }
+
+  @Test func cancelAndSilenceDoNotCreateHistory() async throws {
+    for cancel in [true, false] {
+      let engine = NativeEngineFixture()
+      let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine })
+      var saved: [DictationRecord] = []
+      session.saveHistory = { saved.append($0) }
+      session.start(); try await settle { session.phase == .recording }
+      if cancel { engine.emit("Discard me"); session.cancel() }
+      else { session.stop { _ in true } }
+      try await settle { session.phase == .idle }
+      #expect(saved.isEmpty)
+    }
   }
 
   @Test func deniedMicrophoneNeverCreatesAnEngine() async throws {
@@ -190,17 +244,6 @@ import Speech
     #expect(inserted == "Current")
   }
 
-  @Test func legacyDisabledPreferenceDoesNotBlockDictation() async throws {
-    let defaults = preferences(), engine = NativeEngineFixture()
-    defaults.set(false, forKey: "wovenmatter.dictation.enabled")
-    let session = DictationSession(preferences: defaults, permission: { true }, makeEngine: { engine })
-    session.start()
-    try await settle { session.phase == .recording }
-    session.cancel()
-    #expect(engine.captureStopped)
-    #expect(session.phase == .idle)
-  }
-
   @Test func stalledFinalizationRetainsCompletedTextAndStopsCapture() async throws {
     let engine = NativeEngineFixture(); engine.finalizes = false
     let session = DictationSession(preferences: preferences(), permission: { true }, makeEngine: { engine },
@@ -245,6 +288,8 @@ import Speech
     try await settle { session.phase == .recording }
     #expect(creations == 2)
     session.cancel()
+    #expect(current.captureStopped)
+    #expect(session.phase == .idle)
   }
 }
 #endif

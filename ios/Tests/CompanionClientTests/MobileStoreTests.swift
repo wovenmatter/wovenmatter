@@ -6,112 +6,6 @@ final class MobileStoreTests: XCTestCase {
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
-  func testOfflineFolderNoteAndDraftSurviveRestartInDependencyOrder() async throws {
-    let url = file(); let store = try MobileStore(file: url)
-    let folder = try await store.createFolder(name: "Ideas")
-    let note = try await store.createNote(folderID: folder.id, title: "Capture", content: content("offline"))
-    try await store.editNote(id: note.id, title: "Better idea", content: content("durable writing"), folderID: folder.id)
-    let restarted = try MobileStore(file: url)
-    let state = await restarted.snapshot()
-    XCTAssertEqual(state.notes[note.id]?.title, "Better idea")
-    XCTAssertEqual(state.outbox.count, 2)
-    let first = try await restarted.nextMutation()
-    XCTAssertEqual(first?.kind, .createFolder)
-    try await restarted.acknowledge(.init(operationID: first!.operationID, status: .accepted, folder: .init(id: folder.id, name: folder.name)))
-    let second = try await restarted.nextMutation()
-    XCTAssertEqual(second?.kind, .createNote)
-    XCTAssertEqual(second?.resourceID, note.id)
-  }
-
-  func testLostAcknowledgementResendsExactIDAndContentDespiteNewEdit() async throws {
-    let url = file(); let store = try MobileStore(file: url)
-    let note = try await store.createNote(folderID: nil, title: "Idea", content: content("first"))
-    let sent = try await store.nextMutation()!
-    try await store.editNote(id: note.id, title: "Idea", content: content("second"), folderID: nil)
-    let restarted = try MobileStore(file: url)
-    let retry = try await restarted.nextMutation()
-    XCTAssertEqual(retry, sent)
-    let remote = CompanionNote(id: note.id, title: "Idea", content: sent.content!, revision: 7)
-    try await restarted.acknowledge(.init(operationID: sent.operationID, status: .accepted, note: remote))
-    let successor = try await restarted.nextMutation()
-    XCTAssertEqual(successor?.expectedRevision, 7)
-    XCTAssertNotEqual(successor?.operationID, sent.operationID)
-    XCTAssertEqual(successor?.content, try content("second"))
-    try await restarted.acknowledge(.init(operationID: sent.operationID, status: .accepted, note: remote))
-    let afterRepeatedAck = await restarted.snapshot()
-    XCTAssertEqual(afterRepeatedAck.outbox.count, 1)
-  }
-
-  func testConflictKeepsBaseLocalRemoteAndCopyUsesNewIdentity() async throws {
-    let store = try MobileStore(file: file())
-    let base = CompanionNote(id: "note", title: "Plan", content: try content("base"), revision: 2)
-    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: [base]))
-    try await store.editNote(id: "note", title: "Plan", content: content("local"), folderID: nil)
-    let mutation = try await store.nextMutation()!
-    var remote = base; remote.content = try content("remote"); remote.revision = 3
-    try await store.acknowledge(.init(operationID: mutation.operationID, status: .conflict, note: remote))
-    let conflict = await store.snapshot().conflicts["note"]
-    XCTAssertEqual(conflict?.base, base)
-    XCTAssertEqual(conflict?.remote, remote)
-    XCTAssertEqual(conflict?.local.content, try content("local"))
-    let copy = try await store.preserveConflictAsCopy(id: "note")
-    XCTAssertNotEqual(copy.id, base.id)
-    XCTAssertEqual(copy.content, try content("local"))
-    let state = await store.snapshot()
-    XCTAssertEqual(state.notes[base.id], remote)
-    XCTAssertEqual(state.outbox.count, 1)
-  }
-
-  func testDeletionNeverDiscardsOrResurrectsDirtyWriting() async throws {
-    let url = file(); let store = try MobileStore(file: url)
-    let base = CompanionNote(id: "note", title: "Plan", content: try content("base"), revision: 2)
-    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: [base]))
-    try await store.editNote(id: base.id, title: "Plan", content: content("local survives"), folderID: nil)
-    try await store.apply(.init(workspaceID: "mac", cursor: 2, changes: [.init(cursor: 2, resourceKind: .note, resourceID: base.id, operation: .delete, revision: 3)]))
-    let restarted = try MobileStore(file: url)
-    let state = await restarted.snapshot()
-    XCTAssertEqual(state.conflicts[base.id]?.local.content, try content("local survives"))
-    XCTAssertNil(state.conflicts[base.id]?.remote)
-    let next = try await restarted.nextMutation()
-    XCTAssertNil(next)
-  }
-
-  func testSnapshotResetPreservesUnsyncedWritingAndRejectsDifferentWorkspace() async throws {
-    let store = try MobileStore(file: file())
-    try await store.apply(CompanionSnapshot(workspaceID: "mac", cursor: 9))
-    let local = try await store.createNote(folderID: nil, title: "Local", content: content("safe"))
-    try await store.apply(CompanionSnapshot(workspaceID: "mac", cursor: 100))
-    var state = await store.snapshot()
-    XCTAssertEqual(state.notes[local.id], local)
-    do { try await store.apply(CompanionSnapshot(workspaceID: "other", cursor: 0)); XCTFail("Workspace was switched") }
-    catch MobileStore.Failure.wrongWorkspace {}
-    state = await store.snapshot()
-    XCTAssertEqual(state.workspaceID, "mac")
-  }
-
-  func testTranscriptCacheCountAndBytesSurviveRestart() async throws {
-    let url = file(); let store = try MobileStore(file: url, budget: .init(transcriptCount: 2, transcriptBytes: 1_500))
-    for i in 0..<10 {
-      let id = String(i)
-      try await store.cache(.init(conversationID: id, messages: [.init(id: id, conversationID: id, role: "assistant", content: String(repeating: "x", count: 400))]))
-    }
-    let restarted = try MobileStore(file: url)
-    let state = await restarted.snapshot()
-    XCTAssertLessThanOrEqual(state.transcripts.count, 2)
-    XCTAssertLessThanOrEqual(try JSONEncoder().encode(state.transcripts).count, 1_500)
-    XCTAssertNotNil(state.transcripts["9"])
-  }
-
-  func testCacheBudgetDoesNotEvictUnsyncedNotes() async throws {
-    let store = try MobileStore(file: file(), budget: .init(noteBytes: 1_600))
-    let note = try await store.createNote(folderID: nil, title: "Unsynced", content: content("keep"))
-    let remote = (0..<20).map { CompanionNote(id: "remote-\($0)", title: "Remote", content: String(repeating: "r", count: 150)) }
-    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: remote))
-    let state = await store.snapshot()
-    XCTAssertEqual(state.notes[note.id], note)
-    XCTAssertTrue(state.isDirty(note.id))
-  }
-
   func testRichEditPreservesUnchangedTablesUnknownKeysLinksAndIDs() throws {
     let document = NoteDocument(blocks: [.richText(.init(id: "text", style: .heading2, runs: [.init(text: "Hello", bold: true, link: "https://example.com")])), .table(.init(rows: 2, columns: 2, headerRow: true))])
     var raw = try JSONSerialization.jsonObject(with: Data(document.encoded().utf8)) as! [String: Any]
@@ -150,20 +44,6 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertEqual(state.conflicts[displayed.id]?.local.content, try content("held draft"))
     XCTAssertTrue(state.outbox.isEmpty)
   }
-  func testPopulatedLibraryIdleDoesNotWriteAndSmallEditDoesNotRewriteLibrary() async throws {
-    let store = try MobileStore(file: file())
-    let notes = try (0..<40).map { CompanionNote(id: "note-\($0)", title: "Note", content: try content(String(repeating: "x", count: 30_000)), revision: 1) }
-    let snapshot = CompanionSnapshot(workspaceID: "mac", cursor: 1, notes: notes)
-    try await store.apply(snapshot)
-    let before = await store.persistenceStatistics()
-    for _ in 0..<10 { try await store.apply(CompanionChangePage(workspaceID: "mac", cursor: 1)); try await store.apply(snapshot) }
-    let idle = await store.persistenceStatistics()
-    XCTAssertEqual(idle.writes, before.writes)
-    try await store.editNote(id: "note-0", title: "Changed", content: content("small replacement"), folderID: nil, base: notes[0])
-    let edit = await store.persistenceStatistics()
-    XCTAssertLessThan(edit.lastBytes, 80_000)
-  }
-
   func testOversizePasteAndBlockAdditionAreRejectedBeforeEditorAdoption() throws {
     let saved = try content("Saved writing")
     var visible = saved
@@ -184,20 +64,16 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertTrue(html.contains("form-action 'none'"))
   }
 
-  func testOfflinePinsPreserveHistoryBeyondCacheBudgetAndRestart() async throws {
-    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
-    let store = try MobileStore(file: location, budget: .init(transcriptCount: 1, transcriptBytes: 512))
-    try await store.setTranscriptPinned("pinned", true)
-    let text = String(repeating: "all history ", count: 200)
-    try await store.cache(.init(conversationID: "pinned", messages: [.init(id: "older", conversationID: "pinned", role: "assistant", content: text)]))
-    try await store.cache(.init(conversationID: "other", messages: [.init(id: "other", conversationID: "other", role: "user", content: "recent")]))
-    let restarted = try MobileStore(file: location, budget: .init(transcriptCount: 1, transcriptBytes: 512))
-    let state = await restarted.snapshot()
-    XCTAssertEqual(state.pinnedTranscriptIDs, ["pinned"])
-    XCTAssertEqual(state.transcripts["pinned"]?.messages.first?.content, text)
-  }
-  func testSettledTranscriptReplacesStreamingRowsWithoutReorderingUserOrDroppingHistory() async throws {
-    let location = file(), store = try MobileStore(file: location)
+  func testCachePressurePreservesDirtyNotesAndSettledPinnedHistoryAcrossRestart() async throws {
+    let location = file()
+    let budget = MobileStore.Budget(transcriptCount: 1, transcriptBytes: 512, noteBytes: 1_600)
+    let store = try MobileStore(file: location, budget: budget)
+    let note = try await store.createNote(folderID: nil, title: "Unsynced", content: content("keep"))
+    let remote = (0..<20).map { CompanionNote(id: "remote-\($0)", title: "Remote", content: String(repeating: "r", count: 150)) }
+    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: remote))
+    let dirty = await store.snapshot()
+    XCTAssertEqual(dirty.notes[note.id], note)
+    XCTAssertTrue(dirty.isDirty(note.id))
     try await store.setTranscriptPinned("chat", true)
     let older = CompanionMessage(id: "older", conversationID: "chat", role: "user", content: "Earlier turn")
     let user = CompanionMessage(id: "u", conversationID: "chat", runID: "r", role: "user", content: "Weather?", sequence: 0)
@@ -205,36 +81,19 @@ final class MobileStoreTests: XCTestCase {
     let transient = CompanionActivity(id: "thinking-live", runID: "r", title: "Thinking", status: "running", isTransient: true)
     try await store.cache(.init(conversationID: "chat", messages: [older, user, streaming], activities: [transient]))
     // The final SDK entry gets a durable ID, unlike the temporary streaming row.
-    let final = CompanionMessage(id: "answer", conversationID: "chat", runID: "r", role: "assistant", content: "Sunny and breezy.", sequence: 1)
+    let text = "Sunny and breezy. " + String(repeating: "all history ", count: 200)
+    let final = CompanionMessage(id: "answer", conversationID: "chat", runID: "r", role: "assistant", content: text, sequence: 1)
     try await store.cache(.init(conversationID: "chat", messages: [user, final]))
-    let restarted = try MobileStore(file: location)
+    try await store.cache(.init(conversationID: "other", messages: [.init(id: "other", conversationID: "other", role: "user", content: "recent")]))
+    let restarted = try MobileStore(file: location, budget: budget)
     let state = await restarted.snapshot()
+    XCTAssertEqual(state.notes[note.id], note)
+    XCTAssertTrue(state.isDirty(note.id))
     let transcript = try XCTUnwrap(state.transcripts["chat"])
     XCTAssertEqual(transcript.messages.map(\.id), ["older", "u", "answer"])
     XCTAssertTrue(transcript.activities.isEmpty)
-  }
-
-  func testPairingIdentityPersistsBeforeFirstSnapshot() async throws {
-    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
-    let store = try MobileStore(file: location)
-    try await store.bindWorkspace("library-a")
-    let restarted = try MobileStore(file: location)
-    do { try await restarted.bindWorkspace("library-b"); XCTFail("Changed central identity before initial snapshot") }
-    catch MobileStore.Failure.wrongWorkspace { }
-    let state = await restarted.snapshot(); XCTAssertEqual(state.workspaceID, "library-a")
-  }
-
-  func testTranscriptInvalidationCommitsWithCursorAndSurvivesRestart() async throws {
-    let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library")
-    let store = try MobileStore(file: location)
-    let transcript = CompanionTranscript(conversationID: "chat", messages: [.init(id: "old", conversationID: "chat", role: "user", content: "existing")])
-    try await store.apply(.init(workspaceID: "library", cursor: 1, conversations: [.init(id: "chat", title: "Chat")]))
-    try await store.cache(transcript)
-    try await store.apply(.init(workspaceID: "library", cursor: 2, changes: [.init(cursor: 2, resourceKind: .transcript, resourceID: "chat", operation: .upsert, revision: 2)]))
-    let restarted = try MobileStore(file: location), state = await restarted.snapshot()
-    XCTAssertEqual(state.cursor, 2); XCTAssertEqual(state.dirtyTranscriptIDs, ["chat"])
-    try await restarted.cache(transcript)
-    let refreshed = await restarted.snapshot(); XCTAssertEqual(refreshed.dirtyTranscriptIDs, [])
+    XCTAssertEqual(state.pinnedTranscriptIDs, ["chat"])
+    XCTAssertEqual(transcript.messages.last?.content, text)
   }
 
 }

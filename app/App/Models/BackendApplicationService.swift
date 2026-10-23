@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCompanion
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -21,6 +22,7 @@ struct BuiltInSubagentArchiveRequest: Codable, Sendable {
 }
 
 enum BackendApplicationCommand: Codable, Sendable {
+    case saveDictation(DictationRecord)
     case companion(CompanionHostAction)
     case federatedExecution(FederatedExecutionAction)
     case setIdleSleepPolicy(WorkPowerPolicy)
@@ -350,6 +352,9 @@ final class BackendApplicationService {
                 throw BackendRPCError.remote("This input request is no longer available.")
             }
             model.resolveLocalACPInteraction(id: id, response: value)
+        case let .saveDictation(record):
+            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            try await database.saveDictation(record)
         case let .saveCalendar(draft, eventID, revision, occurrence):
             let event: WorkspaceCalendarItemRecord?
             if let eventID { event = try calendarEvent(eventID, revision: revision) }

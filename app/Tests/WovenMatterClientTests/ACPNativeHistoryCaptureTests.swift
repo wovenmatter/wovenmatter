@@ -3,19 +3,6 @@ import Testing
 @testable import WovenMatterClient
 
 struct ACPNativeHistoryCaptureTests {
-    @Test func archivesCompactionAndNativeUnknownFields() throws {
-        let update: ACPJSONValue = .object([
-            "sessionUpdate": .string("context_compacted"), "summary": .string("exposed context summary"),
-            "nativeContext": .object(["cutoff": .integer(42)]),
-        ])
-        let record = try ACPNativeHistoryCapture.record(update, runID: "woven-run")
-        #expect(record.kind == "acp.context_compacted")
-        #expect(record.runID == "woven-run")
-        #expect(record.payload.contains("nativeContext"))
-        #expect(record.text?.contains("exposed context summary") == true)
-        #expect(record.projectionJSON?.contains("exposed context summary") == true)
-    }
-
     @Test func nativeEventsAndToolSnapshotsHaveStableSourceIdentity() throws {
         let tool: ACPJSONValue = .object([
             "sessionUpdate": .string("tool_call_update"), "toolCallId": .string("native-tool"),

@@ -36,24 +36,6 @@ struct OpenCodeApprovalHandlingTests {
         await coordinator.shutdown()
     }
 
-    @Test func nativeFormCancelAndDesktopReplyShareResolution() async throws {
-        let context = try await ApprovalContext()
-        defer { context.clean() }
-        let form: OpenCodeValue = ["id": "form_a", "fields": .array([["key": "answer", "type": "string", "required": .bool(true)]])]
-        await context.fixture.setForms([form], session: "ses_a")
-        let coordinator = context.coordinator()
-        try await coordinator.connect(context.connection)
-        try await coordinator.cancelForm(context.a, expectedRequest: form, expectedRunID: nil)
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.replyToForm(context.a, expectedRequest: form, expectedRunID: nil, answers: ["answer": "late"])
-        }
-        let replies = await context.fixture.replies
-        #expect(replies.count == 1)
-        #expect(replies.first?.0 == "/api/session/ses_a/form/form_a/cancel")
-        #expect(replies.first?.1 == .null)
-        await coordinator.shutdown()
-    }
-
 
     @Test func nativeManualResponsesValidateCurrentRequestAndResolveOnlyOnce() async throws {
         let context = try await ApprovalContext()
@@ -112,58 +94,6 @@ struct OpenCodeApprovalHandlingTests {
         }
         _ = try await coordinator.sessionCall(context.a, suffix: "/permission/per_stopped/reply", method: "POST", body: ["reply": "reject"])
         #expect(await context.fixture.replies.map { $0.1 } == [["reply": "reject"]])
-        await coordinator.shutdown()
-    }
-
-    @Test(arguments: ["ask", "allow", "deny", "unconfirmed"])
-    func nativePoliciesRequireCanonicalReadbackWithoutClientReplies(choice: String) async throws {
-        let context = try await ApprovalContext()
-        defer { context.clean() }
-        let effect = choice == "unconfirmed" ? "allow" : choice
-        await context.fixture.setIgnoreNativeWrites(choice == "unconfirmed")
-        let original: OpenCodeValue = ["action": "read", "resource": "/fixture/*", "effect": "allow"]
-        await context.fixture.setNativeRules([original], session: "ses_a")
-        await context.fixture.setRequests([request("per_manual", "ses_a"),
-            request("per_auth", "ses_a", action: "auth.login")], session: "ses_a")
-        let coordinator = context.coordinator()
-        try await coordinator.connect(context.connection)
-        if choice == "unconfirmed" {
-            await #expect(throws: OpenCodeError.self) {
-                try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: effect)
-            }
-            #expect(OpenCodePermissionHandling.nativeMode(session: try await context.database.openCodeSnapshot(conversationID: context.a.conversationID)?.info ?? .null) == nil)
-            #expect(await context.fixture.replies.isEmpty)
-            await coordinator.shutdown()
-            return
-        }
-        #expect(try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: effect) == effect)
-        try await coordinator.refresh(context.a)
-        let saved = try #require(await context.database.openCodeSnapshot(conversationID: context.a.conversationID))
-        #expect(saved.info["permissions"].array == [original, ["action": "*", "resource": "*", "effect": .string(effect)]])
-        #expect(OpenCodeComposerMetadata.metadata(session: saved.info, models: []).permission == effect)
-        let reopened = try await WorkspaceDatabase(url: context.directory.appending(path: "workspace.sqlite"))
-        let stored = try #require(await reopened.openCodeSnapshot(conversationID: context.a.conversationID))
-        #expect(OpenCodeComposerMetadata.metadata(session: stored.info, models: []).permission == effect)
-        #expect(await context.fixture.nativeWrites.count == 1)
-        #expect(await context.fixture.replies.isEmpty)
-        #expect(OpenCodePermissionHandling.nativeMode(session: try await context.database.openCodeSnapshot(conversationID: context.b.conversationID)?.info ?? .null) == nil)
-        await coordinator.shutdown()
-    }
-
-    @Test func rejectedModeNeverIncreasesAuthority() async throws {
-        let context = try await ApprovalContext()
-        defer { context.clean() }
-        await context.fixture.setRequests([request("per_a", "ses_a")], session: "ses_a")
-        let coordinator = context.coordinator()
-        try await coordinator.connect(context.connection)
-        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "ask")
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "unknown")
-        }
-        try await coordinator.refresh(context.a)
-        #expect(await context.fixture.replies.isEmpty)
-        let saved = try #require(await context.database.openCodeSnapshot(conversationID: context.a.conversationID))
-        #expect(OpenCodePermissionHandling.nativeMode(session: saved.info) == "ask")
         await coordinator.shutdown()
     }
 

@@ -27,6 +27,13 @@ struct DashboardNoteWriteBehindTests {
         await #expect(throws: Failure.expected) { try await barrier.value }
         #expect(try journal.entries().map(\.content) == ["not committed"])
         await #expect(throws: Failure.expected) { try await writer.flush() }
+        #expect(await writer.hasOutstandingWork())
+        let retained = try journal.entries()
+        await writes.setFailure(false)
+        try await writer.replayAndFlush(retained)
+        #expect(try journal.entries().isEmpty)
+        #expect(await !writer.hasOutstandingWork())
+        #expect(await writes.values == ["not committed", "not committed"])
     }
 
     private actor Writes {
@@ -106,26 +113,6 @@ struct DashboardNoteWriteBehindTests {
         #expect(await writes.values == ["first", "third"])
         #expect(try journal.entries().isEmpty)
         #expect(await !writer.hasOutstandingWork())
-    }
-
-    @Test func failedAsyncWriteRetainsJournalAndReplayAcknowledgesIt() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let writes = Writes()
-        await writes.setFailure(true)
-        let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
-        let writer = DashboardNoteWriteBehind(journal: journal, coalescingDelay: .seconds(60),
-            update: { try await writes.append($0) }, completion: { _, _ in })
-        writer.submit(entry("retained", revision: 1))
-        await #expect(throws: Failure.expected) { try await writer.flush() }
-        #expect(await writer.hasOutstandingWork())
-        let retained = try journal.entries()
-        #expect(retained.map(\.content) == ["retained"])
-        await writes.setFailure(false)
-        try await writer.replayAndFlush(retained)
-        #expect(try journal.entries().isEmpty)
-        #expect(await !writer.hasOutstandingWork())
-        #expect(await writes.values == ["retained", "retained"])
     }
 
     @Test func appendFailureNeverCallsDatabaseAndCanRetryFromPendingDraft() async throws {

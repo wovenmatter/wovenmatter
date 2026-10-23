@@ -61,17 +61,21 @@ struct WorkspaceAssetTabsTests {
     #expect(tabs.tabs.count == 12)
   }
 
-  @Test func hidingDoesNotDiscardPagesAndLastCloseDismisses() throws {
+  @Test func documentsHaveIndependentCapacityAndPreserveAdjacentSelection() throws {
     var tabs = WorkspaceAssetTabs()
-    let browser = WorkspaceAssetTabs.Tab.browser(UUID())
-    try tabs.open(browser)
+    try tabs.open(.note("note"))
+    for index in 0..<WorkspaceAssetTabs.maximumDocuments { try tabs.open(.document("file\(index)")) }
+    #expect(throws: WorkspaceAssetTabs.Capacity.self) { try tabs.open(.document("overflow")) }
+    try tabs.open(.browser(UUID()))
+    try tabs.open(.document("file0"))
+    #expect(tabs.documentIDs.count == 8)
     tabs.hide()
-    #expect(!tabs.isPresented)
-    #expect(tabs.tabs == [browser])
-    tabs.select(browser)
+    try tabs.open(.document("file0"))
     #expect(tabs.isPresented)
-    tabs.close(browser)
-    #expect(tabs.tabs.isEmpty && tabs.selected == nil && !tabs.isPresented)
+    tabs.close(.document("file0"))
+    #expect(tabs.selected == .document("file1"))
+    #expect(tabs.noteIDs == ["note"])
+    #expect(tabs.browserIDs.count == 1)
   }
 
 }

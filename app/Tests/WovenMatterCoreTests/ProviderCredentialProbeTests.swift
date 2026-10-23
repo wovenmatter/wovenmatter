@@ -118,6 +118,7 @@ struct ProviderCredentialProbeTests {
     let fixture = ClaudeKeychainFixture()
     let cache = ClaudeUsageCredentialCache()
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: url) }
     fixture.expectsInteraction = true
     try ProviderLimitCollector.authorizeClaudeCredentialAccess(
       credentialsURL: url, keychain: fixture.access, cache: cache
@@ -159,22 +160,16 @@ struct ProviderCredentialProbeTests {
       credentialsURL: url, keychain: fixture.access, cache: cache
     ) == "replacement-token")
     #expect(fixture.readCount == 3)
-  }
-
-  @Test("Claude file credentials take precedence over the session cache")
-  func claudeFileCredentialPrecedence() throws {
-    let fixture = ClaudeKeychainFixture()
-    let cache = ClaudeUsageCredentialCache()
-    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: url) }
+    cache.receivedResponse(statusCode: 401, token: "fixture-token", credentialsURL: url)
     #expect(ProviderLimitCollector.claudeOAuthToken(
       credentialsURL: url, keychain: fixture.access, cache: cache
-    ) == "fixture-token")
+    ) == "replacement-token")
+    #expect(fixture.readCount == 3)
     try Data(#"{"claudeAiOauth":{"accessToken":"file-token"}}"#.utf8).write(to: url)
     #expect(ProviderLimitCollector.claudeOAuthToken(
       credentialsURL: url, keychain: fixture.access, cache: cache
     ) == "file-token")
-    #expect(fixture.readCount == 1)
+    #expect(fixture.readCount == 3)
   }
 
   @Test("Claude saved-credential recovery reports denied and missing items",
@@ -245,24 +240,6 @@ struct ProviderCredentialProbeTests {
     ) == nil)
     #expect(fixture.readCount == 1)
     #expect(fixture.policyChanges == [false, true])
-  }
-
-  @Test("late authentication failure cannot remove a replacement Claude token")
-  func claudeLateAuthFailurePreservesReplacement() throws {
-    let fixture = ClaudeKeychainFixture()
-    let cache = ClaudeUsageCredentialCache()
-    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    _ = ProviderLimitCollector.claudeOAuthToken(credentialsURL: url, keychain: fixture.access, cache: cache)
-    fixture.token = "replacement-token"
-    fixture.expectsInteraction = true
-    try ProviderLimitCollector.authorizeClaudeCredentialAccess(
-      credentialsURL: url, keychain: fixture.access, cache: cache
-    )
-    cache.receivedResponse(statusCode: 401, token: "fixture-token", credentialsURL: url)
-    #expect(ProviderLimitCollector.claudeOAuthToken(
-      credentialsURL: url, keychain: fixture.access, cache: cache
-    ) == "replacement-token")
-    #expect(fixture.readCount == 2)
   }
 
   private func collect(

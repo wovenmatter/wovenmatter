@@ -475,6 +475,7 @@ struct WovenMatterApp: App {
         WindowGroup {
             RootView(model: applicationModel)
                 .onAppear {
+                    applicationModel.configureDictationHistory()
                     lifecycleDelegate.model = applicationModel
                     DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }

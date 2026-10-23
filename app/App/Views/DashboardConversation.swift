@@ -30,6 +30,7 @@ private enum DashboardConversationDisplayRow: Identifiable {
 }
 
 struct DashboardCloudConversation: View {
+    @Environment(\.openDocumentPreview) private var openPreview
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ApplicationModel
@@ -202,6 +203,7 @@ struct DashboardCloudConversation: View {
                                                     openAttachment(contentHash: attachment.contentHash,
                                                         fileName: attachment.fileName, mimeType: attachment.mimeType)
                                                 },
+                                                resolveFile: { source in try await generatedFileURL(source, message: message) },
                                                 layout: fragment.layout,
                                                 displayedBody: presentation?.displayedBody,
                                                 commentaryIDs: presentation?.commentaryIDs,
@@ -654,10 +656,19 @@ struct DashboardCloudConversation: View {
         }
         Task {
             do {
-                try await model.library.openAttachment(
+                let url = try await model.library.attachmentURL(
                     contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+                openPreview?(url, nil)
             } catch { attachmentOpenError = error.localizedDescription }
         }
+    }
+
+    private func generatedFileURL(_ source: String, message: WorkspaceMessageRecord) async throws -> URL {
+        let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
+        if let client = model.liveLibraryClient, client.isForeignConversation(message.conversationID) {
+            return try await client.exportFile(.libraryFile(id: id))
+        }
+        return try await model.library.fileURL(id: id)
     }
 
     private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {
@@ -1110,6 +1121,7 @@ struct DashboardMessageRow: View {
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
+    var resolveFile: ((String) async throws -> URL)? = nil
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
@@ -1176,6 +1188,9 @@ struct DashboardMessageRow: View {
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
+                        if let resolveFile, message.status != "streaming" {
+                            ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
+                        }
                     }
                     if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)

@@ -12,22 +12,6 @@ struct CompanionMacExecutionTests {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true); return url
   }
 
-  @Test("scoped secret survives restart, cannot cross workspace, and revokes durably")
-  func scope() async throws {
-    let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appendingPathComponent("tokens.json")
-    let auth = try CompanionExecutionAuthentication(fileURL: file)
-    let library = UUID().uuidString.lowercased(), workspace = UUID().uuidString.lowercased()
-    let token = try await auth.provision(deviceID: deviceID, libraryID: library, workspaceID: workspace)
-    #expect(!(try String(contentsOf: file, encoding: .utf8)).contains(token))
-    let restarted = try CompanionExecutionAuthentication(fileURL: file)
-    let scope = try await restarted.authenticate(bearer: token)
-    #expect(scope.deviceID == deviceID && scope.libraryID == library && scope.workspaceID == workspace)
-    try await restarted.revoke(deviceID: deviceID)
-    let revoked = try CompanionExecutionAuthentication(fileURL: file)
-    await #expect(throws: CompanionAPIError.self) { try await revoked.authenticate(bearer: token) }
-  }
-
   @Test("disabled central execution policy rejects an already-issued token without dispatch")
   func policyRevocation() async throws {
     let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
@@ -65,6 +49,11 @@ struct CompanionMacExecutionTests {
     let commands = ScopedCommands()
     let api = CompanionMacExecutionAPI(database: db, commands: commands, authentication: auth, descriptor: workspace, isActive: { true })
     let credential = try await api.provision(deviceID: deviceID)
+    let tokenFile = dir.appendingPathComponent("tokens.json")
+    #expect(!(try String(contentsOf: tokenFile, encoding: .utf8)).contains(credential.token))
+    let restarted = try CompanionExecutionAuthentication(fileURL: tokenFile)
+    let scope = try await restarted.authenticate(bearer: credential.token)
+    #expect(scope.deviceID == deviceID && scope.libraryID == identity.libraryID && scope.workspaceID == workspace.id)
     var headers = ["authorization": "Bearer " + credential.token, "x-woven-protocol": String(CompanionProtocol.version),
       "x-woven-library": identity.libraryID, "x-woven-workspace": workspace.id, "x-woven-device": deviceID]
     let providersResponse = await api.handle(.init(method: "GET", target: "/wovenmatter/v1/execution/providers", headers: headers))
@@ -79,6 +68,9 @@ struct CompanionMacExecutionTests {
     headers["x-woven-device"] = UUID().uuidString.lowercased()
     let crossed = await api.handle(.init(method: "GET", target: "/v1/execution/commands/\(local.commandID)", headers: headers))
     #expect(crossed.status == 403 && commands.receiptReads == 0)
+    try await restarted.revoke(deviceID: deviceID)
+    let revoked = try CompanionExecutionAuthentication(fileURL: tokenFile)
+    await #expect(throws: CompanionAPIError.self) { try await revoked.authenticate(bearer: credential.token) }
   }
 }
 

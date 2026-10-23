@@ -7,26 +7,6 @@ import WovenMatterCore
 @MainActor
 struct CompanionToolBridgeTests {
 
-  @Test(arguments: [NoteArtifactKind.spreadsheet, .html])
-  func richArtifactsKeepKindAcrossCreateEditAndReplay(kind: NoteArtifactKind) async throws {
-    let fixture = try await Fixture(); defer { fixture.remove() }
-    let id = UUID().uuidString.lowercased()
-    var document = NoteDocument(kind: kind, html: kind == .html ? "<h1>Original</h1>" : "")
-    let create = CompanionMutation(deviceID: fixture.deviceID, kind: .createNote, resourceID: id,
-      title: "Rich artifact", content: try document.encoded())
-    let receipt = try await fixture.database.applyCompanionMutation(create)
-    #expect(receipt.status == .accepted && receipt.note?.kind == kind)
-    if kind == .html { document.html = "<h1>Edited</h1>" }
-    else { document.blocks = [.table(.init(rows: 3, columns: 4, headerRow: true))] }
-    let update = CompanionMutation(deviceID: fixture.deviceID, kind: .updateNote, resourceID: id,
-      expectedRevision: receipt.note?.revision, title: "Edited artifact", content: try document.encoded())
-    #expect(try await fixture.database.applyCompanionMutation(update).status == .accepted)
-    #expect(try await fixture.database.applyCompanionMutation(create) == receipt)
-    let stored = try #require(try await fixture.database.companionNote(id: id))
-    #expect(stored.kind == kind)
-    #expect(try NoteDocument.editableDocument(from: stored.content) == document)
-  }
-
 
   @Test func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }

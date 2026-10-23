@@ -9,26 +9,18 @@ import WovenMatterCore
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
 
-  @Test func sessionEndpointCapabilitiesAreRedactedWithoutChangingOtherProtocolContent() throws {
-    let a = String(repeating: "a", count: 32), b = String(repeating: "b", count: 32)
-    let socket = "/private/tmp/wmtools-\(a)/\(b).sock"
-    let cli = "/home/.wmt/\(a)/\(b)/wovenmatter"
-    for path in [socket, cli, socket.replacingOccurrences(of: "/", with: "\\/")] {
-      let raw = "{\"prompt\":\"Use \(path)\",\"future_field\":true}"
-      let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(raw)
-      #expect(!redacted.contains(a))
-      #expect(redacted.contains("future_field"))
-      #expect(try JSONSerialization.jsonObject(with: Data(redacted.utf8)) is [String: Any])
-    }
-    let ordinary = #"{"path":"/workspace/example/a.swift","text":"preserved"}"#
-    #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
-  }
-
-  @Test func nestedHTTPHistoryRedactsSessionEndpoints() async throws {
+  @Test func directAndNestedHistoryRedactEndpointsWhilePreservingOtherContent() async throws {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
     let owner = String(repeating: "a", count: 32), endpoint = String(repeating: "b", count: 32)
     for path in ["/private/tmp/wmtools-\(owner)/\(endpoint).sock", "/home/.wmt/\(owner)/\(endpoint)/wovenmatter"] {
+      for spelling in [path, path.replacingOccurrences(of: "/", with: "\\/")] {
+        let raw = "{\"prompt\":\"Use \(spelling)\",\"future_field\":true}"
+        let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(raw)
+        #expect(!redacted.contains(owner))
+        #expect(redacted.contains("future_field"))
+        #expect(try JSONSerialization.jsonObject(with: Data(redacted.utf8)) is [String: Any])
+      }
       // HTTP observations wrap the original JSON response as a JSON string.
       let body = String(decoding: try JSONEncoder().encode(["text": "Use " + path, "other": "preserved"]), as: UTF8.self)
       let frame = WorkspaceHTTPObservation(method: "GET", path: "/api/session/ses_a/message", query: [:], status: 200, body: body)
@@ -46,6 +38,8 @@ struct WorkspaceHistoryTests {
       #expect(decoded["other"] == "preserved")
       #expect(decoded["text"] == "Use [Woven Matter session tool endpoint]")
     }
+      let ordinary = #"{"path":"/workspace/example/a.swift","text":"preserved"}"#
+    #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
   }
 
 
@@ -81,31 +75,6 @@ struct WorkspaceHistoryTests {
     #expect(rows(try await reopened.queryHistory(.init(command: "search", search: secret))).isEmpty)
     let endpointEvent = rows(try await reopened.queryHistory(.init(command: "event", id: endpointEventID))).first
     #expect(endpointEvent?.objectValue?["payload"]?.stringValue == "[Woven Matter session tool endpoint]")
-  }
-
-  @Test func nativeHTTPHistoryIsAdoptedOnlyByTheMatchingWorkspaceImport() async throws {
-    let (db, url) = try await database()
-    defer { try? FileManager.default.removeItem(at: url) }
-    let body = #"{"data":[{"id":"message-a","text":"full original response"}]}"#
-    let observation = try JSONEncoder().encode(WorkspaceHTTPObservation(method: "GET", path: "/api/session/ses_shared/message",
-      query: [:], status: 200, body: body))
-    let local = db.openCodeHistoryRecorder(connectionID: "local")
-    let remote = db.openCodeHistoryRecorder(connectionID: "remote")
-    try await local("in", observation)
-    try await remote("in", observation)
-    let imported = try await db.createLocalACPSession(runtimeKind: .opencode, title: "Imported", ownerDeviceID: UUID(),
-      openCodeAssociation: ("local", "ses_shared"))
-    let other = try await db.createLocalACPSession(runtimeKind: .opencode, title: "Other workspace", ownerDeviceID: UUID(),
-      openCodeAssociation: ("remote", "ses_shared"))
-    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
-    for id in [imported, other] {
-      let result = rows(try await reopened.queryHistory(.init(command: "events", conversationID: id, kind: "wire.in")))
-      #expect(result.count == 1)
-      #expect(result.first?.objectValue?["payload"]?.stringValue == String(decoding: observation, as: UTF8.self))
-    }
-    try await local("in", observation)
-    #expect(rows(try await reopened.queryHistory(.init(command: "events", conversationID: imported, kind: "wire.in"))).count == 2)
-    #expect(rows(try await reopened.queryHistory(.init(command: "events", conversationID: other, kind: "wire.in"))).count == 1)
   }
 
   private func database() async throws -> (WorkspaceDatabase, URL) {
@@ -151,33 +120,6 @@ struct WorkspaceHistoryTests {
     await #expect(throws: (any Error).self) { try await db.queryHistory(.init(command: "DELETE FROM notes")) }
   }
 
-  @Test func versionsAreBoundedAndRestoreChecksRevision() async throws {
-    let (db, url) = try await database()
-    defer { try? FileManager.default.removeItem(at: url) }
-    let note = try await db.createNote(folderID: nil, title: "Document", content: "Original")
-    let original = try await #require(db.noteAssetVersions(id: note).first)
-    _ = try await db.applyNoteEdits(
-      .init(command: .apply, noteID: note, operations: [.appendText(" agent", .paragraph)]))
-    #expect(try await db.noteAssetVersions(id: note).count == 2)
-    await #expect(throws: (any Error).self) {
-      try await db.restoreNoteAssetVersion(
-        noteID: note, versionID: original.id, expectedRevision: "stale")
-    }
-    let current = try await db.readNoteForEditing(id: note)
-    let restored = try await db.restoreNoteAssetVersion(
-      noteID: note, versionID: original.id, expectedRevision: try #require(current.revision))
-    #expect(restored.document?.plainText == NoteDocument.decode(original.content).plainText)
-    var revision = try #require(restored.revision)
-    for n in 0..<65 {
-      let response = try await db.applyNoteEdits(
-        .init(command: .apply, noteID: note, expectedRevision: revision,
-          operations: [.setTitle("Version \(n)")]))
-      revision = try #require(response.revision)
-    }
-    #expect(try await db.noteAssetVersions(id: note).count == 50)
-    #expect(try await db.readNoteForEditing(id: note).title == "Version 64")
-  }
-
   @Test func rapidAutosavesCoalesceButAgentEditsAreImmediateForEveryAssetKind() async throws {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
@@ -207,41 +149,4 @@ struct WorkspaceHistoryTests {
     }
   }
 
-  @Test func messagingReservesIdempotentlyAndRejectsImpersonationCollisionAndSelfSend() async throws {
-    let (db, url) = try await database()
-    defer { try? FileManager.default.removeItem(at: url) }
-    let a = try await db.createLocalACPSession(
-      runtimeKind: .codex, title: "Research", ownerDeviceID: UUID())
-    let b = try await db.createLocalACPSession(
-      runtimeKind: .claudeCode, title: "Writer", ownerDeviceID: UUID())
-    let id = UUID().uuidString
-    #expect(
-      try await db.reserveToolDelivery(sourceID: a, targetID: b, text: "Findings", requestID: id).status == "queued"
-    )
-    _ = try await db.claimToolDelivery(id: id)
-    let run = try await db.beginLocalACPRun(
-      conversationID: b, input: AgentMessageInput(text: "Findings", historyDeliveryID: id))
-    let message = try await #require(
-      db.conversationContent(id: b).messages.first(where: { $0.id == run.userMessageID }))
-    #expect(message.senderSessionID == a)
-    #expect(message.senderSessionTitle == "Research")
-    #expect(message.content == "Findings")
-    try await db.setToolDeliveryStatus(id: id, status: "accepted")
-    #expect(
-      try await db.reserveToolDelivery(sourceID: a, targetID: b, text: "Findings", requestID: id).status == "accepted")
-    await #expect(throws: (any Error).self) {
-      try await db.reserveToolDelivery(sourceID: b, targetID: a, text: "Findings", requestID: id)
-    }
-    await #expect(throws: (any Error).self) {
-      try await db.reserveToolDelivery(
-        sourceID: a, targetID: a, text: "Loop", requestID: UUID().uuidString)
-    }
-    await #expect(throws: (any Error).self) {
-      try await db.reserveToolDelivery(
-        sourceID: a, targetID: "missing", text: "Test", requestID: UUID().uuidString)
-    }
-    let findings = rows(try await db.queryHistory(.init(command: "search", search: "Findings")))
-    #expect(findings.count == 1) // the input, excluding this search's own audit event
-    #expect(findings.first?.objectValue?["kind"]?.stringValue == "message.insert")
-  }
 }

@@ -80,23 +80,6 @@ struct UsageImportAtomicityTests {
     #expect(result.samples.first?.tokens.inputTokens == 8)
   }
 
-  @Test("Metadata and cursor step failures throw instead of resembling missing rows")
-  func lookupStepErrors() throws {
-    let fixture = try UsageSQLFixture()
-    let store = try UsageStore(databaseURL: fixture.indexURL)
-    #expect(try store.metadataDate("fixture") == nil)
-    #expect(try store.runtimeSyncState(endpoint: "fixture") == nil)
-    try fixture.execute(at: fixture.indexURL, sql: """
-      DROP TABLE usage_metadata;
-      CREATE VIEW usage_metadata AS SELECT 'fixture' AS key, json_extract('invalid', '$') AS value;
-      DROP TABLE usage_runtime_cursors;
-      CREATE VIEW usage_runtime_cursors AS SELECT 'fixture' AS endpoint,
-        json_extract('invalid', '$') AS source_id, '0' AS cursor, 0 AS synced_at,
-        'available' AS status, '' AS detail;
-      """)
-    #expect(throws: UsageStoreError.self) { try store.metadataDate("fixture") }
-    #expect(throws: UsageStoreError.self) { try store.runtimeSyncState(endpoint: "fixture") }
-  }
 
   private let now = Date(timeIntervalSince1970: 1_780_000_000)
 

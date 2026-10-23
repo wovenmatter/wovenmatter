@@ -48,6 +48,7 @@
 		A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */; };
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
 		5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000004 /* SettingsGeneralView.swift */; };
+		A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013E364D3F71552BF924C602 /* SettingsDictationView.swift */; };
 		5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */; };
 		5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsUsageView.swift */; };
 		49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */; };
@@ -151,6 +152,8 @@
 		66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */; };
 		7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */; };
 		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
+		D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000001; };
+		D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000003; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -197,6 +200,7 @@
 		A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAgentDefaultsSection.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000004 /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
+		013E364D3F71552BF924C602 /* SettingsDictationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDictationView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLocalWorkspaceView.swift; sourceTree = "<group>"; };
 		5E7A0000000000000000000E /* SettingsUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUsageView.swift; sourceTree = "<group>"; };
 		DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "wovenmatter-macos"; path = .; sourceTree = SOURCE_ROOT; };
@@ -296,6 +300,8 @@
 		51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLaunch.swift"; sourceTree = SOURCE_ROOT; };
 		EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLibraryProjection.swift"; sourceTree = SOURCE_ROOT; };
 		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000001 /* DashboardDocumentPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardDocumentPane.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000003 /* ConversationFilePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationFilePreviews.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -326,6 +332,8 @@
 			isa = PBXGroup;
 			children = (
 				4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */,
+				D0C000000000000000000003 /* ConversationFilePreviews.swift */,
+				D0C000000000000000000001 /* DashboardDocumentPane.swift */,
 				1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */,
 				D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */,
 				C67C8CBF1B7E40CA0F37A274 /* App */,
@@ -470,6 +478,7 @@
 				E7E000000000000000000004 /* ExecutorControls.swift */,
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
+				013E364D3F71552BF924C602 /* SettingsDictationView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
 				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
 				5E7A0000000000000000000E /* SettingsUsageView.swift */,
@@ -663,6 +672,8 @@
 				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
 				6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
+				D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */,
+				D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */,
 				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
 				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
 				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
@@ -767,6 +778,7 @@
 				E7E000000000000000000003 /* ExecutorControls.swift in Sources */,
 				D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */,
 				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
+				A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */,
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,

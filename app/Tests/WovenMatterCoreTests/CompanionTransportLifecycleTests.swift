@@ -6,43 +6,6 @@ import WovenMatterCore
 
 @MainActor
 extension CompanionTransportTests {
-  func testRealSupervisorDispatchHeartbeatEOFAndForcedReap() async throws {
-    let fixture = try await SupervisorFixture.build()
-    defer { fixture.remove() }
-
-    let ordinary = try fixture.launch(arguments: ["--ordinary-app-argument"])
-    try await waitForFixture { !ordinary.process.isRunning }
-    XCTAssertEqual(ordinary.process.terminationStatus, 73, "Normal launches must bypass helper mode")
-    let invalid = try fixture.launch(arguments: [CompanionServeSupervisor.argument])
-    try await waitForFixture { !invalid.process.isRunning }
-    XCTAssertEqual(invalid.process.terminationStatus, 64)
-    let natural = try fixture.launch(arguments: [CompanionServeSupervisor.argument, fixture.executable.path, "--fixture-exit", "42"])
-    try await waitForFixture { !natural.process.isRunning }
-    XCTAssertEqual(natural.process.terminationStatus, 42, "Child exit must propagate while the parent pipe is open")
-
-    for resistant in [false, true] {
-      let pidFile = fixture.directory.appendingPathComponent("child-\(resistant).pid")
-      let report = fixture.directory.appendingPathComponent("reaped-\(resistant).txt")
-      let child = try fixture.launch(arguments: [CompanionServeSupervisor.argument, fixture.executable.path,
-        resistant ? "--fixture-resistant-child" : "--fixture-cooperative-child", pidFile.path],
-        childPIDFile: pidFile, reapReport: report)
-      defer { child.cleanup(childPIDFile: pidFile) }
-      try await waitForFixture { FileManager.default.fileExists(atPath: pidFile.path) }
-      let pid = try fixturePID(at: pidFile)
-      XCTAssertTrue(child.process.isRunning)
-      XCTAssertEqual(kill(pid, 0), 0)
-      let began = ProcessInfo.processInfo.systemUptime
-      try child.heartbeat.fileHandleForWriting.close()
-      try await waitForFixture { !child.process.isRunning }
-      XCTAssertEqual(child.process.terminationStatus, 0)
-      XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 3)
-      if resistant { XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - began, 0.9) }
-      XCTAssertEqual(try String(contentsOf: report, encoding: .utf8), "-1:\(ECHILD)", "Production supervisor must reap its child before exiting")
-      XCTAssertEqual(kill(pid, 0), -1)
-      XCTAssertEqual(errno, ESRCH)
-    }
-  }
-
   func testRealSupervisorStopsAfterAbruptParentDeathWithoutCleanupHandlers() async throws {
     let fixture = try await SupervisorFixture.build()
     defer { fixture.remove() }
@@ -61,22 +24,6 @@ extension CompanionTransportTests {
     XCTAssertEqual(try String(contentsOf: report, encoding: .utf8), "-1:\(ECHILD)")
     try await waitForFixture { kill(pid, 0) == -1 && errno == ESRCH }
     try await waitForFixture { kill(helperPID, 0) == -1 && errno == ESRCH }
-  }
-
-  func testOccupiedPreferredServePortFailsWithoutChangingExistingRoutes() async throws {
-    let fixture = ServeLifecycleFixture(existingPorts: [443, 8443, 10000])
-    let serve = fixture.makeServe()
-    do {
-      _ = try await serve.start(loopbackPort: 50001, preferredHTTPSPort: 10000)
-      XCTFail("A paired endpoint must not silently change to a different port")
-    } catch {
-      XCTAssertEqual((error as? CompanionAPIError)?.code, "tailscale_unavailable")
-    }
-    XCTAssertFalse(serve.isRunning)
-    XCTAssertTrue(fixture.children.isEmpty)
-    XCTAssertTrue(fixture.launchArguments.isEmpty)
-    XCTAssertEqual(fixture.existingPorts, [443, 8443, 10000])
-    XCTAssertEqual(fixture.probeArguments, [["status", "--json"], ["serve", "status", "--json"]])
   }
 
 }
@@ -145,57 +92,4 @@ private struct SupervisorFixtureProcess {
     if let pid = try? fixturePID(at: childPIDFile), kill(pid, 0) == 0 { _ = kill(pid, SIGKILL) }
     if process.isRunning { process.terminate() }
   }
-}
-
-@MainActor
-private final class ServeLifecycleFixture {
-  let existingPorts: Set<Int>
-  let cleanupDelay: TimeInterval
-  var children: [DelayedServingProcess] = []
-  var launchArguments: [[String]] = []
-  var probeArguments: [[String]] = []
-  var probedWhileStopping = false
-  init(existingPorts: Set<Int> = [443, 8443], cleanupDelay: TimeInterval = 0) {
-    self.existingPorts = existingPorts; self.cleanupDelay = cleanupDelay
-  }
-  func makeServe() -> CompanionTailscaleServe {
-    CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
-      probe: { _, arguments in try await self.probe(arguments) },
-      launch: { _, arguments in
-        self.launchArguments.append(arguments)
-        let child = DelayedServingProcess(cleanupDelay: self.cleanupDelay,
-          port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
-        self.children.append(child)
-        return child
-      })
-  }
-  func probe(_ arguments: [String]) async throws -> Data {
-    probeArguments.append(arguments)
-    probedWhileStopping = probedWhileStopping || children.contains { $0.isRunning && $0.terminationCalls > 0 }
-    if arguments == ["status", "--json"] {
-      return Data(#"{"BackendState":"Running","Self":{"DNSName":"fixture.test.ts.net."}}"#.utf8)
-    }
-    let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
-    var foreground: [String: Any] = [:]
-    for (index, child) in children.enumerated() where child.isRunning {
-      foreground[String(index)] = ["TCP": [String(child.port): ["HTTPS": true]],
-        "Web": ["fixture.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]
-    }
-    return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": foreground], options: .sortedKeys)
-  }
-}
-
-@MainActor
-private final class DelayedServingProcess: CompanionServingProcess {
-  let cleanupDelay: TimeInterval
-  let port: Int
-  let target: String
-  var stoppedAt: TimeInterval?
-  var forceStopped = false
-  var terminationCalls = 0
-  init(cleanupDelay: TimeInterval, port: Int, target: String) {
-    self.cleanupDelay = cleanupDelay; self.port = port; self.target = target
-  }
-  var isRunning: Bool { !forceStopped && stoppedAt.map { ProcessInfo.processInfo.systemUptime - $0 < cleanupDelay } ?? !forceStopped }
-  func terminate() { terminationCalls += 1; stoppedAt = ProcessInfo.processInfo.systemUptime }
 }

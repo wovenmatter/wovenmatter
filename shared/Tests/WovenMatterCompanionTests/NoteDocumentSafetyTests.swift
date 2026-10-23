@@ -12,6 +12,9 @@ struct NoteDocumentSafetyTests {
     let table = NoteTableBlock(rows: 2, columns: 2, headerRow: true)
     let original = NoteDocument(blocks: [.richText(text), .table(table)])
     let raw = try original.encoded()
+    #expect(try NoteDocument.editableDocument(from: "Legacy text").plainText == "Legacy text")
+    let v1 = raw.replacingOccurrences(of: "\"version\":2", with: "\"version\":1")
+    #expect(try NoteDocument.editableDocument(from: v1).plainText == original.plainText)
     var edited = try NoteDocument.editableDocument(from: raw)
     edited.blocks.append(.richText(NoteRichTextBlock(text: "New idea")))
     let read = try NoteDocument.editableDocument(from: edited.encoded())
@@ -41,23 +44,15 @@ struct NoteDocumentSafetyTests {
     let raw = String(decoding: try JSONEncoder().encode(NoteDocument(blocks: [.table(sparse)])), as: UTF8.self)
     #expect(raw.utf8.count < CompanionProtocol.maximumNoteBytes)
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: raw) }
+    #expect(throws: NoteDocumentSafetyError.tooLarge) {
+      try NoteDocument.editableDocument(from: String(repeating: "x", count: CompanionProtocol.maximumNoteBytes + 1))
+    }
     // The permissive legacy display entry point must also avoid expansion.
     #expect(NoteDocument.decode(raw).blocks.count == 1)
     for cells in [[], [NoteTableCell(text: "first"), NoteTableCell(text: "must not disappear")]] {
       let ragged = NoteTableBlock(columns: [NoteTableColumn()], rows: [NoteTableRow(cells: cells)])
       let content = String(decoding: try JSONEncoder().encode(NoteDocument(blocks: [.table(ragged)])), as: UTF8.self)
       #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: content) }
-    }
-  }
-
-  @Test("legacy v1 migration retains text and body byte ceilings apply")
-  func legacyAndBounds() throws {
-    #expect(try NoteDocument.editableDocument(from: "Legacy text").plainText == "Legacy text")
-    let raw = try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Legacy"))]).encoded()
-    let v1 = raw.replacingOccurrences(of: "\"version\":2", with: "\"version\":1")
-    #expect(try NoteDocument.editableDocument(from: v1).plainText == "Legacy")
-    #expect(throws: NoteDocumentSafetyError.tooLarge) {
-      try NoteDocument.editableDocument(from: String(repeating: "x", count: CompanionProtocol.maximumNoteBytes + 1))
     }
   }
 
