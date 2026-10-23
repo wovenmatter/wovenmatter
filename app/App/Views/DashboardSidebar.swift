@@ -343,7 +343,7 @@ struct DashboardSidebarNavigationPage: View {
             if let onMove {
                 Button(action: onMove) {
                     DashboardLucideIcon(
-                        glyph: side == .left ? .panelRightOpen : .panelLeftOpen,
+                        glyph: .arrowLeftRight,
                         size: 16
                     )
                     .frame(
@@ -1809,7 +1809,7 @@ struct DashboardSidebarWorkspacePage: View {
             if let onMove {
                 Button(action: onMove) {
                     DashboardLucideIcon(
-                        glyph: side == .left ? .panelRightOpen : .panelLeftOpen,
+                        glyph: .arrowLeftRight,
                         size: 16
                     )
                     .frame(width: 32, height: 32)
