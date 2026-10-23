@@ -13,7 +13,7 @@ struct DictationHistoryPane: View {
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 12) {
-        Text("Your completed dictations, newest first. Tap an entry to read it in full.")
+        Text("Your completed dictations. Click on an entry to see it in full.")
           .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
         if let problem = DictationSession.shared.historyError {
           Text(problem).foregroundStyle(DashboardPalette.danger)
@@ -81,29 +81,31 @@ private struct MobileDictationHistoryRow: View {
   @State private var expanded = false
   @State private var copied = false
   var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      VStack(alignment: .leading, spacing: 8) {
-        Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
-          .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-        if expanded {
-          Text(record.text).textSelection(.enabled)
-          Button("Show less") { expanded = false }.font(.subheadline)
-        } else {
-          Button { expanded = true } label: {
-            Text(record.text).lineLimit(3).multilineTextAlignment(.leading)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }.buttonStyle(.plain).accessibilityHint("Show full dictation")
-        }
-      }.frame(maxWidth: .infinity, alignment: .leading)
+    VStack(alignment: .leading, spacing: 8) {
+      Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
+        .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+      if expanded {
+        Text(record.text).textSelection(.enabled)
+        Button("Show less") { expanded = false }.font(.subheadline)
+      } else {
+        Button { expanded = true } label: {
+          Text(record.text).lineLimit(3).multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain).accessibilityHint("Show full dictation")
+      }
       Button {
         UIPasteboard.general.string = record.text; copied = true
       } label: {
-        Image(systemName: copied ? "checkmark" : "doc.on.doc").frame(width: 44, height: 44)
+        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+          .font(.system(size: 11.5, weight: .medium))
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel(copied ? "Copied dictation" : "Copy dictation")
         .task(id: copied) {
           guard copied else { return }
           do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
         }
-    }.padding(12).background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+    }.frame(maxWidth: .infinity, alignment: .leading)
+      .padding(12).background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
   }
 }

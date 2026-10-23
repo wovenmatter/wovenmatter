@@ -15,7 +15,7 @@ struct SettingsDictationView: View {
     @State private var error: String?
 
     var body: some View {
-        SettingsPage(title: "Dictation", detail: "Your completed dictations, newest first. Select an entry to read it in full.",
+        SettingsPage(title: "Dictation", detail: "Your completed dictations. Click on an entry to see it in full.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if let problem = DictationSession.shared.historyError {
                 Text(problem).font(.system(size: 13)).foregroundStyle(DashboardPalette.danger)
@@ -94,34 +94,36 @@ private struct DictationHistoryRow: View {
     @State private var copied = false
     @Environment(\.dashboardTheme) private var theme
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                if expanded {
-                    Text(record.text).font(.system(size: 13)).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Show less") { expanded = false }.buttonStyle(SettingsQuietButtonStyle())
-                } else {
-                    Button { expanded = true } label: {
-                        Text(record.text).font(.system(size: 13)).lineLimit(3)
-                            .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-                    }.buttonStyle(.plain).help("Read full dictation")
-                        .accessibilityHint("Show full dictation")
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+            if expanded {
+                Text(record.text).font(.system(size: 13)).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Show less") { expanded = false }.buttonStyle(SettingsQuietButtonStyle())
+            } else {
+                Button { expanded = true } label: {
+                    Text(record.text).font(.system(size: 13)).lineLimit(3)
+                        .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.plain).help("Read full dictation")
+                    .accessibilityHint("Show full dictation")
+            }
             Button {
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(record.text, forType: .string)
             } label: {
-                Text(copied ? "Copied" : "Copy").font(.system(size: 12))
-            }.buttonStyle(SettingsQuietButtonStyle())
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }.buttonStyle(DashboardIconButtonStyle())
                 .help(copied ? "Copied" : "Copy dictation")
                 .accessibilityLabel(copied ? "Copied dictation" : "Copy dictation")
                 .task(id: copied) {
                     guard copied else { return }
                     do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
                 }
-        }.padding(16).background(theme.palette.workspace).clipShape(DashboardShapes.card)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16).background(theme.palette.workspace).clipShape(DashboardShapes.card)
     }
 }
