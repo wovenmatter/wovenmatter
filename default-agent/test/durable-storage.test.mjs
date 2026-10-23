@@ -18,6 +18,11 @@ test('private replacements flush contents before rename and the directory before
   const { directory, prototype, path } = await fixture(t);
   await writePrivateJSON(path, { revision: 1 });
   const sync = prototype.sync;
+  const failed = t.mock.method(prototype, 'sync', async () => { throw new Error('fixture disk failure'); });
+  await assert.rejects(writePrivateJSON(path, { revision: 2 }), /fixture disk failure/);
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { revision: 1 });
+  assert.deepEqual((await readdir(directory)).sort(), ['probe', 'state.json']);
+  failed.mock.restore();
   const observed = [];
   t.mock.method(prototype, 'sync', async function () {
     observed.push({ directory: (await this.stat()).isDirectory(), value: JSON.parse(await readFile(path, 'utf8')) });
@@ -29,14 +34,5 @@ test('private replacements flush contents before rename and the directory before
     { directory: true, value: { revision: 2 } },
   ]);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
-  assert.deepEqual((await readdir(directory)).sort(), ['probe', 'state.json']);
-});
-
-test('failed flush preserves the prior file and removes the partial replacement', async t => {
-  const { directory, prototype, path } = await fixture(t);
-  await writePrivateJSON(path, { revision: 1 });
-  t.mock.method(prototype, 'sync', async () => { throw new Error('fixture disk failure'); });
-  await assert.rejects(writePrivateJSON(path, { revision: 2 }), /fixture disk failure/);
-  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { revision: 1 });
   assert.deepEqual((await readdir(directory)).sort(), ['probe', 'state.json']);
 });

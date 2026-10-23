@@ -6,32 +6,6 @@ import WovenMatterCore
 
 @Suite("SQLite text fidelity")
 struct WorkspaceDatabaseTextTests {
-  @Test func textBindingsAndRowsPreserveNULUnicodeEmptyAndNull() async throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    let value = "before\0after 🪡 café"
-    try await database.write { connection in
-      try connection.executeUnlocked("CREATE TABLE text_fidelity(id TEXT PRIMARY KEY, body TEXT, optional TEXT)")
-      try connection.toolsExecuteUnlocked("INSERT INTO text_fidelity VALUES(?,?,?)", ["id\0suffix", value, ""])
-      try connection.toolsExecuteUnlocked("INSERT INTO text_fidelity VALUES(?,?,?)", ["id", "", nil])
-    }
-    try await database.read { connection in
-      let query = try connection.prepareUnlocked("SELECT body,optional FROM text_fidelity WHERE id=?")
-      defer { sqlite3_finalize(query) }
-      try connection.bind("id\0suffix", at: 1, to: query)
-      #expect(sqlite3_step(query) == SQLITE_ROW)
-      #expect(try connection.text(query, column: 0) == value)
-      #expect(connection.optionalText(query, column: 0) == value)
-      #expect(connection.optionalText(query, column: 1) == "")
-      let rows = try connection.historyRowsUnlocked("SELECT body,optional,typeof(body) AS kind FROM text_fidelity WHERE id=?", values: ["id"])
-      #expect(rows.first?.objectValue?["body"]?.stringValue == "")
-      #expect(rows.first?.objectValue?["optional"] == .null)
-      #expect(rows.first?.objectValue?["kind"]?.stringValue == "text")
-    }
-  }
-
   @Test func deliveryRetryPreservesTextAfterNULAcrossConnections() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

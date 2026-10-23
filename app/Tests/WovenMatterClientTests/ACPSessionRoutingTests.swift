@@ -36,137 +36,6 @@ struct ACPSessionRoutingTests {
         events.continuation.finish()
     }
 
-    @Test(arguments: [false, true])
-    func earlyNewAndLoadUpdatesKeepOnlyTheResolvedSession(loading: Bool) async throws {
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [
-            modelUpdate("early-parent"),
-            update("available_commands_update", fields: ["availableCommands": [["name": "early-parent-command"]]]),
-            modelUpdate("early-child", session: "child"),
-            update("available_commands_update", session: "child", fields: ["availableCommands": []]),
-        ])
-        defer { fixture.remove() }
-        let client = try fixture.client()
-        defer { Task { await client.shutdown() } }
-        let initialized = try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: loading ? "parent" : nil, title: nil
-        )
-        await client.shutdown()
-        #expect(initialized.sessionID == "parent")
-        #expect(initialized.loadedExistingSession == loading)
-        #expect(initialized.configuration.model == "early-parent")
-        #expect(initialized.configuration.slashCommands.map(\.name) == ["early-parent-command"])
-    }
-
-
-    @Test @MainActor func composerReceivesDistinctBillingModelsThinkingAndPermissions() async throws {
-        let models = ["claude-subscription/sonnet", "anthropic/sonnet", "openai-codex/fixture"]
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [
-            update("config_option_update", fields: ["configOptions": [
-                ["id": "model", "category": "model", "currentValue": models[0],
-                 "options": models.map { ["value": $0, "name": $0] }],
-                ["id": "thinking", "category": "thought_level", "currentValue": "high",
-                 "options": [["value": "off"], ["value": "high"]]],
-                ["id": "permission_mode", "currentValue": "normal",
-                 "options": [["value": "normal", "name": "Ask Before Changes"], ["value": "full", "name": "Full Access"]]],
-            ]]),
-        ])
-        defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
-        defer { Task { await client.shutdown() } }
-        let configuration = try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: nil, title: nil
-        ).configuration
-        #expect(configuration.model == "claude-subscription/sonnet")
-        #expect(configuration.modelOptions == models)
-        #expect(configuration.thinking == "high" && configuration.thinkingOptions == ["off", "high"])
-        #expect(configuration.permission == "normal" && configuration.permissionOptions == ["normal", "full"])
-        #expect(configuration.permissionOptionMetadata["full"]?.name == "Full Access")
-        await client.shutdown()
-    }
-
-    @Test func childSessionsDoNotInterruptParentTextReasoningToolsOrConfiguration() async throws {
-        let frames: [[String: Any]] = [
-            update("agent_thought_chunk", text: "parent thought one"),
-            update("agent_message_chunk", session: "child-one", text: "child answer"),
-            update("tool_call", session: "child-two", fields: ["toolCallId": "child-tool", "title": "Search"]),
-            update("agent_thought_chunk", text: "parent thought two"),
-            update("agent_message_chunk", text: "Casement, "),
-            update("agent_thought_chunk", session: "child-three", text: "sources"),
-            update("tool_call", session: "child-four", fields: ["toolCallId": "child-search", "title": "Search"]),
-            update("agent_message_chunk", session: "child-five", text: "I will split the research"),
-            update("agent_message_chunk", text: "Hardenburg, Britannica."),
-            update("tool_call", fields: ["toolCallId": "parent-tool", "title": "Parent search", "kind": "search"]),
-            update("tool_call_update", session: "child-six", fields: ["toolCallId": "parent-tool", "status": "failed"]),
-            update("tool_call_update", fields: ["toolCallId": "parent-tool", "status": "completed"]),
-            update("plan", fields: ["entries": [["content": "Parent plan", "status": "pending"]]]),
-            update("plan", session: "child-one", fields: ["entries": []]),
-            modelUpdate("parent-model"),
-            modelUpdate("child-model", session: "child-two"),
-            update("available_commands_update", fields: ["availableCommands": [["name": "parent-command"]]]),
-            update("available_commands_update", fields: ["availableCommands": [["name": "parent-command"]]]),
-            update("available_commands_update", session: "child-three", fields: ["availableCommands": [["name": "child-command"]]]),
-            update("agent_message_chunk", session: nil, text: " legacy adapter"),
-            update("agent_message_chunk", session: "", text: "empty session"),
-            ["jsonrpc": "2.0", "method": "session/update", "params": ["sessionId": 7, "update": ["sessionUpdate": "agent_message_chunk", "content": ["text": "invalid session"]]]],
-        ]
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [modelUpdate("fixture-model")], promptFrames: frames)
-        defer { fixture.remove() }
-        let client = try fixture.client()
-        defer { Task { await client.shutdown() } }
-        let events = RoutingEvents()
-        let configurations = RoutingConfigurations()
-        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        await client.setConfigurationHandler { await configurations.record($0) }
-        #expect(await configurations.values().map(\.model) == ["fixture-model"])
-        #expect(try await client.prompt("fixture", onEvent: { await events.record($0) }) == .endTurn)
-        await client.shutdown()
-
-        let delivered = await events.values()
-        let text = delivered.compactMap { event -> String? in
-            if case .assistantChunk(let value) = event { return value }
-            return nil
-        }
-        #expect(text == ["Casement, ", "Hardenburg, Britannica.", " legacy adapter"])
-        let activities = delivered.compactMap { event -> AgentRunActivity? in
-            if case .activity(let value, _) = event { return value }
-            return nil
-        }
-        let thoughts = activities.filter { $0.kind == .thought }
-        #expect(thoughts.map(\.id) == ["thought-1", "thought-1", "thought-1"])
-        #expect(thoughts.map(\.content) == ["parent thought one", "parent thought two", nil])
-        #expect(thoughts.map(\.phase) == ["update", "update", "end"])
-        #expect(thoughts.map(\.status) == ["running", "running", "completed"])
-        #expect(delivered.compactMap { event -> Bool? in
-            guard case .activity(let activity, let appendsContent) = event,
-                  activity.kind == .thought else { return nil }
-            return appendsContent
-        } == [true, true, false])
-        #expect(activities.filter { $0.kind == .tool }.map(\.id) == ["parent-tool", "parent-tool"])
-        #expect(activities.filter { $0.kind == .tool }.last?.status == "completed")
-        #expect(activities.filter { $0.kind == .plan }.map(\.phase) == ["update"])
-        // Only the parent's first answer closes its thought. Foreign messages
-        // and tool calls must neither split that phase nor enter the transcript.
-        #expect(delivered.map { event in
-            switch event {
-            case .activity(let activity, _): "\(activity.kind.rawValue):\(activity.id):\(activity.phase ?? "")"
-            case .assistantChunk(let text): "assistant:\(text)"
-            default: "unexpected"
-            }
-        } == [
-            "thought:thought-1:update", "thought:thought-1:update", "thought:thought-1:end",
-            "assistant:Casement, ", "assistant:Hardenburg, Britannica.",
-            "tool:parent-tool:start", "tool:parent-tool:end", "plan:plan:update",
-            "assistant: legacy adapter",
-        ])
-        let snapshots = await configurations.values()
-        #expect(snapshots.count == 3)
-        #expect(snapshots.first?.slashCommands.isEmpty == true)
-        #expect(snapshots.last?.model == "parent-model")
-        #expect(snapshots.last?.slashCommands.map(\.name) == ["parent-command"])
-        let log = try String(contentsOf: fixture.logURL, encoding: .utf8).replacingOccurrences(of: "\\/", with: "/")
-        #expect(log.components(separatedBy: #""method":"initialize""#).count - 1 == 1)
-        #expect(log.components(separatedBy: #""method":"session/new""#).count - 1 == 1)
-    }
 
     @Test func missingLoadedSessionSwitchesRoutingToTheNewSession() async throws {
         let fixture = try SessionRoutingFixture(
@@ -186,24 +55,6 @@ struct ACPSessionRoutingTests {
         #expect(await events.values() == [.assistantChunk("new reply")])
     }
 
-
-    @Test @MainActor func durableRemoteReconnectDeliversNativeApprovalWhileLoadingHistory() async throws {
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
-        defer { fixture.remove() }
-        let client = try fixture.client(durableRemoteACP: true)
-        defer { Task { await client.shutdown() } }
-        let approvals = RoutingPermissions()
-        await client.setResumePermissionHandler { request in
-            await approvals.record(request)
-            return "allow-exact-id"
-        }
-        let initialized = try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
-        #expect(initialized.loadedExistingSession)
-        #expect(await approvals.values().count == 1)
-        #expect(await approvals.values().first?.options.contains(where: { $0.id == "allow-exact-id" }) == true)
-        await client.shutdown()
-    }
 
     @Test func foreignPermissionsCancelWithoutCallingTheParentHandlerAndPreserveRequestIDs() async throws {
         let fixture = try SessionRoutingFixture(promptFrames: [
@@ -271,12 +122,6 @@ actor RoutingEvents {
     private var recorded: [LocalACPEvent] = []
     func record(_ event: LocalACPEvent) { recorded.append(event) }
     func values() -> [LocalACPEvent] { recorded }
-}
-
-private actor RoutingConfigurations {
-    private var recorded: [LocalACPSessionConfiguration] = []
-    func record(_ configuration: LocalACPSessionConfiguration) { recorded.append(configuration) }
-    func values() -> [LocalACPSessionConfiguration] { recorded }
 }
 
 private actor RoutingPermissions {

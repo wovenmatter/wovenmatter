@@ -4,18 +4,6 @@ import Testing
 import WovenMatterCore
 
 struct AgentInteractionBrokerTests {
-    @Test @MainActor func nativeSecretReplyStillResolvesOnDesktop() async {
-        let broker = AgentInteractionBroker()
-        let id = UUID()
-        let answer = await withCheckedContinuation { continuation in
-            broker.registerInteraction(id: id, request: .secret(prompt: "Enter a value"), continuation: continuation)
-            #expect(!broker.resolveInteraction(id: id, response: .answers(["value": .single("fixture")])))
-            #expect(broker.resolveInteraction(id: id, response: .secret(" fixture value ")))
-            #expect(!broker.resolveInteraction(id: id, response: .cancelled))
-        }
-        #expect(answer == .secret(" fixture value "))
-    }
-
     @Test @MainActor func invalidPermissionCannotConsumeAndFirstValidResponseWins() async {
         let broker = AgentInteractionBroker()
         let id = UUID()

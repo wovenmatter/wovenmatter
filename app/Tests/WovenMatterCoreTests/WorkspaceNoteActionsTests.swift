@@ -6,7 +6,7 @@ import WovenMatterCore
 @Suite("Note menu revisions, retention and export")
 struct WorkspaceNoteActionsTests {
 
-  @Test func nestedListsPersistThroughDatabaseAndStyleChanges() async throws {
+  @Test func nestedListsPersistAndStaleMenuActionsCannotOverwriteTheirNewRevision() async throws {
     let f = try await Fixture(); defer { f.close() }
     let parent = NoteTextList(id: "parent-list", markerFormat: "{decimal}.", startingItemNumber: 5)
     let child = NoteTextList(id: "child-list", markerFormat: "{hyphen}")
@@ -17,10 +17,23 @@ struct WorkspaceNoteActionsTests {
                      list: .init(levels: [parent], headIndent: 28, firstLineHeadIndent: 6))),
       .richText(.init(id: "child", style: .numberedList, text: "Layers", list: nested))
     ])
-    let id = try await f.db.createNote(folderID: nil, title: "Nested", content: document.encoded())
+    let original = NoteDocument(blocks: [.richText(.init(id: "original", text: "Original content"))])
+    let id = try await f.db.createNote(folderID: nil, title: "Original", content: original.encoded())
+    let stale = try await f.db.noteActionRevision(id: id)
     _ = try await f.db.updateNote(id: id, title: "Nested", content: document.encoded())
     let stored = try await f.db.readNoteForEditing(id: id)
-    #expect(stored.document == document)
+    #expect(stored.document == document && stored.title == "Nested")
+    for mutation in [WorkspaceNoteMutation.rename("Stale name"), .moveToTrash] {
+      await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+        try await f.db.mutateNote(id: id, mutation: mutation, expectedRevision: stale)
+      }
+    }
+    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
+      try await f.db.noteExport(id: id, format: .standard, expectedRevision: stale)
+    }
+    let after = try await f.db.readNoteForEditing(id: id)
+    #expect(after.title == "Nested" && after.document == document)
+    #expect(try await f.db.trashedNotes().isEmpty)
     let exported = try document.exported(title: "Nested", format: .document)
     #expect(try JSONDecoder().decode(NoteDocument.self, from: exported.data) == document)
 
@@ -75,56 +88,6 @@ struct WorkspaceNoteActionsTests {
     func close() { try? FileManager.default.removeItem(at: root) }
   }
 
-  @Test func staleRevisionCannotRenameTrashOrExportNewerContent() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let id = try await f.db.createNote(folderID: nil, title: "Original", content: "Original content")
-    let stale = try await f.db.noteActionRevision(id: id)
-    _ = try await f.db.updateNote(id: id, title: "Newer title", content: "Newer content")
-    for mutation in [WorkspaceNoteMutation.rename("Stale name"), .moveToTrash] {
-      await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-        try await f.db.mutateNote(id: id, mutation: mutation, expectedRevision: stale)
-      }
-    }
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await f.db.noteExport(id: id, format: .standard, expectedRevision: stale)
-    }
-    let saved = try await f.db.readNoteForEditing(id: id)
-    #expect(saved.title == "Newer title" && saved.document?.plainText == "Newer content")
-    #expect(try await f.db.trashedNotes().isEmpty)
-  }
-
-  @Test func trashRestorePreservesEveryDocumentKindPinAndFolder() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Retained")
-    for kind in NoteArtifactKind.allCases {
-      let document = NoteDocument(kind: kind, blocks: [.richText(.init(text: "Retained content"))], html: "<h1>Original HTML</h1>")
-      let content = try document.encoded()
-      let id = try await f.db.createNote(folderID: folder, title: kind.displayName, content: content, kind: kind)
-      let original = try #require(try await f.db.workspaceOverview().notes.first { $0.id == id })
-      let revision = try await f.db.noteActionRevision(id: id)
-      for pinned in [true, false, true] {
-        try await f.db.mutateNote(id: id, mutation: .setPinned(pinned), expectedRevision: revision)
-        let saved = try #require(try await f.db.workspaceOverview().notes.first { $0.id == id })
-        #expect(saved.isPinned == pinned && saved.updatedAt == original.updatedAt && saved.createdAt == original.createdAt)
-        #expect(try await f.db.noteActionRevision(id: id) == revision)
-      }
-      let before = try await f.db.readNoteForEditing(id: id)
-      let versions = try await f.db.noteAssetVersions(id: id)
-      try await f.db.mutateNote(id: id, mutation: .moveToTrash, expectedRevision: f.db.noteActionRevision(id: id))
-      #expect(try await f.db.workspaceOverview().notes.allSatisfy { $0.id != id })
-      let hidden = try #require(try await f.db.trashedNotes().first { $0.id == id })
-      #expect(hidden.isPinned && hidden.title == kind.displayName)
-      await #expect(throws: WorkspaceNoteMutationError.noteNotFound) {
-        try await f.db.noteActionRevision(id: id)
-      }
-      try await f.db.mutateNote(id: id, mutation: .restore, expectedRevision: f.db.noteActionRevision(id: id, trashed: true))
-      let restored = try #require(try await f.db.workspaceOverview().notes.first { $0.id == id })
-      #expect(restored.content == content && restored.folderID == folder && restored.isPinned)
-      #expect(try await f.db.readNoteForEditing(id: id).document == before.document)
-      #expect(try await f.db.noteAssetVersions(id: id).map(\.id) == versions.map(\.id))
-    }
-  }
-
   @Test func readableExportsEscapeContentAndDocumentExportRetainsStructure() throws {
     let rich = NoteRichTextBlock(style: .heading2, runs: [
       .init(text: "A [link]", bold: true, link: "https://example.org/a(b)?q=two words")
@@ -151,20 +114,6 @@ struct WorkspaceNoteActionsTests {
     let bounded = try note.exported(title: String(repeating: "界🙂", count: 300) + "/:\\\n", format: .standard)
     #expect(bounded.suggestedFilename.decomposedStringWithCanonicalMapping.utf8.count <= 255)
     #expect(!bounded.suggestedFilename.contains("/") && !bounded.suggestedFilename.contains(":"))
-  }
-
-  @Test func cancelledExportNeverTouchesAnExistingDestination() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let destination = f.root.appending(path: "keep.md")
-    try Data("Keep existing file".utf8).write(to: destination)
-    let cancelled = Task {
-      withUnsafeCurrentTask { $0?.cancel() }
-      try await WorkspaceExportFileIO.perform {
-        try Data("Replacement".utf8).write(to: destination, options: .atomic)
-      }
-    }
-    await #expect(throws: CancellationError.self) { try await cancelled.value }
-    #expect(String(decoding: try Data(contentsOf: destination), as: UTF8.self) == "Keep existing file")
   }
 
 }

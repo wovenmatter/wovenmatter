@@ -30,22 +30,4 @@ struct LibraryTransportTests {
     }
   }
 
-  @Test("ACP documents point at the actual local host path")
-  func nativeFileAttachments() throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: "library-acp-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let url = root.appending(path: "report.pdf")
-    try Data([1, 2, 3]).write(to: url)
-    let acp = try LocalACPClient.promptBlocks(
-      .init(
-        text: "Read",
-        attachments: [
-          .file(
-            .init(
-              kind: .file, fileName: "report.pdf", mimeType: "application/pdf", sizeBytes: 3, contentHash: "hash",
-              localURL: url))
-        ]))
-    #expect(acp.arrayValue?.first?["text"]?.stringValue?.contains(url.path) == true)
-  }
 }

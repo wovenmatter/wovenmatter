@@ -85,7 +85,8 @@ class BundledCLITests(unittest.TestCase):
         identity = "10000000-0000-4000-8000-000000000001"
         args = ["sessions", "send", "destination", "--text", "--file", "--request-id", identity]
         response = {"success": True, "result": {"status": "accepted"}, "silent": False, "requestID": identity}
-        result, request = self.invoke(args, response)
+        result, request = self.invoke(args, response, {"WOVENMATTER_CONTEXT_ID": "captured-input"})
+        self.assertEqual(request["contextID"], "captured-input")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(request["arguments"], args)
         self.assertEqual(request["requestID"], identity)
@@ -107,13 +108,6 @@ class BundledCLITests(unittest.TestCase):
                 {"WOVENMATTER_NOTE_ID": "attached-note"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(request["arguments"], args)
-
-    def test_context_binding_is_carried_outside_command_arguments(self):
-        result, request = self.invoke(["context"], {"success": True, "silent": False, "result": "note-a"},
-            {"WOVENMATTER_CONTEXT_ID": "captured-input"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(request["arguments"], ["context"])
-        self.assertEqual(request["contextID"], "captured-input")
 
     def test_silent_capacity_response_and_explicit_errors(self):
         result, _ = self.invoke(["sessions", "send", "destination", "--text", "Fixture"],

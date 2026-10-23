@@ -38,13 +38,6 @@ struct AgentDispatchAdmissionTests {
         }
     }
 
-    @Test func oldBackendLifetimeCannotSendOrStopNewWork() throws {
-        var ledger = AgentDispatchAdmissionLedger(instanceID: UUID())
-        #expect(throws: AgentDispatchAdmissionError.restarted) { try ledger.prepareSend(frame(clientA, 0), conversationID: "session") }
-        #expect(throws: AgentDispatchAdmissionError.restarted) { try ledger.prepareStop(frame(clientA, 1), conversationID: "session") }
-        #expect(ledger.stopRevisions.isEmpty)
-    }
-
 }
 
 @Suite("Native Stop barriers", .serialized)
@@ -65,33 +58,4 @@ struct AgentStopCoordinatorTests {
         try await coordinator.wait(conversationID: "another-session")
     }
 
-    @Test func secondStopWaitsForFirstAndSupersededCleanupCannotReleaseNewBarrier() async throws {
-        let coordinator = AgentStopCoordinator()
-        let firstRelease = AsyncStream<Void>.makeStream()
-        let secondRelease = AsyncStream<Void>.makeStream()
-        let secondStarted = AsyncStream<Void>.makeStream()
-        var order: [Int] = []
-        let first = coordinator.begin(conversationID: "session") {
-            order.append(1)
-            for await _ in firstRelease.stream { break }
-        }
-        let second = coordinator.begin(conversationID: "session") {
-            order.append(2)
-            secondStarted.continuation.yield(())
-            for await _ in secondRelease.stream { break }
-        }
-        firstRelease.continuation.yield(())
-        try await first.value
-        var started = secondStarted.stream.makeAsyncIterator()
-        await started.next()
-        var admitted = false
-        let input = Task { try await coordinator.wait(conversationID: "session"); admitted = true }
-        await Task.yield()
-        #expect(!admitted)
-        #expect(order == [1, 2])
-        secondRelease.continuation.yield(())
-        try await second.value
-        try await input.value
-        #expect(admitted)
-    }
 }

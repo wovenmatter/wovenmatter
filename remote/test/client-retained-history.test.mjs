@@ -81,13 +81,6 @@ test('active task and direct execution spools are never re-imported as legacy RP
   await bridge.pump();assert.equal(imports,0);assert.equal(bridge.status().pendingAssociationCount,0);await bridge.close()
 })
 
-test('changed RPC input cannot reuse a retained intent identity',async t=>{
-  const f=fixture(t),bridge=capture(f),message={method:'session/prompt',operationID:randomUUID(),params:{sessionId:'native',prompt:[{type:'text',text:'one'}]}}
-  bridge.prepareRPC(message);bridge.prepareRPC(message)
-  assert.throws(()=>bridge.prepareRPC({...message,params:{...message.params,prompt:[{type:'text',text:'two'}]}}),/different input/)
-  assert.equal(readdirSync(f.directory).filter(name=>name.startsWith('intent-')).length,1);await bridge.close()
-})
-
 test('verified historical association is durable before import and can finish offline after ACK loss',async t=>{
   const f=fixture(t),runID=randomUUID(),operationID=randomUUID(),conversationID=randomUUID()
   writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${operationID}.jsonl`),JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'verified-native',records:[{runID}]}})+'\n')
@@ -116,6 +109,9 @@ test('legacy RPC admission saves identity without credentials and owner polling 
   const bridge=capture(f,{defaultAgent:service,intervalMilliseconds:5})
   const message=bridge.prepareRPC({method:'session/prompt',operationID:inputID,attachmentToken:'test-private-attachment',params:{sessionId:'native-rpc',prompt:[{type:'text',text:'Hello'}],
     _meta:{wovenConversationID:conversationID,wovenRunID:runID,wovenInputID:inputID,wovenTools:{executablePath:'/test/private/tool',captureID:'private-capability'}}}})
+  bridge.prepareRPC(message)
+  assert.throws(()=>bridge.prepareRPC({...message,params:{...message.params,prompt:[{type:'text',text:'Changed'}]}}),/different input/)
+  assert.equal(readdirSync(f.directory).filter(name=>name.startsWith('intent-')).length,1)
   const intent=readFileSync(join(f.directory,'intent-'+inputID+'.json'),'utf8')
   assert.equal(intent.includes('test-private-attachment'),false);assert.equal(intent.includes('private-capability'),false);assert.equal(intent.includes('/test/private/tool'),false)
   bridge.acceptedRPC(message,await service.invoke(message));bridge.start()

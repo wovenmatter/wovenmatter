@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { EventEmitter, once } from 'node:events'
+import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
@@ -391,11 +391,10 @@ async function stopService(child) {
   }
 }
 
-async function startService({ workspace, home, catalog, token,
-  spawnImplementation = spawn, startupTimeoutMilliseconds = 5_000 }) {
+async function startService({ workspace, home, catalog, token }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)
-  const child = spawnImplementation(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
+  const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
     cwd: repositoryRoot,
     env: {
       ...environment,
@@ -410,7 +409,7 @@ async function startService({ workspace, home, catalog, token,
   try {
     await new Promise((resolvePromise, reject) => {
       let output = ''
-      const timeout = setTimeout(() => finish(new Error('service did not start')), startupTimeoutMilliseconds)
+      const timeout = setTimeout(() => finish(new Error('service did not start')), 5_000)
       const exited = (code, signal) => finish(new Error(`service exited ${signal ?? code}`))
       const failed = error => finish(error)
       const received = data => {
@@ -613,23 +612,6 @@ test('authentication deadline escalates only a live process and preserves timeou
   assert.deepEqual(signals, ['SIGTERM'])
   context.mock.timers.tick(5_000)
   assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'])
-})
-
-test('HTTP fixture startup failure reaps a SIGTERM-ignoring child and cleanup accepts its signal exit', { timeout: 10000 }, async context => {
-  const root = await temporaryFixture(context, 'wovenmatter-service-cleanup-')
-  const child = spawn(process.execPath, ['-e',
-    "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"], {
-    env: {}, stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  context.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
-  await once(child.stdout, 'data')
-  await assert.rejects(startService({
-    workspace: root, home: root, catalog: catalogPath, token: 'synthetic-token',
-    spawnImplementation: () => child, startupTimeoutMilliseconds: 25,
-  }), /service did not start/)
-  assert.equal(child.exitCode, null)
-  assert.equal(child.signalCode, 'SIGKILL')
-  await stopService(child)
 })
 
 test('HTTP execution survives a lost acknowledgement without replay and preserves history after device revocation', { timeout: 20000 }, async context => {

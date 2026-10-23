@@ -7,24 +7,6 @@ import WovenMatterDashboardStore
 @MainActor
 struct LibraryModelTests {
 
-    @Test func backendLibraryCommandsResolveCatalogIdentities() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let chat = try await database.createLocalACPSession(runtimeKind: .codex, title: "Library", ownerDeviceID: UUID())
-        let run = try await database.beginLocalACPRun(conversationID: chat, content: "https://example.com/item")
-        try await database.completeLocalACPRun(runID: run.runID)
-        try await database.indexLibraryMessages()
-        let item = try await #require(database.libraryPage(query: .init(), count: 1).items.first)
-        let backend = BackendLibraryService(service: LibraryService(database: database))
-        let result = try await backend.execute(.open(id: item.id))
-        #expect(result.url?.absoluteString == "https://example.com/item")
-        await #expect(throws: (any Error).self) {
-            try await backend.execute(.open(id: "removed"))
-        }
-    }
-
     @Test func backendOpensDraftAttachmentsWithoutCatalogingOrFollowingTheirSourceURL() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

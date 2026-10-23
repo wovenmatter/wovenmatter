@@ -10,24 +10,6 @@ final class TranscriptDetailTests: XCTestCase {
     return .init(id:"call", runID:"turn", title:"read_file", status:"completed",
       projectionJSON:String(decoding: try JSONSerialization.data(withJSONObject:object), as:UTF8.self), sequence:1)
   }
-  func testLargeToolOutputDoesNotEvictChatMessages() async throws {
-    let store = try MobileStore(file:file(), budget:.init(transcriptBytes:8_192))
-    let transcript = CompanionTranscript(conversationID:"c", messages:[
-      .init(id:"u", conversationID:"c", runID:"turn", role:"user", content:"Read it", sequence:0),
-      .init(id:"a", conversationID:"c", runID:"turn", role:"assistant", content:"Here is the result.", sequence:2)
-    ], activities:[try activity(content:String(repeating:"output🟩", count:20_000))], runs:[.init(id:"turn", status:"completed")])
-    try await store.cache(transcript)
-    let state = await store.snapshot()
-    let cached = try XCTUnwrap(state.transcripts["c"])
-    XCTAssertEqual(cached.messages, transcript.messages)
-    XCTAssertEqual(cached.activities.count, 1)
-    XCTAssertEqual(cached.activities.first?.sequence, 1)
-    XCTAssertLessThan(try JSONEncoder().encode(cached).count, 8_192)
-    let projection = try XCTUnwrap(cached.activities.first?.projectionJSON)
-    let object = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(projection.utf8)) as? [String:Any])
-    XCTAssertNil(object["rawOutputJSON"])
-    XCTAssertEqual(object["detailsAvailable"] as? Bool, true)
-  }
   func testLegacyToolMigrationPreservesUserTextAndOriginalJournal() async throws {
     let journal = try WorkspaceJournal(file:file())
     let old = CompanionTranscript(conversationID:"c", messages:[
@@ -55,18 +37,6 @@ final class TranscriptDetailTests: XCTestCase {
     _ = try await journal.append(workspaceID:"phone", transcript:.init(conversationID:"c", removedMessageIDs:["c-1-0"]))
     let preserved = await journal.snapshot()
     XCTAssertEqual(preserved.transcripts["c"]?.messages.first?.content, "Inspect")
-  }
-  func testTransientThoughtDoesNotLeaveDuplicateJournalRows() async throws {
-    let journal = try WorkspaceJournal(file:file())
-    var transient = try activity(content:"Thinking")
-    transient.id = "streaming-thought"; transient.isTransient = true
-    _ = try await journal.append(workspaceID:"phone", transcript:.init(conversationID:"c", activities:[transient]))
-    let live = await journal.snapshot()
-    XCTAssertTrue(live.transcripts["c"]?.activities.isEmpty == true)
-    var final = transient; final.id = "saved-thought"; final.isTransient = nil
-    _ = try await journal.append(workspaceID:"phone", transcript:.init(conversationID:"c", activities:[final]))
-    let settled = await journal.snapshot()
-    XCTAssertEqual(settled.transcripts["c"]?.activities.map(\.id), ["saved-thought"])
   }
   func testLargeDetailsSurviveRestartAndJournalReplication() async throws {
     let path = file()

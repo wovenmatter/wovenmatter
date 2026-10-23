@@ -53,7 +53,11 @@ test('repeated native compaction keeps exact windows, new prefix, usage and cano
   const { engine, calls } = await fixture(t), record = await engine.create();
   record.accountID = 'a';
   await seed(record);
-  await engine.credentials.runWithAccount('openai', (await engine.credentials.candidates('openai'))[0], () => compact(record));
+  let generations = 0;
+  record.streamFunction = model => { generations++; return stream(response(model)); };
+  const result = await engine.handle('session/prompt', { sessionId: record.session.sessionId,
+    prompt: [{ type: 'text', text: '/compact preserve exact tool IDs' }], _meta: { wovenRunID: 'compact-run' } });
+  assert.equal(generations, 0); assert.equal(result.stopReason, 'end_turn'); assert.equal(result.usage.inputTokens, 100);
   assert.equal(calls.length, 1);
   const head = (await record.conversation.context(ctx)).head;
   assert.equal(head.kind, 'woven.native-compaction');
@@ -71,7 +75,8 @@ test('repeated native compaction keeps exact windows, new prefix, usage and cano
   await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Continue' }] });
   assert.deepEqual(sent.input[0], window.output[0]);
   assert.equal(calls.length, 2);
-  let after = 0, text = ''; do { const page = await record.history(after); text += page.recordBatch.records.map(r => r.payload).join(''); after = page.nextAfter; if (!page.hasMore) break; } while (true);
+  let after = 0, text = '', compactCaptured = false; do { const page = await record.history(after); text += page.recordBatch.records.map(r => r.payload).join(''); compactCaptured ||= page.recordBatch.records.some(item => item.runID === 'compact-run' && item.kind === 'woven.native-compaction'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
+  assert.ok(compactCaptured);
   assert.ok(text.includes('original-0')); assert.ok(text.includes('opaque-window-1')); assert.ok(text.includes('opaque-window-2')); assert.ok(!text.includes('fixture-a'));
 });
 
@@ -205,18 +210,6 @@ test('foreign or unknown canonical signatures and item IDs are stripped while re
   assert.equal(result[0].content[0].thinking, 'Visible summary'); assert.equal(result[0].content[2].id, 'call_a'); assert.equal(result[1].toolCallId, 'call_a');
   assert.equal(message.content[2].id, 'call_a|fc_a');
   assert.deepEqual(compatibleCanonicalMessages([message], origin), [message]);
-});
-
-test('manual /compact uses one native task, accounts usage and continues without ordinary generation', async t => {
-  const { engine, calls } = await fixture(t), record = await engine.create(); await seed(record);
-  let generations = 0; record.streamFunction = model => { generations++; return stream(response(model)); };
-  const result = await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact preserve exact tool IDs' }], _meta: { wovenRunID: 'compact-run' } });
-  assert.equal(generations, 0); assert.equal(calls.length, 1); assert.equal(result.stopReason, 'end_turn'); assert.equal(result.usage.inputTokens, 100);
-  let captured; record.streamFunction = (model, input, options) => { captured = options.onPayload({ model: model.id, input: [{ role: 'user', content: 'continue' }] }, model); return stream(response(model)); };
-  await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Continue after manual compact' }] });
-  assert.equal(captured.input[0].encrypted_content, 'opaque-window-1');
-  let after = 0, found = false; do { const page = await record.history(after); found ||= page.recordBatch.records.some(item => item.runID === 'compact-run' && item.kind === 'woven.native-compaction'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
-  assert.ok(found);
 });
 
 test('a smaller target window recompresses original canonical turns incrementally with exact prior native windows', async t => {

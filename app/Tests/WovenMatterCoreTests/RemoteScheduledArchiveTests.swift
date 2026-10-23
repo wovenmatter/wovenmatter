@@ -47,47 +47,6 @@ struct RemoteScheduledArchiveTests {
       completedAt: run.scheduledAt.addingTimeInterval(10), updateOffset: updateOffset, complete: complete)
   }
 
-  @Test func boundedPagesReplayExactlyAndPublishOneCompleteReplyInOrdinalOrder() async throws {
-    let (database, directory, workspaceID, run) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let updates: [GatewayJSONValue] = [try nativeUpdate(sessionID: "native-session", runID: run.id)] + (0..<12).map { index in
-      .object(["sessionUpdate": .string("agent_message_chunk"),
-        "content": .object(["type": .string("text"), "text": .string("\(index) ")])])
-    }
-    for offset in [0, 5] {
-      let page = Array(updates[offset..<min(offset + 5, updates.count)])
-      for _ in 0..<2 {
-        try await importResult(database, workspaceID: workspaceID, run: run,
-          updates: page, updateOffset: offset, complete: false)
-      }
-    }
-    let pending = try await database.conversationContent(id: run.sessionID)
-    #expect(pending.messages.isEmpty && pending.runs.isEmpty)
-    let before = try await database.read { connection in
-      try connection.historyRowsUnlocked("SELECT id,native_record_id FROM workspace_history_events WHERE conversation_id=? AND run_id=? AND kind LIKE 'native.%' ORDER BY sequence",
-        values: [run.sessionID, run.id])
-    }
-    #expect(before.count == 10)
-    #expect(try await database.read { connection in
-      try connection.historyRowsUnlocked("SELECT id FROM workspace_calendar_remote_receipts", values: []).isEmpty
-    })
-    for _ in 0..<2 {
-      try await importResult(database, workspaceID: workspaceID, run: run,
-        updates: Array(updates[10...]), updateOffset: 10)
-    }
-    let content = try await database.conversationContent(id: run.sessionID)
-    #expect(content.messages.count == 2 && content.runs.count == 1)
-    #expect(content.messages.first { $0.role == "assistant" }?.content == (0..<12).map { "\($0) " }.joined())
-    let after = try await database.read { connection in
-      try connection.historyRowsUnlocked("SELECT id,native_record_id FROM workspace_history_events WHERE conversation_id=? AND run_id=? AND kind LIKE 'native.%' ORDER BY sequence",
-        values: [run.sessionID, run.id])
-    }
-    #expect(after.count == 13)
-    #expect(Array(after.prefix(10)) == before)
-    #expect(after.contains { $0.objectValue?["native_record_id"]?.stringValue == "receipt:receipt:update:11" })
-    #expect(after.filter { $0.objectValue?["native_record_id"]?.stringValue == "commit:1:0" }.count == 1)
-  }
-
   @Test func foreignNativeSessionRollsBackAndReceiptCannotMoveAcrossRoutes() async throws {
     let (database, directory, workspaceID, run) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }

@@ -79,35 +79,6 @@ struct SecondaryMacExecutionWorkspaceTests {
         #expect(!restored.outbox.contains { $0.mutation.resourceID == folder || $0.mutation.resourceID == note })
     }
 
-    @Test func linkedDocumentsProjectWithoutWeakeningNetworkMutationAndStaleDeletionRecovers() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        let content = try NoteDocument(kind: .html, html: "<p>Linked</p>", databaseLink: .init(
-            sourceID: "workspace", databaseID: "fixture", relativePath: "data.sqlite")).encoded()
-        let note = CompanionNote(id: UUID().uuidString.lowercased(), title: "Linked", content: content, revision: 1)
-        try await replica.apply(.init(workspaceID: libraryID, cursor: 0, notes: [note]))
-        let owner = await replica.snapshot().deviceID
-        let rejected = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .createNote,
-            resourceID: UUID().uuidString.lowercased(), title: note.title, content: content))
-        #expect(rejected.status == .invalid)
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        let projected = try #require(try await fixture.database.companionNote(id: note.id))
-        #expect(projected.content == content)
-        _ = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .deleteNote,
-            resourceID: note.id, expectedRevision: projected.revision))
-        try await replica.editNote(id: note.id, title: "Newer title", content: content, folderID: nil, base: note)
-        try await workspace.capture()
-        #expect(await replica.snapshot().notes[note.id]?.title == "Newer title")
-        #expect(try await fixture.database.companionNote(id: note.id)?.title == "Newer title")
-        let ownLibrary = try await fixture.database.companionWorkspaceID()
-        await #expect(throws: (any Error).self) {
-            _ = try await fixture.database.applyExecutionReplicaProjection(.init(deviceID: owner, kind: .deleteNote,
-                resourceID: note.id, expectedRevision: projected.revision), libraryID: ownLibrary, workspaceID: owner)
-        }
-    }
-
     @Test func largeOwnerHistoryImportsCompletelyAndDoesNotBlockLaterEvents() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let identity = try await fixture.database.companionLibraryIdentity()

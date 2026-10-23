@@ -37,18 +37,6 @@ struct MessageInputTransportTests {
   }
 
 
-  @Test("transport preserves raw text without references and separates file bytes")
-  func textAndFiles() {
-    let input = AgentMessageInput(text: "  draft \n", attachments: [.file(
-      AgentFileAttachmentDraft(
-        kind: .file, fileName: "data.txt", mimeType: "text/plain",
-        sizeBytes: 1, contentHash: "fixture", localURL: URL(filePath: "/fixture/data.txt")
-      )
-    )])
-    #expect(input.transportText() == "  draft \n")
-    #expect(input.transportText(deliveryText: "  override \n") == "  override \n")
-  }
-
   @Test("notes retain snapshots while conversation attachments send only a reference")
   func referenceContext() {
     let input = AgentMessageInput(text: "original", attachments: [

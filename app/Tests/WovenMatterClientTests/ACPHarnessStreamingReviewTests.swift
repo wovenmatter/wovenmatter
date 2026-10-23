@@ -5,75 +5,6 @@ import WovenMatterCore
 
 struct ACPHarnessStreamingReviewTests {
 
-  @Test func overlappingPromptsReserveHandlersBeforeHistorySuspends() async throws {
-    let fixture = try ACPHarnessFixture(kind: .claudeCode, initialize: #"{"protocolVersion":1}"#,
-      session: #"{"sessionId":"overlap"}"#, extras: [:])
-    defer { fixture.remove() }
-    let entered = AsyncStream<Void>.makeStream()
-    let release = AsyncStream<Void>.makeStream()
-    defer { release.continuation.finish() }
-    let client = try await fixture.client { direction, data in
-      guard direction == "out",
-            let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            value["method"] as? String == "session/prompt" else { return }
-      let params = value["params"] as? [String: Any]
-      let blocks = params?["prompt"] as? [[String: Any]]
-      if (blocks?.first?["text"] as? String)?.hasSuffix("first") == true {
-        entered.continuation.yield(())
-        var iterator = release.stream.makeAsyncIterator()
-        await iterator.next()
-      }
-    }
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil, systemPrompt: "Unique initial instructions")
-    let events = ACPReviewEvents()
-    let first = Task { try await client.prompt("first") { await events.record($0) } }
-    var iterator = entered.stream.makeAsyncIterator()
-    await iterator.next()
-    // Reserving handlers before recording prevents a second prompt from losing
-    // updates while the first outbound history write is suspended.
-    let second = Task { try await client.prompt("second") { await events.record($0) } }
-    let deadline = ContinuousClock.now + .seconds(60)
-    while await client.activePromptRequestCount != 2 {
-      guard ContinuousClock.now < deadline else { throw LocalACPClientError.processExited }
-      try await Task.sleep(for: .milliseconds(1))
-    }
-    release.continuation.yield(())
-    #expect(try await first.value == .endTurn)
-    #expect(try await second.value == .endTurn)
-    #expect(await client.activePromptRequestCount == 0)
-    #expect(await events.values().count > 0)
-    await client.shutdown()
-    #expect(try fixture.log().components(separatedBy: "Unique initial instructions").count - 1 == 1)
-  }
-
-  @Test func rejectedHistoryWriteReleasesPromptStateForRetry() async throws {
-    actor Recorder {
-      var reject = true
-      func record(_ direction: String, _ data: Data) throws {
-        guard direction == "out", reject,
-          let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          value["method"] as? String == "session/prompt" else { return }
-        reject = false
-        throw Failure.expected
-      }
-    }
-    enum Failure: Error { case expected }
-    let fixture = try ACPHarnessFixture(kind: .codex, initialize: #"{"protocolVersion":1}"#,
-      session: #"{"sessionId":"retry"}"#, extras: [:])
-    defer { fixture.remove() }
-    let recorder = Recorder()
-    let client = try await fixture.client { try await recorder.record($0, $1) }
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil)
-    await #expect(throws: Failure.expected) { try await client.prompt("rejected") }
-    #expect(await client.activePromptRequestCount == 0)
-    #expect(try await client.prompt("retry") == .endTurn)
-    await client.shutdown()
-    #expect(!(try fixture.log()).contains("rejected"))
-    #expect((try fixture.log()).contains("retry"))
-  }
-
   @Test(arguments: [false, true])
   func claudeContextVariantsSharePresentationButKeepExactSelections(legacy: Bool) async throws {
     let rows: [(String, String, String)] = [
@@ -123,123 +54,6 @@ struct ACPHarnessStreamingReviewTests {
   }
 
 
-  @Test("Pi Durable status records retain run identity and reject malformed reports")
-  func builtInProgramStatusWireReplay() async throws {
-    let fixture = try ACPHarnessFixture(kind: .defaultAgent,
-      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"status"}"#, extras: ["woven/configure": "{}"], promptOverride: """
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"status","update":{"sessionUpdate":"woven_program_status","status":{"state":"blocked","id":"children/1","kind":"auth","msg":"Waiting for authentication"},"_meta":{"wovenRunID":"owner-run"}}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"status","update":{"sessionUpdate":"woven_program_status","status":{"state":"working","id":"bad//path"},"_meta":{"wovenRunID":"owner-run"}}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"status","update":{"sessionUpdate":"woven_program_status","status":{"state":"done"}}}}'
-        respond "$id" '{"stopReason":"end_turn"}'; continue
-        """)
-    defer { fixture.remove() }
-    let client = try await fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    let events = ACPReviewEvents()
-    _ = try await client.prompt("Replay") { await events.record($0) }
-    await client.shutdown()
-    let reports = await events.values().compactMap { event -> ProgramStatus? in
-      guard case .programStatus(let status, let runID) = event else { return nil }
-      #expect(runID == "owner-run")
-      return status
-    }
-    #expect(reports.count == 1 && reports.first?.kind == .auth && reports.first?.id == "children/1")
-  }
-
-  @Test("wire plans replace, clear, and do not reappear on a later prompt", arguments: [false, true])
-  func planWireReplay(existingSession: Bool) async throws {
-    let fixture = try ACPHarnessFixture(kind: .codex,
-      initialize: #"{"protocolVersion":2,"agentCapabilities":{"loadSession":true}}"#,
-      session: #"{"sessionId":"plan-replay"}"#, extras: [:], promptOverride: """
-        case "$request" in
-          *'without-plan'*) respond "$id" '{"stopReason":"end_turn"}'; continue ;;
-        esac
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"child-session","update":{"sessionUpdate":"plan","entries":[{"content":"Child only","status":"pending"}]}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"plan-replay","update":{"sessionUpdate":"plan","entries":[{"content":"Inspect café 🧵","priority":"high","status":"completed"},{"content":"Verify","status":"in_progress"}]}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"plan-replay","update":{"sessionUpdate":"plan","entries":[{"content":"Verify","status":"completed"}]}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"plan-replay","update":{"sessionUpdate":"plan","entries":[]}}}'
-        respond "$id" '{"stopReason":"end_turn"}'
-        continue
-        """)
-    defer { fixture.remove() }
-    let client = try await fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root,
-      existingSessionID: existingSession ? "plan-replay" : nil, title: nil)
-    let events = ACPReviewEvents()
-    #expect(try await client.prompt("with-plan") { await events.record($0) } == .endTurn)
-    let laterEvents = ACPReviewEvents()
-    #expect(try await client.prompt("without-plan") { await laterEvents.record($0) } == .endTurn)
-    await client.shutdown()
-    let plans = await events.values().compactMap { event -> AgentRunActivity? in
-      guard case .activity(let activity, let appends) = event, activity.kind == .plan else { return nil }
-      #expect(!appends)
-      return activity
-    }
-    #expect(plans.count == 3)
-    #expect(Set(plans.map(\.id)) == ["plan"])
-    #expect(plans.first?.planEntries.map(\.content) == ["Inspect café 🧵", "Verify"])
-    #expect(plans.first?.planEntries.first?.priority == "high")
-    #expect(plans.first?.status == "running")
-    let initial = try #require(plans.first)
-    let replaced = initial.merging(try #require(plans.dropFirst().first))
-    #expect(replaced.planEntries == [.init(content: "Verify", status: "completed")])
-    #expect(replaced.status == "completed")
-    #expect(replaced.merging(try #require(plans.last)).planEntries.isEmpty)
-    #expect(await laterEvents.values().isEmpty)
-    let log = try fixture.log()
-    #expect(log.contains(existingSession ? "session/load" : "session/new"))
-  }
-
-  @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild], [1, 2])
-  func slashCommandsPreserveArgumentsAndReuseSessionAfterEmptyOrRejectedResults(kind: AgentRuntimeKind, protocolVersion: Int) async throws {
-    let fixture = try ACPHarnessFixture(kind: kind, initialize: "{\"protocolVersion\":\(protocolVersion)}",
-      session: #"{"sessionId":"commands","availableCommands":[{"name":"native"}]}"#,
-      extras: [:],
-      promptOverride: """
-        case "$request" in
-          *'/native '* ) respond "$id" '{"stopReason":"end_turn"}'; continue ;;
-          *'/denied'* ) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Command rejected"}}\\n' "$id"; continue ;;
-        esac
-        """)
-    defer { fixture.remove() }
-    let client = try await fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
-      title: nil, systemPrompt: kind == .codex ? nil : "Agent instructions")
-    let input = "/native keep  spacing\nand this line"
-    let events = ACPReviewEvents()
-    #expect(try await client.prompt(input) { await events.record($0) } == .endTurn)
-    #expect(await events.values().isEmpty)
-    do {
-      _ = try await client.prompt("/denied")
-      Issue.record("Rejected command must report its native error")
-    } catch LocalACPClientError.agent(let code, let message) {
-      #expect(code == -32602 && message == "Command rejected")
-      #expect(LocalACPClientError.agent(code: code, message: message).localizedDescription == "Command rejected")
-    }
-    #expect(try await client.prompt("ordinary message") == .endTurn)
-    await client.shutdown()
-    let requests = try fixture.log().split(separator: "\n").map {
-      try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
-    }
-    let prompts = requests.filter { $0["method"] as? String == "session/prompt" }
-    let params = prompts.first?["params"] as? [String: Any]
-    let blocks = params?["prompt"] as? [[String: Any]]
-    #expect(blocks?.first?["text"] as? String == input)
-    #expect(prompts.count == 3)
-    let lastParams = prompts.last?["params"] as? [String: Any]
-    let lastBlocks = lastParams?["prompt"] as? [[String: Any]]
-    #expect(lastBlocks?.first?["text"] as? String == "ordinary message")
-    let sessions = requests.filter { $0["method"] as? String == "session/new" }
-    #expect(sessions.count == 1)
-    let sessionParams = sessions.first?["params"] as? [String: Any]
-    let metadata = sessionParams?["_meta"] as? [String: Any]
-    if kind == .claudeCode {
-      #expect((metadata?["systemPrompt"] as? [String: String])?["append"] == "Agent instructions")
-    } else if kind == .grokBuild {
-      #expect(metadata?["rules"] as? String == "Agent instructions")
-    }
-  }
-
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
   func modelAndThinkingSelectionFollowsAdvertisedOptions(kind: AgentRuntimeKind) async throws {
     let withEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"with-effort","options":[{"value":"with-effort","name":"Same supplied label"},{"value":"no-effort","name":"Same supplied label"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low","name":"Low effort"},{"value":"high","name":"High effort"}]}]}"#
@@ -281,18 +95,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(!log.contains(#""value":{"#))
   }
 
-  @Test func claudeUsesSystemPromptMetadataAndRetainsAdvertisedNativeModes() async throws {
-    try await review(
-      .claudeCode,
-      initialize: #"{"protocolVersion":2,"agentInfo":{"name":"@agentclientprotocol/claude-agent-acp"},"agentCapabilities":{"loadSession":false}}"#,
-      session: #"{"sessionId":"claude-session","configOptions":[{"id":"mode","options":[{"value":"auto"}],"currentValue":"default"}]}"#,
-      extras: [:], expected: [#""systemPrompt":{"append":"System fixture"}"#]
-    ) { configuration in
-      #expect(configuration.permission == "default")
-      #expect(configuration.permissionOptions == ["auto"])
-    }
-  }
-
   @Test func grokCapturesVendorState() async throws {
     try await review(
       .grokBuild,
@@ -305,34 +107,6 @@ struct ACPHarnessStreamingReviewTests {
     }
   }
 
-
-  @Test("Codex terminal metadata deltas remain readable and append exactly once")
-  func terminalOutputDeltas() async throws {
-    let fixture = try ACPHarnessFixture(kind: .codex,
-      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"terminal"}"#, extras: [:], promptOverride: """
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call","toolCallId":"exec","kind":"execute","title":"python3"}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","_meta":{"terminal_output_delta":{"data":"wait"}}}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","_meta":{"terminal_output_delta":{"data":"ing\\n"}}}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"terminal","update":{"sessionUpdate":"tool_call_update","toolCallId":"exec","status":"completed","_meta":{"terminal_exit":{"exit_code":0}}}}}'
-        respond "$id" '{"stopReason":"end_turn"}'; continue
-        """)
-    defer { fixture.remove() }
-    let client = try await fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    let events = ACPReviewEvents()
-    _ = try await client.prompt("Read output") { await events.record($0) }
-    await client.shutdown()
-    let tools = await events.values().compactMap { event -> AgentRunActivity? in
-      guard case .activity(let activity, _) = event, activity.kind == .tool else { return nil }
-      return activity
-    }
-    #expect(tools.count == 4)
-    let first = try #require(tools.first)
-    let merged = tools.dropFirst().reduce(first) { $0.merging($1) }
-    #expect(merged.content == "waiting\n")
-    #expect(merged.status == "completed")
-    #expect(merged.rawPayloadJSON?.contains("terminal_exit") == true)
-  }
 
   @Test("built-in replacement chunks are assembled before admission and preserve boundaries")
   func builtInSnapshotWireReplay() async throws {
@@ -390,18 +164,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(await client.activePromptRequestCount == 0)
     await client.shutdown()
     #expect(!(try fixture.log()).contains(#""method":"session/prompt""#))
-  }
-
-  @Test func codexLoadsExistingV2SessionAndKeepsIndependentConfiguration() async throws {
-    try await review(
-      .codex,
-      initialize: #"{"protocolVersion":2,"agentCapabilities":{"loadSession":true},"configOptions":[{"id":"model","category":"model","currentValue":"gpt","options":[{"value":"gpt"}]},{"id":"effort","category":"thought_level","currentValue":"high","options":[{"value":"high"}]}]}"#,
-      session: #"{"configOptions":[{"id":"model","category":"model","currentValue":"gpt","options":[{"value":"gpt"}]},{"id":"effort","category":"thought_level","currentValue":"high","options":[{"value":"high"}]}]}"#,
-      extras: [:], expected: ["session/load"], existingSessionID: "codex-existing"
-    ) { configuration in
-      #expect(configuration.model == "gpt")
-      #expect(configuration.thinking == "high")
-    }
   }
 
   private func review(

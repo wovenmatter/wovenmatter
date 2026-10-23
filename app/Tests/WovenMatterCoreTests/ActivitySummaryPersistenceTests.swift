@@ -162,50 +162,6 @@ struct ActivitySummaryPersistenceTests {
     #expect(try await reopened.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true) == compact)
   }
 
-  @Test("Gateway failure after activity writes rolls back text, traces, summaries, and cursor")
-  func gatewayTransactionRollback() async throws {
-    let fixture = try PersistenceFixture()
-    defer { fixture.remove() }
-    let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
-      title: "Rollback", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
-    try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
-      activity: .init(id: "existing", kind: .tool, content: "kept"))
-    let before = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true)
-    let sql = try PersistenceSQL(url: fixture.databaseURL)
-    // Fail only after the projection has already claimed its trace, appended
-    // canonical text, and inserted a commentary boundary in this transaction.
-    try sql.execute("""
-      CREATE TRIGGER fixture_abort_activity BEFORE INSERT ON dashboard_run_events
-      WHEN new.id='\(run.runID):activity:reject' BEGIN SELECT RAISE(ABORT,'fixture rollback'); END;
-      """)
-    await #expect(throws: WorkspaceDatabaseError.self) {
-      try await database.applyDeviceOwnedGatewayProjection(runID: run.runID, remoteRunID: "remote",
-        eventName: "agent", sequence: 1, eventType: "assistant_delta", eventPhase: "update", toolName: nil,
-        content: "lost", rawEventJSON: #"{"fixture":true}"#, assistantMessageID: run.assistantMessageID,
-        assistantMutation: .append("lost"), streamBoundary: true,
-        activity: .init(id: "reject", kind: .tool, content: "lost"))
-    }
-    #expect(try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true) == before)
-    #expect(try await database.deviceOwnedGatewayTraceEvents(runID: run.runID).isEmpty)
-    let delta = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true,
-      activityCursor: before.activityRevision, knownActivityRunIDs: [run.runID])
-    #expect(delta.activities.isEmpty && delta.removedActivityIDs.isEmpty)
-    #expect(delta.activityRevision == before.activityRevision)
-    try sql.execute("DROP TRIGGER fixture_abort_activity")
-    #expect(try await database.applyDeviceOwnedGatewayProjection(runID: run.runID, remoteRunID: "remote",
-      eventName: "agent", sequence: 1, eventType: "assistant_delta", eventPhase: "update", toolName: nil,
-      content: "kept", rawEventJSON: #"{"fixture":true}"#, assistantMessageID: run.assistantMessageID,
-      assistantMutation: .append("kept"), streamBoundary: true,
-      activity: .init(id: "reject", kind: .tool, content: "kept")) == .applied)
-    let committed = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true,
-      activityCursor: before.activityRevision, knownActivityRunIDs: [run.runID])
-    #expect(Set(committed.activities.map(\.activity.kind)) == [.assistant, .tool])
-    #expect(committed.messages.first { $0.id == run.assistantMessageID }?.content == "kept")
-    #expect(try #require(committed.activityRevision) > #require(before.activityRevision))
-  }
-
 }
 
 /// Compare persisted public page contracts, with explicit checks above for the

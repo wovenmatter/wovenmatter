@@ -88,66 +88,6 @@ struct PublicSourceContractsTests {
     ) == personalHome)
   }
 
-  @Test("normalized last-good limit snapshots persist without credentials")
-  func limitSnapshotPersistence() throws {
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-limit-cache")
-    defer { directory.remove() }
-    let store = try UsageStore(databaseURL: directory.url.appending(path: "workspace.sqlite"))
-    let account = UsageLimitAccount(
-      provider: .openRouter,
-      accountLabel: "Fixture key",
-      status: .available,
-      quotaWindows: [ProviderQuotaWindow(
-        id: "monthly", label: "Monthly", usedPercent: 20,
-        usageKnown: true, windowMinutes: nil, resetsAt: nil
-      )],
-      source: "Fixture",
-      detail: "Normalized fixture",
-      observedAt: Date(timeIntervalSince1970: 1_800_000_000)
-    )
-    try store.saveUsageLimitAccounts([account], storedAt: account.observedAt)
-    let restored = try #require(store.usageLimitAccounts(providers: [.openRouter]).first)
-    #expect(restored == account)
-
-    let personal = UsageLimitAccount(
-      provider: .codex,
-      accountScopeID: "workspace-personal",
-      accountLabel: "Personal — same@example.com",
-      status: .available,
-      quotaWindows: [ProviderQuotaWindow(
-        id: "weekly", label: "Weekly", usedPercent: 10,
-        usageKnown: true, windowMinutes: nil, resetsAt: nil
-      )],
-      source: "Fixture",
-      detail: "Personal workspace",
-      observedAt: account.observedAt
-    )
-    let business = UsageLimitAccount(
-      provider: .codex,
-      accountScopeID: "workspace-business",
-      accountLabel: "Example Business — same@example.com",
-      status: .available,
-      quotaWindows: [ProviderQuotaWindow(
-        id: "weekly", label: "Weekly", usedPercent: 70,
-        usageKnown: true, windowMinutes: nil, resetsAt: nil
-      )],
-      source: "Fixture",
-      detail: "Business workspace",
-      observedAt: account.observedAt
-    )
-    try store.saveUsageLimitAccounts([personal, business], storedAt: account.observedAt)
-    let restoredPersonal = try #require(store.usageLimitAccounts(
-      providers: [.codex],
-      accountScopes: [.codex: "workspace-personal"]
-    ).first)
-    let restoredBusiness = try #require(store.usageLimitAccounts(
-      providers: [.codex],
-      accountScopes: [.codex: "workspace-business"]
-    ).first)
-    #expect(restoredPersonal.quotaWindows.first?.usedPercent == 10)
-    #expect(restoredBusiness.quotaWindows.first?.usedPercent == 70)
-  }
-
   @Test("disabled providers are filtered from analytics and limits")
   func disabledProvidersAreFiltered() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-filtering")

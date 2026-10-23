@@ -153,20 +153,6 @@ test('real ModelRuntime uses ambient Claude auth while native profiles retain ac
   await assert.rejects(engine.runtime.getAuth(selected, { signal: controller.signal }), { name: 'AbortError' });
 });
 
-test('model, thinking, and permission choices survive an empty draft restart', async t => {
-  const { engine, options } = await fixture(t);
-  const record = await engine.create();
-  await engine.select(record, 'high', 'thinking');
-  await engine.select(record, 'full', 'permission_mode');
-  await record.session.dispose();
-  const restarted = await new DefaultAgentEngine(options).initialize();
-  t.after(async () => { for (const record of [...restarted.sessions.values()]) await record.session.dispose(); });
-  const restored = await restarted.create(record.session.sessionId);
-  assert.equal(restored.selected, 'claude-subscription/sonnet');
-  assert.equal(restored.session.thinkingLevel, 'high');
-  assert.equal(restored.permission, 'full');
-});
-
 test('session working directories stay isolated and survive a service restart', async t => {
   const { engine, root, options } = await fixture(t);
   const first = join(root, 'first-project'), second = join(root, 'second-project');

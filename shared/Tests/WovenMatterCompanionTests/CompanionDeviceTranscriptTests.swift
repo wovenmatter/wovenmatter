@@ -41,16 +41,13 @@ final class CompanionDeviceTranscriptTests: XCTestCase {
     XCTAssertLessThan(try XCTUnwrap(commentary.sequence), try XCTUnwrap(files.sequence))
     XCTAssertLessThan(try XCTUnwrap(files.sequence), try XCTUnwrap(final.sequence))
     XCTAssertEqual(result, CompanionDeviceTranscript.project(snapshot: hey(), conversationID: "hey"))
-  }
-  func testIDsSurviveLiveToSettledAndSerialization() throws {
     let live = CompanionDeviceTranscript.project(snapshot: hey(), conversationID: "hey", activeRunID: "request-1")
-    let settled = CompanionDeviceTranscript.project(snapshot: hey(), conversationID: "hey")
-    XCTAssertEqual(live.messages.map(\.id), settled.messages.map(\.id))
-    XCTAssertEqual(live.activities.map(\.id), settled.activities.map(\.id))
-    XCTAssertEqual(live.runs?.map(\.id), settled.runs?.map(\.id))
+    XCTAssertEqual(live.messages.map(\.id), result.messages.map(\.id))
+    XCTAssertEqual(live.activities.map(\.id), result.activities.map(\.id))
+    XCTAssertEqual(live.runs?.map(\.id), result.runs?.map(\.id))
     XCTAssertEqual(live.runs?.last?.status, "running")
     XCTAssertNil(live.runs?.last?.completedAt)
-    XCTAssertEqual(try JSONDecoder().decode(CompanionTranscript.self, from: JSONEncoder().encode(settled)), settled)
+    XCTAssertEqual(try JSONDecoder().decode(CompanionTranscript.self, from: JSONEncoder().encode(result)), result)
   }
   func testFailedToolPreservesArgumentsResultAndFailure() throws {
     let snapshot: [String: Any] = ["entries": [

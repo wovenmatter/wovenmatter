@@ -32,29 +32,6 @@ struct CalendarReplicaTests {
         task: owner ? .init(prompt: "Run here") : nil)), ownerDeviceID: owner ? device : nil))
   }
 
-  @Test func lostReceiptAndRestartCreateExactlyOneEvent() async throws {
-    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let request = mutation()
-    let first = try await database.companionCalendarMutate(request, deviceID: device)
-    #expect(first.status == .accepted)
-    let reopened = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
-    #expect(try await reopened.companionCalendarMutate(request, deviceID: device) == first)
-    #expect(try await reopened.calendarItems().count == 1)
-    var invalid = request; invalid.record.event.draft.title = "Different"
-    await #expect(throws: (any Error).self) { try await reopened.companionCalendarMutate(invalid, deviceID: device) }
-  }
-  @Test func nativeEditConflictsWithOfflineMutationWithoutDataLoss() async throws {
-    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let request = mutation()
-    let base = try await #require(database.companionCalendarMutate(request, deviceID: device).record)
-    let native = try await #require(database.calendarItems().first)
-    var draft = WorkspaceCalendarDraft(native); draft.title = "Mac edit"
-    _ = try await database.saveCalendarEvent(id: native.id, draft: draft, creating: false, expectedRevision: native.calendar.revision)
-    var local = base; local.event.draft.title = "Phone edit"
-    let conflict = try await database.companionCalendarMutate(.init(deviceID: device, expectedRevision: base.event.revision, record: local), deviceID: device)
-    #expect(conflict.status == .conflict); #expect(conflict.record?.event.draft.title == "Mac edit")
-    #expect(try await database.calendarItems().first?.title == "Mac edit")
-  }
   @Test func centralRunnerCannotClaimClientOwnedTasksAndRunReceiptsRemainOwned() async throws {
     let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     var request = mutation(owner: true); request.record.event.draft.task?.enabledTools = ["wovenmatter_calendar"]

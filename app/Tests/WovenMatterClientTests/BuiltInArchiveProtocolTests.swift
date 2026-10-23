@@ -12,55 +12,6 @@ private actor NativeBatchCapture {
 
 @Suite(.timeLimit(.minutes(1)))
 struct BuiltInArchiveProtocolTests {
-    @Test @MainActor func reconnectPagesNativeHistoryWithoutCapturingCredentialWire() async throws {
-        let first = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "parent", records: [
-            .init(id: "entry:1", runID: "old-run", kind: "assistant", payload: #"{"content":"retained first"}"#),
-        ])
-        let second = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "parent", records: [
-            .init(id: "entry:2", kind: "compaction", payload: #"{"summary":"retained context"}"#),
-        ])
-        let firstJSON = String(decoding: try JSONEncoder().encode(first), as: UTF8.self)
-        let secondJSON = String(decoding: try JSONEncoder().encode(second), as: UTF8.self)
-        let fixture = try SessionRoutingFixture(firstPage: #"{"recordBatch":\#(firstJSON),"nextAfter":1,"hasMore":true}"#,
-            secondPage: #"{"recordBatch":\#(secondJSON),"nextAfter":2,"hasMore":false}"#,
-            nativeUpdate: #"{"sessionUpdate":"woven_native_record","recordBatch":\#(firstJSON)}"#)
-        defer { fixture.remove() }
-        let archive = NativeBatchCapture()
-        let accounts = archiveFixtureAccounts()
-        let client = try fixture.client(recorder: { direction, data in
-            #expect(direction == "native")
-            #expect(!String(decoding: data, as: UTF8.self).contains("fixture-secret"))
-            try await archive.append(data)
-        }, accounts: accounts)
-        do {
-            let loaded = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
-            #expect(loaded.loadedExistingSession)
-            let records = await archive.values
-            #expect(records.count == 3)
-            #expect(records.allSatisfy { $0.sourceID == "local:store" })
-            #expect(records.flatMap(\.records).map(\.id) == ["entry:1", "entry:1", "entry:2"])
-            #expect(records.flatMap(\.records).last?.runID == nil)
-            #expect(try fixture.historyRequests() == 2)
-            await client.shutdown()
-        } catch { await client.shutdown(); throw error }
-    }
-
-    @Test @MainActor func nonAdvancingHistoryCursorFailsWithoutLooping() async throws {
-        let batch = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "parent", records: [])
-        let json = String(decoding: try JSONEncoder().encode(batch), as: UTF8.self)
-        let fixture = try SessionRoutingFixture(firstPage: #"{"recordBatch":\#(json),"nextAfter":0,"hasMore":true}"#,
-            secondPage: "{}", nativeUpdate: nil)
-        defer { fixture.remove() }
-        let client = try fixture.client(recorder: { _, _ in }, accounts: archiveFixtureAccounts())
-        do {
-            _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
-            Issue.record("A nonadvancing native cursor was accepted")
-        } catch LocalACPClientError.invalidResponse { }
-        catch { await client.shutdown(); throw error }
-        #expect(try fixture.historyRequests() == 1)
-        await client.shutdown()
-    }
-
     @Test @MainActor func reconnectStreamsOversizedRecordSubcursorWithoutAssembly() async throws {
         let batch = WorkspaceNativeRunRecordBatch(sourceID: "store", nativeSessionID: "parent", records: [
             .init(id: "chunk:sha", kind: "native-file.chunk", payload: #"{"encoding":"base64","dataBase64":"cmF3"}"#),

@@ -24,10 +24,14 @@ async function fixture(t, run) {
 }
 
 test('Executor updates follow every V2 release but never select another API major', async () => {
-  const metadata = version => ({ version, bin: { executor: 'bin.mjs' } });
+  const metadata = version => version.endsWith('-win32-x64')
+    ? { version, os: ['win32'], cpu: ['x64'] } : { version, bin: { executor: 'bin.mjs' } };
   const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest')
     ? metadata(latest) : { versions: Object.fromEntries(versions.map(version => [version, metadata(version)])) }));
-  assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19'])), '2.0.0-beta.19');
+  assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19', '2.0.0-beta.99-win32-x64'])), '2.0.0-beta.19');
+  assert.equal(await latestExecutorVersion(registry('2.1.0-beta.1', ['2.0.0', '2.1.0-beta.1'])), '2.0.0');
+  assert.equal(await latestExecutorVersion(registry('1.6.10', ['2.0.0-beta-hotfix.1', '2.0.0-beta-hotfix.2'])), '2.0.0-beta-hotfix.2');
+  await assert.rejects(latestExecutorVersion(registry('3.0.0', ['3.0.0'])), /compatible/);
   for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '2.99.3']) {
     assert.equal(supportsExecutorVersion(version), true);
     assert.equal(await latestExecutorVersion(registry(version, [version])), version);
@@ -276,10 +280,12 @@ test('a signal-terminated local runtime is not mistaken for a running child', as
 test('remote deployment waits for its private endpoint to become ready', async t => {
   let attempts = 0;
   const { broker } = await fixture(t, async () => ({}));
+  broker.runtimeVersion = '2.0.0-beta.12';
   broker.deployRemote = async () => {};
   broker.fetch = async () => { attempts++; if (attempts === 1) throw new Error('still starting'); return new Response('{}'); };
   const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' }, true);
   assert.equal(result.ready, true); assert.equal(attempts, 3);
+  assert.equal(result.version, null);
 });
 
 test('concurrent jobs share scoped grant refresh and one client connection', async t => {
@@ -325,11 +331,4 @@ test('connection replacement closes a late transport instead of caching it', asy
   release();
   await assert.rejects(pending, /connection changed/);
   assert.equal(closes, 1); assert.equal(broker.clients.size, 0);
-});
-
-test('existing remote connections never report the previous local runtime version', async t => {
-  const { broker } = await fixture(t, async () => ({}));
-  broker.runtimeVersion = '2.0.0-beta.12';
-  const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' });
-  assert.equal(result.version, null);
 });

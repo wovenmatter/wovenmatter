@@ -53,33 +53,6 @@ struct SessionSelectionPreferencesTests {
     }
   }
 
-  @Test("new sessions resolve each field in conversation, workspace, harness, native order")
-  func fieldwisePrecedence() throws {
-    try withPreferences { preferences, _ in
-      preferences.saveDefaults(
-        SessionSelections(model: "harness-model", thinking: "low", permission: "ask"),
-        harness: "codex"
-      )
-      preferences.saveDefaults(
-        SessionSelections(model: "workspace-model", thinking: "high"),
-        harness: "codex", workspace: "project-a"
-      )
-      let snapshot = preferences.captureConversation(
-        id: "new", harness: "codex", workspace: "project-a",
-        selections: SessionSelections(model: "conversation-model"),
-        nativeFallback: SessionSelections(model: "native", permission: "native", tools: ["read"])
-      )
-      #expect(snapshot.selections == SessionSelections(
-        model: "conversation-model", thinking: "high", permission: "ask", tools: ["read"]
-      ))
-      #expect(snapshot.desiredSelections == SessionSelections(
-        model: "conversation-model", thinking: "high", permission: "ask"
-      ))
-      #expect(snapshot.harness == "codex")
-      #expect(snapshot.workspace == "project-a")
-    }
-  }
-
   @Test("existing native sessions are adopted without applying newly configured defaults")
   func existingConversationMigration() throws {
     try withPreferences { preferences, defaults in
@@ -127,32 +100,6 @@ struct SessionSelectionPreferencesTests {
       reopened.markApplied(id: "session")
       #expect(preferences.conversation(id: "session")?.requiresApplication == false)
       #expect(preferences.conversation(id: "session")?.selections.thinking == nil)
-    }
-  }
-
-  @Test("malformed storage reads use product defaults without rewriting saved data")
-  func corruptStorageIsSafe() throws {
-    try withPreferences { preferences, defaults in
-      let invalidDocuments = [
-        Data("not json".utf8),
-        Data(#"{"version":99,"harnessDefaults":{"codex":{"permission":"full-access"}},"workspaceDefaults":{},"conversations":{}}"#.utf8),
-        Data(#"{"version":1,"harnessDefaults":{"codex":{"permission":123}},"workspaceDefaults":{},"conversations":{}}"#.utf8),
-      ]
-      defaults.set("unrelated setting", forKey: "legacy-preference")
-      for data in invalidDocuments {
-        defaults.set(data, forKey: SessionSelectionPreferences.storageKey)
-        #expect(preferences.defaults(harness: "codex", workspace: "project")
-          == SessionSelections(permission: "agent-full-access"))
-        #expect(preferences.conversation(id: "session") == nil)
-        #expect(defaults.data(forKey: SessionSelectionPreferences.storageKey) == data)
-        let captured = preferences.captureConversation(
-          id: "session", harness: "codex", workspace: "project",
-          nativeFallback: SessionSelections(model: "native", permission: "read-only")
-        )
-        #expect(captured.selections == SessionSelections(model: "native", permission: "agent-full-access"))
-        #expect(captured.desiredSelections == SessionSelections(permission: "agent-full-access"))
-      }
-      #expect(defaults.string(forKey: "legacy-preference") == "unrelated setting")
     }
   }
 

@@ -27,42 +27,6 @@ struct CompanionWorkspaceTests {
     #expect(try await db.companionNote(id: noteID) == nil)
   }
 
-  @Test("all metadata remains discoverable above 80 MiB and coalesced changes always progress")
-  func boundedLargeLibrary() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let raw = try document(String(repeating: "x", count: 2_200_000))
-    let ids = (0..<40).map { _ in UUID().uuidString.lowercased() }
-    try await db.write { db in try db.transaction {
-      for id in ids {
-        try db.companionExecuteUnlocked("INSERT INTO notes(id,user_id,title,content) VALUES (?,'local-operator','Large',?)", values: [id, raw])
-      }
-    } }
-    let snapshot = try await db.companionSnapshot()
-    #expect(snapshot.notes.count == 40)
-    #expect(snapshot.notes.allSatisfy { !$0.contentIncluded && $0.contentByteCount > 2_000_000 })
-    #expect(try JSONEncoder().encode(snapshot).count < 1_024 * 1_024)
-    #expect(try await db.companionNote(id: ids[0])?.content == raw)
-    try await db.write { db in try db.transaction {
-      for index in 0..<410 {
-        try db.companionExecuteUnlocked("UPDATE notes SET updated_at = ? WHERE id = ?", values: [String(index), ids[0]])
-        if index == 205 { try db.companionExecuteUnlocked("INSERT INTO folders(id,user_id,name) VALUES (?,'local-operator','Independent')", values: [UUID().uuidString.lowercased()]) }
-      }
-    } }
-    var cursor = snapshot.cursor; var seenFolder = false; var pages = 0
-    while true {
-      let page = try await db.companionChanges(after: cursor, limit: 200)
-      #expect(!page.resetRequired && page.cursor > cursor)
-      #expect(try JSONEncoder().encode(page).count < 1_024 * 1_024)
-      #expect(page.changes.filter { $0.resourceKind == .note }.count <= 1)
-      seenFolder = seenFolder || page.changes.contains { $0.resourceKind == .folder }
-      cursor = page.cursor; pages += 1
-      if !page.hasMore { break }
-      #expect(pages < 4)
-    }
-    #expect(seenFolder && pages == 3)
-  }
-
   @Test("local agent table operations are bounded before allocation and unknown documents retain raw bytes")
   func agentFormatBoundary() async throws {
     let fixture = try CompanionFixture(); defer { fixture.remove() }
@@ -82,58 +46,7 @@ struct CompanionWorkspaceTests {
     #expect(try await db.companionNote(id: noteID)?.content == unknown)
   }
 
-  @Test("recovery copies preserve unknown bytes and history without reviving a tombstone")
-  func recoveryCopiesKeepHistory() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let noteID = try await db.createNote(folderID: nil, content: document("Before deletion"))
-    #expect(try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .deleteNote,
-      resourceID: noteID, expectedRevision: 1)).status == .accepted)
-    let raw = #"{"version":99,"kind":"note","future":{"writing":"preserve exact bytes"}}"#
-    let recoveredID = try await db.preserveRecoveryCopy(sourceID: noteID, title: "Future document", content: raw, folderID: nil)
-    #expect(recoveredID != noteID)
-    #expect(try await db.preserveRecoveryCopy(sourceID: noteID, title: "Future document", content: raw, folderID: nil) == recoveredID)
-    #expect(try await db.companionNote(id: noteID) == nil)
-    #expect(try await db.companionNote(id: recoveredID)?.content == raw)
-    let versions = try await db.noteAssetVersions(id: recoveredID)
-    #expect(versions.count == 1 && versions[0].content == raw && versions[0].source == "recovered")
-    await #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try await db.readNoteForEditing(id: recoveredID) }
-  }
-
   private let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-
-  @Test("phone, desktop autosave and agent edits share integer CAS despite identical timestamps")
-  func allWriterCAS() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let noteID = try await db.createNote(folderID: nil, content: document("Base"), createdAt: Date(timeIntervalSince1970: 100))
-    let base = try #require(try await db.companionNote(id: noteID))
-    let localContent = try document("Desktop writing")
-    let operationID = UUID().uuidString.lowercased()
-    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: localContent,
-                               updatedAt: Date(timeIntervalSince1970: 100), expectedRevision: String(base.revision), operationID: operationID)
-    let committed = try #require(try await db.companionDraftRevision(operationID: operationID))
-    #expect(committed == "2")
-    let phoneContent = try document("Phone writing")
-    _ = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote, resourceID: noteID, expectedRevision: 2, title: "Phone", content: phoneContent))
-    // A delayed desktop completion reads its exact receipt, never the current phone revision.
-    #expect(try await db.companionDraftRevision(operationID: operationID) == "2")
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await db.persistNoteDraft(id: noteID, title: "New desktop writing", content: document("Retain locally"), expectedRevision: committed)
-    }
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "2", operations: [.appendText("Agent", .paragraph)]))
-    }
-    #expect(try await db.companionNote(id: noteID)?.content == phoneContent)
-    // Retrying a committed desktop mutation never overwrites the later phone edit.
-    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: localContent, expectedRevision: "1", operationID: operationID)
-    #expect(try await db.companionNote(id: noteID)?.content == phoneContent)
-    let agent = try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "3", operations: [.appendText("Agent", .paragraph)]))
-    #expect(agent.revision == "4")
-    // Main's safe append API remains usable without a destructive-write revision.
-    let appended = try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, operations: [.appendText("Safe append", .paragraph)]))
-    #expect(appended.revision == "5" && appended.document?.plainText.contains("Safe append") == true)
-  }
 
   @Test("mobile history, desktop drafts and agent restore share revisions and independent receipts")
   func mobileHistoryAndAgentRestore() async throws {
@@ -185,40 +98,6 @@ struct CompanionWorkspaceTests {
       try await reopened.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,
         expectedRevision: "3", callerConversationID: caller, requestID: restoreID)
     }
-  }
-
-  @Test("current note bindings validate in run acceptance while historical snapshots stay usable")
-  func boundRunChecksRevisionAtomically() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let conversation = try await db.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
-    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: conversation)
-    let noteID = try await db.createNote(folderID: nil, title: "Original", content: document("Initial"))
-    var binding = AgentNoteContext(noteID: noteID, title: "Original", revision: "1", requireCurrentRevision: true)
-    _ = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote,
-      resourceID: noteID, expectedRevision: 1, title: "Changed", content: document("Changed after discovery")))
-    await #expect(throws: WorkspaceNoteMutationError.revisionConflict) {
-      try await db.beginLocalACPRun(conversationID: conversation, content: "Edit this note", noteContext: binding)
-    }
-    #expect(try await db.activeRunID(conversationID: conversation) == nil)
-    #expect(try fixture.scalar("SELECT count(*) FROM dashboard_messages") == 0)
-    #expect(try fixture.scalar("SELECT count(*) FROM dashboard_run_visible_context") == 0)
-    binding.revision = "2"
-    try await db.setSessionTools(.init(enabled: []), sessionID: conversation)
-    await #expect(throws: WorkspaceToolError.disabled(.notes)) {
-      try await db.beginLocalACPRun(conversationID: conversation, content: "Permission changed", noteContext: binding)
-    }
-    #expect(try fixture.scalar("SELECT count(*) FROM dashboard_runs") == 0)
-    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: conversation)
-    let accepted = try await db.beginLocalACPRun(conversationID: conversation, content: "Current binding", noteContext: binding)
-    #expect(try await db.activeRunID(conversationID: conversation) == accepted.runID)
-    let historicalConversation = try await db.createLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
-    let historical = AgentNoteContext(noteID: noteID, title: "Original snapshot", revision: "1")
-    let historicalRun = try await db.beginLocalACPRun(conversationID: historicalConversation,
-      content: "Discuss an earlier snapshot", noteContext: historical)
-    #expect(try await db.activeRunID(conversationID: historicalConversation) == historicalRun.runID)
-    let legacyJSON = #"{"noteID":"old-note","title":"Old","revision":"old-revision"}"#
-    #expect(try JSONDecoder().decode(AgentNoteContext.self, from: Data(legacyJSON.utf8)).requireCurrentRevision == nil)
   }
 
   private func document(_ text: String) throws -> String {

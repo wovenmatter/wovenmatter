@@ -71,19 +71,6 @@ class IOSRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call[0] for call in calls], ['swift'])
 
-    def test_owned_device_is_ready_before_testing_and_always_cleaned(self):
-        result, calls = self.run_script('--ui')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[:3] for call in calls], [
-            ['swift', 'test', '--package-path'], ['xcrun', 'simctl', 'create'],
-            ['xcrun', 'simctl', 'boot'], ['xcrun', 'simctl', 'bootstatus'],
-            ['xcrun', '--find', 'simctl'], ['Simulator', '-CurrentDeviceUDID', 'fixture-simulator'],
-            ['xcodebuild', '-project', str(ROOT / 'ios/WovenMatterCompanion.xcodeproj')],
-            ['xcrun', 'simctl', 'shutdown'], ['xcrun', 'simctl', 'delete'], ['SimulatorExit']])
-        self.assertIn('-b', calls[3])
-        self.assertIn('-resultBundlePath', calls[6])
-        self.assertNotIn('-only-testing:CompanionAppTests', calls[6])
-
     def test_toolchain_without_standalone_simulator_still_runs_xctest_and_propagates_failure(self):
         result, calls = self.run_script('--ui', WM_NO_SIMULATOR='1', WM_XCODE_EXIT='17')
         self.assertEqual(result.returncode, 17, result.stderr)
@@ -109,6 +96,15 @@ class IOSRunnerTests(unittest.TestCase):
     def test_both_devices_have_separate_result_bundles(self):
         result, calls = self.run_script('--all-devices')
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call[:3] for call in calls[:10]], [
+            ['swift', 'test', '--package-path'], ['xcrun', 'simctl', 'create'],
+            ['xcrun', 'simctl', 'boot'], ['xcrun', 'simctl', 'bootstatus'],
+            ['xcrun', '--find', 'simctl'], ['Simulator', '-CurrentDeviceUDID', 'fixture-simulator'],
+            ['xcodebuild', '-project', str(ROOT / 'ios/WovenMatterCompanion.xcodeproj')],
+            ['xcrun', 'simctl', 'shutdown'], ['xcrun', 'simctl', 'delete'], ['SimulatorExit']])
+        self.assertIn('-b', calls[3])
+        self.assertIn('-resultBundlePath', calls[6])
+        self.assertNotIn('-only-testing:CompanionAppTests', calls[6])
         builds = [call for call in calls if call[0] == 'xcodebuild']
         self.assertEqual(len(builds), 2)
         paths = [call[call.index('-resultBundlePath') + 1] for call in builds]

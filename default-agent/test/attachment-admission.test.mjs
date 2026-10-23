@@ -70,11 +70,14 @@ test('stale prompt, steering, cancel and selection cannot mutate the replacement
   const f = await fixture(t);
   const old = (await f.load()).result._meta.attachmentToken;
   const current = (await f.load()).result._meta.attachmentToken;
-  for (const method of ['session/prompt', '_session/steering', 'session/cancel', 'session/set_config_option']) {
+  for (const method of ['session/prompt', '_session/steering', 'session/cancel', 'session/set_config_option', 'woven/recover']) {
     await assert.rejects(f.service.invoke({ ...f.prompt(old), method }), /attachment was replaced/);
     await assert.rejects(f.service.invoke({ ...f.prompt(undefined), method }), /attachment was replaced/);
   }
   assert.equal(f.calls.some(call => call.method !== 'session/load'), false);
+  assert.equal((await f.service.invoke({ method: 'woven/recover', attachmentToken: current,
+    params: { sessionId: 'native', runs: [] } })).result.sessionId, 'native');
+  assert.equal(f.calls.at(-1).method, 'woven/recover');
   assert.ok((await f.load(current)).result._meta.attachmentToken);
 });
 

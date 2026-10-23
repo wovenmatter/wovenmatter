@@ -57,35 +57,29 @@ final class PiCodeModePolicyTests: XCTestCase {
     do { _ = try await task.value; XCTFail("Stopped program completed") } catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
   }
 
-  func testLegacyDepthAlwaysNormalizesToRootAndOneChildLevel() throws {
-    for value in 1...4 { XCTAssertEqual(try PiExecutionPolicy(subagentDepth: value).validated().subagentDepth, 2) }
-  }
-
-  func testRestoredPoliciesRaiseLegacyWatchdogWithoutReducingLongerBudgets() throws {
-    for (saved, expected) in [(30.0, 120.0), (120.0, 120.0), (240.0, 240.0)] {
-      let original = PiExecutionPolicy(unresponsiveCodeSeconds: saved, concurrentSubagents: 3)
-      let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: JSONEncoder().encode(original)).validated()
-      XCTAssertEqual(restored.unresponsiveCodeSeconds, expected)
-      XCTAssertEqual(restored.concurrentSubagents, 3)
-    }
-  }
-
-  func testLegacyToolConcurrencyIsIgnoredAndNotPersisted() throws {
-    for oldLimit in [0, 1, 16, 128] {
+  func testSavedPolicyNormalizesLegacyLimitsAndPreservesSupportedBudgets() throws {
+    let cases: [(tools: Int, depth: Int, seconds: Double, expected: Double)] = [
+      (0, 1, 30, 120), (1, 2, 120, 120), (16, 3, 240, 240), (128, 4, 240, 240),
+    ]
+    for value in cases {
       let data = try JSONSerialization.data(withJSONObject: [
-        "unresponsiveCodeSeconds": 30, "concurrentTools": oldLimit,
-        "concurrentSubagents": 3, "subagentDepth": 2,
+        "unresponsiveCodeSeconds": value.seconds, "concurrentTools": value.tools,
+        "concurrentSubagents": 3, "subagentDepth": value.depth,
       ])
       let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: data).validated()
-      XCTAssertEqual(restored.unresponsiveCodeSeconds, 120)
+      XCTAssertEqual(restored.unresponsiveCodeSeconds, value.expected)
       XCTAssertEqual(restored.concurrentSubagents, 3)
-      let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(restored)) as? [String: Any])
+      XCTAssertEqual(restored.subagentDepth, 2)
+      let encodedData = try JSONEncoder().encode(restored)
+      let roundTrip = try JSONDecoder().decode(PiExecutionPolicy.self, from: encodedData).validated()
+      XCTAssertEqual(roundTrip.unresponsiveCodeSeconds, value.expected)
+      XCTAssertEqual(roundTrip.concurrentSubagents, 3)
+      XCTAssertEqual(roundTrip.subagentDepth, 2)
+      let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedData) as? [String: Any])
       XCTAssertNil(encoded["concurrentTools"])
     }
-  }
-
-  func testInvalidResourcePolicyRejected() throws {
     XCTAssertThrowsError(try PiExecutionPolicy(unresponsiveCodeSeconds: .infinity).validated())
     XCTAssertThrowsError(try PiExecutionPolicy(subagentDepth: 0).validated())
   }
+
 }

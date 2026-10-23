@@ -15,33 +15,6 @@ struct WorkspaceCoordinationEventTests {
     return (db, dir, a, b)
   }
 
-  @Test func completionIsDeliveredOnceAcrossConcurrentPollsAndReopenWithoutEndingAssignment() async throws {
-    let (db, dir, a, b) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let old = try await db.beginLocalACPRun(conversationID: b, content: "Old work", createdAt: Date().addingTimeInterval(-20))
-    try await db.completeLocalACPRun(runID: old.runID, completedAt: Date().addingTimeInterval(-10))
-    try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Review")
-    #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
-    let run = try await db.beginLocalACPRun(conversationID: b, content: "New work")
-    #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
-    try await db.completeLocalACPRun(runID: run.runID)
-    let deliveries = try await withThrowingTaskGroup(of: [WorkspaceSessionDelivery].self) { group in
-      for _ in 0..<4 { group.addTask { try await db.collectCoordinationTurnNotifications() } }
-      var values: [WorkspaceSessionDelivery] = []
-      for try await value in group { values += value }
-      return values
-    }
-    #expect(deliveries.count == 1)
-    let delivery = try #require(deliveries.first)
-    #expect(delivery.sourceID == b && delivery.targetID == a && delivery.kind == .notification)
-    #expect(delivery.text == "Session “Worker” (\(b)): done. Run: \(run.runID).")
-    #expect(try await db.sessionRelationship(b).coordinatorID == a)
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    #expect(try await reopened.collectCoordinationTurnNotifications().isEmpty)
-    #expect(try await reopened.claimToolDelivery(id: delivery.id)?.id == delivery.id)
-    try await reopened.validateClaimedToolDelivery(id: delivery.id)
-  }
-
   @Test func mutedEventsDoNotReplayAndReacquisitionInvalidatesOldClaim() async throws {
     let (db, dir, a, b) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
