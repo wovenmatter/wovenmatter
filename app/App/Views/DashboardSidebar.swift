@@ -211,7 +211,6 @@ struct DashboardSidebarRail: View {
             onCollapse: { actions.onCollapse(side) },
             onBack: style == .split ? nil : actions.onShowNavigation,
             onMove: style == .single ? actions.onMoveSingleRail : nil,
-            collapseAtLeadingEdge: adaptiveExpanded && side == .right,
             showsQuickActions: !adaptiveExpanded,
             onCreateChat: actions.onCreateConversation,
             onCreateNote: actions.onCreateNote,
@@ -330,8 +329,17 @@ struct DashboardSidebarNavigationPage: View {
         }
     }
 
+    private var mirrorsHeader: Bool {
+        side == .right && onMove != nil
+    }
+
     private var railHeader: some View {
         HStack(spacing: 8) {
+            if mirrorsHeader {
+                collapseButton
+                moveButton
+                Spacer()
+            }
             VStack(alignment: .leading, spacing: 1) {
                 Text("Workspaces")
                     .font(.system(size: 13, weight: .semibold))
@@ -339,35 +347,44 @@ struct DashboardSidebarNavigationPage: View {
                 .font(.system(size: 11))
                 .foregroundStyle(DashboardPalette.foreground)
             }
-            Spacer()
-            if let onMove {
-                Button(action: onMove) {
-                    DashboardLucideIcon(
-                        glyph: .arrowLeftRight,
-                        size: 16
-                    )
-                    .frame(
-                        width: onCollapse == nil ? 36 : 32,
-                        height: onCollapse == nil ? 36 : 32
-                    )
-                }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help(side == .left ? "Move sidebar right" : "Move sidebar left")
-            }
-            if let onCollapse {
-                Button(action: onCollapse) {
-                    DashboardLucideIcon(
-                        glyph: side == .left ? .leftCollapse : .rightCollapse,
-                        size: 18
-                    )
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help("Hide sidebar")
+            if !mirrorsHeader {
+                Spacer()
+                moveButton
+                collapseButton
             }
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 68)
+    }
+
+    @ViewBuilder
+    private var moveButton: some View {
+        if let onMove {
+            Button(action: onMove) {
+                DashboardLucideIcon(glyph: .arrowLeftRight, size: 16)
+                    .frame(
+                        width: onCollapse == nil ? 36 : 32,
+                        height: onCollapse == nil ? 36 : 32
+                    )
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .help(side == .left ? "Move sidebar right" : "Move sidebar left")
+        }
+    }
+
+    @ViewBuilder
+    private var collapseButton: some View {
+        if let onCollapse {
+            Button(action: onCollapse) {
+                DashboardLucideIcon(
+                    glyph: side == .left ? .leftCollapse : .rightCollapse,
+                    size: 18
+                )
+                .frame(width: 36, height: 36)
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .help("Hide sidebar")
+        }
     }
 
     private var topActions: some View {
@@ -1615,7 +1632,6 @@ struct DashboardSidebarWorkspacePage: View {
     let onCollapse: () -> Void
     let onBack: (() -> Void)?
     let onMove: (() -> Void)?
-    let collapseAtLeadingEdge: Bool
     let showsQuickActions: Bool
     let onCreateChat: () -> Void
     let onCreateNote: () -> Void
@@ -1773,26 +1789,18 @@ struct DashboardSidebarWorkspacePage: View {
         )
     }
 
+    private var mirrorsHeader: Bool {
+        side == .right && onBack != nil
+    }
+
     private var railHeader: some View {
         HStack(spacing: 8) {
-            if collapseAtLeadingEdge {
+            if mirrorsHeader {
                 collapseButton
-            }
-            if let onBack {
-                Button(action: onBack) {
-                    DashboardLucideIcon(glyph: .arrowLeft, size: 16)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help("Back to Workspace")
-                .accessibilityLabel("Back to Workspace")
+                moveButton
+                Spacer()
             } else {
-                Button(action: onCollapse) {
-                    DashboardLucideIcon(glyph: .rightCollapse, size: 18)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help("Hide workspace")
+                headerNavigationButton
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(selectedFolderName ?? "All Workspaces")
@@ -1802,27 +1810,56 @@ struct DashboardSidebarWorkspacePage: View {
                     .font(.system(size: 11))
                     .foregroundStyle(DashboardPalette.foreground)
             }
-            Spacer()
-            if onBack == nil {
-                filterMenu(inSearchRow: false)
-            }
-            if let onMove {
-                Button(action: onMove) {
-                    DashboardLucideIcon(
-                        glyph: .arrowLeftRight,
-                        size: 16
-                    )
-                    .frame(width: 32, height: 32)
+            if mirrorsHeader {
+                headerNavigationButton
+            } else {
+                Spacer()
+                if onBack == nil {
+                    filterMenu(inSearchRow: false)
                 }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help(side == .left ? "Move sidebar right" : "Move sidebar left")
-            }
-            if onBack != nil && !collapseAtLeadingEdge {
-                collapseButton
+                moveButton
+                if onBack != nil {
+                    collapseButton
+                }
             }
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 68)
+    }
+
+    @ViewBuilder
+    private var headerNavigationButton: some View {
+        if let onBack {
+            Button(action: onBack) {
+                DashboardLucideIcon(
+                    glyph: side == .left ? .arrowLeft : .arrowRight,
+                    size: 16
+                )
+                .frame(width: 32, height: 32)
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .help("Back to Workspace")
+            .accessibilityLabel("Back to Workspace")
+        } else {
+            Button(action: onCollapse) {
+                DashboardLucideIcon(glyph: .rightCollapse, size: 18)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .help("Hide workspace")
+        }
+    }
+
+    @ViewBuilder
+    private var moveButton: some View {
+        if let onMove {
+            Button(action: onMove) {
+                DashboardLucideIcon(glyph: .arrowLeftRight, size: 16)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .help(side == .left ? "Move sidebar right" : "Move sidebar left")
+        }
     }
 
     private var collapseButton: some View {
