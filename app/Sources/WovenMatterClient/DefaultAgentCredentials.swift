@@ -63,6 +63,11 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
     public let name: String
     public let state: String
     public let detail: String
+    public struct Account: Codable, Equatable, Sendable {
+        public let method: String
+        public let name: String?
+    }
+    public var accounts: [Account]? = nil
     public var displayName: String {
         if id == AgentRuntimeKind.defaultAgent.rawValue { return AgentRuntimeKind.defaultAgent.displayName }
         // Normalize provider labels returned by older workspace services.

@@ -17,14 +17,19 @@ struct SettingsRemoteHarnessAccountView: View {
             if embedded { accountContent }
             else { SettingsCard(title: "Account", detail: workspace.name) { accountContent } }
         }.id(workspace.id.uuidString + runtimeKind.rawValue)
+        .task { await model.refreshSignInStatus(workspace) }
+        .onChange(of: model.authenticationSessions[workspace.id]?.state) { _, state in
+            if state == "succeeded" { Task { await model.refreshSignInStatus(workspace) } }
+        }
     }
 
     private var accountContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == runtimeKind }) {
                 HStack {
-                    Text(HarnessAccountPresentation.remoteLabel(harness))
-                        .font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    SettingsHarnessAccountDetails(
+                        status: model.signInStatuses[workspace.id]?.first { $0.id == runtimeKind.rawValue },
+                        fallback: HarnessAccountPresentation.remoteLabel(harness))
                     Spacer()
                     harnessButtons(harness, workspace: workspace)
                         .disabled(model.busyWorkspaceIDs.contains(workspace.id))

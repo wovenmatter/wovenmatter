@@ -32,7 +32,18 @@ public enum HarnessOnboarding {
                 ]) { _, new in new }
                 let result = try LocalACPProcessRunner.run(executableURL: executable, arguments: arguments,
                     environment: environment, timeout: 10)
-                return parseSignIn(kind, output: result.combinedOutput, succeeded: result.succeeded)
+                var status = parseSignIn(kind, output: result.combinedOutput, succeeded: result.succeeded)
+                if kind == .codex, status.state == "verified", let root = DefaultAgentSupport.resources {
+                    // Read public account metadata, never token files or a login flow.
+                    if let result = try? LocalACPProcessRunner.run(executableURL: root.appending(path: "bin/node"),
+                        arguments: [root.appending(path: "src/sign-in-status.mjs").path, "--codex-account", executable.path],
+                        environment: environment, timeout: 12), result.succeeded,
+                       let accounts = try? JSONDecoder().decode([AgentSignInStatus.Account].self,
+                           from: Data(result.combinedOutput.utf8)), !accounts.isEmpty {
+                        status.accounts = accounts
+                    }
+                }
+                return status
             } catch { return status(kind, state: "check_failed") }
         }.value
     }
@@ -48,14 +59,14 @@ public enum HarnessOnboarding {
                 Range($0.range(at: 1), in: text).flatMap { Int(text[$0]) }
             }
             if !counts.isEmpty {
-                return status(kind, state: counts.contains { $0 > 0 } ? "credentials_present" : "sign_in_required")
+                return status(kind, state: counts.contains { $0 > 0 } ? "credentials_present" : "sign_in_required", accounts: accountDetails(kind, text: text))
             }
         }
         if matches(#"not (?:logged|signed) in|not authenticated|login required|"loggedIn"\s*:\s*false|"authenticated"\s*:\s*false"#) {
             return status(kind, state: "sign_in_required")
         }
         if succeeded, matches(#"logged in|signed in|"loggedIn"\s*:\s*true|"authenticated"\s*:\s*true"#) {
-            return status(kind, state: "verified")
+            return status(kind, state: "verified", accounts: accountDetails(kind, text: text))
         }
         return status(kind, state: succeeded ? "not_checked" : "check_failed")
     }
@@ -76,7 +87,40 @@ public enum HarnessOnboarding {
             + ([executable.path] + arguments).map(quote).joined(separator: " ") + "\n"
     }
 
-    private static func status(_ kind: AgentRuntimeKind, state: String) -> AgentSignInStatus {
+    static func accountDetails(_ kind: AgentRuntimeKind, text: String) -> [AgentSignInStatus.Account] {
+        func label(_ value: Any?) -> String? {
+            guard let value = value as? String, !value.isEmpty, value.count <= 160,
+                  !value.contains(where: { $0.isNewline || $0.asciiValue.map { $0 < 32 } == true }),
+                  !value.contains("sk-"), !value.contains("Bearer "), !value.hasPrefix("eyJ") else { return nil }
+            return value
+        }
+        if kind == .claudeCode, let data = text.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let method = json["authMethod"] as? String
+            let name = label(json["email"]) ?? label(json["apiKeyName"])
+            if method == "claude.ai" { return [.init(method: "Claude subscription", name: name)] }
+            if ["api_key", "apiKey", "api-key"].contains(method ?? "") {
+                return [.init(method: "API key", name: name)]
+            }
+        }
+        if kind == .opencode {
+            let pattern = #"(?m)^[│┃\s]*[●•]\s+([\p{L}0-9 ._()/-]+?)\s+(oauth|api|api_key|[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN))\s*$"#
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+                    guard let provider = Range(match.range(at: 1), in: text), let method = Range(match.range(at: 2), in: text),
+                          let name = label(String(text[provider])) else { return nil }
+                    let value = String(text[method])
+                    return .init(method: value == "oauth" ? "OAuth" : value.hasSuffix("API_KEY") || value.hasSuffix("TOKEN") ? "Environment key · " + value : "API key", name: name)
+                }
+            }
+        }
+        if text.localizedCaseInsensitiveContains("using ChatGPT") { return [.init(method: "ChatGPT", name: nil)] }
+        if text.localizedCaseInsensitiveContains("API key") { return [.init(method: "API key", name: nil)] }
+        if text.localizedCaseInsensitiveContains("OAuth") { return [.init(method: "OAuth", name: nil)] }
+        return []
+    }
+
+    private static func status(_ kind: AgentRuntimeKind, state: String, accounts: [AgentSignInStatus.Account] = []) -> AgentSignInStatus {
         let detail: String = switch state {
         case "verified": "Already signed in on this Mac."
         case "credentials_present": "Saved credentials found. Provider access has not been verified."
@@ -84,6 +128,6 @@ public enum HarnessOnboarding {
         case "not_installed": "Choose this harness to install it."
         default: "Sign-in could not be confirmed. You can check again or continue setup later."
         }
-        return AgentSignInStatus(id: kind.rawValue, name: kind.displayName, state: state, detail: detail)
+        return AgentSignInStatus(id: kind.rawValue, name: kind.displayName, state: state, detail: detail, accounts: accounts)
     }
 }

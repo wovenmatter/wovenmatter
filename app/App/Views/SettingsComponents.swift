@@ -276,19 +276,32 @@ struct SettingsLocalRuntimeInventoryRow: View {
     }
 
     var body: some View {
+        SettingsRuntimeSummaryRow(runtimeKind: runtimeKind,
+            summary: model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…",
+            status: status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning) {
+            SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+        }
+    }
+}
+
+struct SettingsRuntimeSummaryRow<Actions: View>: View {
+    let runtimeKind: AgentRuntimeKind
+    let summary: String
+    let status: String
+    var tone: SettingsPillTone = .neutral
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
         SettingsInset {
             HStack(spacing: 12) {
-                DashboardHarnessLogoIcon(
-                    logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20
-                ).frame(width: 28, height: 28)
+                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20)
+                    .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(runtimeKind.displayName).font(.system(size: 13, weight: .medium))
-                    Text(model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(summary).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                SettingsPill(status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning)
-                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+                SettingsPill(status, tone: tone)
+                actions
             }
         }
     }
@@ -836,9 +849,12 @@ struct SettingsHarnessSignInControl: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if signedIn {
-                    Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    if compact {
+                        Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
+                            .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    } else {
+                        SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Signed in")
+                    }
                     if !compact {
                         Spacer()
                         Button("Change sign-in…") { signIn.signIn(runtimeKind) }
@@ -851,9 +867,7 @@ struct SettingsHarnessSignInControl: View {
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     if !compact {
-                        Text(signIn.statuses[runtimeKind]?.label ?? "Checking sign-in…")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                        SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Checking sign-in…")
                         Spacer()
                     }
                     Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Sign in…") {
@@ -901,5 +915,28 @@ struct SettingsWorkspaceScope: View {
                 }
             }.padding(.top, 8)
         }
+    }
+}
+
+
+struct SettingsHarnessAccountDetails: View {
+    let status: AgentSignInStatus?
+    let fallback: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(status?.label ?? fallback).font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            if let accounts = status?.accounts, !accounts.isEmpty {
+                ForEach(Array(accounts.enumerated()), id: \.offset) { _, account in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.name ?? account.method).font(.system(size: 12.5, weight: .medium))
+                        Text(account.name == nil ? "\(account.method) · Name not provided by harness" : account.method)
+                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                }
+            } else if ["verified", "credentials_present"].contains(status?.state ?? "") {
+                SettingsNote("Account details not provided by this harness.")
+            }
+        }.textSelection(.enabled)
     }
 }

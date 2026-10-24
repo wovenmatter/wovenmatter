@@ -73,8 +73,12 @@ when an intentional design change is accepted.
   remote workspaces expose Use shared settings. Independent defaults stay separate
   from later shared edits. Sign-in and installed versions belong to each workspace,
   regardless of default sharing; do not imply credentials transfer between hosts.
-- **Pi Durable updates:** show Pi Durable as the heading, list its embedded Pi Durable
-  SDK and Claude SDK versions, and provide one Check for updates / Update action per
+  Account rows show the authentication method and reported account or key labels,
+  including multiple providers. Never show key/token values or infer names that a
+  harness does not expose.
+- **Pi Durable updates:** use the same compact runtime row as other harnesses:
+  logo, harness name, embedded SDK versions on one summary line, installed status,
+  and one Check for updates / Update action per
   workspace. Update all outdated components in one staged activation. Shared scope
   lists local and remote installations; an individual scope shows that installation.
   Keep progress and errors with their workspace and preserve operation state when
