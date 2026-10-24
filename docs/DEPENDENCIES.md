@@ -90,6 +90,8 @@ Every app release carries the refreshed SDK snapshot. When the bundled source
 or dependency graph changes, its fingerprint supersedes SDK generations from
 the previous app, so new launches use the release's bundled SDKs without
 requiring a separate Settings update.
+The fingerprint includes JavaScript helpers in nested source directories, so
+broker-only fixes also supersede stale generations without deleting them.
 
 Agent CLIs update the same way from Settings: ACP adapters take the latest
 release at or above their catalog minimum. OpenCode and Executor stay on v2,
