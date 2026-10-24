@@ -13,6 +13,7 @@ struct SettingsDefaultAgentView: View {
     @State private var setupProvider: String?
     @State private var setupRequest = UUID()
     @State private var showsWorkspaceOverrides = false
+    @State private var savingScope = false
     @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
         DashboardPiDurableLogoStyle.defaultStyle.rawValue
@@ -126,21 +127,32 @@ struct SettingsDefaultAgentView: View {
         .clipShape(DashboardShapes.card)
     }
     private var scopeSection: some View {
-        DisclosureGroup("Workspace settings · \(agent.scope == "global" ? "Shared" : remote?.name ?? "Local")", isExpanded: $showsWorkspaceOverrides) {
-            Picker("Settings for", selection: Binding(get: { agent.scope }, set: { selectScope($0) })) {
-                Text("Shared across workspaces").tag("global")
-                Text("Local agent workspace").tag("local")
-                ForEach(model.remoteWorkspaces.workspaces) { workspace in Text(workspace.name).tag(workspace.id.uuidString.lowercased()) }
-            }.frame(maxWidth: 440, alignment: .leading)
-            if agent.scope != "global" {
-                Toggle("Use shared settings", isOn: Binding(get: { agent.inherits }, set: {
-                    agent.setInherits($0)
-                    agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
-                }))
-                Text(agent.inherits ? "Uses shared providers, search, and model preferences. Manage accounts in Shared settings." : "This workspace has its own settings. Claude subscriptions require sign-in on this host.").font(.callout).foregroundStyle(.secondary)
-            }
+        SettingsWorkspaceScope(scope: Binding(get: { agent.scope }, set: { selectScope($0) }),
+            expanded: $showsWorkspaceOverrides, workspaces: model.remoteWorkspaces.workspaces,
+            inherits: Binding(get: { agent.inherits }, set: setSharing), detail: agent.inherits
+                ? "Uses shared providers, search, and model preferences."
+                : "Settings apply only to this workspace.")
+            .disabled(savingScope)
+    }
+
+    private func setSharing(_ shared: Bool) {
+        let scope = agent.scope
+        let workspace = scope == "local"
+            ? model.localACPWorkspaceLaunchConfiguration.map { "local:" + $0.rootURL.standardizedFileURL.path }
+            : "remote:" + scope
+        guard scope != "global", let workspace else { return }
+        savingScope = true; syncError = nil
+        Task { @MainActor in
+            defer { savingScope = false }
+            do {
+                _ = try await model.setAgentDefaultsSharing(runtime: .defaultAgent, workspace: workspace, shared: shared)
+                guard agent.scope == scope else { return }
+                agent.setInherits(shared)
+                agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
+            } catch { syncError = error.localizedDescription }
         }
     }
+
     private func connected(_ provider: String) {
         setupProvider = nil
         browsingAllModels = true

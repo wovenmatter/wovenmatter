@@ -9,10 +9,18 @@ struct SettingsRemoteHarnessAccountView: View {
     @Bindable var model: RemoteWorkspacesModel
     let runtimeKind: AgentRuntimeKind
     let workspace: RemoteWorkspaceConfiguration
+    var embedded = false
     @State private var authorizationCode = ""
 
     var body: some View {
-        SettingsCard(title: "Account", detail: workspace.name) {
+        Group {
+            if embedded { accountContent }
+            else { SettingsCard(title: "Account", detail: workspace.name) { accountContent } }
+        }.id(workspace.id.uuidString + runtimeKind.rawValue)
+    }
+
+    private var accountContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == runtimeKind }) {
                 HStack {
                     Text(HarnessAccountPresentation.remoteLabel(harness))
@@ -31,7 +39,6 @@ struct SettingsRemoteHarnessAccountView: View {
             }
             if let error = model.actionErrors[workspace.id]?[runtimeKind] { SettingsError(error) }
         }
-        .id(workspace.id.uuidString + runtimeKind.rawValue)
     }
 
     @ViewBuilder

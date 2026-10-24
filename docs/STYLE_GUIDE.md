@@ -61,19 +61,24 @@ when an intentional design change is accepted.
   rather than a horizontal strip of actions. Remote workspaces have no global
   enable switch; saved workspaces reconnect using silent Keychain reads.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
-  This Mac or a saved remote workspace. Workspace inventory shows status and links
+  Local agent workspace or a named remote workspace. Workspace inventory shows status and links
   to that scoped page. Never label credentials present as verified sign-in.
   New remote workspaces offer skippable, reopenable setup with only Pi Durable
   selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
-- **Pi Durable SDK settings:** place SDK management directly below the workspace
-  scope controls. The local workspace uses a fixed heading with Pi Durable SDK and Claude
-  SDK versions and explicit check/update actions always visible. Remote workspaces
-  use full-width disclosure buttons, collapsed by default, for the same controls.
-  All workspaces lists the local location and configured remote workspaces; an
-  individual scope shows only that location. Keep progress and errors with their
-  workspace and preserve operation state when a remote row is collapsed.
+- **Harness workspace settings:** use the same Workspace settings disclosure and
+  Settings for selector on every harness page, with space below the hover row.
+  Shared across workspaces edits shared defaults; Local agent workspace and named
+  remote workspaces expose Use shared settings. Independent defaults stay separate
+  from later shared edits. Sign-in and installed versions belong to each workspace,
+  regardless of default sharing; do not imply credentials transfer between hosts.
+- **Pi Durable updates:** show Pi Durable as the heading, list its embedded Pi Durable
+  SDK and Claude SDK versions, and provide one Check for updates / Update action per
+  workspace. Update all outdated components in one staged activation. Shared scope
+  lists local and remote installations; an individual scope shows that installation.
+  Keep progress and errors with their workspace and preserve operation state when
+  a remote row is collapsed.
 - **Settings disclosures:** use `SettingsDisclosureGroupStyle` throughout settings
   editors so the chevron, label, and remaining header width all toggle expansion.
   `SettingsPage` supplies this by default; standalone settings sheets apply it

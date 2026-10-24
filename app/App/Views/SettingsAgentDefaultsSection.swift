@@ -14,6 +14,12 @@ struct SettingsAgentDefaultsSection: View {
     var showsTools = true
     var showsPermissions = true
     var title = "Defaults for new chats"
+    var includesHarnessSetup = false
+    var initialScope = "global"
+    var onScopeChange: ((String) -> Void)?
+    @State private var showsWorkspaceSettings = false
+    @State private var usesShared = true
+    @State private var defaultsReady = false
     @State private var selectedScope = "global"
     @State private var stored = SessionSelections()
     @State private var resolved = SessionSelections()
@@ -32,7 +38,10 @@ struct SettingsAgentDefaultsSection: View {
     }
     private var scopeAvailable: Bool { scope != "local" || workspaceScope != nil }
     private var identity: String { runtime.rawValue + ":" + scope + ":" + (workspaceScope ?? "") }
-    private var inheritedLabel: String { scope == "global" ? "Use agent default" : "Use All workspaces" }
+    private var inheritedLabel: String { scope == "global" || (includesHarnessSetup && !usesShared) ? "Use agent default" : "Use shared settings" }
+    private var inheritsDefaults: Bool {
+        scope != "global" && (includesHarnessSetup ? usesShared : runtime == .defaultAgent && model.connections.inherits)
+    }
     private var enabledTools: Set<String> {
         Set(resolved.tools ?? model.agentTools?.settings.enabledByDefault.map(\.rawValue) ?? WorkspaceToolSettings().enabledByDefault.map(\.rawValue))
     }
@@ -40,12 +49,15 @@ struct SettingsAgentDefaultsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if fixedScope == nil {
-                Picker("Defaults for", selection: $selectedScope) {
-                    Text("All workspaces").tag("global")
-                    Text("Local agent workspace").tag("local")
-                    ForEach(model.remoteWorkspaces.workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
-                }
-                .frame(maxWidth: 440, alignment: .leading)
+                SettingsWorkspaceScope(scope: $selectedScope, expanded: $showsWorkspaceSettings,
+                    workspaces: model.remoteWorkspaces.workspaces,
+                    inherits: includesHarnessSetup ? Binding(get: { usesShared }, set: { setSharing($0) }) : nil,
+                    detail: usesShared ? "Uses shared defaults. Sign-in stays with each workspace."
+                        : "Defaults apply only to this workspace.")
+                    .disabled(saving || !defaultsReady)
+            }
+            if includesHarnessSetup {
+                SettingsHarnessAccounts(model: model, runtimeKind: runtime, scope: scope)
             }
             SettingsCard(title: title,
                 detail: "Starting settings for \(runtime.displayName). You can change them in each chat.") {
@@ -71,7 +83,7 @@ struct SettingsAgentDefaultsSection: View {
                         SettingsNote("This model has no thinking-level options.")
                     }
                 }
-            }.disabled(!scopeAvailable)
+            }.disabled(!scopeAvailable || inheritsDefaults)
             if showsTools { SettingsCard(title: "Woven Matter CLI", detail: "Tools available in new chats. Adjust them from Tools in any chat.") {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Enable Woven Matter CLI", isOn: Binding(get: { !enabledTools.subtracting(["goals"]).isEmpty }, set: { enabled in
@@ -87,19 +99,27 @@ struct SettingsAgentDefaultsSection: View {
                             }))
                         }
                     }
-                    if stored.tools != nil {
+                    if stored.tools != nil && !includesHarnessSetup {
                         Button("Use shared defaults") { save(.tools, selections: SessionSelections(tools: nil)) }
                             .buttonStyle(SettingsQuietButtonStyle())
                     }
                     SettingsNote("Calendar access, session limits, and connected apps use shared settings.")
                 }
-            }.disabled(!scopeAvailable)
+            }.disabled(!scopeAvailable || inheritsDefaults)
             }
             if let error { SettingsError(error) }
         }
         .disabled(saving)
+        .task(id: initialScope) {
+            selectedScope = initialScope
+            showsWorkspaceSettings = initialScope != "global"
+        }
         .task(id: identity) { await loadDefaults() }
+        .onChange(of: selectedScope) { _, scope in onScopeChange?(scope) }
         .onDisappear { requestID = UUID() }
+        .onChange(of: model.connections.inherits) { _, _ in
+            if runtime == .defaultAgent { Task { await loadDefaults() } }
+        }
         .onChange(of: model.connections.configuration.defaultModel) { _, _ in
             if runtime == .defaultAgent, showsThinking { Task { await loadDefaults() } }
         }
@@ -147,20 +167,42 @@ struct SettingsAgentDefaultsSection: View {
     @MainActor private func loadDefaults() async {
         requestID = UUID()
         let request = requestID
-        metadata = nil; error = nil; loading = false
+        metadata = nil; error = nil; loading = false; defaultsReady = false
         stored = SessionSelections(); resolved = SessionSelections()
         guard scopeAvailable else {
+            defaultsReady = true
             error = "The local agent workspace is unavailable. Connect it before editing its defaults."
             return
         }
         do {
             let defaults = try await model.agentSelectionDefaults(runtime: runtime, workspace: workspaceScope)
             guard requestID == request, !Task.isCancelled else { return }
-            stored = defaults.stored; resolved = defaults.resolved
+            stored = defaults.stored; resolved = defaults.resolved; usesShared = defaults.usesShared
+            defaultsReady = true
             if showsThinking, runtime != .defaultAgent || model.connections.configuration.defaultModel != nil { await loadOptions() }
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
             self.error = error.localizedDescription
+            defaultsReady = true
+        }
+    }
+
+    private func setSharing(_ shared: Bool) {
+        guard let workspace = workspaceScope, scopeAvailable else { return }
+        let selectedIdentity = identity
+        saving = true; error = nil
+        requestID = UUID(); loading = false
+        Task { @MainActor in
+            defer { saving = false }
+            do {
+                let defaults = try await model.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared)
+                guard identity == selectedIdentity else { return }
+                stored = defaults.stored; resolved = defaults.resolved; usesShared = defaults.usesShared
+                await loadOptions()
+            } catch {
+                guard identity == selectedIdentity else { return }
+                self.error = error.localizedDescription
+            }
         }
     }
 

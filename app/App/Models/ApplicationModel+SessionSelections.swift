@@ -7,13 +7,13 @@ extension ApplicationModel {
     /// Settings edits belong to the execution owner, which also captures defaults
     /// for scheduled and tool-created sessions. Conversation controls never call this.
     func agentSelectionDefaults(runtime: AgentRuntimeKind, workspace: String?) async throws
-        -> (stored: SessionSelections, resolved: SessionSelections) {
+        -> (stored: SessionSelections, resolved: SessionSelections, usesShared: Bool) {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.loadAgentDefaults(runtime: runtime, workspace: workspace))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            return (stored, resolved)
+            return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
         if runtime == .defaultAgent {
             let legacy = sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace)
@@ -23,19 +23,20 @@ extension ApplicationModel {
             }
         }
         return (sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace),
-            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace))
+            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace),
+            workspace.map { sessionSelectionPreferences.usesSharedDefaults(harness: runtime.rawValue, workspace: $0) } ?? false)
     }
 
     func saveAgentSelectionDefault(runtime: AgentRuntimeKind, workspace: String?,
         field: SessionSelectionField, selections: SessionSelections) async throws
-        -> (stored: SessionSelections, resolved: SessionSelections) {
+        -> (stored: SessionSelections, resolved: SessionSelections, usesShared: Bool) {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.saveAgentDefault(runtime: runtime, workspace: workspace,
                 field: field, selections: selections))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            return (stored, resolved)
+            return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
         if field == .tools, let tools = selections.tools { _ = try WorkspaceSessionTools(identifiers: tools) }
         if runtime == .defaultAgent, field == .model {
@@ -49,6 +50,19 @@ extension ApplicationModel {
             // before a scheduled/new conversation can capture these defaults.
             sessionSelectionPreferences.removeDefault(.thinking, harness: runtime.rawValue, workspace: workspace)
         }
+        return try await agentSelectionDefaults(runtime: runtime, workspace: workspace)
+    }
+
+    func setAgentDefaultsSharing(runtime: AgentRuntimeKind, workspace: String, shared: Bool) async throws
+        -> (stored: SessionSelections, resolved: SessionSelections, usesShared: Bool) {
+        if isBackendFrontend {
+            let result = try await sendBackendCommand(.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared))
+            guard let stored = result.selections, let resolved = result.resolvedSelections else {
+                throw ApplicationModelError.dashboardStoreUnavailable
+            }
+            return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
+        }
+        sessionSelectionPreferences.setUsesSharedDefaults(shared, harness: runtime.rawValue, workspace: workspace)
         return try await agentSelectionDefaults(runtime: runtime, workspace: workspace)
     }
 

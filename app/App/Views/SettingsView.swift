@@ -279,14 +279,13 @@ private struct SettingsHarnessView: View {
         SettingsPage(
             title: runtimeKind.displayName,
             detail: isWorkspaceScoped
-                ? remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." } ?? "\(runtimeKind.displayName) on this Mac."
+                ? remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." } ?? "\(runtimeKind.displayName) in the local agent workspace."
                 : "Conversation defaults and runtime settings.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            SettingsHarnessAccounts(model: model, runtimeKind: runtimeKind, initialWorkspaceID: workspaceID, fixedWorkspace: isWorkspaceScoped)
-            SettingsAgentDefaultsSection(model: model, runtime: runtimeKind,
-                fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
+            SettingsAgentDefaultsSection(model: model, runtime: runtimeKind, includesHarnessSetup: true,
+                initialScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : "global")
             if runtimeKind == .codex {
                 codexIconCard
             }

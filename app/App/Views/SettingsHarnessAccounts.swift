@@ -5,27 +5,13 @@ import WovenMatterCore
 struct SettingsHarnessAccounts: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
-    var initialWorkspaceID: UUID?
-    var fixedWorkspace = false
-    @State private var scope = "local"
-
-    private var workspace: RemoteWorkspaceConfiguration? {
-        model.remoteWorkspaces.workspaces.first { $0.id.uuidString == scope }
-    }
+    let scope: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if !fixedWorkspace {
-            Picker("Account workspace", selection: $scope) {
-                Text("This Mac").tag("local")
-                ForEach(model.remoteWorkspaces.workspaces) { Text($0.name).tag($0.id.uuidString) }
-            }.frame(maxWidth: 440, alignment: .leading)
-            }
-            if scope == "local" {
-                SettingsCard(title: "Account", detail: "This Mac") {
+            if scope == "global" || scope == "local" {
+                SettingsCard(title: runtimeKind.displayName, detail: "Local agent workspace") {
                     SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
-                }
-                SettingsCard(title: "Software") {
                     SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: runtimeKind)
                     if model.runtimeInventories[runtimeKind]?.isInstalled == false {
                         Button("Install") { model.installLocalACPRuntimeComponent(runtimeKind) }
@@ -34,20 +20,32 @@ struct SettingsHarnessAccounts: View {
                     }
                     SettingsRuntimeMaintenanceErrorView(model: model, runtimeKind: runtimeKind)
                 }
-            } else if let workspace {
-                SettingsRemoteHarnessAccountView(model: model.remoteWorkspaces,
-                    runtimeKind: runtimeKind, workspace: workspace)
-                SettingsRemoteHarnessSoftware(model: model.remoteWorkspaces, runtimeKind: runtimeKind, workspace: workspace)
-            } else {
+                .task { model.refreshRuntimeInventory() }
+                .modifier(HarnessInstallerConfirmation(model: model))
+            }
+            ForEach(model.remoteWorkspaces.workspaces.filter {
+                scope == "global" || $0.id.uuidString.lowercased() == scope
+            }) { workspace in
+                if scope == "global" {
+                    DisclosureGroup(workspace.name) { remote(workspace) }
+                } else { remote(workspace) }
+            }
+            if scope != "global" && scope != "local",
+               !model.remoteWorkspaces.workspaces.contains(where: { $0.id.uuidString.lowercased() == scope }) {
                 SettingsEmpty("This workspace is no longer configured.")
             }
         }
-        .task(id: initialWorkspaceID) { scope = initialWorkspaceID?.uuidString ?? "local" }
-        .task(id: scope) {
-            if let workspace { model.remoteWorkspaces.refresh(workspace) }
-            else if scope == "local" { model.refreshRuntimeInventory() }
+    }
+
+    private func remote(_ workspace: RemoteWorkspaceConfiguration) -> some View {
+        SettingsCard(title: runtimeKind.displayName, detail: workspace.name) {
+            SettingsRemoteHarnessAccountView(model: model.remoteWorkspaces,
+                runtimeKind: runtimeKind, workspace: workspace, embedded: true)
+            SettingsRemoteHarnessSoftware(model: model.remoteWorkspaces,
+                runtimeKind: runtimeKind, workspace: workspace)
         }
-        .modifier(HarnessInstallerConfirmation(model: model, workspaceID: workspace?.id))
+        .task { model.remoteWorkspaces.refresh(workspace) }
+        .modifier(HarnessInstallerConfirmation(model: model, workspaceID: workspace.id))
     }
 }
 
@@ -57,7 +55,7 @@ struct SettingsRemoteHarnessSoftware: View {
     let workspace: RemoteWorkspaceConfiguration
     private var busy: Bool { model.busyWorkspaceIDs.contains(workspace.id) }
     var body: some View {
-        SettingsCard(title: "Software") {
+        VStack(alignment: .leading, spacing: 12) {
             if let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == runtimeKind }) {
                 let runtime = model.runtimeMaintenance[workspace.id]?.first { $0.id == runtimeKind }
                 if let runtime {

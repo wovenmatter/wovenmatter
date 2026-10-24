@@ -6,6 +6,33 @@ import WovenMatterDashboardStore
 @MainActor
 struct SessionSelectionPreferencesTests {
 
+  @Test("workspace sharing isolates local and remote defaults and survives reopening")
+  func workspaceSharing() throws {
+    try withPreferences { preferences, defaults in
+      let local = "local:/fixture", remote = "remote:fixture"
+      #expect(preferences.usesSharedDefaults(harness: "codex", workspace: remote))
+      preferences.saveDefaults(SessionSelections(model: "shared-one", tools: ["browser"]), harness: "codex")
+      preferences.setUsesSharedDefaults(false, harness: "codex", workspace: remote)
+      preferences.saveDefaults(SessionSelections(model: "shared-two", thinking: "high", permission: "read-only", tools: []), harness: "codex")
+      let reopened = SessionSelectionPreferences(defaults: defaults)
+      #expect(!reopened.usesSharedDefaults(harness: "codex", workspace: remote))
+      #expect(reopened.defaults(harness: "codex", workspace: local).model == "shared-two")
+      let independent = reopened.defaults(harness: "codex", workspace: remote)
+      #expect(independent.model == "shared-one" && independent.thinking == nil)
+      #expect(independent.tools == ["browser"])
+      #expect(reopened.usesProductPermissionDefault(harness: "codex", workspace: remote))
+      let chat = reopened.captureConversation(id: "independent", harness: "codex", workspace: remote)
+      #expect(chat.usesProductPermissionDefault)
+      reopened.setUsesSharedDefaults(true, harness: "codex", workspace: remote)
+      #expect(reopened.usesSharedDefaults(harness: "codex", workspace: remote))
+      #expect(reopened.defaults(harness: "codex", workspace: remote).model == "shared-two")
+      #expect(reopened.conversation(id: "independent") == chat)
+      reopened.setUsesSharedDefaults(false, harness: "grok-build", workspace: remote)
+      reopened.saveDefaults(SessionSelections(model: "later"), harness: "grok-build")
+      #expect(reopened.defaults(harness: "grok-build", workspace: remote).model == nil)
+    }
+  }
+
   @Test("frozen permission origin survives settings edits during native creation")
   func frozenPermissionOrigin() throws {
     try withPreferences { preferences, defaults in

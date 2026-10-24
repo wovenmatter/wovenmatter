@@ -874,3 +874,32 @@ struct SettingsHarnessSignInControl: View {
         }
     }
 }
+
+/// One scope control for every harness. Account controls remain host-specific.
+struct SettingsWorkspaceScope: View {
+    @Binding var scope: String
+    @Binding var expanded: Bool
+    let workspaces: [RemoteWorkspaceConfiguration]
+    var inherits: Binding<Bool>?
+    var detail: String?
+
+    private var label: String {
+        scope == "global" ? "Shared" : scope == "local" ? "Local agent workspace"
+            : workspaces.first { $0.id.uuidString.lowercased() == scope }?.name ?? "Workspace"
+    }
+    var body: some View {
+        DisclosureGroup("Workspace settings · \(label)", isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Settings for", selection: $scope) {
+                    Text("Shared across workspaces").tag("global")
+                    Text("Local agent workspace").tag("local")
+                    ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
+                }.frame(maxWidth: 440, alignment: .leading)
+                if scope != "global", let inherits {
+                    Toggle("Use shared settings", isOn: inherits)
+                    if let detail { SettingsNote(detail) }
+                }
+            }.padding(.top, 8)
+        }
+    }
+}
