@@ -8,24 +8,25 @@ import WovenMatterCore
 struct CompanionToolBridgeTests {
 
 
-  @Test func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {
+  @Test(.timeLimit(.minutes(1))) func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }
     let dispatcher = CompanionToolDispatcher(database: fixture.database)
     let request = fixture.request(["notes", "create", "--title", "Retained work"])
     var executions = 0
-    var continuation: CheckedContinuation<Void, Never>?
+    let started = AsyncStream<CheckedContinuation<Void, Never>>.makeStream()
     let initial = Task {
-      try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, caller in
+      defer { started.continuation.finish() }
+      return try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, caller in
         executions += 1
         #expect(caller == fixture.conversationID)
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation { started.continuation.yield($0) }
         #expect(!Task.isCancelled)
         return .init(result: .string("completed"), requestID: request.request.requestID)
       }
     }
-    let deadline = Date().addingTimeInterval(5)
-    while continuation == nil, Date() < deadline { await Task.yield() }
-    let release = try #require(continuation)
+    // Wait for acceptance itself rather than racing a loaded runner's clock.
+    var acceptance = started.stream.makeAsyncIterator()
+    let release = try #require(await acceptance.next())
     initial.cancel()
     let retry = Task {
       try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, _ in
