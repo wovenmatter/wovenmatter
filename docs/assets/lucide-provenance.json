@@ -10,6 +10,10 @@
       "upstream": "arrow-down.svg",
       "sha256": "a9bde5591a14128dea903414b3501e3859d26e752aa858f250f297842d3f6854"
     },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-left-right-s175.imageset/lucide-arrow-left-right-s175.svg": {
+      "upstream": "arrow-left-right.svg",
+      "sha256": "9b5fa08f78ab7c4df6a3f46d422ebbd58252907a9f5641152085c161c06d58d9"
+    },
     "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-left-s175.imageset/lucide-arrow-left-s175.svg": {
       "upstream": "arrow-left.svg",
       "sha256": "ebf83526bf3d3eeda9d66746dad2fb40bf788ad3b9272187636970bd01b28f23"
