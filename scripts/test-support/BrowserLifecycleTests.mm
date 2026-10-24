@@ -54,6 +54,16 @@ static WMBrowserRuntime *Runtime(BOOL running) {
 
 int main() {
   @autoreleasepool {
+    // Missing Keychain access must select in-memory storage, isolated from the
+    // saved profile. Neither cookies nor localStorage may be persisted there.
+    auto memory = BrowserStorageForProfile(nil, @"/tmp/browser-fixture");
+    Check(memory.cache.length == 0 && !memory.persistSessionCookies);
+    Check([memory.root isEqualToString:@"/tmp/browser-fixture"]);
+    auto saved = BrowserStorageForProfile(@"/tmp/saved-browser-fixture", @"/tmp/browser-fixture");
+    Check([saved.cache isEqualToString:@"/tmp/saved-browser-fixture/Default"]);
+    Check(saved.persistSessionCookies);
+    Check(![memory.root isEqualToString:saved.root]);
+
     // Never-started CEF still fences new tabs until a failed restart recovers.
     WMBrowserRuntime *cold = Runtime(NO);
     __block BOOL prepared = NO;

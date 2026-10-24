@@ -78,6 +78,7 @@ class AutomationObserver;
 @property(nonatomic) NSMutableSet<WMBrowserPage *> *pages;
 @property(nonatomic) NSTimer *pumpTimer;
 @property(nonatomic) BOOL running;
+@property(nonatomic, copy) NSString *temporaryProfileRoot;
 @property(nonatomic) BOOL stopping;
 @property(nonatomic) BOOL shutdownRequested;
 @property(nonatomic) BOOL pumping;
@@ -555,6 +556,18 @@ class AutomationObserver final : public CefDevToolsMessageObserver {
 }
 @end
 
+// An empty cache path is CEF's in-memory (off-the-record) profile. Give it a
+// separate installation root too, so it never touches the saved profile's files.
+struct BrowserStorage {
+  NSString *root;
+  NSString *cache;
+  BOOL persistSessionCookies;
+};
+static BrowserStorage BrowserStorageForProfile(NSString *savedPath, NSString *temporaryRoot) {
+  return {savedPath ?: temporaryRoot,
+    savedPath ? [savedPath stringByAppendingPathComponent:@"Default"] : @"", savedPath != nil};
+}
+
 @implementation WMBrowserRuntime
 + (void)prepareApplication { [WMBrowserApplication sharedApplication]; }
 + (instancetype)sharedRuntime {
@@ -570,7 +583,7 @@ class AutomationObserver final : public CefDevToolsMessageObserver {
   Boolean interactive = true;
   if (SecKeychainGetUserInteractionAllowed(&interactive) != errSecSuccess || interactive) {
     if (error) *error = [NSError errorWithDomain:@"WovenBrowser" code:2 userInfo:@{
-      NSLocalizedDescriptionKey: @"Reconnect saved credentials in Settings > General before opening the browser."}];
+      NSLocalizedDescriptionKey: @"The browser could not start without system credential prompts. Restart Woven Matter and try again."}];
     return NO;
   }
   if (_running) return YES;
@@ -596,11 +609,15 @@ class AutomationObserver final : public CefDevToolsMessageObserver {
 #endif
     CefSettings settings;
     settings.external_message_pump = true;
-    settings.persist_session_cookies = true;
     settings.log_severity = LOGSEVERITY_WARNING;
-    CefString(&settings.root_cache_path) = Cef(path);
-    CefString(&settings.cache_path) = Cef([path stringByAppendingPathComponent:@"Default"]);
-    CefString(&settings.log_file) = Cef([path stringByAppendingPathComponent:@"chromium.log"]);
+    NSString *temporaryRoot = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [@"wovenmatter-browser-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    self.temporaryProfileRoot = path ? nil : temporaryRoot;
+    auto storage = BrowserStorageForProfile(path, temporaryRoot);
+    settings.persist_session_cookies = storage.persistSessionCookies;
+    CefString(&settings.root_cache_path) = Cef(storage.root);
+    CefString(&settings.cache_path) = Cef(storage.cache);
+    CefString(&settings.log_file) = Cef([storage.root stringByAppendingPathComponent:@"chromium.log"]);
     app_ = new BrowserApp;
     _running = CefInitialize(CefMainArgs(argc, argv), settings, app_, nullptr);
     if (!_running) failure = @"Chromium could not initialize its browser profile.";
@@ -692,6 +709,10 @@ class AutomationObserver final : public CefDevToolsMessageObserver {
       CefShutdown();
       self->app_ = nullptr;
       self->loader_.reset();
+      if (self.temporaryProfileRoot) {
+        [NSFileManager.defaultManager removeItemAtPath:self.temporaryProfileRoot error:nil];
+        self.temporaryProfileRoot = nil;
+      }
     }
     void (^completion)(BOOL) = self.shutdownCompletion;
     self.shutdownCompletion = nil;

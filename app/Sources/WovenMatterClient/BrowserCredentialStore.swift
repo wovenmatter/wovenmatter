@@ -53,6 +53,15 @@ public final class BrowserCredentialStore: @unchecked Sendable {
     _ = try read(vaultQuery, authorize: false)
   }
 
+  /// Browsing may proceed without saved credentials or a persistent profile.
+  /// This probe is always noninteractive; only Settings can authorize access.
+  public func prepareForBrowsing(consented: Bool) -> Bool {
+    do {
+      try prepare(consented: consented)
+      return true
+    } catch { return false }
+  }
+
   public func prepare(consented: Bool, authorize: Bool = false) throws {
     guard consented else { throw AccessError.consentRequired }
     try lock.withLock {
