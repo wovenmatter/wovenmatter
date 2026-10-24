@@ -767,6 +767,30 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
+test('Claude readiness offers its stable session protocol rather than opting into draft v2', async () => {
+  for (const [id, version] of [['claude_code', 1], ['codex', 2]]) {
+    const child = new EventEmitter()
+    child.exitCode = null
+    child.killed = false
+    child.kill = () => { child.killed = true }
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    let initialize
+    child.stdin = new Writable({ write(bytes, _encoding, callback) {
+      initialize = JSON.parse(bytes)
+      callback()
+      queueMicrotask(() => child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: initialize.id,
+        result: { protocolVersion: version } }) + '\n'))
+    } })
+    const result = await probeHarnessTransport({ id, command: 'fixture' }, 1_000, () => {
+      queueMicrotask(() => child.emit('spawn'))
+      return child
+    })
+    assert.deepEqual(result, { ready: true, error: null })
+    assert.equal(initialize.params.protocolVersion, version)
+  }
+})
+
 test('readiness returns unavailable when the initialize pipe closes before its write', async () => {
   const child = new EventEmitter()
   child.exitCode = null

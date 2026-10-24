@@ -45,6 +45,7 @@ struct LocalACPFormTests {
         await client.shutdown()
         let messages = try read(fixture)
         let initialize = try #require(messages.first(where: { $0["method"] as? String == "initialize" }))
+        #expect((initialize["params"] as? [String: Any])?["protocolVersion"] as? Int == 1)
         let capabilities = ((initialize["params"] as? [String: Any])?["clientCapabilities"] as? [String: Any])?["elicitation"] as? [String: Any]
         #expect(capabilities?["form"] != nil)
         let result = try #require(messages.first(where: { $0["id"] as? String == "form" })?["result"] as? [String: Any])

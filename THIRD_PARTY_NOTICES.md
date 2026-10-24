@@ -142,7 +142,7 @@ SOFTWARE.
 ## Browser and computer automation
 
 Woven Matter embeds [Peekaboo](https://github.com/openclaw/Peekaboo) Automation Kit
-at `260fc35320d6c350af503338b944d68311e2bebb`, under MIT, copyright 2025 Peter
+at `5639e70501010ca9dcae5f594a0b57dd69e9b395` (4.9.7), under MIT, copyright 2025 Peter
 Steinberger. AXorcist and the Swift support-library licenses are reproduced in
 `app/App/ThirdPartyNotices.txt`, which is included in the application bundle.
 
@@ -151,6 +151,12 @@ Browser automation bundles `playwright-core` from
 and `ws` from [websockets/ws](https://github.com/websockets/ws) under MIT.
 Their upstream licenses remain in the bundled Node dependencies. Playwright
 connects to Woven Matter’s bundled CEF rather than installing another browser.
+
+The automation server and Executor client bundle the v2
+`@modelcontextprotocol/server` and `@modelcontextprotocol/client` packages from
+[the MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+under Apache-2.0. Their complete upstream licenses and notices remain in the
+bundled Node dependencies.
 
 ## Sparkle 2.10.0
 

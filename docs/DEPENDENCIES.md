@@ -51,9 +51,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 - **Peekaboo** accepts compatible releases from the tested release floor. Its
   exact build selection lives in the shared native lockfile; maintenance validates
   automation API compatibility before changing that snapshot.
+  Peekaboo 4.9.7 requires exactly AXorcist 0.2.2, so its resolved graph cannot
+  accept AXorcist 0.2.3 independently. Retain that upstream constraint until a
+  stable Peekaboo release lifts it; check both releases during each maintenance
+  scan. Local automation tests and native compilation validate this graph;
+  Accessibility permission and real desktop input still need manual acceptance.
+- **MCP TypeScript SDK** uses the current v2 client and server packages. The
+  automation stdio server and Executor Streamable HTTP client migrate together;
+  validate cancellation across both real transports with provider-free fixtures.
 - **Pi family and Chord** must resolve to one release, because the desktop
   and mobile bridges share their data contracts. A partially published release
   is skipped.
+  A scoped npm override raises Pi Coding Agent's pinned `undici` to the tested
+  `>=8.12.3` security floor, addressing GHSA-4qv8-2p9j-2685,
+  GHSA-f72v-6w45-q472, and GHSA-xjj6-f33q-929c. Review this override on every
+  Pi refresh and remove it once Pi's own requirement excludes the affected
+  releases. Provider-free HTTP security fixtures and the coding-agent suites
+  validate the overridden Node dependency; it is not part of the mobile bundle.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
@@ -79,6 +93,9 @@ Agent CLIs update the same way from Settings: ACP adapters take the latest
 release at or above their catalog minimum. OpenCode and Executor stay on v2,
 because v2 is the API Woven Matter implements. Maintenance must identify a
 new upstream API major and the integration work needed to support it.
+Claude ACP 0.95 serves both stable ACP v1 and an experimental v2 wire protocol;
+Woven Matter offers v1 explicitly for its implemented session API. Check the
+adapter's router on each refresh and migrate when ACP v2 becomes stable.
 
 Updates start only from Settings or explicit workspace actions; there is no
 background updater.

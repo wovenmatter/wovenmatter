@@ -1,9 +1,8 @@
 import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
 // cross the session CLI. Executor is used unchanged through its public local API.
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFile, mkdir, chmod } from 'node:fs/promises';
@@ -354,7 +353,7 @@ export class ExecutorBroker {
         if (job.status === 'cancelled' || job.controller.signal.aborted) return;
         const args = job.pending ? { requestId: job.pending.requestId, response } : job.action === 'skills' ? {} : { code: job.code };
         const name = job.pending ? 'resume' : job.action === 'skills' ? 'skills' : 'execute';
-        const result = await client.callTool({ name, arguments: args }, undefined, { signal: job.controller.signal, timeout: 900000, maxTotalTimeout: 900000 });
+        const result = await client.callTool({ name, arguments: args }, { signal: job.controller.signal, timeout: 900000, maxTotalTimeout: 900000 });
         if (job.status === 'cancelled') return;
         const structured = result.structuredContent;
         if (['approval-required', 'input-required'].includes(structured?.status)) { job.pending = structured; job.status = structured.status; }
@@ -376,7 +375,7 @@ export class ExecutorBroker {
       const client = this.clients.get(job.scope?.id);
       // Cancellation is best effort; never let an offline server block local
       // revocation or the UI. Pending approvals cannot run without acceptance.
-      client?.callTool({ name: 'resume', arguments: { requestId: pending.requestId, response: { action: 'cancel' } } }, undefined, { timeout: 3000, signal: AbortSignal.timeout(3000) }).catch(() => {});
+      client?.callTool({ name: 'resume', arguments: { requestId: pending.requestId, response: { action: 'cancel' } } }, { timeout: 3000, signal: AbortSignal.timeout(3000) }).catch(() => {});
     }
   }
   async cancelSession(session) {
