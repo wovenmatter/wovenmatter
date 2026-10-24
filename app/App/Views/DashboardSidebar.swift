@@ -283,6 +283,7 @@ struct DashboardSidebarNavigationPage: View {
     @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
 
+    @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var presentedFolderID: String?
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
@@ -326,6 +327,9 @@ struct DashboardSidebarNavigationPage: View {
             .onScrollPhaseChange { _, phase in
                 scrollHoverCoordinator.setScrolling(phase.isScrolling)
             }
+        }
+        .sheet(item: $browserWorkspace) { configuration in
+            RemoteBrowserView(workspaces: remoteWorkspaces, configuration: configuration)
         }
     }
 
@@ -588,6 +592,10 @@ struct DashboardSidebarNavigationPage: View {
         let ownerID = "remote:" + workspace.id.uuidString.lowercased()
         // Remote workspace names deliberately align with the local heading.
         agentDisclosureHeading(title: workspace.configuration.name, key: key)
+            .contextMenu {
+                Button("View browser") { browserWorkspace = workspace.configuration }
+                    .disabled(!remoteWorkspaces.isCredentialAccessEnabled)
+            }
         if agentSectionExpanded(key) {
             workspaceContents(
                 key: key, title: workspace.configuration.name,

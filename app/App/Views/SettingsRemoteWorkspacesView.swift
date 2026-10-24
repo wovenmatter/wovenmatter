@@ -23,6 +23,7 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var managedMemoryLimit = ""
     @State private var managedSwapLimit = ""
     @State private var showsCredentialDisclosure = false
+    @State private var browserWorkspace: RemoteWorkspaceConfiguration?
 
     var body: some View {
         SettingsPage(
@@ -72,6 +73,9 @@ struct SettingsRemoteWorkspacesView: View {
                 model.discoverMachines()
                 for workspace in model.workspaces { model.refresh(workspace) }
             }
+        }
+        .sheet(item: $browserWorkspace) { workspace in
+            RemoteBrowserView(workspaces: model, configuration: workspace)
         }
         .sheet(isPresented: $showsCredentialDisclosure) {
             CredentialAccessDisclosureView(
@@ -299,6 +303,10 @@ struct SettingsRemoteWorkspacesView: View {
             .fixedSize(horizontal: true, vertical: false)
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(busy)
+
+            Button("View browser") { browserWorkspace = workspace }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(!model.isCredentialAccessEnabled || busy)
 
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Keep tasks and sessions running in the background", isOn: Binding(

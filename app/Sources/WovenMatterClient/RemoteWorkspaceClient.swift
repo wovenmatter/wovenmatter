@@ -1126,6 +1126,44 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
     }
 
+    public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
+        var components = URLComponents(url: baseURL.appending(path: "v1/browser/stream"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "tabID", value: tabID)]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let configuration = session.configuration
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let decoder = RemoteBrowserStreamDecoder(continuation)
+            let session = URLSession(configuration: configuration, delegate: decoder, delegateQueue: nil)
+            let task = session.dataTask(with: request)
+            continuation.onTermination = { @Sendable _ in task.cancel(); session.invalidateAndCancel() }
+            task.resume()
+        }
+    }
+
+    public func browserTabs() async throws -> RemoteBrowserTabs {
+        try await request(path: "v1/browser/tabs", method: "GET", body: nil)
+    }
+
+    public func browserAction(_ action: RemoteBrowserAction) async throws -> RemoteBrowserActionResult {
+        try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action))
+    }
+
+    public func browserActions(_ actions: [RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult {
+        struct Payload: Encodable { let actions: [RemoteBrowserAction] }
+        return try await request(path: "v1/browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)))
+    }
+
+    public func browserFrame(tabID: String, previousFrameID: String? = nil) async throws -> RemoteBrowserFrame {
+        struct Payload: Encodable { let tabID: String; let previousFrameID: String? }
+        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)))
+    }
+
     public func health() async throws -> RemoteWorkspaceHealth {
         try await request(path: "v1/health", method: "GET", body: nil)
     }
@@ -1299,6 +1337,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.httpMethod = method
         request.httpBody = body
         if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
+        if path.hasPrefix("v1/browser/") { request.timeoutInterval = 10 }
         if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
@@ -1308,6 +1347,16 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
+            if path.hasPrefix("v1/browser/") {
+                let message: String
+                switch (response as? HTTPURLResponse)?.statusCode {
+                case 404: message = "Update this workspace container in Settings to view its browser."
+                case 410: message = "This tab has closed. Waiting for the workspace’s current tabs."
+                case 409: message = "The page changed or another input is finishing. Check the refreshed page and try again."
+                default: message = "The remote browser is unavailable. Reconnect to the workspace and try again."
+                }
+                throw RemoteWorkspaceClientError.invalidResponse(message)
+            }
             if path == "v1/default-agent/sdks" {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
@@ -1332,6 +1381,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             throw RemoteWorkspaceClientError.invalidResponse(
                 String(decoding: data, as: UTF8.self)
             )
+        }
+        if path.hasPrefix("v1/browser/"), data.count > 3 * 1024 * 1024 {
+            throw RemoteWorkspaceClientError.invalidResponse("The browser response is too large.")
         }
         let decoder = JSONDecoder()
         if path.hasPrefix("v1/task-gateway") {

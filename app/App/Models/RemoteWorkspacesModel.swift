@@ -49,6 +49,7 @@ final class RemoteWorkspacesModel {
     private(set) var statuses: [UUID: RemoteWorkspaceStatus] = [:]
     private(set) var harnesses: [UUID: [RemoteHarnessStatus]] = [:]
     var onRuntimeMaintenanceChanged: (@MainActor () async -> Void)?
+    private var browserFeeds: [UUID: RemoteBrowserFrameFeed] = [:]
     private var credentialEpoch = UUID()
     private var authorizingWorkspaceIDs: Set<UUID> = []
     private var workspaceEpochs: [UUID: UUID] = [:]
@@ -222,6 +223,7 @@ final class RemoteWorkspacesModel {
 
     func disableCredentialAccess() {
         if forwardToBackend(.disableCredentialAccess) { return }
+        browserFeeds.values.forEach { $0.stop() }; browserFeeds.removeAll()
         credentialEpoch = UUID()
         isCredentialAccessEnabled = false
         preparedHarnessAction = nil
@@ -505,6 +507,92 @@ final class RemoteWorkspacesModel {
 
     func createProject(name: String, in configuration: RemoteWorkspaceConfiguration, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
         try await databaseRequest(configuration) { try await $0.createProject(name: name, reuseExisting: reuseExisting) }
+    }
+
+    func browserIdentity(for configuration: RemoteWorkspaceConfiguration) -> RemoteWorkspaceRequestIdentity? {
+        guard isCredentialAccessEnabled, self.configuration(id: configuration.id) == configuration,
+              !invalidatingWorkspaceIDs.contains(configuration.id) else { return nil }
+        return .init(configuration: configuration, credentialEpoch: credentialEpoch,
+                     workspaceEpoch: workspaceEpochs[configuration.id] ?? configuration.id)
+    }
+
+    private func browserBackend(_ command: BackendRemoteWorkspaceCommand,
+                                configuration: RemoteWorkspaceConfiguration) async throws -> BackendRemoteWorkspaceResponse {
+        guard let identity = browserIdentity(for: configuration), let backendRequest else {
+            throw RemoteWorkspaceClientError.invalidResponse("Reconnect to this workspace in Settings to view its browser.")
+        }
+        let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
+        guard identity == browserIdentity(for: configuration), !Task.isCancelled else { throw CancellationError() }
+        // A live frame must never apply an older administration snapshot over a
+        // credential disable or workspace edit that arrived while it was loading.
+        return try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
+    }
+
+    private func browserRequest<Value: Sendable>(_ configuration: RemoteWorkspaceConfiguration,
+        operation: (RemoteWorkspaceServiceClient) async throws -> Value) async throws -> Value {
+        guard isCredentialAccessEnabled else {
+            throw RemoteWorkspaceClientError.invalidResponse("Enable credential access in Settings to connect.")
+        }
+        let identity = try requestIdentity(configuration)
+        let client: RemoteWorkspaceServiceClient
+        if let feed = browserFeeds[configuration.id], feed.identity == identity, !feed.stopped, let existing = feed.client {
+            // The live stream already owns a ready, authenticated connection.
+            // Probing SSH/HTTP before every local video read adds a full WAN RTT.
+            client = existing
+        } else { client = try await serviceClient(for: configuration) }
+        try requireCurrent(identity)
+        let value = try await operation(client)
+        try requireCurrent(identity)
+        return value
+    }
+
+    func browserTabs(for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserTabs {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserTabs(configuration.id), configuration: configuration).browserTabs else {
+                throw BackendRPCError.remote("The background service returned no browser tabs.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { try await $0.browserTabs() }
+    }
+
+    func browserAction(_ action: RemoteBrowserAction, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserActionResult {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserAction(configuration.id, action), configuration: configuration).browserAction else {
+                throw BackendRPCError.remote("The background service returned no browser input acknowledgement.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { try await $0.browserAction(action) }
+    }
+
+    func browserActions(_ actions: [RemoteBrowserAction], for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserActionBatchResult {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserActions(configuration.id, actions), configuration: configuration).browserActions else {
+                throw BackendRPCError.remote("The background service returned no browser input acknowledgement.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { try await $0.browserActions(actions) }
+    }
+
+    func browserFrame(tabID: String, previousFrameID: String? = nil, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserFrame {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserFrame(configuration.id, tabID: tabID, previousFrameID: previousFrameID), configuration: configuration).browserFrame else {
+                throw BackendRPCError.remote("The background service returned no browser image.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { client in
+            let identity = try self.requestIdentity(configuration)
+            if let feed = self.browserFeeds[configuration.id], feed.tabID != tabID || feed.identity != identity || feed.stopped {
+                feed.stop(); self.browserFeeds[configuration.id] = nil
+            }
+            if self.browserFeeds[configuration.id] == nil {
+                self.browserFeeds[configuration.id] = RemoteBrowserFrameFeed(tabID: tabID, identity: identity, client: client, frames: client.browserFrames(tabID: tabID))
+            }
+            return try await self.browserFeeds[configuration.id]!.latest(previousFrameID: previousFrameID)
+        }
     }
 
     func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
@@ -921,6 +1009,7 @@ final class RemoteWorkspacesModel {
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
             self.actionErrors.removeValue(forKey: configuration.id)
+            self.browserFeeds.removeValue(forKey: configuration.id)?.stop()
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -956,6 +1045,7 @@ final class RemoteWorkspacesModel {
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
             self.actionErrors.removeValue(forKey: configuration.id)
+            self.browserFeeds.removeValue(forKey: configuration.id)?.stop()
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -1558,7 +1648,7 @@ final class RemoteWorkspacesModel {
         }
         let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
         let response = try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
-        applyBackendSnapshot(response.snapshot)
+        if let snapshot = response.snapshot { applyBackendSnapshot(snapshot) }
         return response
     }
 
@@ -1620,4 +1710,63 @@ extension RemoteWorkspacesModel {
     func deleteProject(path: String, in configuration: RemoteWorkspaceConfiguration) async throws {
         _ = try await databaseRequest(configuration) { try await $0.deleteProject(path: path) }
     }
+}
+
+/// The owner keeps one latest image, never a playback queue. Viewing renews a
+/// short lease, so closing/crashing the frontend stops remote capture automatically.
+@MainActor
+final class RemoteBrowserFrameFeed {
+    let tabID: String
+    let identity: RemoteWorkspaceRequestIdentity
+    let client: RemoteWorkspaceServiceClient?
+    private(set) var stopped = false
+    private var frame: RemoteBrowserFrame?
+    private var error: (any Error)?
+    private var equivalentFrames: [String] = []
+    private var lastRead = ContinuousClock.now
+    private var receiver: Task<Void, Never>?
+    private var lease: Task<Void, Never>?
+    init(tabID: String, identity: RemoteWorkspaceRequestIdentity, client: RemoteWorkspaceServiceClient? = nil, frames: AsyncThrowingStream<RemoteBrowserFrame, any Error>) {
+        self.tabID = tabID; self.identity = identity; self.client = client
+        receiver = Task { [weak self] in
+            do {
+                for try await incoming in frames {
+                    guard let self, !self.stopped else { return }
+                    guard incoming.tabID == tabID, incoming.imageBase64.utf8.count <= 2 * 1024 * 1024,
+                          incoming.frameID != nil else { throw BackendRPCError.invalidFrame }
+                    if let imageID = incoming.imageID, imageID == self.frame?.imageID {
+                        if let previous = self.frame?.frameID { self.equivalentFrames.append(previous) }
+                        if self.equivalentFrames.count > 128 { self.equivalentFrames.removeFirst() }
+                    } else { self.equivalentFrames.removeAll() }
+                    self.frame = incoming
+                }
+                self?.error = URLError(.networkConnectionLost)
+            } catch { self?.error = error }
+            self?.frame = nil
+        }
+        lease = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self else { return }
+                if self.lastRead.duration(to: .now) >= .seconds(3) { self.stop(); return }
+            }
+        }
+    }
+    func latest(previousFrameID: String?) async throws -> RemoteBrowserFrame {
+        guard !stopped else { throw CancellationError() }
+        if let error { throw error }
+        lastRead = .now
+        let started = ContinuousClock.now
+        while frame == nil, error == nil, !stopped {
+            lastRead = .now
+            if started.duration(to: .now) > .seconds(10) { throw URLError(.timedOut) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard !stopped else { throw CancellationError() }
+        if let error { throw error }
+        guard let frame else { throw CancellationError() }
+        return .init(tabID: tabID, imageBase64: frame.frameID == previousFrameID || equivalentFrames.contains(previousFrameID ?? "") ? "" : frame.imageBase64, frameID: frame.frameID, imageID: frame.imageID)
+    }
+    func stop() { stopped = true; receiver?.cancel(); lease?.cancel(); frame = nil; equivalentFrames.removeAll() }
+    deinit { receiver?.cancel(); lease?.cancel() }
 }

@@ -60,8 +60,17 @@ wait_for_health() {
   done
 }
 
+verify_browser() {
+  # Exercise the actual non-root, read-only workspace from its mounted home.
+  # Feeding stdin avoids installing test files or dependencies in the image.
+  docker exec -i --workdir /home "$1" timeout --kill-after=5s 90s node --input-type=commonjs \
+    < remote/test-support/browser-smoke.cjs
+}
+
 wait_for_health "$port_a" "$token_a"
 wait_for_health "$port_b" "$token_b"
+verify_browser "$container_a"
+verify_browser "$container_b"
 printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port_a}/v1/health")" = 401 ]
 [ "$(docker inspect -f '{{.State.Running}}' "$container_a")" = true ]
@@ -92,6 +101,7 @@ wait_for_health "$port_a" "$token_a"
 
 scripts/remote-workspace.sh update "$workspace_a" wovenmatter/workspace:latest "" "" "$port_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
+verify_browser "$container_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
 delete_status="$(scripts/remote-workspace.sh delete "$workspace_a")"
@@ -126,4 +136,4 @@ fi
 scripts/remote-workspace.sh delete "$workspace_b" --data >/dev/null
 trap - EXIT HUP INT TERM
 cleanup
-printf '%s\n' 'Container home, storage reporting, lifecycle persistence, legacy safety, and explicit deletion passed.'
+printf '%s\n' 'Container browser, home, storage reporting, lifecycle persistence, legacy safety, and explicit deletion passed.'

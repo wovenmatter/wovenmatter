@@ -111,6 +111,11 @@ final class BackendApplicationService {
     }
 
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
+        // Browser frames and input are ephemeral. Do not retain images or typed
+        // text in RPC replay storage; the workspace deduplicates input IDs.
+        if request.method == "remoteWorkspaces.command",
+           let command = try? JSONDecoder().decode(BackendRemoteWorkspaceCommand.self, from: request.payload),
+           command.isBrowserOperation { return await perform(request) }
         guard ["application.command", "remoteWorkspaces.command"].contains(request.method) else { return await perform(request) }
         let identity = BackendRPCCommandIdentity(request)
         if let saved = completed[request.id] {
