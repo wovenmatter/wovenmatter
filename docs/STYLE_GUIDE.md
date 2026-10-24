@@ -67,15 +67,16 @@ when an intentional design change is accepted.
   selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
-- **Harness workspace settings:** use the same Workspace settings disclosure and
-  Settings for selector on every harness page, with space below the hover row.
-  Shared across workspaces edits shared defaults; Local agent workspace and named
-  remote workspaces expose Use shared settings. Independent defaults stay separate
-  from later shared edits. Sign-in and installed versions belong to each workspace,
-  regardless of default sharing; do not imply credentials transfer between hosts.
-  Account rows show the authentication method and reported account or key labels,
-  including multiple providers. Never show key/token values or infer names that a
-  harness does not expose.
+- **Harness settings areas:** separate Accounts & installation from Chat settings.
+  Give accounts their own Local agent workspace / named remote workspace selector;
+  only Pi Durable exposes Shared Pi Durable accounts. Keep chat inheritance controls
+  inside Chat settings, never above accounts or software. Changing chat inheritance
+  must not change credential selection. Workspace Pi Durable accounts take priority
+  per provider, with shared accounts as fallback; show their source and labels.
+  Explain native harness capability differences in the Account sharing disclosure:
+  reusable API keys are not the same as automatic credential sync, and native
+  subscription sign-ins stay with their installation. Never show key/token values
+  or infer names that a harness does not expose.
 - **Pi Durable updates:** use the same compact runtime row as other harnesses:
   logo, harness name, embedded SDK versions on one summary line, installed status,
   and one Check for updates / Update action per

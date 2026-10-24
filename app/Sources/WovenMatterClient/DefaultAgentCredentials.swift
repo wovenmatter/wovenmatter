@@ -307,7 +307,7 @@ public final class ProviderAccountCoordinator {
     nonisolated public static func refreshStored(_ scopes: [String]) async throws -> [String: DefaultAgentPayload] {
         try DefaultAgentSupport.migrateLocalOAuth()
         let settings = DefaultAgentSupport.settings
-        let keyScopes = Set(["global"] + Array(settings.workspaces.keys))
+        let keyScopes = Set(["global"] + scopes + Array(settings.workspaces.keys))
         var issues: [String: [String: String]] = [:]
         for scope in keyScopes {
             for provider in ["openai-codex", "xai"] {
@@ -335,7 +335,7 @@ public final class ProviderAccountCoordinator {
         var result: [String: DefaultAgentPayload] = [:]
         for scope in scopes {
             var value = try DefaultAgentSupport.snapshot(workspace: scope)
-            let keyScope = settings.workspaces[scope] == nil ? "global" : scope
+            let keyScope = scope
             for id in ["openai-codex", "xai"] {
                 let owner = try DefaultAgentSupport.oauth(id, scope: keyScope) == nil ? "global" : keyScope
                 if issues[owner]?[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }

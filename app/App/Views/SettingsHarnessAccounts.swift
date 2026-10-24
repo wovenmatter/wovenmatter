@@ -9,6 +9,10 @@ struct SettingsHarnessAccounts: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            SettingsNote("Sign-in belongs to this harness on the selected workspace. Sharing chat settings does not change it.")
+            DisclosureGroup("Account sharing") {
+                SettingsNote(sharingDetail)
+            }
             if scope == "global" || scope == "local" {
                 SettingsCard(title: runtimeKind.displayName, detail: "Local agent workspace") {
                     SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
@@ -34,6 +38,21 @@ struct SettingsHarnessAccounts: View {
                !model.remoteWorkspaces.workspaces.contains(where: { $0.id.uuidString.lowercased() == scope }) {
                 SettingsEmpty("This workspace is no longer configured.")
             }
+        }
+    }
+
+    private var sharingDetail: String {
+        switch runtimeKind {
+        case .codex:
+            "Codex uses its own ChatGPT sign-in or OpenAI API key. An OpenAI API key can also be used in Pi Durable, but Woven Matter does not automatically copy it into Codex or sync Codex sign-ins between machines."
+        case .claudeCode:
+            "Claude Code uses Claude’s credentials on this machine. Pi Durable manages separate Claude profiles; both require native sign-in on each machine. Anthropic API keys are reusable, but are not automatically synced into Claude Code."
+        case .grokBuild:
+            "Grok Build uses its own Grok sign-in on each machine. Pi Durable’s Grok account sharing does not sign in Grok Build."
+        case .opencode:
+            "OpenCode manages accounts and API keys in its own service. Workspaces connected to the same service use that service’s accounts; separate services need their own setup. Pi Durable’s OpenCode API key is not automatically synced into OpenCode."
+        default:
+            "Accounts are managed by this harness on each workspace."
         }
     }
 

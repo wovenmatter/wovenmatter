@@ -17,7 +17,10 @@ struct SettingsAgentDefaultsSection: View {
     var includesHarnessSetup = false
     var initialScope = "global"
     var onScopeChange: ((String) -> Void)?
-    @State private var showsWorkspaceSettings = false
+    var onAreaChange: ((HarnessSettingsArea) -> Void)?
+    @State private var area: HarnessSettingsArea = .accounts
+    @State private var accountScope = "local"
+    @State private var showsWorkspaceSettings = true
     @State private var usesShared = true
     @State private var defaultsReady = false
     @State private var selectedScope = "global"
@@ -48,16 +51,20 @@ struct SettingsAgentDefaultsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if includesHarnessSetup {
+                SettingsHarnessAreaPicker(selection: $area)
+            }
+            if includesHarnessSetup && area == .accounts {
+                SettingsAccountWorkspacePicker(scope: $accountScope, workspaces: model.remoteWorkspaces.workspaces)
+                SettingsHarnessAccounts(model: model, runtimeKind: runtime, scope: accountScope)
+            } else {
             if fixedScope == nil {
                 SettingsWorkspaceScope(scope: $selectedScope, expanded: $showsWorkspaceSettings,
                     workspaces: model.remoteWorkspaces.workspaces,
                     inherits: includesHarnessSetup ? Binding(get: { usesShared }, set: { setSharing($0) }) : nil,
-                    detail: usesShared ? "Uses shared defaults. Sign-in stays with each workspace."
+                    detail: usesShared ? "Models, thinking, permissions, and tool defaults follow shared chat settings."
                         : "Defaults apply only to this workspace.")
                     .disabled(saving || !defaultsReady)
-            }
-            if includesHarnessSetup {
-                SettingsHarnessAccounts(model: model, runtimeKind: runtime, scope: scope)
             }
             SettingsCard(title: title,
                 detail: "Starting settings for \(runtime.displayName). You can change them in each chat.") {
@@ -108,14 +115,17 @@ struct SettingsAgentDefaultsSection: View {
             }.disabled(!scopeAvailable || inheritsDefaults)
             }
             if let error { SettingsError(error) }
+            }
         }
         .disabled(saving)
         .task(id: initialScope) {
             selectedScope = initialScope
-            showsWorkspaceSettings = initialScope != "global"
+            accountScope = initialScope == "global" ? "local" : initialScope
+            showsWorkspaceSettings = true
         }
         .task(id: identity) { await loadDefaults() }
-        .onChange(of: selectedScope) { _, scope in onScopeChange?(scope) }
+        .onChange(of: accountScope) { _, scope in onScopeChange?(scope) }
+        .onChange(of: area) { _, area in onAreaChange?(area) }
         .onDisappear { requestID = UUID() }
         .onChange(of: model.connections.inherits) { _, _ in
             if runtime == .defaultAgent { Task { await loadDefaults() } }

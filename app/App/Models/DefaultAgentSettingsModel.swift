@@ -211,7 +211,7 @@ final class DefaultAgentSettingsModel {
             catalogIncludesAllModels = value.catalogIncludesAllModels ?? false
             resolvedDefaultModelID = value.resolvedDefaultModelID
         }
-        searchConfigured = value.searchConfigured; accounts = value.accounts
+        searchConfigured = value.searchConfigured; accounts = value.accounts; sharedAccounts = value.sharedAccounts ?? [:]
         signInProvider = value.signInProvider
         signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
@@ -256,7 +256,7 @@ final class DefaultAgentSettingsModel {
         if let provider = providers.first(where: { $0.id == id }) {
             return provider.connected ? "Credentials present" : "Connect account"
         }
-        guard let saved = accounts[id] else { return "Status unchecked" }
+        guard let saved = effectiveAccounts[id] else { return "Status unchecked" }
         return saved.isEmpty ? "Connect account" : "Credential saved · status unchecked"
     }
     private func invalidateConnection(_ provider: String) {
@@ -265,6 +265,10 @@ final class DefaultAgentSettingsModel {
     var signInProvider: String?
     var signInOutcome: SignInOutcome?
     var accounts: [String: [ProviderConnectionAccounts.Account]] = [:]
+    var sharedAccounts: [String: [ProviderConnectionAccounts.Account]] = [:]
+    var effectiveAccounts: [String: [ProviderConnectionAccounts.Account]] {
+        sharedAccounts.merging(accounts.filter { !$0.value.isEmpty }) { _, owned in owned }
+    }
     var busy = false
     var error: String?
     var notice: String?
@@ -310,9 +314,9 @@ final class DefaultAgentSettingsModel {
         publishCatalog()
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
-    var keyScope: String { inherits ? "global" : scope }
+    var keyScope: String { scope }
     var availableModelProviderIDs: Set<String> {
-        var result = Set(accounts.filter { !$0.value.isEmpty }.map(\.key))
+        var result = Set(effectiveAccounts.filter { !$0.value.isEmpty }.map(\.key))
         for provider in providers {
             if provider.connected { result.insert(provider.id) }
             else { result.remove(provider.id) }
@@ -366,7 +370,7 @@ final class DefaultAgentSettingsModel {
     }
     @discardableResult func saveKey(_ key: String, provider: String, label: String? = nil) async -> Bool {
         if forward(.init(action: "saveKey", provider: provider, value: key, label: label)) { return true }
-        guard !inherits, !busy else { return false }
+        guard !busy else { return false }
         let runID = generation, accountScope = keyScope
         busy = true
         defer { if generation == runID { busy = false } }
@@ -398,17 +402,19 @@ final class DefaultAgentSettingsModel {
         let runID = generation, accountScope = keyScope
         do {
             let value = try await ProviderConnectionStore.shared.accounts(scope: accountScope, force: force)
+            let shared = accountScope == "global" ? nil : try await ProviderConnectionStore.shared.accounts(scope: "global", force: force)
             guard !Task.isCancelled, generation == runID, keyScope == accountScope,
                 value.revision == DefaultAgentSupport.revision else { return }
             if accounts != value.accounts { accounts = value.accounts }
+            sharedAccounts = shared?.accounts ?? [:]
             publishCatalog()
-            if !providers.contains(where: { $0.id == "exa" }) { searchConfigured = !(accounts["exa"] ?? []).isEmpty }
+            if !providers.contains(where: { $0.id == "exa" }) { searchConfigured = !(effectiveAccounts["exa"] ?? []).isEmpty }
         } catch is CancellationError { }
         catch { if generation == runID, keyScope == accountScope { self.error = error.localizedDescription } }
     }
     func selectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) async {
         if forward(.init(action: "select", provider: provider, value: id, remote: remote)) { return }
-        guard !inherits, !busy else { return }
+        guard !busy else { return }
         let runID = generation, accountScope = keyScope
         busy = true
         defer { if generation == runID { busy = false } }
@@ -421,7 +427,7 @@ final class DefaultAgentSettingsModel {
     }
     func moveAccount(_ id: String, provider: String, offset: Int) async {
         if forward(.init(action: "move", provider: provider, value: id, offset: offset)) { return }
-        guard !inherits, !busy else { return }
+        guard !busy else { return }
         let runID = generation, accountScope = keyScope
         busy = true
         defer { if generation == runID { busy = false } }
@@ -433,7 +439,7 @@ final class DefaultAgentSettingsModel {
     }
     func removeAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) async {
         if forward(.init(action: "remove", provider: provider, value: id, remote: remote)) { return }
-        guard !inherits, !busy else { return }
+        guard !busy else { return }
         let runID = generation, accountScope = keyScope
         busy = true
         defer { if generation == runID { busy = false } }
@@ -454,7 +460,7 @@ final class DefaultAgentSettingsModel {
     }
     func reconnectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration?) async {
         if forward(.init(action: "reconnect", provider: provider, value: id, remote: remote)) { return }
-        guard !inherits, !busy else { return }
+        guard !busy else { return }
         let runID = generation, accountScope = keyScope
         busy = true
         defer { if generation == runID { busy = false } }
@@ -468,7 +474,7 @@ final class DefaultAgentSettingsModel {
     }
     func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) async {
         if forward(.init(action: "signOut", provider: provider, remote: remote)) { return }
-        guard !inherits, !busy else { return }
+        guard !busy else { return }
         if provider == "claude-subscription" || remote != nil {
             refresh(remote: remote, login: provider, action: "logout")
             return
@@ -483,6 +489,8 @@ final class DefaultAgentSettingsModel {
         } catch { if generation == runID { self.error = error.localizedDescription } }
     }
     private func enableProvider(_ id: String) {
+        // Signing in must not silently detach a workspace from shared settings.
+        guard !inherits else { return }
         var config = configuration
         if !config.providers.contains(id) {
             config.providers.append(id)
@@ -491,7 +499,7 @@ final class DefaultAgentSettingsModel {
     }
     func signInClaude(remote: RemoteWorkspaceConfiguration?) {
         if forward(.init(action: "claude", remote: remote)) { return }
-        guard !inherits else { return }
+        guard !busy else { return }
         enableProvider("claude-subscription")
         refresh(remote: remote, login: "claude-subscription")
     }
@@ -540,7 +548,7 @@ final class DefaultAgentSettingsModel {
         publishedCatalogKey = nil
         catalogRemote = nil
         if backendRequest != nil {
-            if self.scope != scope { catalog = []; providers = []; accounts = [:] }
+            if self.scope != scope { catalog = []; providers = []; accounts = [:]; sharedAccounts = [:] }
             self.scope = scope
             _ = forward(.init(action: "scope", value: scope))
             return
@@ -550,7 +558,7 @@ final class DefaultAgentSettingsModel {
         settings = DefaultAgentSupport.settings
         localServers = LocalModelServerStore.servers
         self.scope = scope
-        if changedScope { catalog = []; providers = []; accounts = [:] }
+        if changedScope { catalog = []; providers = []; accounts = [:]; sharedAccounts = [:] }
         signInOutcome = nil
         notice = nil
         error = nil
@@ -843,7 +851,7 @@ final class DefaultAgentSettingsModel {
     }
     func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil, profile: String? = nil, removingAccount: String? = nil, reconnectingAccount: String? = nil) {
         if forward(.init(action: "refresh", provider: login, value: action, remote: remote, profile: profile, removingAccount: removingAccount, reconnectingAccount: reconnectingAccount)) { return }
-        guard login == nil || !inherits else { return }
+        // Account actions are independent of chat-settings inheritance.
         cancel()
         self.activeRemote = remote
         self.catalogRemote = remote

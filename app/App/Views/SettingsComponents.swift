@@ -889,7 +889,35 @@ struct SettingsHarnessSignInControl: View {
     }
 }
 
-/// One scope control for every harness. Account controls remain host-specific.
+enum HarnessSettingsArea: String, CaseIterable {
+    case accounts = "Accounts & installation"
+    case defaults = "Chat settings"
+}
+
+struct SettingsHarnessAreaPicker: View {
+    @Binding var selection: HarnessSettingsArea
+    var body: some View {
+        Picker("Manage", selection: $selection) {
+            ForEach(HarnessSettingsArea.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }.pickerStyle(.segmented).frame(maxWidth: 440)
+    }
+}
+
+/// Account location is independent of preference inheritance.
+struct SettingsAccountWorkspacePicker: View {
+    @Binding var scope: String
+    let workspaces: [RemoteWorkspaceConfiguration]
+    var supportsSharedAccounts = false
+    var body: some View {
+        Picker("Accounts for", selection: $scope) {
+            if supportsSharedAccounts { Text("Shared Pi Durable accounts").tag("global") }
+            Text("Local agent workspace").tag("local")
+            ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
+        }.frame(maxWidth: 480, alignment: .leading)
+    }
+}
+
+/// Only chat preferences inherit; accounts have their own location selector.
 struct SettingsWorkspaceScope: View {
     @Binding var scope: String
     @Binding var expanded: Bool
@@ -902,16 +930,18 @@ struct SettingsWorkspaceScope: View {
             : workspaces.first { $0.id.uuidString.lowercased() == scope }?.name ?? "Workspace"
     }
     var body: some View {
-        DisclosureGroup("Workspace settings · \(label)", isExpanded: $expanded) {
+        DisclosureGroup("Chat settings · \(label)", isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Settings for", selection: $scope) {
-                    Text("Shared across workspaces").tag("global")
+                    Text("Shared chat settings").tag("global")
                     Text("Local agent workspace").tag("local")
                     ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
                 }.frame(maxWidth: 440, alignment: .leading)
                 if scope != "global", let inherits {
-                    Toggle("Use shared settings", isOn: inherits)
+                    Toggle("Use shared chat settings", isOn: inherits)
                     if let detail { SettingsNote(detail) }
+                } else if scope == "global" {
+                    SettingsNote("Used by workspaces with shared chat settings enabled. Accounts are managed separately.")
                 }
             }.padding(.top, 8)
         }

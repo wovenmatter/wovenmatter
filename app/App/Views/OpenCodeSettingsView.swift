@@ -127,7 +127,8 @@ struct SettingsOpenCodeView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onOpenAgent: (UUID?) -> Void
-    @State private var selectedScope = "global"
+    @State private var selectedScope = "local"
+    @State private var area: HarnessSettingsArea = .accounts
 
     private var remoteConfigurations: [RemoteWorkspaceConfiguration] {
         model.remoteWorkspaces.workspaces.filter {
@@ -139,8 +140,9 @@ struct SettingsOpenCodeView: View {
         SettingsPage(title: "OpenCode", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             SettingsAgentDefaultsSection(model: model, runtime: .opencode, includesHarnessSetup: true,
                 initialScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : "global",
-                onScopeChange: { selectedScope = $0 })
-            SettingsCard(title: "Agent settings") {
+                onScopeChange: { selectedScope = $0 }, onAreaChange: { area = $0 })
+            if area == .accounts {
+            SettingsCard(title: "OpenCode service settings") {
                 if selectedScope == "global" || selectedScope == "local" {
                     if model.openCode?.isInstalled == true {
                         agentLink("Local agent workspace", workspaceID: nil)
@@ -152,9 +154,10 @@ struct SettingsOpenCodeView: View {
                     }
                 }
             }
+            }
         }
         .task {
-            selectedScope = isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : "global"
+            selectedScope = workspaceID?.uuidString.lowercased() ?? "local"
             await model.synchronizeRemoteOpenCodeInstances()
         }
     }

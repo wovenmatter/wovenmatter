@@ -27,6 +27,7 @@ struct SettingsConnectionsView: View {
     var focus: ConnectionSettingsFocus = .providers
     var embedded = false
     var onConnected: ((String) -> Void)?
+    var onManageShared: (() -> Void)?
     let onBack: () -> Void
     @State private var keyDrafts: [String: String] = [:]
     @State private var keyLabels: [String: String] = [:]
@@ -34,7 +35,7 @@ struct SettingsConnectionsView: View {
     @State private var confirmingCredentialReset = false
     @Environment(\.dashboardTheme) private var theme
     private var agent: DefaultAgentSettingsModel { model.connections }
-    private var editable: Bool { !agent.inherits }
+    private var editable: Bool { true }
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
@@ -130,7 +131,7 @@ struct SettingsConnectionsView: View {
         case "OpenRouter": ids = ["openrouter"]
         default: ids = ["opencode-go"]
         }
-        let accounts = ids.flatMap { agent.accounts[$0] ?? [] }
+        let accounts = ids.flatMap { agent.effectiveAccounts[$0] ?? [] }
         return accounts.isEmpty ? nil : accounts.map(\.label).joined(separator: " · ")
     }
     private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {
@@ -142,6 +143,24 @@ struct SettingsConnectionsView: View {
         VStack(alignment: .leading, spacing: 10) {
             let stored = agent.accounts[id] ?? []
             let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
+            if agent.scope != "global" {
+                if accounts.isEmpty, let shared = agent.sharedAccounts[id], !shared.isEmpty {
+                    SettingsNote(id == "claude-subscription"
+                        ? "Shared profile names · Claude sign-in is required on this machine."
+                        : remote == nil ? "Using shared Pi Durable accounts" : "Shared fallback accounts")
+                    ForEach(shared) { account in
+                        Text(account.label).font(.system(size: 12.5, weight: .medium))
+                    }
+                    if let onManageShared {
+                        Button("Manage shared accounts", action: onManageShared).buttonStyle(SettingsQuietButtonStyle())
+                    }
+                } else if !accounts.isEmpty {
+                    SettingsNote("Workspace accounts · shared accounts are used when these are removed.")
+                }
+            }
+            if id == "claude-subscription" {
+                SettingsNote("Claude signs in on each machine. Only profile names are shared; Claude tokens are not synced.")
+            }
             ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {

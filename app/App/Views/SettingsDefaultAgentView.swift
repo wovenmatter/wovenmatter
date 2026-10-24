@@ -8,6 +8,9 @@ struct SettingsDefaultAgentView: View {
     var reservesRailControlSpace = false
     let onBack: () -> Void
     private var agent: DefaultAgentSettingsModel { model.connections }
+    @State private var area: HarnessSettingsArea = .accounts
+    @State private var accountScope = "global"
+    @State private var settingsScope = "global"
     @State private var syncError: String?
     @State private var browsingAllModels = false
     @State private var setupProvider: String?
@@ -30,6 +33,8 @@ struct SettingsDefaultAgentView: View {
         ScrollViewReader { proxy in
             settingsPage
                 .task {
+                    accountScope = initialScope
+                    settingsScope = initialScope
                     selectScope(initialScope)
                     if let provider = model.pendingDefaultAgentModelProvider {
                         model.pendingDefaultAgentModelProvider = nil
@@ -38,19 +43,42 @@ struct SettingsDefaultAgentView: View {
                 }
                 .onChange(of: setupRequest) { _, _ in proxy.scrollTo("pi-models", anchor: .top) }
         }
+        .onChange(of: area) { _, area in
+            let target = area == .accounts ? accountScope : settingsScope
+            if agent.scope != target { selectScope(target) }
+        }
         .onDisappear { agent.cancel() }
     }
 
     private var settingsPage: some View {
         SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsHarnessAreaPicker(selection: $area).disabled(agent.busy || savingScope)
+            if area == .accounts {
+                SettingsAccountWorkspacePicker(scope: Binding(get: { accountScope }, set: {
+                    accountScope = $0; selectScope($0)
+                }), workspaces: model.remoteWorkspaces.workspaces, supportsSharedAccounts: true)
+                    .disabled(agent.busy)
+                SettingsNote(accountScope == "global"
+                    ? "Shared API keys and supported subscription accounts are available to Pi Durable in connected workspaces."
+                    : "Workspace accounts take priority for each provider. Shared Pi Durable accounts fill in when none are saved here.")
+                DisclosureGroup("Account sharing") {
+                    SettingsNote("API keys and Pi Durable’s ChatGPT and Grok sign-ins can be shared. Claude requires a native sign-in on each machine. These connections do not sign in the standalone Codex, Claude Code, Grok Build, or OpenCode harnesses.")
+                    SettingsNote("Chat-settings sharing never changes which accounts are used. Offline workspaces receive shared account changes when they reconnect.")
+                }
+                SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
+                Text("Provider accounts").font(.headline)
+                SettingsConnectionsView(model: model, focus: .providers, embedded: true,
+                    onConnected: connected, onManageShared: manageSharedAccounts, onBack: {})
+                Text("Web search account").font(.headline)
+                SettingsConnectionsView(model: model, focus: .webSearch, embedded: true,
+                    onManageShared: manageSharedAccounts, onBack: {})
+                DisclosureGroup("Local model servers · Shared connections") { LocalModelServerConnections(agent: agent) }
+            } else {
             scopeSection
-            SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
-            Text("Providers").font(.headline)
-            SettingsConnectionsView(model: model, focus: .providers, embedded: true,
-                onConnected: connected, onBack: {})
-            DisclosureGroup("Local model servers") { LocalModelServerConnections(agent: agent) }
-            Text("Web search").font(.headline)
-            SettingsConnectionsView(model: model, focus: .webSearch, embedded: true, onBack: {})
+            if agent.availableModelProviderIDs.isEmpty {
+                Button("Set up accounts") { area = .accounts }
+                    .buttonStyle(SettingsQuietButtonStyle())
+            }
             VStack(alignment: .leading, spacing: 12) {
                 if let provider = setupProvider {
                     SettingsNote("Connected. Choose models for chat from \(ProviderConnectionID(rawValue: provider)?.name ?? provider).")
@@ -90,6 +118,7 @@ struct SettingsDefaultAgentView: View {
                 Text("Choose 2–24. This setting applies to new conversations. The parent agent does not count toward the limit.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            }
             piDurableIconCard
             if let error = syncError { SettingsError(error) }
             DisclosureGroup("Workspace synchronization") {
@@ -127,11 +156,11 @@ struct SettingsDefaultAgentView: View {
         .clipShape(DashboardShapes.card)
     }
     private var scopeSection: some View {
-        SettingsWorkspaceScope(scope: Binding(get: { agent.scope }, set: { selectScope($0) }),
+        SettingsWorkspaceScope(scope: Binding(get: { settingsScope }, set: { settingsScope = $0; selectScope($0) }),
             expanded: $showsWorkspaceOverrides, workspaces: model.remoteWorkspaces.workspaces,
             inherits: Binding(get: { agent.inherits }, set: setSharing), detail: agent.inherits
-                ? "Uses shared providers, search, and model preferences."
-                : "Settings apply only to this workspace.")
+                ? "Model, thinking, permissions, and tool preferences follow shared chat settings. Accounts stay independent."
+                : "Chat settings apply only to this workspace. Accounts stay independent.")
             .disabled(savingScope)
     }
 
@@ -153,7 +182,14 @@ struct SettingsDefaultAgentView: View {
         }
     }
 
+    private func manageSharedAccounts() {
+        accountScope = "global"
+        selectScope("global")
+    }
     private func connected(_ provider: String) {
+        settingsScope = agent.inherits ? "global" : accountScope
+        if agent.scope != settingsScope { agent.changeScope(settingsScope) }
+        area = .defaults
         setupProvider = nil
         browsingAllModels = true
         agent.loadCatalog(remote: remote, includeAllModels: true, provider: provider)
@@ -181,7 +217,7 @@ struct SettingsDefaultAgentView: View {
     private func selectScope(_ scope: String) {
         browsingAllModels = false
         setupProvider = nil
-        showsWorkspaceOverrides = scope != "global"
+        showsWorkspaceOverrides = true
         agent.changeScope(scope)
         agent.loadCatalog(remote: remote, includeAllModels: false)
     }
@@ -482,7 +518,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if availableProviders.isEmpty {
-                SettingsNote("Sign in or add an API key above to browse models.")
+                SettingsNote("Add an account in Accounts & installation to browse models.")
             } else {
             Picker("Provider", selection: Binding(get: { agent.browsingProvider }, set: {
                 agent.browsingProvider = $0

@@ -26,7 +26,7 @@ struct SettingsDefaultAgentSDKView: View {
                 let state = connections.sdks.state(for: workspace.id)
                 if workspace.remoteID == nil {
                     VStack(alignment: .leading, spacing: 10) {
-                        if connections.scope == "global" && workspaces.count > 1 {
+                        if connections.scope == "global" {
                             workspaceLabel(workspace, state: state)
                         }
                         workspaceContent(workspace, state: state)
