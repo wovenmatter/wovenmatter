@@ -100,6 +100,36 @@ test('invalid typed input remains pending and a valid response resumes once', as
   while (job.status === 'running') await wait(10);
   assert.equal(job.status, 'completed'); assert.equal(resumes, 1);
 });
+for (const dialect of ['implicit draft-07', 'explicit draft-07', 'explicit 2020-12']) test(`Executor preserves ${dialect} tuple forms and resumes only a valid answer`, async t => {
+  const modern = dialect === 'explicit 2020-12';
+  const tuple = [{ type: 'integer' }, { type: 'string' }];
+  const requestedSchema = { type: 'object', required: ['pair'], properties: {
+    pair: { type: 'array', minItems: 2, ...(modern ? { prefixItems: tuple, items: false } : { items: tuple, additionalItems: false }) }
+  }, ...(dialect === 'implicit draft-07' ? {} : {
+    $schema: modern ? 'https://json-schema.org/draft/2020-12/schema' : 'http://json-schema.org/draft-07/schema#'
+  }) };
+  let resumes = 0;
+  const { broker, scope } = await fixture(t, async request => {
+    if (request.name === 'resume') { resumes++; return { structuredContent: { status: 'completed' } }; }
+    return { structuredContent: { status: 'input-required', requestId: 'tuple-form', elicitation: { requestedSchema } } };
+  });
+  const id = randomUUID();
+  await broker.start({ id, session: 'conversation-a', scope, code: 'return tools.ask({});' });
+  const job = broker.owned(id, 'conversation-a');
+  await broker.advance(job, { action: 'accept' });
+  while (job.busy) await wait(10);
+  assert.equal(job.status, 'input-required');
+  for (const pair of [['wrong type', 'label'], [3], [3, 'label', 'extra']]) {
+    await assert.rejects(broker.advance(job, { action: 'accept', content: { pair } }), /requested form/);
+    assert.equal(job.status, 'input-required');
+    assert.equal(resumes, 0);
+  }
+  await broker.advance(job, { action: 'accept', content: { pair: [3, 'label'] } });
+  while (job.busy) await wait(10);
+  assert.equal(job.status, 'completed');
+  assert.equal(resumes, 1);
+});
+
 test('corrupt manager keys fail before runtime startup without replacing storage', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-corrupt-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
