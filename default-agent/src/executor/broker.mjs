@@ -335,7 +335,12 @@ export class ExecutorBroker {
   validateResponse(job, response) {
     if (response.action !== 'accept' || job.pending?.status !== 'input-required') return { valid: true };
     try {
-      return { valid: new AjvJsonSchemaValidator().getValidator(job.pending.elicitation.requestedSchema)(response.content ?? {}).valid };
+      const schema = job.pending.elicitation.requestedSchema;
+      // Preserve the existing draft-07 form contract when Executor omits a
+      // dialect. MCP v2 otherwise assumes 2020-12 and rejects legacy tuples.
+      const declared = schema && typeof schema === 'object' && !Array.isArray(schema) && !Object.hasOwn(schema, '$schema')
+        ? { ...schema, $schema: 'http://json-schema.org/draft-07/schema#' } : schema;
+      return { valid: new AjvJsonSchemaValidator().getValidator(declared)(response.content ?? {}).valid };
     } catch { return { valid: false }; }
   }
   async advance(job, response) {

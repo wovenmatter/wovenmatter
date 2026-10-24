@@ -59,6 +59,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 - **MCP TypeScript SDK** uses the current v2 client and server packages. The
   automation stdio server and Executor Streamable HTTP client migrate together;
   validate cancellation across both real transports with provider-free fixtures.
+  Executor forms without a declared schema dialect retain their prior draft-07
+  validation semantics; explicit newer dialects remain supported and tested.
 - **Pi family and Chord** must resolve to one release, because the desktop
   and mobile bridges share their data contracts. A partially published release
   is skipped.
