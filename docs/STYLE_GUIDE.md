@@ -107,6 +107,9 @@ when an intentional design change is accepted.
   child indentation. All Workspaces sits above the workspaces, Trash below them,
   and Recents remains global. Folder hover cards match chat previews and show the
   workspace, chat/note counts, root directory, and additional reference directories.
+- **Sidebar headers:** in Single and Adaptive layouts, mirror the header button
+  order when the sidebar moves to the right, and point the workspace back arrow
+  toward the navigation rail. Keep titles and list content in normal reading order.
 - **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
   styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
