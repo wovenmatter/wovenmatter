@@ -1015,7 +1015,7 @@
         A03000000000000000000005 /* Sparkle */ = {
             isa = XCRemoteSwiftPackageReference;
             repositoryURL = "https://github.com/sparkle-project/Sparkle";
-            requirement = { kind = revision; revision = eef1a539a373c1f1a320624b1130fc5de7b2e100; };
+            requirement = { kind = revision; revision = ab7d71291238df6e0492143b120c9b696a35f603; };
         };
 /* End XCRemoteSwiftPackageReference section */
 
