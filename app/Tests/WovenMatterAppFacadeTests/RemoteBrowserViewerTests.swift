@@ -244,6 +244,7 @@ import WovenMatterClient
             sendBatch: { try await client.browserActions($0) }, sendAction: { try await client.browserAction($0) })
         viewer.select(tab.id); await viewer.refresh()
         #expect(viewer.frameID != nil)
+        let firstImage = viewer.image
         let canvas = RemoteBrowserInputView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         canvas.image = viewer.image; canvas.frameID = viewer.frameID; canvas.tabID = tab.id; canvas.send = viewer.enqueue
         let window = NSWindow(contentRect: canvas.bounds, styleMask: .borderless, backing: .buffered, defer: false)
@@ -283,8 +284,7 @@ import WovenMatterClient
         }
         #expect(observed["name"] == "hi 日本語")
         #expect(observed["output"] == "Hello hi 日本語")
-        let firstImage = viewer.image
-        await viewer.refresh(includeTabs: false)
+        for _ in 0..<10 where viewer.image === firstImage { await viewer.refresh(includeTabs: false) }
         #expect(viewer.image !== firstImage)
         canvas.image = viewer.image; canvas.frameID = viewer.frameID
         try mouse(.leftMouseDown, 30, 220)
