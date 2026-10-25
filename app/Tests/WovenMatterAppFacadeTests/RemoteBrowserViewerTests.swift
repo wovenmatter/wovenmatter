@@ -400,7 +400,7 @@ import WovenMatterClient
         let latest = try await feed.latest(previousFrameID: nil)
         #expect(latest.frameID == "99")
         #expect(try await feed.latest(previousFrameID: "99").imageBase64.isEmpty)
-        try await Task.sleep(for: .milliseconds(4200))
+        feed.stopIfLeaseExpired(at: .now.advanced(by: .seconds(4)))
         #expect(feed.stopped)
         await #expect(throws: CancellationError.self) { try await feed.latest(previousFrameID: nil) }
     }
@@ -414,6 +414,8 @@ import WovenMatterClient
         _ = try await feed.latest(previousFrameID: nil)
         let waiting = Task { try await feed.latest(previousFrameID: "1") }
         for _ in 0..<10 { await Task.yield() }
+        feed.stopIfLeaseExpired(at: .now.advanced(by: .seconds(4)))
+        #expect(!feed.stopped)
         pair.continuation.yield(.init(tabID: "first", imageBase64: "second", frameID: "2"))
         #expect(try await waiting.value.frameID == "2")
         let cancelled = Task { try await feed.latest(previousFrameID: "2") }

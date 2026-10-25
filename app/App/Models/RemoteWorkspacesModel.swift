@@ -1666,6 +1666,7 @@ final class RemoteBrowserFrameFeed {
     private var equivalentFrames: [String] = []
     private var waiters: [UUID: (continuation: CheckedContinuation<Void, Never>, timeout: Task<Void, Never>)] = [:]
     private var lastRead = ContinuousClock.now
+    private var activeReads = 0
     private var receiver: Task<Void, Never>?
     private var lease: Task<Void, Never>?
     init(tabID: String, identity: RemoteWorkspaceRequestIdentity, client: RemoteWorkspaceServiceClient? = nil, frames: AsyncThrowingStream<RemoteBrowserFrame, any Error>) {
@@ -1692,14 +1693,17 @@ final class RemoteBrowserFrameFeed {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
                 guard let self else { return }
-                if self.lastRead.duration(to: .now) >= .seconds(3) { self.stop(); return }
+                self.stopIfLeaseExpired()
+                if self.stopped { return }
             }
         }
     }
     func latest(previousFrameID: String?) async throws -> RemoteBrowserFrame {
         guard !stopped else { throw CancellationError() }
         if let error { throw error }
+        activeReads += 1
         lastRead = .now
+        defer { activeReads -= 1; lastRead = .now }
         if let previousFrameID, frame?.frameID == previousFrameID {
             let id = UUID()
             guard waiters.count < 16 else { throw BackendRPCError.remote("Too many browser viewers.") }
@@ -1724,6 +1728,10 @@ final class RemoteBrowserFrameFeed {
         if let error { throw error }
         guard let frame else { throw CancellationError() }
         return .init(tabID: tabID, imageBase64: frame.frameID == previousFrameID || equivalentFrames.contains(previousFrameID ?? "") ? "" : frame.imageBase64, frameID: frame.frameID, imageID: frame.imageID)
+    }
+    func stopIfLeaseExpired(at now: ContinuousClock.Instant = .now) {
+        // A suspended reader still owns the feed, even if the main actor is busy.
+        if activeReads == 0, lastRead.duration(to: now) >= .seconds(3) { stop() }
     }
     private func wakeReader(_ id: UUID) {
         guard let waiter = waiters.removeValue(forKey: id) else { return }
