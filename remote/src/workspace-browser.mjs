@@ -84,14 +84,16 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
     const cast = casts.get(page)
     if (!cast) return
     casts.delete(page); void releasePointer(page); cast.stopped = true; clearInterval(cast.heartbeat)
-    page.off('close', cast.closed)
+    page.off('close', cast.closed); page.off('crash', cast.closed)
     for (const listener of cast.listeners) listener.fail(failure(410, 'browser_tab_closed'))
     cast.listeners.clear()
-    void cast.start.then(async () => {
-      cast.cdp.off('Page.screencastFrame', cast.receive)
-      await deadline(() => cast.cdp.send('Page.stopScreencast'), 1000).catch(() => {})
-      await cast.cdp.detach().catch(() => {})
-    }).catch(() => {})
+    const cdp = cast.cdp
+    if (cdp) {
+      cdp.off('Page.screencastFrame', cast.receive)
+      // Do not await a failed or wedged start command before cleaning up.
+      void deadline(() => cdp.send('Page.stopScreencast'), 1000).catch(() => {})
+        .then(() => cdp.detach()).catch(() => {})
+    }
   }
   function forget(session) {
     if (active !== session) return
@@ -146,11 +148,11 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
         cast = { listeners: new Set(), stopped: false }
         casts.set(page, cast)
         cast.closed = () => stopCast(page)
-        page.once('close', cast.closed)
+        page.once('close', cast.closed); page.once('crash', cast.closed)
         cast.receive = event => {
           if (cast.stopped) return
           // ACK promptly; retaining only the newest frame prevents a playback queue.
-          void cast.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {})
+          void cast.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => { if (!cast.stopped) stopCast(page) })
           const m = event.metadata
           if (!m || ![m.deviceWidth, m.deviceHeight, m.pageScaleFactor, m.scrollOffsetX, m.scrollOffsetY, m.offsetTop].every(Number.isFinite)
               || m.deviceWidth <= 0 || m.deviceHeight <= 0 || m.pageScaleFactor <= 0 || m.offsetTop !== 0
@@ -167,7 +169,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
         }
         cast.start = (async () => {
           cast.cdp = await page.context().newCDPSession(page)
-          if (cast.stopped) return
+          if (cast.stopped) { await cast.cdp.detach().catch(() => {}); return }
           cast.cdp.on('Page.screencastFrame', cast.receive)
           await cast.cdp.send('Page.startScreencast', { format: 'jpeg', quality: 65, maxWidth: 1920, maxHeight: 1200, everyNthFrame: 1 })
         })()
@@ -182,12 +184,12 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       const listener = { emit, fail }
       cast.listeners.add(listener)
       try { await deadline(() => cast.start) }
-      catch (error) { stopCast(page); throw error }
+      catch (error) { if (!cast.stopped) stopCast(page); throw error }
       if (cast.latest && cast.latest.document === documents.get(page)) {
         const { document, viewport, data } = cast.latest
         emit(recordFrame(page, document, viewport, data, viewport.clientWidth, viewport.clientHeight))
       }
-      return () => { cast.listeners.delete(listener); if (!cast.listeners.size) stopCast(page) }
+      return () => { cast.listeners.delete(listener); if (!cast.stopped && !cast.listeners.size) stopCast(page) }
     },
     async frame(tabID, previousFrameID) {
       if (typeof tabID !== 'string' || !/^[0-9a-f-]{36}$/.test(tabID)) throw failure(400, 'invalid_browser_tab')

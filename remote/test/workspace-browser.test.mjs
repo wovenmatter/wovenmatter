@@ -269,3 +269,56 @@ test('a disconnect during capture startup tears down the late capture session', 
   assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
   await f.service.close()
 })
+
+
+for (const cause of ['renderer crash', 'capture session disconnected']) {
+  test(`capture terminates instead of renewing stale images after ${cause}`, async () => {
+    const f = fixture(); await f.service.connect(); const page = f.addPage()
+    const tab = (await f.service.tabs()).tabs[0], failures = []
+    await f.service.watch(tab.id, () => {}, error => failures.push(error))
+    if (cause === 'renderer crash') page.emit('crash')
+    else {
+      const cdp = f.sessions[0], send = cdp.send.bind(cdp)
+      cdp.send = (method, params) => method === 'Page.screencastFrameAck' ? Promise.reject(Error('Session closed')) : send(method, params)
+      cdp.emit('Page.screencastFrame', { sessionId: 1, data: 'jpeg', metadata: {
+        deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0,
+      } })
+    }
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(failures.length, 1)
+    assert.equal(f.detached, 1)
+    assert.equal(page.listenerCount('crash'), 0)
+    assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
+    await f.service.close()
+  })
+}
+
+
+test('capture startup rejection still detaches its control session', async () => {
+  const f = fixture(); await f.service.connect(); f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], create = f.context.newCDPSession
+  f.context.newCDPSession = async () => {
+    const cdp = await create(), send = cdp.send.bind(cdp)
+    cdp.send = (method, params) => method === 'Page.startScreencast' ? Promise.reject(Error('Capture unavailable')) : send(method, params)
+    return cdp
+  }
+  await assert.rejects(f.service.watch(tab.id, () => {}, () => {}), /Capture unavailable/)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.detached, 1)
+  assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
+  await f.service.close()
+})
+
+
+test('cleanup from an obsolete viewer cannot stop replacement capture', async () => {
+  const f = fixture(); await f.service.connect(); const page = f.addPage()
+  const tab = (await f.service.tabs()).tabs[0]
+  const oldStop = await f.service.watch(tab.id, () => {}, () => {})
+  page.emit('crash')
+  const newStop = await f.service.watch(tab.id, () => {}, assert.fail)
+  oldStop()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.detached, 1)
+  assert.equal(f.sessions[1].listenerCount('Page.screencastFrame'), 1)
+  newStop(); await f.service.close()
+})
