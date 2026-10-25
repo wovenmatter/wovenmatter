@@ -84,7 +84,7 @@ struct SettingsDefaultAgentView: View {
                     SettingsNote("Connected. Choose models for chat from \(ProviderConnectionID(rawValue: provider)?.name ?? provider).")
                 }
                 SettingsAgentModelsView(agent: agent, editable: editable,
-                    browsingAllModels: browsingAllModels, setBrowsingAllModels: showCatalog,
+                    browsingAllModels: browsingAllModels, setBrowsingAllModels: { showCatalog($0) },
                     selectDefault: selectDefault)
             }.id("pi-models")
             SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope,
@@ -158,7 +158,7 @@ struct SettingsDefaultAgentView: View {
     private var scopeSection: some View {
         SettingsWorkspaceScope(scope: Binding(get: { settingsScope }, set: { settingsScope = $0; selectScope($0) }),
             expanded: $showsWorkspaceOverrides, workspaces: model.remoteWorkspaces.workspaces,
-            inherits: Binding(get: { agent.inherits }, set: setSharing), detail: agent.inherits
+            inherits: Binding(get: { agent.inherits }, set: { setSharing($0) }), detail: agent.inherits
                 ? "Model, thinking, permissions, and tool preferences follow shared chat settings. Accounts stay independent."
                 : "Chat settings apply only to this workspace. Accounts stay independent.")
             .disabled(savingScope)
