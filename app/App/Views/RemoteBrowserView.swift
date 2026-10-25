@@ -33,7 +33,7 @@ struct RemoteBrowserView: View {
                     let started = ContinuousClock.now
                     if scenePhase == .active { await viewer.refresh(includeTabs: false) }
                     let interval: Duration = scenePhase != .active || reduceMotion ? .seconds(1)
-                        : viewer.image == nil ? .milliseconds(250) : .milliseconds(33)
+                        : viewer.image == nil ? .milliseconds(250) : .milliseconds(16)
                     do { try await Task.sleep(until: started.advanced(by: interval), clock: .continuous) }
                     catch { break }
                 }

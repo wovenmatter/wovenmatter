@@ -28,7 +28,7 @@ final class RemoteBrowserInputView: NSView, @preconcurrency NSTextInputClient {
     var send: (RemoteBrowserAction) -> Void = { _ in }
     var focusAddress: () -> Void = {}
     private var tracking: NSTrackingArea?
-    private var pressed: (NSPoint, String, Int, Int, String?)?
+    private var pressed: RemoteBrowserAction?
     private var marked = NSAttributedString(string: "")
     private var lastMotion = TimeInterval.zero
     override var isFlipped: Bool { true }
@@ -61,7 +61,10 @@ final class RemoteBrowserInputView: NSView, @preconcurrency NSTextInputClient {
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area); tracking = area
     }
-    func resetInput() { pressed = nil; unmarkText() }
+    func resetInput() {
+        if var action = pressed { action.kind = "pointerCancel"; emit(action) }
+        pressed = nil; unmarkText()
+    }
     override func resignFirstResponder() -> Bool { resetInput(); return super.resignFirstResponder() }
     private func emit(_ gesture: RemoteBrowserAction) {
         var action = gesture
@@ -78,27 +81,35 @@ final class RemoteBrowserInputView: NSView, @preconcurrency NSTextInputClient {
     private func point(_ event: NSEvent) -> NSPoint? { normalizedPoint(convert(event.locationInWindow, from: nil)) }
     private func begin(_ event: NSEvent, button: String) {
         guard let point = point(event) else { return }
-        window?.makeFirstResponder(self)
-        pressed = (point, button, min(3, max(1, event.clickCount)), modifiers(event), frameID)
+        resetInput(); window?.makeFirstResponder(self)
+        var action = RemoteBrowserAction(kind: "pointerDown")
+        action.gestureID = UUID().uuidString.lowercased(); action.frameID = frameID ?? ""
+        action.x = point.x; action.y = point.y; action.button = button
+        action.clickCount = min(3, max(1, event.clickCount)); action.modifiers = modifiers(event)
+        pressed = action; emit(action)
     }
-    private func end(_ event: NSEvent) {
-        defer { pressed = nil }
-        guard let (start, button, count, flags, capturedFrame) = pressed, let finish = point(event) else { return }
-        let drag = hypot(finish.x - start.x, finish.y - start.y) > 0.004
-        var action = RemoteBrowserAction(kind: drag ? "drag" : "click")
-        action.frameID = capturedFrame ?? ""
-        action.x = start.x; action.y = start.y; action.button = button; action.clickCount = count; action.modifiers = flags
-        if drag { action.endX = finish.x; action.endY = finish.y }
+    private func continuePointer(_ event: NSEvent, release: Bool) {
+        guard var action = pressed else { return }
+        let rect = imageRect, location = convert(event.locationInWindow, from: nil)
+        guard rect.width > 0, rect.height > 0 else { resetInput(); return }
+        action.actionID = UUID().uuidString.lowercased()
+        action.kind = release ? "pointerUp" : "pointerMove"
+        // A release outside the image must still release the remote button.
+        action.x = min(1, max(0, (location.x - rect.minX) / rect.width))
+        action.y = min(1, max(0, (location.y - rect.minY) / rect.height))
+        action.modifiers = modifiers(event)
+        if release && !rect.contains(location) { action.kind = "pointerCancel" }
+        if release { pressed = nil } else { pressed = action }
         emit(action)
     }
     override func mouseDown(with event: NSEvent) { begin(event, button: "left") }
-    override func mouseUp(with event: NSEvent) { end(event) }
-    override func mouseDragged(with event: NSEvent) {} // Send one bounded drag on release; never leave remote buttons held.
+    override func mouseUp(with event: NSEvent) { continuePointer(event, release: true) }
+    override func mouseDragged(with event: NSEvent) { continuePointer(event, release: false) }
     override func rightMouseDown(with event: NSEvent) { begin(event, button: "right") }
-    override func rightMouseUp(with event: NSEvent) { end(event) }
-    override func rightMouseDragged(with event: NSEvent) {}
+    override func rightMouseUp(with event: NSEvent) { continuePointer(event, release: true) }
+    override func rightMouseDragged(with event: NSEvent) { continuePointer(event, release: false) }
     override func mouseMoved(with event: NSEvent) {
-        guard event.timestamp - lastMotion > 0.08, let point = point(event) else { return }
+        guard event.timestamp - lastMotion > 0.016, let point = point(event) else { return }
         lastMotion = event.timestamp
         var action = RemoteBrowserAction(kind: "move")
         action.x = point.x; action.y = point.y; action.modifiers = modifiers(event); emit(action)

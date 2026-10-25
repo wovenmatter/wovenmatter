@@ -159,8 +159,12 @@ async function verifyInteraction(page, tabID, request) {
   await input({ kind: 'text', text: 'human returned' });
   assert.equal(await page.getByRole('textbox', { name: 'Name' }).inputValue(), 'human returned');
   const start = await position('#range', 0.05), end = await position('#range', 0.95);
-  await input({ kind: 'drag', ...start, endX: end.x, endY: end.y });
+  const gestureID = require('node:crypto').randomUUID();
+  await input({ kind: 'pointerDown', gestureID, ...start });
+  await input({ kind: 'pointerMove', gestureID, ...end });
+  // The actual page changes while the button is held, not only after release.
   assert.ok(Number(await page.locator('#range').inputValue()) > 80);
+  await input({ kind: 'pointerUp', gestureID, ...end });
   await page.evaluate(() => { document.body.style.minHeight = '3000px'; });
   await input({ kind: 'scroll', x: 0.5, y: 0.5, deltaX: 0, deltaY: 500 });
   await page.waitForFunction(() => window.scrollY > 0);

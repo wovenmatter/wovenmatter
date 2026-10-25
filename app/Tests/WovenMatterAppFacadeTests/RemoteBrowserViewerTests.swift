@@ -140,11 +140,12 @@ import WovenMatterClient
                 timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
             if type == .leftMouseDown { canvas.mouseDown(with: event); canvas.frameID = "newer-frame" } else { canvas.mouseUp(with: event) }
         }
-        #expect(actions.first?.kind == "click")
+        #expect(actions.map(\.kind) == ["pointerDown", "pointerUp"])
+        #expect(actions.first?.gestureID == actions.last?.gestureID)
         #expect(actions.first?.frameID == "pressed-frame")
         #expect(actions.first?.x == 0.5 && actions.first?.y == 0.5)
         canvas.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
-        #expect(actions.count == 1) // Composition remains local until committed.
+        #expect(actions.count == 2) // Composition remains local until committed.
         canvas.insertText("日本語", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(actions.last?.text == "日本語")
         #expect(!canvas.hasMarkedText())
@@ -248,12 +249,20 @@ import WovenMatterClient
         canvas.image = viewer.image; canvas.frameID = viewer.frameID; canvas.tabID = tab.id; canvas.send = viewer.enqueue
         let window = NSWindow(contentRect: canvas.bounds, styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = canvas
+        func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat) throws {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 800 - y), modifierFlags: [],
+                timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            if type == .leftMouseDown { canvas.mouseDown(with: event) }
+            else if type == .leftMouseDragged { canvas.mouseDragged(with: event) }
+            else { canvas.mouseUp(with: event) }
+        }
         func click(_ x: CGFloat, _ y: CGFloat) throws {
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = try #require(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 800 - y), modifierFlags: [],
-                    timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-                if type == .leftMouseDown { canvas.mouseDown(with: event) } else { canvas.mouseUp(with: event) }
-            }
+            try mouse(.leftMouseDown, x, y); try mouse(.leftMouseUp, x, y)
+        }
+        func state() async throws -> [String: String] {
+            var request = URLRequest(url: url.appendingPathComponent("fixture/state"))
+            request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization")
+            return try JSONDecoder().decode([String: String].self, from: await URLSession.shared.data(for: request).0)
         }
         try click(100, 40)
         let selectAll = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 2,
@@ -267,17 +276,35 @@ import WovenMatterClient
         }
         canvas.insertText(" 日本語", replacementRange: NSRange(location: NSNotFound, length: 0))
         try click(60, 100)
-        var state: [String: String] = [:]
+        var observed: [String: String] = [:]
         for _ in 0..<100 {
-            var request = URLRequest(url: url.appendingPathComponent("fixture/state"))
-            request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization")
-            let (data, _) = try await URLSession.shared.data(for: request)
-            state = try JSONDecoder().decode([String: String].self, from: data)
-            if state["output"] == "Hello hi 日本語" { break }
+            observed = try await state()
+            if observed["output"] == "Hello hi 日本語" { break }
             try await Task.sleep(for: .milliseconds(100))
         }
-        #expect(state["name"] == "hi 日本語")
-        #expect(state["output"] == "Hello hi 日本語")
+        #expect(observed["name"] == "hi 日本語")
+        #expect(observed["output"] == "Hello hi 日本語")
+        let firstImage = viewer.image
+        await viewer.refresh(includeTabs: false)
+        #expect(viewer.image !== firstImage)
+        canvas.image = viewer.image; canvas.frameID = viewer.frameID
+        try mouse(.leftMouseDown, 30, 220)
+        try mouse(.leftMouseDragged, 290, 220)
+        for _ in 0..<100 {
+            observed = try await state()
+            if Int(observed["level"] ?? "0") ?? 0 > 80 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(Int(observed["level"] ?? "0") ?? 0 > 80)
+        #expect(observed["held"] == "true") // The DOM changes before mouse-up.
+        #expect(Int(observed["moves"] ?? "0") ?? 0 > 0)
+        canvas.resetInput() // Dismissal/focus loss releases without requiring mouse-up.
+        for _ in 0..<100 {
+            observed = try await state()
+            if observed["held"] == "false" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(observed["held"] == "false")
         #expect(viewer.inputError == nil)
         viewer.clear()
     }
@@ -330,6 +357,87 @@ import WovenMatterClient
         try await Task.sleep(for: .milliseconds(4200))
         #expect(feed.stopped)
         await #expect(throws: CancellationError.self) { try await feed.latest(previousFrameID: nil) }
+    }
+
+    @Test func idleFrameWaitWakesOnArrivalCancellationAndDisconnect() async throws {
+        let pair = AsyncThrowingStream<RemoteBrowserFrame, any Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let identity = RemoteWorkspaceRequestIdentity(configuration: .init(name: "Fixture", workspaceID: "fixture", hostName: "localhost"), credentialEpoch: UUID(), workspaceEpoch: UUID())
+        let feed = RemoteBrowserFrameFeed(tabID: "first", identity: identity, frames: pair.stream)
+        defer { feed.stop() }
+        pair.continuation.yield(.init(tabID: "first", imageBase64: "first", frameID: "1"))
+        _ = try await feed.latest(previousFrameID: nil)
+        let waiting = Task { try await feed.latest(previousFrameID: "1") }
+        for _ in 0..<10 { await Task.yield() }
+        pair.continuation.yield(.init(tabID: "first", imageBase64: "second", frameID: "2"))
+        #expect(try await waiting.value.frameID == "2")
+        let cancelled = Task { try await feed.latest(previousFrameID: "2") }
+        for _ in 0..<10 { await Task.yield() }
+        cancelled.cancel()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        let disconnected = Task { try await feed.latest(previousFrameID: "2") }
+        for _ in 0..<10 { await Task.yield() }
+        pair.continuation.finish(throwing: URLError(.networkConnectionLost))
+        await #expect(throws: URLError.self) { try await disconnected.value }
+    }
+
+    @Test func measureNativeViewerWhenRequested() async throws {
+        guard ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_PERFORMANCE"] == "1",
+              let endpoint = ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"],
+              let url = URL(string: endpoint) else { return }
+        func memory() -> UInt64 {
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                }
+            }
+            return result == KERN_SUCCESS ? info.resident_size : 0
+        }
+        func measure(_ label: String, action: () async throws -> Void) async throws {
+            let start = ContinuousClock.now, cpu = clock(), rss = memory()
+            try await action()
+            let elapsed = start.duration(to: .now).components
+            let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+            let percent = Double(clock() - cpu) / Double(CLOCKS_PER_SEC) / seconds * 100
+            print("NATIVE_VIEWER \(label) cpu_one_core_percent=\(percent) rss_before_MiB=\(Double(rss)/1048576) rss_after_MiB=\(Double(memory())/1048576)")
+        }
+        try await measure("baseline") { try await Task.sleep(for: .seconds(5)) }
+        let client = RemoteWorkspaceServiceClient(baseURL: url, token: "fixture")
+        let tab = try #require(try await client.browserTabs().tabs.first { $0.title == "Shared collaboration fixture" })
+        let identity = RemoteWorkspaceRequestIdentity(configuration: .init(name: "Fixture", workspaceID: "fixture", hostName: "localhost"), credentialEpoch: UUID(), workspaceEpoch: UUID())
+        let feed = RemoteBrowserFrameFeed(tabID: tab.id, identity: identity, frames: client.browserFrames(tabID: tab.id))
+        defer { feed.stop() }
+        let viewer = RemoteBrowserViewerModel(loadTabs: { try await client.browserTabs() },
+            loadFrame: { _, previous in try await feed.latest(previousFrameID: previous) })
+        viewer.select(tab.id); await viewer.refresh()
+        let canvas = RemoteBrowserInputView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        let window = NSWindow(contentRect: canvas.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.title = "Disposable remote browser performance fixture"
+        window.isReleasedWhenClosed = false; window.contentView = canvas
+        window.orderBack(nil)
+        defer { window.close() }
+        func renderForFiveSeconds() async throws {
+            let start = ContinuousClock.now
+            var drawn = 0
+            while start.duration(to: .now) < .seconds(5) {
+                let tick = ContinuousClock.now
+                await viewer.refresh(includeTabs: false)
+                if canvas.image !== viewer.image {
+                    canvas.image = viewer.image; canvas.needsDisplay = true; canvas.displayIfNeeded(); drawn += 1
+                }
+                try await Task.sleep(until: tick.advanced(by: .milliseconds(16)), clock: .continuous)
+            }
+            print("NATIVE_VIEWER drawn_frames=\(drawn)")
+        }
+        try await measure("idle") { try await renderForFiveSeconds() }
+        var request = URLRequest(url: url.appendingPathComponent("fixture/animation").appending(queryItems: [.init(name: "enabled", value: "true")]))
+        request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization")
+        _ = try await URLSession.shared.data(for: request)
+        try await measure("animated") { try await renderForFiveSeconds() }
+        request.url = url.appendingPathComponent("fixture/animation").appending(queryItems: [.init(name: "enabled", value: "false")])
+        _ = try await URLSession.shared.data(for: request)
+        viewer.clear()
     }
 
     @Test func renderViewerWhenRequested() async throws {

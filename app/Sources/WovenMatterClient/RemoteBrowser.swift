@@ -28,6 +28,7 @@ public struct RemoteBrowserAction: Codable, Equatable, Sendable {
     public var actionID = UUID().uuidString.lowercased()
     public var tabID = ""
     public var frameID = ""
+    public var gestureID: String?
     public var kind: String
     public var x: Double?
     public var y: Double?

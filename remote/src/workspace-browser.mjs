@@ -38,7 +38,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
   let active, starting, closed = false
   const capturing = new Set()
   const pages = new Map(), ids = new WeakMap(), documents = new WeakMap(), frames = new Map(), receipts = new Map()
-  const acting = new Set(), sessions = new Map()
+  const acting = new Set(), sessions = new Map(), casts = new Map(), pointers = new Map(), cancelledPointers = new Set()
   async function sessionFor(page) {
     if (!sessions.has(page)) {
       const pending = page.context().newCDPSession(page)
@@ -52,9 +52,51 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
     sessions.delete(page)
     void pending?.then(cdp => cdp.detach()).catch(() => {})
   }
+  async function releasePointer(page, gestureID, cancel = true) {
+    if (gestureID && cancel) {
+      cancelledPointers.add(gestureID)
+      while (cancelledPointers.size > 1024) cancelledPointers.delete(cancelledPointers.values().next().value)
+    }
+    const pointer = pointers.get(page)
+    if (!pointer || (gestureID && pointer.gestureID !== gestureID)) return
+    pointers.delete(page); clearTimeout(pointer.timer)
+    const event = { ...pointer.event, ...(cancel ? { x: -1, y: -1 } : {}), buttons: 0 }
+    await deadline(async () => {
+      if (cancel) await pointer.cdp.send('Input.dispatchMouseEvent', { ...event, type: 'mouseMoved' }).catch(() => {})
+      await pointer.cdp.send('Input.dispatchMouseEvent', { ...event, type: 'mouseReleased' }).catch(() => {})
+    }, 1000).catch(() => {})
+  }
+  function renewPointer(page, pointer) {
+    clearTimeout(pointer.timer)
+    pointer.timer = setTimeout(() => { void releasePointer(page, pointer.gestureID) }, 15000)
+    pointer.timer.unref?.()
+  }
+  function recordFrame(page, document, viewport, data, width, height) {
+    const tabID = ids.get(page), frameID = randomUUID()
+    const digest = createHash('sha256').update(data).digest('hex')
+    frames.set(frameID, { page, document, viewport, width, height, digest, created: Date.now() })
+    while (frames.size && (frames.size > 8192 || frames.values().next().value.created < Date.now() - 30000)) {
+      frames.delete(frames.keys().next().value)
+    }
+    return { tabID, frameID, imageID: document + ':' + digest, imageBase64: data }
+  }
+  function stopCast(page) {
+    const cast = casts.get(page)
+    if (!cast) return
+    casts.delete(page); void releasePointer(page); cast.stopped = true; clearInterval(cast.heartbeat)
+    page.off('close', cast.closed)
+    for (const listener of cast.listeners) listener.fail(failure(410, 'browser_tab_closed'))
+    cast.listeners.clear()
+    void cast.start.then(async () => {
+      cast.cdp.off('Page.screencastFrame', cast.receive)
+      await deadline(() => cast.cdp.send('Page.stopScreencast'), 1000).catch(() => {})
+      await cast.cdp.detach().catch(() => {})
+    }).catch(() => {})
+  }
   function forget(session) {
     if (active !== session) return
     active = undefined
+    for (const page of casts.keys()) stopCast(page)
     pages.clear(); frames.clear(); receipts.clear(); sessions.clear()
   }
   function inventory() {
@@ -63,9 +105,9 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
     return current.map(page => {
       if (!ids.has(page)) {
         ids.set(page, randomUUID()); documents.set(page, randomUUID())
-        page.once('close', () => discardSession(page))
+        page.once('close', () => { void releasePointer(page); discardSession(page) })
         page.on('framenavigated', frame => {
-          if (frame === page.mainFrame()) documents.set(page, randomUUID())
+          if (frame === page.mainFrame()) { documents.set(page, randomUUID()); void releasePointer(page) }
         })
       }
       const id = ids.get(page)
@@ -95,6 +137,58 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       })))
       return active === session ? { running: !!session, tabs } : { running: false, tabs: [] }
     },
+    async watch(tabID, emit, fail) {
+      inventory()
+      const page = pages.get(tabID)
+      if (!page) throw failure(410, 'browser_tab_closed')
+      let cast = casts.get(page)
+      if (!cast) {
+        cast = { listeners: new Set(), stopped: false }
+        casts.set(page, cast)
+        cast.closed = () => stopCast(page)
+        page.once('close', cast.closed)
+        cast.receive = event => {
+          if (cast.stopped) return
+          // ACK promptly; retaining only the newest frame prevents a playback queue.
+          void cast.cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {})
+          const m = event.metadata
+          if (!m || ![m.deviceWidth, m.deviceHeight, m.pageScaleFactor, m.scrollOffsetX, m.scrollOffsetY, m.offsetTop].every(Number.isFinite)
+              || m.deviceWidth <= 0 || m.deviceHeight <= 0 || m.pageScaleFactor <= 0 || m.offsetTop !== 0
+              || typeof event.data !== 'string' || event.data.length > 2 * 1024 * 1024) {
+            for (const listener of cast.listeners) listener.fail(failure(503, 'browser_frame_unavailable'))
+            stopCast(page); return
+          }
+          const viewport = { pageX: m.scrollOffsetX, pageY: m.scrollOffsetY,
+            clientWidth: m.deviceWidth / m.pageScaleFactor, clientHeight: m.deviceHeight / m.pageScaleFactor }
+          const document = documents.get(page)
+          cast.latest = { document, viewport, data: event.data }
+          const frame = recordFrame(page, document, viewport, event.data, viewport.clientWidth, viewport.clientHeight)
+          for (const listener of cast.listeners) listener.emit(frame)
+        }
+        cast.start = (async () => {
+          cast.cdp = await page.context().newCDPSession(page)
+          if (cast.stopped) return
+          cast.cdp.on('Page.screencastFrame', cast.receive)
+          await cast.cdp.send('Page.startScreencast', { format: 'jpeg', quality: 65, maxWidth: 1920, maxHeight: 1200, everyNthFrame: 1 })
+        })()
+        cast.heartbeat = setInterval(() => {
+          const latest = cast.latest
+          if (!latest || cast.stopped || latest.document !== documents.get(page)) return
+          const frame = recordFrame(page, latest.document, latest.viewport, latest.data, latest.viewport.clientWidth, latest.viewport.clientHeight)
+          for (const listener of cast.listeners) listener.emit(frame)
+        }, 2000)
+        cast.heartbeat.unref?.()
+      }
+      const listener = { emit, fail }
+      cast.listeners.add(listener)
+      try { await deadline(() => cast.start) }
+      catch (error) { stopCast(page); throw error }
+      if (cast.latest && cast.latest.document === documents.get(page)) {
+        const { document, viewport, data } = cast.latest
+        emit(recordFrame(page, document, viewport, data, viewport.clientWidth, viewport.clientHeight))
+      }
+      return () => { cast.listeners.delete(listener); if (!cast.listeners.size) stopCast(page) }
+    },
     async frame(tabID, previousFrameID) {
       if (typeof tabID !== 'string' || !/^[0-9a-f-]{36}$/.test(tabID)) throw failure(400, 'invalid_browser_tab')
       inventory()
@@ -120,18 +214,12 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
           if (data.length > 2 * 1024 * 1024) throw failure(413, 'browser_frame_too_large')
           if (page.isClosed() || pages.get(tabID) !== page) throw failure(410, 'browser_tab_closed')
           if (document !== documents.get(page)) throw failure(409, 'browser_page_changed')
-          const frameID = randomUUID()
-          const digest = createHash('sha256').update(data).digest('hex')
           const previous = frames.get(previousFrameID)
-          const unchanged = previous?.page === page && previous.document === document && previous.digest === digest
-          frames.set(frameID, { page, document, viewport, digest, created: Date.now() })
-          // Four live viewers can produce 120 frames/sec. Retain their input
-          // identities for the full 30s gesture window, without retaining JPEGs.
-          while (frames.size > 4096 || frames.values().next().value.created < Date.now() - 30000) {
-            frames.delete(frames.keys().next().value)
-          }
+          const frame = recordFrame(page, document, viewport, data, Math.min(viewport.clientWidth, 1920), Math.min(viewport.clientHeight, 1200))
+          const unchanged = previous?.page === page && previous.document === document
+            && previous.digest === frames.get(frame.frameID).digest
           succeeded = true
-          return { tabID, frameID, imageID: document + ':' + digest, imageBase64: unchanged ? '' : data }
+          return { ...frame, imageBase64: unchanged ? '' : data }
         })
       } finally {
         expired = true
@@ -164,6 +252,10 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       inventory()
       const { tabID, frameID, actionID } = request, page = pages.get(tabID)
       if (!page) throw failure(410, 'browser_tab_closed')
+      if (request.kind === 'pointerCancel') {
+        await releasePointer(page, request.gestureID)
+        return { tabID, accepted: true }
+      }
       const frame = frames.get(frameID)
       if (!frame || frame.page !== page || frame.document !== documents.get(page) || Date.now() - frame.created > 30000) {
         throw failure(409, 'browser_page_changed')
@@ -185,15 +277,39 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
           if (expired) { await cdp.detach().catch(() => {}); throw failure(503, 'browser_timed_out') }
           const send = async (method, params) => {
             if (expired || page.isClosed() || documents.get(page) !== frame.document) throw failure(409, 'browser_page_changed')
+            if (request.gestureID && cancelledPointers.has(request.gestureID)) throw failure(409, 'browser_pointer_cancelled')
             return cdp.send(method, params)
           }
           const { kind, x, y, modifiers = 0 } = request
-          if (['click', 'drag', 'move', 'scroll'].includes(kind)) {
+          if (['pointerDown', 'pointerMove', 'pointerUp'].includes(kind)) {
+            let pointer = pointers.get(page)
+            if (cancelledPointers.has(request.gestureID)) throw failure(409, 'browser_pointer_cancelled')
+            if (kind === 'pointerDown' ? !!pointer : !pointer || pointer.gestureID !== request.gestureID || pointer.document !== frame.document) {
+              throw failure(409, 'browser_pointer_changed')
+            }
+            const { cssVisualViewport: current } = await send('Page.getLayoutMetrics')
+            const fields = kind === 'pointerDown' ? ['pageX', 'pageY', 'clientWidth', 'clientHeight'] : ['clientWidth', 'clientHeight']
+            if (!current || fields.some(key => Math.abs(current[key] - frame.viewport[key]) > 1)) throw failure(409, 'browser_page_changed')
+            const event = { x: x * frame.width, y: y * frame.height, modifiers, button: request.button ?? 'left', clickCount: request.clickCount ?? 1 }
+            if (kind === 'pointerDown') {
+              if (cancelledPointers.has(request.gestureID)) throw failure(409, 'browser_pointer_cancelled')
+              pointer = { cdp, event, document: frame.document, gestureID: request.gestureID }
+              pointers.set(page, pointer); renewPointer(page, pointer)
+              await send('Input.dispatchMouseEvent', { ...event, type: 'mouseMoved', buttons: 0 })
+              if (cancelledPointers.has(request.gestureID)) throw failure(409, 'browser_pointer_cancelled')
+              await send('Input.dispatchMouseEvent', { ...event, type: 'mousePressed', buttons: event.button === 'left' ? 1 : 2 })
+            } else {
+              if (pointer.event.button !== event.button) throw failure(400, 'invalid_browser_action')
+              pointer.event = event; renewPointer(page, pointer)
+              if (kind === 'pointerUp') await releasePointer(page, request.gestureID, false)
+              else await send('Input.dispatchMouseEvent', { ...event, type: 'mouseMoved', buttons: event.button === 'left' ? 1 : 2 })
+            }
+          } else if (['click', 'drag', 'move', 'scroll'].includes(kind)) {
             const { cssVisualViewport: current } = await send('Page.getLayoutMetrics')
             if (!current || (kind === 'scroll' ? ['clientWidth', 'clientHeight'] : ['pageX', 'pageY', 'clientWidth', 'clientHeight']).some(key => Math.abs(current[key] - frame.viewport[key]) > 1)) {
               throw failure(409, 'browser_page_changed')
             }
-            const width = Math.min(current.clientWidth, 1920), height = Math.min(current.clientHeight, 1200)
+            const width = frame.width, height = frame.height
             const point = (px, py) => ({ x: px * width, y: py * height })
             const position = point(x, y)
             await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...position, modifiers })
@@ -257,6 +373,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
         }, Math.max(1, expires - performance.now()))
       } finally {
         expired = true
+        if (!succeeded && request.gestureID) await releasePointer(page, request.gestureID)
         if (cdp) {
           await deadline(async () => {
             if (heldButton) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...heldButton, buttons: 0 }).catch(() => {})
@@ -272,6 +389,8 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       await starting?.catch(() => {})
       const session = active
       active = undefined
+      for (const page of casts.keys()) stopCast(page)
+      await Promise.all([...pointers.keys()].map(page => releasePointer(page)))
       pages.clear(); frames.clear(); receipts.clear(); sessions.clear()
       await session?.context.close()
     },
@@ -300,9 +419,10 @@ function keyInfo(key) {
 function validateAction(r) {
   const invalid = () => { throw failure(400, 'invalid_browser_action') }
   if (!r || !['tabID', 'frameID', 'actionID'].every(key => typeof r[key] === 'string' && /^[0-9a-f-]{36}$/i.test(r[key]))) invalid()
-  if (!['click', 'drag', 'move', 'scroll', 'text', 'key', 'copy', 'navigate', 'back', 'forward', 'reload'].includes(r.kind)) invalid()
+  if (!['click', 'drag', 'move', 'scroll', 'text', 'key', 'copy', 'navigate', 'back', 'forward', 'reload', 'pointerDown', 'pointerMove', 'pointerUp', 'pointerCancel'].includes(r.kind)) invalid()
+  if (r.kind.startsWith('pointer') && (typeof r.gestureID !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.gestureID))) invalid()
   if (r.modifiers !== undefined && (!Number.isInteger(r.modifiers) || r.modifiers < 0 || r.modifiers > 15)) invalid()
-  if (['click', 'drag', 'move', 'scroll'].includes(r.kind)) {
+  if (['click', 'drag', 'move', 'scroll', 'pointerDown', 'pointerMove', 'pointerUp'].includes(r.kind)) {
     if (![r.x, r.y].every(v => Number.isFinite(v) && v >= 0 && v <= 1)) invalid()
     if (r.button !== undefined && !['left', 'right'].includes(r.button)) invalid()
     if (r.clickCount !== undefined && ![1, 2, 3].includes(r.clickCount)) invalid()
@@ -329,48 +449,38 @@ export async function streamBrowserFrames(browser, tabID, response) {
   const viewers = streams.get(browser)
   if (viewers.size >= 4) throw failure(429, 'browser_viewer_limit')
   viewers.add(response)
-  let stopped = false, wake, previous, sentAt = 0
+  let stopped = false, wake, unsubscribe, latest, failed, previousImageID
   const stop = () => { stopped = true; wake?.() }
   response.once('close', stop)
   try {
-    let busy = 0
+    unsubscribe = await browser.watch(tabID, frame => { latest = frame; wake?.() }, error => { failed = error; wake?.() })
     while (!stopped) {
-      const started = performance.now()
-      let frame
-      try { frame = await browser.frame(tabID, previous); busy = 0 }
-      catch (error) {
-        if (error.statusCode !== 409 || ++busy > 100) throw error
+      if (failed) throw failed
+      if (!latest) { await new Promise(resolve => { wake = resolve }); continue }
+      const frame = latest; latest = undefined
+      if (!response.headersSent) {
+        response.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' })
+        response.flushHeaders()
       }
-      if (stopped) break
-      if (frame && (frame.imageBase64 || Date.now() - sentAt >= 2000)) {
-        if (!response.headersSent) {
-          response.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' })
-          response.flushHeaders()
-        }
-        if (response.writableLength > 3 * 1024 * 1024) break
-        const writable = response.write(JSON.stringify(frame) + '\n')
-        previous = frame.frameID; sentAt = Date.now()
-        if (!writable && !stopped) {
-          // Wait before capturing again, so a slow link never queues old frames.
-          const drained = await new Promise(resolve => {
-            const finish = value => {
-              clearTimeout(timer); response.off('drain', ready); response.off('close', gone); resolve(value)
-            }
-            const ready = () => finish(true), gone = () => finish(false)
-            const timer = setTimeout(gone, 1500)
-            response.once('drain', ready); response.once('close', gone)
-          })
-          if (!drained) break
-        }
+      if (response.writableLength > 3 * 1024 * 1024) break
+      const writable = response.write(JSON.stringify({ ...frame, imageBase64: frame.imageID === previousImageID ? '' : frame.imageBase64 }) + '\n')
+      previousImageID = frame.imageID
+      if (!writable && !stopped) {
+        const drained = await new Promise(resolve => {
+          const finish = value => {
+            clearTimeout(timer); response.off('drain', ready); response.off('close', gone); resolve(value)
+          }
+          const ready = () => finish(true), gone = () => finish(false)
+          const timer = setTimeout(gone, 1500)
+          response.once('drain', ready); response.once('close', gone)
+        })
+        if (!drained) break
       }
-      await new Promise(resolve => {
-        const timer = setTimeout(resolve, Math.max(1, 33 - (performance.now() - started)))
-        wake = () => { clearTimeout(timer); resolve() }
-      })
     }
   } catch (error) {
-    if (!response.headersSent) throw error
+    if (!response.headersSent && !stopped) throw error
   } finally {
+    unsubscribe?.()
     viewers.delete(response)
     response.off('close', stop)
     if (response.headersSent) response.destroy()

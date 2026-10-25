@@ -1723,6 +1723,7 @@ final class RemoteBrowserFrameFeed {
     private var frame: RemoteBrowserFrame?
     private var error: (any Error)?
     private var equivalentFrames: [String] = []
+    private var waiters: [UUID: (continuation: CheckedContinuation<Void, Never>, timeout: Task<Void, Never>)] = [:]
     private var lastRead = ContinuousClock.now
     private var receiver: Task<Void, Never>?
     private var lease: Task<Void, Never>?
@@ -1739,10 +1740,12 @@ final class RemoteBrowserFrameFeed {
                         if self.equivalentFrames.count > 128 { self.equivalentFrames.removeFirst() }
                     } else { self.equivalentFrames.removeAll() }
                     self.frame = incoming
+                    self.wakeReaders()
                 }
                 self?.error = URLError(.networkConnectionLost)
             } catch { self?.error = error }
             self?.frame = nil
+            self?.wakeReaders()
         }
         lease = Task { [weak self] in
             while !Task.isCancelled {
@@ -1756,6 +1759,20 @@ final class RemoteBrowserFrameFeed {
         guard !stopped else { throw CancellationError() }
         if let error { throw error }
         lastRead = .now
+        if let previousFrameID, frame?.frameID == previousFrameID {
+            let id = UUID()
+            guard waiters.count < 16 else { throw BackendRPCError.remote("Too many browser viewers.") }
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    let timeout = Task { [weak self] in
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        self?.wakeReader(id)
+                    }
+                    waiters[id] = (continuation, timeout)
+                }
+            } onCancel: { Task { @MainActor [weak self] in self?.wakeReader(id) } }
+            try Task.checkCancellation()
+        }
         let started = ContinuousClock.now
         while frame == nil, error == nil, !stopped {
             lastRead = .now
@@ -1767,6 +1784,13 @@ final class RemoteBrowserFrameFeed {
         guard let frame else { throw CancellationError() }
         return .init(tabID: tabID, imageBase64: frame.frameID == previousFrameID || equivalentFrames.contains(previousFrameID ?? "") ? "" : frame.imageBase64, frameID: frame.frameID, imageID: frame.imageID)
     }
-    func stop() { stopped = true; receiver?.cancel(); lease?.cancel(); frame = nil; equivalentFrames.removeAll() }
+    private func wakeReader(_ id: UUID) {
+        guard let waiter = waiters.removeValue(forKey: id) else { return }
+        waiter.timeout.cancel(); waiter.continuation.resume()
+    }
+    private func wakeReaders() {
+        for id in Array(waiters.keys) { wakeReader(id) }
+    }
+    func stop() { stopped = true; receiver?.cancel(); lease?.cancel(); frame = nil; equivalentFrames.removeAll(); wakeReaders() }
     deinit { receiver?.cancel(); lease?.cancel() }
 }

@@ -6,9 +6,11 @@ import { createWorkspaceBrowser, streamBrowserFrames } from '../src/workspace-br
 function fixture() {
   const context = new EventEmitter(), pages = [], commands = []
   let launches = 0, detached = 0
+  const sessions = []
   context.pages = () => pages
   context.close = async () => context.emit('close')
-  context.newCDPSession = async () => ({
+  context.newCDPSession = async () => {
+    const session = Object.assign(new EventEmitter(), {
     async send(method, params) {
       commands.push({ method, params })
       return method === 'Page.getLayoutMetrics'
@@ -16,7 +18,9 @@ function fixture() {
         : { data: Buffer.from('jpeg fixture').toString('base64') }
     },
     async detach() { detached++ },
-  })
+    })
+    sessions.push(session); return session
+  }
   const addPage = () => {
     const page = Object.assign(new EventEmitter(), { closed: false, isClosed() { return this.closed }, title: async () => 'Remote tab',
       url: () => 'http://127.0.0.1:3000', context: () => context })
@@ -29,7 +33,7 @@ function fixture() {
     await new Promise(resolve => setImmediate(resolve))
     return { context, endpoint: 'ws://127.0.0.1:4000/devtools/browser/fixture' }
   } })
-  return { service, addPage, context, commands, get launches() { return launches }, get detached() { return detached } }
+  return { service, addPage, context, commands, sessions, get launches() { return launches }, get detached() { return detached } }
 }
 
 test('viewing is lazy, concurrent agents share one browser, crash permits a fresh launch', async () => {
@@ -153,47 +157,115 @@ function streamResponse() {
   return response
 }
 
-test('live frames recover from capture contention and stop as soon as the viewer disconnects', async () => {
-  const response = streamResponse(), received = []; let captures = 0
-  const browser = { async frame() {
-    captures++
-    if (captures < 3) throw Object.assign(Error('busy'), { statusCode: 409 })
-    return { tabID: 'tab', frameID: String(captures), imageBase64: 'jpeg' }
-  } }
-  response.write = data => { received.push(JSON.parse(data)); response.emit('close'); return true }
-  await streamBrowserFrames(browser, 'tab', response)
-  assert.equal(captures, 3); assert.equal(received.length, 1)
-  assert.equal(response.headers['Cache-Control'], 'no-store')
-  assert.equal(response.listenerCount('close'), 0)
-})
-
-test('a stalled viewer cannot build an unbounded video backlog', async () => {
-  const response = streamResponse(); response.writableLength = 4 * 1024 * 1024
-  response.write = () => { assert.fail('must not add to a congested socket') }
-  await streamBrowserFrames({ frame: async () => ({ imageBase64: 'jpeg' }) }, 'tab', response)
-  assert.equal(response.destroyed, true)
-})
-
-
-test('network backpressure waits for drain before capturing another image', async () => {
-  const response = streamResponse(); let captures = 0, writes = 0
-  const browser = { frame: async () => { captures++; return { imageBase64: 'jpeg' } } }
-  response.write = () => {
-    if (++writes === 1) {
-      setTimeout(() => { assert.equal(captures, 1); response.emit('drain') }, 80)
+test('streams keep the newest frame during backpressure and unsubscribe on disconnect', async () => {
+  const response = streamResponse(), received = []; let emit, unsubscribed = false
+  const browser = { async watch(tab, callback) { emit = callback; callback({ tabID: tab, frameID: '1', imageID: '1', imageBase64: 'jpeg1' }); return () => { unsubscribed = true } } }
+  response.write = data => {
+    received.push(JSON.parse(data))
+    if (received.length === 1) {
+      for (let i = 2; i <= 100; i++) emit({ tabID: 'tab', frameID: String(i), imageID: String(i), imageBase64: 'jpeg' + i })
+      setTimeout(() => response.emit('drain'), 20)
       return false
     }
     response.emit('close'); return true
   }
   await streamBrowserFrames(browser, 'tab', response)
-  assert.equal(captures, 2); assert.equal(response.listenerCount('drain'), 0)
+  assert.deepEqual(received.map(f => f.frameID), ['1', '100'])
+  assert.equal(response.headers['Cache-Control'], 'no-store'); assert.equal(unsubscribed, true)
+  assert.equal(response.listenerCount('drain'), 0); assert.equal(response.listenerCount('close'), 0)
 })
 
+test('a stalled viewer cannot build an unbounded video backlog', async () => {
+  const response = streamResponse(); response.writableLength = 4 * 1024 * 1024
+  response.write = () => { assert.fail('must not add to a congested socket') }
+  await streamBrowserFrames({ watch: async (_, emit) => { emit({ imageID: 'image', imageBase64: 'jpeg' }); return () => {} } }, 'tab', response)
+  assert.equal(response.destroyed, true)
+})
 
 test('live frame throughput does not prematurely evict a captured gesture identity', async () => {
   const f = fixture(); await f.service.connect(); f.addPage()
   const tab = (await f.service.tabs()).tabs[0], first = await f.service.frame(tab.id)
   for (let i = 0; i < 300; i++) await f.service.frame(tab.id)
   assert.equal((await f.service.action({ actionID: uuid(), tabID: tab.id, frameID: first.frameID, kind: 'key', key: 'a' })).accepted, true)
+  await f.service.close()
+})
+
+
+test('viewers share change-driven capture, preserve full-viewport coordinates, and stop on last disconnect', async () => {
+  const f = fixture(); await f.service.connect(); const page = f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], received = []
+  const stop1 = await f.service.watch(tab.id, frame => received.push(frame), assert.fail)
+  const stop2 = await f.service.watch(tab.id, frame => received.push(frame), assert.fail)
+  assert.equal(f.sessions.length, 1)
+  f.sessions[0].emit('Page.screencastFrame', { sessionId: 1, data: 'jpeg', metadata: {
+    deviceWidth: 4000, deviceHeight: 3000, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 12, scrollOffsetY: 300,
+  } })
+  assert.equal(received.length, 2)
+  await f.service.action({ actionID: uuid(), tabID: tab.id, frameID: received[0].frameID, kind: 'click', x: 0.5, y: 0.5 })
+  assert.equal(f.commands.find(c => c.params?.type === 'mousePressed').params.x, 2000)
+  stop1(); assert.equal(f.commands.filter(c => c.method === 'Page.stopScreencast').length, 0)
+  stop2(); await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.commands.filter(c => c.method === 'Page.stopScreencast').length, 1)
+  assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
+  assert.equal(f.commands.filter(c => c.method === 'Page.captureScreenshot').length, 0)
+  await f.service.close()
+})
+
+test('live pointer moves while held, releases outside, and rejects a late cancelled press', async () => {
+  const f = fixture(); await f.service.connect(); const page = f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], frame = await f.service.frame(tab.id)
+  const gestureID = uuid()
+  const action = kind => ({ actionID: uuid(), gestureID, tabID: tab.id, frameID: frame.frameID, kind, button: 'left', x: 0.2, y: 0.3 })
+  await f.service.action(action('pointerDown'))
+  assert.equal(f.commands.at(-1).params.type, 'mousePressed')
+  await f.service.action({ ...action('pointerMove'), x: 0.8 })
+  assert.equal(f.commands.at(-1).params.buttons, 1)
+  assert.equal(f.commands.at(-1).params.x, 1536)
+  await f.service.action(action('pointerCancel'))
+  assert.equal(f.commands.at(-1).params.type, 'mouseReleased'); assert.equal(f.commands.at(-1).params.x, -1)
+  await assert.rejects(f.service.action(action('pointerDown')), { statusCode: 409 })
+  const next = { ...action('pointerDown'), gestureID: uuid() }
+  await f.service.action(next)
+  page.emit('framenavigated', page)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.commands.at(-1).params.type, 'mouseReleased')
+  await f.service.close()
+})
+
+
+test('cancellation overtakes a suspended move without re-pressing the mouse', async () => {
+  const f = fixture(); await f.service.connect(); f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], frame = await f.service.frame(tab.id), gestureID = uuid()
+  const action = kind => ({ actionID: uuid(), gestureID, tabID: tab.id, frameID: frame.frameID, kind, x: 0.2, y: 0.3 })
+  await f.service.action(action('pointerDown'))
+  const cdp = f.sessions[0], original = cdp.send.bind(cdp)
+  let resume
+  cdp.send = async (method, params) => {
+    if (method === 'Page.getLayoutMetrics') await new Promise(resolve => { resume = resolve })
+    return original(method, params)
+  }
+  const moving = f.service.action(action('pointerMove'))
+  while (!resume) await new Promise(resolve => setImmediate(resolve))
+  await f.service.action(action('pointerCancel'))
+  resume()
+  await assert.rejects(moving, /browser_pointer_cancelled/)
+  const mouse = f.commands.filter(c => c.method === 'Input.dispatchMouseEvent')
+  assert.equal(mouse.at(-1).params.type, 'mouseReleased')
+  assert.equal(mouse.filter(c => c.params.type === 'mouseMoved' && c.params.buttons === 1).length, 0)
+  await f.service.close()
+})
+
+test('a disconnect during capture startup tears down the late capture session', async () => {
+  const f = fixture(); await f.service.connect(); f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], response = streamResponse()
+  const create = f.context.newCDPSession
+  let resume
+  f.context.newCDPSession = async () => { await new Promise(resolve => { resume = resolve }); return create() }
+  response.write = () => assert.fail('disconnected viewer must not receive frames')
+  const streaming = streamBrowserFrames(f.service, tab.id, response)
+  response.emit('close'); resume(); await streaming
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.detached, 1)
+  assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
   await f.service.close()
 })

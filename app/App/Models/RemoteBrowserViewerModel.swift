@@ -14,6 +14,7 @@ final class RemoteBrowserViewerModel {
     private(set) var updatedAt: Date?
     private(set) var inputError: String?
     private(set) var frameID: String?
+    private var activePointers: [String: RemoteBrowserAction] = [:]
     private var pendingInput: [RemoteBrowserAction] = []
     private var sendingInput = false
     private var revision = UUID()
@@ -42,6 +43,7 @@ final class RemoteBrowserViewerModel {
 
     func select(_ id: String) {
         guard id != selectedID else { return }
+        cancelPointer()
         revision = UUID()
         selectedID = id
         pendingInput.removeAll(); frameID = nil; inputError = nil
@@ -51,9 +53,22 @@ final class RemoteBrowserViewerModel {
     }
 
     func clear() {
+        cancelPointer()
         revision = UUID()
         pendingInput.removeAll(); frameID = nil; inputError = nil
         tabs = []; selectedID = nil; image = nil; updatedAt = nil; error = nil; hasLoaded = false
+    }
+
+    private func cancelPointer(_ gestureID: String? = nil) {
+        let ids = gestureID.map { [$0] } ?? Array(activePointers.keys)
+        pendingInput.removeAll { action in action.gestureID.map { ids.contains($0) } ?? false }
+        for id in ids {
+            guard var action = activePointers.removeValue(forKey: id) else { continue }
+            action.kind = "pointerCancel"; action.actionID = UUID().uuidString.lowercased()
+            // Cancellation can overtake a press; the service rejects late input
+            // for this gesture. Keep completed clicks until their release is acknowledged.
+            Task { [sendAction, action] in _ = try? await sendAction(action) }
+        }
     }
 
     func enqueue(_ gesture: RemoteBrowserAction) {
@@ -68,9 +83,10 @@ final class RemoteBrowserViewerModel {
         if !action.tabID.isEmpty && action.tabID != selectedID { return }
         action.tabID = selectedID
         if action.frameID.isEmpty { action.frameID = frameID }
+        if action.kind == "pointerCancel" { cancelPointer(action.gestureID); return }
         // Coalesce pointer motion and wheel bursts while preserving input order.
         if let last = pendingInput.last, last.frameID == action.frameID, last.kind == action.kind,
-           ["move", "scroll", "text"].contains(action.kind),
+           ["move", "scroll", "text", "pointerMove"].contains(action.kind), last.gestureID == action.gestureID,
            action.kind != "text" || ((last.text ?? "") + (action.text ?? "")).utf8.count <= 16384 {
             if action.kind == "scroll" {
                 action.deltaX = max(-4000, min(4000, (last.deltaX ?? 0) + (action.deltaX ?? 0)))
@@ -80,7 +96,11 @@ final class RemoteBrowserViewerModel {
             }
             pendingInput.removeLast()
         }
-        guard pendingInput.count < 128 else { inputError = "The workspace is catching up with your input."; return }
+        guard pendingInput.count < 128 else {
+            if action.kind == "pointerUp" { cancelPointer(action.gestureID) }
+            inputError = "The workspace is catching up with your input."; return
+        }
+        if action.kind == "pointerDown", let id = action.gestureID { activePointers[id] = action }
         pendingInput.append(action)
         if !sendingInput { Task { await drainInput() } }
     }
@@ -111,13 +131,14 @@ final class RemoteBrowserViewerModel {
                     throw RemoteWorkspaceClientError.invalidResponse("The workspace did not accept this input.")
                 }
                 for (gesture, result) in zip(batch, results) {
+                    if gesture.kind == "pointerUp", let id = gesture.gestureID { activePointers.removeValue(forKey: id) }
                     if gesture.kind == "copy", let text = result.text, !text.isEmpty, text.utf8.count <= 65536 { copyText(text) }
                 }
                 inputError = nil
             } catch {
                 guard requestRevision == revision else { continue }
                 // Never replay uncertain input or send queued text to a newly navigated page.
-                pendingInput.removeAll()
+                pendingInput.removeAll(); cancelPointer()
                 inputError = error.localizedDescription
             }
         }
@@ -143,11 +164,12 @@ final class RemoteBrowserViewerModel {
             if tabs != current { tabs = current }
             hasLoaded = true
             if !tabs.contains(where: { $0.id == selectedID }) {
-                revision = UUID()
+                cancelPointer(); revision = UUID()
                 selectedID = tabs.first?.id; image = nil; updatedAt = nil; frameID = nil; pendingInput.removeAll()
             }
         } catch {
             guard !Task.isCancelled, requestRevision == revision else { return }
+            cancelPointer()
             tabs = []; selectedID = nil; image = nil; updatedAt = nil; hasLoaded = true
             self.error = error.localizedDescription; frameID = nil; pendingInput.removeAll()
         }
@@ -176,6 +198,7 @@ final class RemoteBrowserViewerModel {
             error = nil
         } catch {
             guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
+            cancelPointer()
             image = nil; updatedAt = nil; self.error = error.localizedDescription; frameID = nil; pendingInput.removeAll()
         }
     }
