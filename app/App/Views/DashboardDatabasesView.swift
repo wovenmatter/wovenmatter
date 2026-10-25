@@ -95,9 +95,6 @@ struct DashboardDatabasesView: View {
         .onChange(of: model.remoteWorkspaces.workspaces) { _, _ in
             Task { await model.refreshDatabases() }
         }
-        .onChange(of: model.remoteWorkspaces.isCredentialAccessEnabled) { _, _ in
-            Task { await model.refreshDatabases() }
-        }
         .onChange(of: filter) { _, _ in selectDefaultSource() }
         .onChange(of: model.databasesSnapshot) { _, _ in selectDefaultSource() }
         .sheet(isPresented: $showsCreateDatabase) {

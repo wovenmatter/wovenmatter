@@ -1,20 +1,25 @@
-# Credential access and prompt policy
+# Keychain access and prompt policy
 
-Woven Matter remembers one app-wide credential-access consent. Enabling a
-provider or remote workspace still selects which features to use; it does not
-create another app-wide permission. The General settings recovery action is
-deliberate, runs once, and stops at the first failed authorization. Background
-refresh never opens credential authorization UI.
+**Settings → General → Keychain access** is the single deliberate recovery entry.
+Use **Enable Keychain access** initially or **Restore Keychain access** after a failure.
+When macOS asks, **Always Allow** remembers access to that item; it is not a blanket
+authorization for future credentials. Background checks stay noninteractive.
+
+The card reports **Access ready** only after checking the browser encryption key,
+website-password vault, saved Pi Durable/Usage items, and remote workspace keys.
+The checks run in the process that owns each credential. Accepting the disclosure
+alone is not proof of access. Failure or cancellation shows **Access needs attention**.
+No credentials or Keychain values are returned to the presentation layer.
 
 ## Audited paths
 
 | Credential or activity | Background behavior | Deliberate access |
 | --- | --- | --- |
-| OpenRouter usage key | Attributes-only presence checks; noninteractive secret reads; successful reads cached for the session and shared by analytics and limits | Saving/removing the key stays silent; General recovery may authorize access |
-| Claude Code credential | File first, then cached session token or noninteractive Keychain read; no CLI fallback after a denied read | Only General recovery may authorize a Keychain read |
+| OpenRouter usage key | Attributes-only presence checks; noninteractive secret reads; successful reads cached for the session and used by limits; device analytics does not read credentials | Saving/removing the key stays silent; General recovery may authorize access |
+| Claude subscriptions | Usage reads the saved Pi Durable profile; native Claude owns its credential permissions | Sign-in lives in Pi Durable and Usage settings; General does not probe unrelated native profiles |
 | OpenClaw device identity/token | Cached by gateway scope; unchanged tokens are not rewritten; reads and token updates suppress UI; failures stop reconnect retries and remain blocked until explicit recovery | General recovery; Link/Reconnect/Restart stays noninteractive |
 | Remote workspace API token | Cached by workspace; noninteractive on service calls; denied reads are not repeated; disabling access clears the cache | General recovery; provisioning, reconnect and deletion stay noninteractive |
-| Codex/Grok/Cursor usage probes | Direct file/API reads only; unavailable reads preserve last-good limits | A selected provider's explicit access action may use its CLI fallback; cannot authorize other providers |
+| Codex/Grok usage limits | Saved account API reads only; no native CLI fallback during refresh | Account management lives in Usage settings; the limits page has no authentication controls |
 | Browser encryption key and website passwords | Consent-gated, noninteractive preflight before CEF starts; exact-origin password vault cached in memory; writes suppress UI | General recovery preauthorizes Chromium Safe Storage and the website-password vault |
 | Local runtime readiness | Startup, reopen, Settings, and passive refresh resolve installed executables without starting credential-sensitive provider sessions | Installed harnesses are available without an Enable step; explicit Sign in opens only the chosen native CLI flow |
 | Codex title options | No automatic session solely to discover models | Existing Refresh options action |

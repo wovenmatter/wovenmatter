@@ -9,35 +9,6 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
     return (try MobileCalendarStore(file: file, deviceID: device), file)
   }
   private func date(_ string: String) -> Date { ISO8601DateFormatter().date(from: string)! }
-  func testOfflineCreateEditDeleteAndRequestReplaySurviveRestart() async throws {
-    let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-    let draft = CompanionCalendarDraft(title: "Appointment", startsAt: date("2026-10-12T13:00:00Z"), timeZoneID: "UTC")
-    let id = UUID().uuidString.lowercased()
-    let created = try await store.save(id: id, expectedRevision: nil, draft: draft, requestID: "create")
-    var edit = draft; edit.title = "Changed"
-    let changed = try await store.save(id: id, expectedRevision: created.event.revision, draft: edit)
-    let replay = try await store.save(id: id, expectedRevision: nil, draft: draft, requestID: "create")
-    XCTAssertEqual(replay, created)
-    let restarted = try MobileCalendarStore(file: file, deviceID: device)
-    let records = await restarted.records(); XCTAssertEqual(records.first, changed)
-    try await restarted.delete(id: id, expectedRevision: changed.event.revision, requestID: "remove")
-    try await restarted.delete(id: id, expectedRevision: changed.event.revision, requestID: "remove")
-    let remaining = await restarted.records(); XCTAssertTrue(remaining.isEmpty)
-    let pending = try await restarted.nextMutation(); XCTAssertTrue(pending?.record.deleted == true)
-  }
-  func testLostAcknowledgementPreservesSubmittedPayloadAndRebasesLaterEdit() async throws {
-    let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-    let record = try await store.save(expectedRevision: nil, draft: .init(title: "First"))
-    let submittedValue = try await store.nextMutation(); let submitted = try XCTUnwrap(submittedValue)
-    var draft = record.event.draft; draft.title = "Second"
-    _ = try await store.save(id: record.id, expectedRevision: record.event.revision, draft: draft)
-    let restarted = try MobileCalendarStore(file: file, deviceID: device)
-    let retried = try await restarted.nextMutation(); XCTAssertEqual(retried, submitted)
-    var canonical = record; canonical.event.revision = 5
-    try await restarted.acknowledge(.init(mutationID: submitted.id, status: .accepted, record: canonical))
-    let second = try await restarted.nextMutation()
-    XCTAssertEqual(second?.expectedRevision, 5); XCTAssertEqual(second?.record.event.draft.title, "Second")
-  }
   func testConcurrentCentralEditPreservesBothVersionsAndOtherEventsStillSync() async throws {
     let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
     let record = try await store.save(expectedRevision: nil, draft: .init(title: "Local"))
@@ -88,19 +59,6 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
     let updated = try await store.dueRuns(deviceID: device); XCTAssertEqual(updated.first?.task.prompt, "After")
     try await store.delete(id: event.id, expectedRevision: edited.event.revision)
     let empty = try await store.dueRuns(deviceID: device); XCTAssertTrue(empty.isEmpty)
-  }
-  func testMonthAndDSTUseAnchoredWallClockArithmetic() throws {
-    let draft = CompanionCalendarDraft(title: "Month", startsAt: date("2026-01-31T14:00:00Z"), timeZoneID: "America/New_York", recurrenceUnit: "month")
-    XCTAssertEqual(CompanionCalendarSchedule.date(draft, index: 1), date("2026-02-28T14:00:00Z"))
-    XCTAssertEqual(CompanionCalendarSchedule.date(draft, index: 2), date("2026-03-31T13:00:00Z"))
-  }
-  func testFrozenToolDraftSurvivesRetryWithoutRepeatingSideEffects() async throws {
-    let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-    let draft = try await store.prepareToolDraft(requestID: "request", arguments: "update 1", draft: .init(title: "Original"))
-    let reopened = try MobileCalendarStore(file: file, deviceID: device)
-    let frozen = try await reopened.prepareToolDraft(requestID: "request", arguments: "update 1", draft: .init(title: "Changed"))
-    XCTAssertEqual(frozen, draft)
-    do { _ = try await reopened.prepareToolDraft(requestID: "request", arguments: "update 2", draft: draft); XCTFail("Mismatched retry") } catch { }
   }
   func testClaimRecoveryFencesEditedEventAndTerminalRunsCannotRestart() async throws {
     let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }

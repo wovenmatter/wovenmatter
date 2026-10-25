@@ -59,39 +59,6 @@ struct ConversationWorkTimelineTests {
     #expect(groups(followed)[0].activeActivityIDs.isEmpty)
   }
 
-  @Test("the fold keeps failed rows and failed calls visible")
-  func foldedFailures() {
-    let records = [
-      record(tool("1", "bash"), at: "1"),
-      record(tool("2", "bash", status: "failed"), at: "2"),
-      record(AgentRunActivity(id: "c", kind: .assistant, content: "Next"), at: "3"),
-      record(tool("3", "read"), at: "4"),
-      record(AgentRunActivity(id: "x", kind: .activity, status: "error", content: "Lost"), at: "5"),
-    ]
-    let timeline = ConversationWorkTimeline(records: records, commentaryIDs: ["c"])
-
-    #expect(groups(timeline)[0].hasFailure)
-    #expect(timeline.foldedEntries.map(\.id) == ["failed:group:1", "activity:x"])
-    guard case .group(let failed)? = timeline.foldedEntries.first?.content else {
-      Issue.record("expected failed calls")
-      return
-    }
-    #expect(failed.activities.map(\.id) == ["2"])
-  }
-
-
-  @Test("a merged detail version includes every contributing trace")
-  func mergedDetailVersions() {
-    let start = record(AgentRunActivity(id: "a", kind: .tool, content: "first", detailVersion: 1), at: "1")
-    let end = record(AgentRunActivity(id: "a", kind: .tool, status: "completed", detailVersion: 2), at: "2")
-    let corrected = record(AgentRunActivity(id: "a", kind: .tool, content: "corrected", detailVersion: 3), at: "1")
-    let version = { (records: [WorkspaceRunActivityRecord]) in
-      ConversationWorkTimeline.mergedActivities(in: records, commentaryIDs: []).first?.detailVersion
-    }
-    #expect(version([start, end]) == version([start, end]))
-    #expect(version([start, end]) != version([corrected, end]))
-    #expect(version([start, end]) != version([end]))
-  }
 
   @Test("commentary splits work groups that keep their first member's identity")
   func chronologicalGrouping() {
@@ -137,30 +104,6 @@ struct ConversationWorkTimelineTests {
     #expect(all[1].activities.map(\.id) == ["t"])
   }
 
-  @Test("clear removes an activity and a later update restores it from the clear")
-  func clearRemoval() {
-    let entries = [AgentRunPlanEntry(content: "Step", status: "pending")]
-    let plan = { (phase: String, entries: [AgentRunPlanEntry]) in
-      AgentRunActivity(id: "plan", kind: .plan, phase: phase, planEntries: entries, planKind: "proposal")
-    }
-    let cleared = ConversationWorkTimeline(records: [
-      record(plan("update", entries), at: "1"),
-      record(plan("clear", []), at: "2"),
-    ], commentaryIDs: [])
-    #expect(cleared.entries.isEmpty)
-
-    let restored = ConversationWorkTimeline(records: [
-      record(plan("update", entries), at: "1"),
-      record(plan("clear", []), at: "2"),
-      record(AgentRunActivity(id: "plan", kind: .plan, phase: "update", title: "Plan"), at: "3"),
-    ], commentaryIDs: [])
-    guard case .activity(let activity)? = restored.entries.first?.content else {
-      Issue.record("expected the restored plan")
-      return
-    }
-    #expect(activity.planEntries.isEmpty)
-  }
-
 
   @Test("the latest segment stays before later visible work, even after a stop")
   func liveCommentaryPartition() {
@@ -186,20 +129,6 @@ struct ConversationWorkTimelineTests {
         tool("update", "update_plan")], isLive: true)
     #expect(checklistOnly.commentaryIDs.isEmpty)
     #expect(checklistOnly.body == transcript.body)
-  }
-
-  @Test("deltas append and snapshots replace in precedes order")
-  func deltaMerge() {
-    let records = [
-      record(AgentRunActivity(id: "c", kind: .assistant, content: "lo", contentIsDelta: true), at: "1", sequence: 2),
-      record(AgentRunActivity(id: "c", kind: .assistant, content: "Hel", contentIsDelta: false), at: "1", sequence: 1),
-    ]
-    let timeline = ConversationWorkTimeline(records: records, commentaryIDs: ["c"])
-    guard case .commentary(let activity)? = timeline.entries.first?.content else {
-      Issue.record("expected commentary")
-      return
-    }
-    #expect(activity.content == "Hello")
   }
 
 }

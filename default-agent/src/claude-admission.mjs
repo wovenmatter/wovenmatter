@@ -100,7 +100,7 @@ export async function createClaudeAdmission({ signal, onEvent, onRequest, onResp
       }
       if (result.ok && (pending + decoder.decode()).trim()) throw new DefaultAgentError('The Claude response ended with an incomplete event.');
       if (result.ok && generation.complete) await onResponse?.(generation.message, compacting ? 'compaction' : 'generation');
-      if (!result.ok) generation.error = new DefaultAgentError(accessFailure(`${result.status} ${errorBody}`) ?? `Claude returned HTTP ${result.status}. Check Settings → Connections or retry.`);
+      if (!result.ok) generation.error = new DefaultAgentError(accessFailure(`${result.status} ${errorBody}`) ?? `Claude returned HTTP ${result.status}. Check Settings → Pi Durable or retry.`);
       if (compacting) {
         // Exact native response content is already forwarded and archived.
         // Retain only accounting while replaying arbitrarily long histories.
@@ -109,7 +109,7 @@ export async function createClaudeAdmission({ signal, onEvent, onRequest, onResp
       }
       response.end();
     } catch (error) {
-      generation.error = error instanceof DefaultAgentError ? error : new DefaultAgentError('The Claude response was interrupted. Retry or check Settings → Connections.');
+      generation.error = error instanceof DefaultAgentError ? error : new DefaultAgentError('The Claude response was interrupted. Retry or check Settings → Pi Durable.');
       state.error = generation.error;
       response.destroy();
     }

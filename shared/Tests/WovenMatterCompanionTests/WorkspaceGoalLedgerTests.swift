@@ -92,22 +92,18 @@ import Testing
             ledger.settle("run", tokens: missing ? nil : 10, succeeded: true)
             #expect(ledger.goal?.status == (missing ? .blocked : .budgetLimited))
             #expect(ledger.claimContinuation(id: "next") == nil)
-            if !missing { #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: goal.id)) } }
+            #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: goal.id)) }
+            if missing {
+                let editedResult = try ledger.mutate(.edit(id: goal.id, objective: "Finish", tokenBudget: 200, turnBudget: nil))
+                let edited = try #require(editedResult)
+                #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: edited.id)) }
+                let unbudgetedResult = try ledger.mutate(.edit(id: edited.id, objective: "Finish", tokenBudget: nil, turnBudget: nil))
+                let unbudgeted = try #require(unbudgetedResult)
+                _ = try ledger.mutate(.resume(id: unbudgeted.id))
+                #expect(ledger.claimContinuation(id: "next") != nil)
+            }
         }
     }
-    @Test func missingUsageCannotBeBypassedByResumeOrAnEditedBudget() throws {
-        var ledger = WorkspaceGoalLedger()
-        let created = try ledger.mutate(.set(objective: "Finish", tokenBudget: 100, turnBudget: nil), currentRunID: "run")
-        let goal = try #require(created)
-        ledger.settle("run", tokens: nil, succeeded: true)
-        #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: goal.id)) }
-        let edited = try ledger.mutate(.edit(id: goal.id, objective: "Finish", tokenBudget: 200, turnBudget: nil))
-        #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: edited!.id)) }
-        let unbudgeted = try ledger.mutate(.edit(id: edited!.id, objective: "Finish", tokenBudget: nil, turnBudget: nil))
-        _ = try ledger.mutate(.resume(id: unbudgeted!.id))
-        #expect(ledger.claimContinuation(id: "next") != nil)
-    }
-
     @Test func noCheckpointAndFailedRunCannotSpin() throws {
         for succeeded in [false, true] {
             var ledger = WorkspaceGoalLedger()

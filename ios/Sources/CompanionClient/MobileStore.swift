@@ -85,6 +85,7 @@ public actor MobileStore {
     }
   }
   public nonisolated let analytics: MobileProductAnalytics
+  public nonisolated let dictations: MobileDictationStore
   public nonisolated let calendar: MobileCalendarStore
   public nonisolated let journal: WorkspaceJournal
   public nonisolated let artifacts: SavedArtifactStore
@@ -96,6 +97,7 @@ public actor MobileStore {
   private var lastWriteBytes = 0
   public init(file: URL, budget: Budget = .init()) throws {
     self.file = file; self.budget = budget
+    dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
     analytics = try MobileProductAnalytics(file: file.appendingPathExtension("analytics"))
     journal = try WorkspaceJournal(file: file.appendingPathExtension("execution"))
     artifacts = try SavedArtifactStore(directory: file.appendingPathExtension("artifacts"))
@@ -154,6 +156,7 @@ public actor MobileStore {
     let backup = file.deletingLastPathComponent().appendingPathComponent("Pairing Recovery", isDirectory: true)
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+    try await dictations.backup(to: backup.appendingPathComponent(file.lastPathComponent + ".dictations.sqlite"))
     // Copy the committed index and immutable bodies before changing any store.
     for source in [file, file.appendingPathExtension("bodies"), file.appendingPathExtension("execution"),
                    file.appendingPathExtension("execution.bodies"), file.appendingPathExtension("calendar"),
@@ -169,6 +172,7 @@ public actor MobileStore {
     // the commit marker; startup resumes it before any sync or agent execution.
     try await journal.moveDeviceWorkspace(to: id, deviceID: state.deviceID)
     try await calendar.moveLocalWriting(to: id)
+    try await dictations.moveLocalWriting(to: id)
     try await artifacts.moveDeviceArtifacts(to: id, deviceID: state.deviceID)
     let history = await journal.snapshot()
     try transaction { next in

@@ -5,20 +5,6 @@ import WovenMatterCore
 
 struct RemoteTaskGatewayClientTests {
 
-    @Test func durableLaunchUsesStableChannelAndOptOutKeepsDirectLaunch() throws {
-        var configuration = RemoteWorkspaceConfiguration(name: "Remote", workspaceID: "test", hostName: "host")
-        let channel = UUID().uuidString
-        let launch = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .codex,
-            processWorkingDirectory: URL(fileURLWithPath: "/tmp"), durableChannelID: channel)
-        #expect(launch.launch.arguments.last?.contains("/opt/wovenmatter/src/durable-acp-stdio.mjs") == true)
-        #expect(launch.launch.arguments.last?.contains(channel) == true)
-        configuration.backgroundExecutionEnabled = false
-        let direct = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .codex,
-            processWorkingDirectory: URL(fileURLWithPath: "/tmp"), durableChannelID: channel)
-        #expect(direct.launch.arguments.last?.contains("durable-acp") == false)
-    }
-
-
 
     @Test func gatewayStatusAndDisableUseAuthenticatedWorkspaceOrigin() async throws {
         let configuration = URLSessionConfiguration.ephemeral

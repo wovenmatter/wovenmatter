@@ -66,6 +66,8 @@ final class RemoteWorkspacesModel {
     private(set) var authenticationSessions: [UUID: RemoteHarnessAuthenticationSession] = [:]
     private(set) var preparedHarnessAction: PreparedHarnessAction?
     private(set) var pendingHostPreparation: PendingHostPreparation?
+    private(set) var pendingHarnessSetupIDs: Set<UUID> = []
+    private let harnessSetupKey = "wovenmatter.remote-workspaces.pending-harness-setup"
     private(set) var busyWorkspaceIDs: Set<UUID> = []
     private(set) var isDiscovering = false
     private(set) var isCheckingHost = false
@@ -73,7 +75,6 @@ final class RemoteWorkspacesModel {
     private(set) var progress: String?
     private(set) var errorMessage: String?
     private(set) var checkedPreflight: RemoteWorkspacePreflight?
-    private(set) var isCredentialAccessEnabled = false
     private var checkedHostKey: String?
 
     let isBackendProjection: Bool
@@ -83,8 +84,6 @@ final class RemoteWorkspacesModel {
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
     private let defaults: UserDefaults
     private let storageKey = "wovenmatter.remote-workspaces.v1"
-    private let credentialAccessDefaultsKey =
-        "wovenmatter.remote-workspaces.credential-access-enabled"
 
     private struct DefaultAgentAcknowledgment {
         let revision: String
@@ -120,7 +119,6 @@ final class RemoteWorkspacesModel {
     private func relayDefaultAgentCredentials() async {
         guard !isBackendProjection else { return }
         _ = try? await ProviderAccountCoordinator.shared.prepare("local")
-        guard isCredentialAccessEnabled else { return }
         for workspace in workspaces where tunnels[workspace.id] != nil {
             do { try await ensureDefaultAgent(workspace) }
             catch { signInErrors[workspace.id] = "Pi Durable credentials could not synchronize. Reconnect this workspace to retry." }
@@ -147,10 +145,28 @@ final class RemoteWorkspacesModel {
         self.defaults = defaults
         self.isBackendProjection = backendProjection
         guard !backendProjection else { return }
-        isCredentialAccessEnabled = defaults.bool(
-            forKey: credentialAccessDefaultsKey
-        )
+        // Configured workspaces are always available. Keychain reads remain silent;
+        // explicit reconnect or General settings handles permission recovery.
         load()
+        pendingHarnessSetupIDs = Set((defaults.stringArray(forKey: harnessSetupKey) ?? []).compactMap(UUID.init(uuidString:)))
+            .intersection(workspaces.map(\.id))
+    }
+
+    /// Called only after a newly created workspace is durably configured.
+    func requestHarnessSetup(_ id: UUID) {
+        guard !isBackendProjection, configuration(id: id) != nil else { return }
+        pendingHarnessSetupIDs.insert(id)
+        saveHarnessSetupRequests()
+    }
+
+    func dismissHarnessSetup(_ id: UUID) {
+        if forwardToBackend(.dismissHarnessSetup(id)) { return }
+        pendingHarnessSetupIDs.remove(id)
+        saveHarnessSetupRequests()
+    }
+
+    private func saveHarnessSetupRequests() {
+        defaults.set(pendingHarnessSetupIDs.map(\.uuidString).sorted(), forKey: harnessSetupKey)
     }
 
     #if COMPANION_FACADE_TESTS
@@ -160,7 +176,6 @@ final class RemoteWorkspacesModel {
                                    maintenance: [RemoteRuntimeMaintenance]) {
         // Captured readiness only: no credential authorization, clients or tunnels.
         companionFixtureWorkspaceIDs.insert(configuration.id)
-        isCredentialAccessEnabled = true
         workspaces = [configuration]
         statuses = [configuration.id: status]
         self.harnesses = [configuration.id: harnesses]
@@ -168,34 +183,6 @@ final class RemoteWorkspacesModel {
         workspaceRoots[configuration.id] = "/fixture/workspace"
     }
     #endif
-
-    func enableCredentialAccess() {
-        if forwardToBackend(.enableCredentialAccess) { return }
-        guard !isCredentialAccessEnabled else { return }
-        isCredentialAccessEnabled = true
-        defaults.set(true, forKey: credentialAccessDefaultsKey)
-        let authorizationEpoch = credentialEpoch
-        let requestedWorkspaces = workspaces
-        // Enabling access is an explicit action. Subsequent automatic refreshes
-        // only use credentials that are already available without a prompt.
-        Task {
-            do {
-                for workspace in requestedWorkspaces {
-                    guard isCredentialAccessEnabled, credentialEpoch == authorizationEpoch else {
-                        throw CancellationError()
-                    }
-                    try await authorizeCredentialAccess(for: workspace)
-                }
-                guard isCredentialAccessEnabled, credentialEpoch == authorizationEpoch else { return }
-                refreshAll()
-            } catch is CancellationError {
-                // Disabling access while authorization is pending wins.
-            } catch {
-                guard isCredentialAccessEnabled, credentialEpoch == authorizationEpoch else { return }
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
 
     func authorizeCredentialAccess(for configuration: RemoteWorkspaceConfiguration) async throws {
         let identity = try requestIdentity(configuration)
@@ -213,7 +200,6 @@ final class RemoteWorkspacesModel {
 
     func reconnect(_ configuration: RemoteWorkspaceConfiguration) {
         if forwardToBackend(.reconnect(configuration.id)) { return }
-        guard isCredentialAccessEnabled else { return }
         performBusy(configuration) {
             try await self.authorizeCredentialAccess(for: configuration)
             self.statuses[configuration.id] = try await self.sshClient.status(configuration: configuration)
@@ -221,35 +207,10 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func disableCredentialAccess() {
-        if forwardToBackend(.disableCredentialAccess) { return }
-        browserFeeds.values.forEach { $0.stop() }; browserFeeds.removeAll()
-        credentialEpoch = UUID()
-        isCredentialAccessEnabled = false
-        preparedHarnessAction = nil
-        runtimeErrors.removeAll()
-        runtimeCheckErrors.removeAll()
-        actionErrors.removeAll()
-        runtimeChecksVerifiedAfterError.removeAll()
-        checkingRuntimeIDs.removeAll()
-        workspaceRoots.removeAll()
-        defaults.set(false, forKey: credentialAccessDefaultsKey)
-        statuses.removeAll()
-        harnesses.removeAll()
-        runtimeMaintenance.removeAll()
-        workspaceInstances.removeAll()
-        Task { await onRuntimeMaintenanceChanged?() }
-        let activeTunnels = Array(tunnels.values)
-        tunnels.removeAll()
-        Task {
-            await credentials.clearCachedTokens()
-            for tunnel in activeTunnels { await tunnel.stop() }
-        }
-    }
 
     var readyChatTargets: [RemoteHarnessChatTarget] {
         workspaces.flatMap { configuration -> [RemoteHarnessChatTarget] in
-            guard isCredentialAccessEnabled, !invalidatingWorkspaceIDs.contains(configuration.id), statuses[configuration.id]?.running == true else { return [] }
+            guard !invalidatingWorkspaceIDs.contains(configuration.id), statuses[configuration.id]?.running == true else { return [] }
             return currentHarnesses(for: configuration).compactMap { harness in
                 harness.state == "ready"
                     && !isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
@@ -320,19 +281,18 @@ final class RemoteWorkspacesModel {
     }
 
     func libraryConfiguration(id: String) -> RemoteWorkspaceConfiguration? {
-        guard isCredentialAccessEnabled, let id = UUID(uuidString: id),
+        guard let id = UUID(uuidString: id),
               !invalidatingWorkspaceIDs.contains(id), statuses[id]?.running == true else { return nil }
         return configuration(id: id)
     }
 
     func refreshAll() {
         if forwardToBackend(.refreshAll) { return }
-        guard isCredentialAccessEnabled else { return }
         for workspace in workspaces { refresh(workspace) }
     }
 
     func isRuntimeEnabled(_ kind: AgentRuntimeKind, in configuration: RemoteWorkspaceConfiguration) -> Bool {
-        isCredentialAccessEnabled && self.configuration(id: configuration.id) == configuration
+        self.configuration(id: configuration.id) == configuration
             && !invalidatingWorkspaceIDs.contains(configuration.id)
             && runtimeMaintenance[configuration.id]?.contains { $0.id == kind && $0.enabled && $0.installed } == true
     }
@@ -355,7 +315,6 @@ final class RemoteWorkspacesModel {
     /// Called at startup/reopen only; never installs, upgrades, or launches runtimes.
     func checkRuntimeMaintenanceOnActivation() {
         guard !isBackendProjection else { return }
-        guard isCredentialAccessEnabled else { return }
         for workspace in workspaces {
             performBusy(workspace) {
                 await self.refreshRuntimeMaintenance(workspace, checkLatest: true)
@@ -495,7 +454,7 @@ final class RemoteWorkspacesModel {
 
     var databaseCatalogIdentity: RemoteDatabaseCatalogIdentity {
         RemoteDatabaseCatalogIdentity(configurations: workspaces, credentialEpoch: credentialEpoch,
-                                      workspaceEpochs: workspaceEpochs, credentialsEnabled: isCredentialAccessEnabled)
+                                      workspaceEpochs: workspaceEpochs, credentialsEnabled: true)
     }
 
     // Validate both sides of every suspension so credentials or destination changes
@@ -510,7 +469,7 @@ final class RemoteWorkspacesModel {
     }
 
     func browserIdentity(for configuration: RemoteWorkspaceConfiguration) -> RemoteWorkspaceRequestIdentity? {
-        guard isCredentialAccessEnabled, self.configuration(id: configuration.id) == configuration,
+        guard self.configuration(id: configuration.id) == configuration,
               !invalidatingWorkspaceIDs.contains(configuration.id) else { return nil }
         return .init(configuration: configuration, credentialEpoch: credentialEpoch,
                      workspaceEpoch: workspaceEpochs[configuration.id] ?? configuration.id)
@@ -524,15 +483,12 @@ final class RemoteWorkspacesModel {
         let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
         guard identity == browserIdentity(for: configuration), !Task.isCancelled else { throw CancellationError() }
         // A live frame must never apply an older administration snapshot over a
-        // credential disable or workspace edit that arrived while it was loading.
+        // workspace removal or edit that arrived while it was loading.
         return try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
     }
 
     private func browserRequest<Value: Sendable>(_ configuration: RemoteWorkspaceConfiguration,
         operation: (RemoteWorkspaceServiceClient) async throws -> Value) async throws -> Value {
-        guard isCredentialAccessEnabled else {
-            throw RemoteWorkspaceClientError.invalidResponse("Enable credential access in Settings to connect.")
-        }
         let identity = try requestIdentity(configuration)
         let client: RemoteWorkspaceServiceClient
         if let feed = browserFeeds[configuration.id], feed.identity == identity, !feed.stopped, let existing = feed.client {
@@ -692,9 +648,6 @@ final class RemoteWorkspacesModel {
         _ configuration: RemoteWorkspaceConfiguration,
         operation: (RemoteWorkspaceServiceClient) async throws -> Value
     ) async throws -> Value {
-        guard isCredentialAccessEnabled else {
-            throw RemoteWorkspaceClientError.invalidResponse("Enable credential access in Settings to connect.")
-        }
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -722,7 +675,7 @@ final class RemoteWorkspacesModel {
     private func requireCurrent(_ identity: RemoteWorkspaceRequestIdentity) throws {
         guard !invalidatingWorkspaceIDs.contains(identity.configuration.id),
               identity.isCurrent(configuration: configuration(id: identity.configuration.id),
-                                 credentialsEnabled: isCredentialAccessEnabled,
+                                 credentialsEnabled: true,
                                  credentialEpoch: credentialEpoch,
                                  workspaceEpoch: workspaceEpochs[identity.configuration.id] ?? UUID()) else {
             throw CancellationError()
@@ -801,10 +754,6 @@ final class RemoteWorkspacesModel {
         swapLimit: String
     ) {
         if forwardToBackend(.create(name: name, workspaceID: workspaceID, hostName: hostName, userName: userName, port: port, memoryLimit: memoryLimit, swapLimit: swapLimit)) { return }
-        guard isCredentialAccessEnabled else {
-            errorMessage = "Enable credential access before creating a remote workspace."
-            return
-        }
         guard !isCreating else { return }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -955,7 +904,6 @@ final class RemoteWorkspacesModel {
 
     func refresh(_ configuration: RemoteWorkspaceConfiguration) {
         if forwardToBackend(.refresh(configuration.id)) { return }
-        guard isCredentialAccessEnabled else { return }
         performBusy(configuration) {
             self.statuses[configuration.id] = try await self.sshClient.status(
                 configuration: configuration
@@ -1038,10 +986,6 @@ final class RemoteWorkspacesModel {
         removePersistentData: Bool
     ) {
         if forwardToBackend(.delete(configuration.id, removePersistentData: removePersistentData)) { return }
-        guard isCredentialAccessEnabled else {
-            errorMessage = "Enable credential access before deleting a remote workspace."
-            return
-        }
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
             self.actionErrors.removeValue(forKey: configuration.id)
@@ -1057,6 +1001,7 @@ final class RemoteWorkspacesModel {
             self.tunnels.removeValue(forKey: configuration.id)
             try await self.credentials.deleteToken(for: configuration.id)
             self.workspaces.removeAll { $0.id == configuration.id }
+            self.dismissHarnessSetup(configuration.id)
             self.statuses.removeValue(forKey: configuration.id)
             self.harnesses.removeValue(forKey: configuration.id)
             self.authenticationSessions.removeValue(forKey: configuration.id)
@@ -1262,7 +1207,7 @@ final class RemoteWorkspacesModel {
             } catch is CancellationError {
                 // Credential or destination changes invalidate this request silently.
             } catch {
-                guard isCredentialAccessEnabled, credentialEpoch == identity.credentialEpoch,
+                guard credentialEpoch == identity.credentialEpoch,
                       self.configuration(id: configuration.id) == configuration else { return }
                 errorMessage = error.localizedDescription
                 if let actionErrorRuntimeKind {
@@ -1447,6 +1392,7 @@ final class RemoteWorkspacesModel {
         workspaces.sort { $0.createdAt < $1.createdAt }
         statuses[configuration.id] = status
         save()
+        requestHarnessSetup(configuration.id)
         await refreshService(configuration)
     }
 
@@ -1455,11 +1401,6 @@ final class RemoteWorkspacesModel {
     ) async throws -> RemoteWorkspaceServiceClient {
         guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
         let identity = try requestIdentity(configuration)
-        guard isCredentialAccessEnabled else {
-            throw RemoteWorkspaceClientError.invalidResponse(
-                "Enable Remote Workspace credential access before connecting."
-            )
-        }
         guard let token = try await credentials.token(for: configuration.id) else {
             throw RemoteWorkspaceClientError.invalidResponse(
                 "The workspace API token is missing from Keychain."
@@ -1545,13 +1486,13 @@ final class RemoteWorkspacesModel {
         let credentialEpoch: UUID
         let preparedHarnessAction: PreparedHarnessAction?
         let pendingHostPreparation: PendingHostPreparation?
+        let pendingHarnessSetupIDs: Set<UUID>?
         let isDiscovering: Bool
         let isCheckingHost: Bool
         let isCreating: Bool
         let progress: String?
         let errorMessage: String?
         let checkedPreflight: RemoteWorkspacePreflight?
-        let isCredentialAccessEnabled: Bool
         let checkedHostKey: String?
     }
 
@@ -1583,13 +1524,13 @@ final class RemoteWorkspacesModel {
             credentialEpoch: credentialEpoch,
             preparedHarnessAction: preparedHarnessAction,
             pendingHostPreparation: pendingHostPreparation,
+            pendingHarnessSetupIDs: pendingHarnessSetupIDs,
             isDiscovering: isDiscovering,
             isCheckingHost: isCheckingHost,
             isCreating: isCreating,
             progress: progress,
             errorMessage: errorMessage,
             checkedPreflight: checkedPreflight,
-            isCredentialAccessEnabled: isCredentialAccessEnabled,
             checkedHostKey: checkedHostKey)
     }
 
@@ -1621,13 +1562,13 @@ final class RemoteWorkspacesModel {
         credentialEpoch = snapshot.credentialEpoch
         preparedHarnessAction = snapshot.preparedHarnessAction
         pendingHostPreparation = snapshot.pendingHostPreparation
+        pendingHarnessSetupIDs = snapshot.pendingHarnessSetupIDs ?? []
         isDiscovering = snapshot.isDiscovering
         isCheckingHost = snapshot.isCheckingHost
         isCreating = snapshot.isCreating
         progress = snapshot.progress
         errorMessage = snapshot.errorMessage
         checkedPreflight = snapshot.checkedPreflight
-        isCredentialAccessEnabled = snapshot.isCredentialAccessEnabled
         checkedHostKey = snapshot.checkedHostKey
     }
 

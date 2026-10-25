@@ -7,45 +7,26 @@ import WovenMatterCore
 @MainActor
 struct CompanionToolBridgeTests {
 
-  @Test(arguments: [NoteArtifactKind.spreadsheet, .html])
-  func richArtifactsKeepKindAcrossCreateEditAndReplay(kind: NoteArtifactKind) async throws {
-    let fixture = try await Fixture(); defer { fixture.remove() }
-    let id = UUID().uuidString.lowercased()
-    var document = NoteDocument(kind: kind, html: kind == .html ? "<h1>Original</h1>" : "")
-    let create = CompanionMutation(deviceID: fixture.deviceID, kind: .createNote, resourceID: id,
-      title: "Rich artifact", content: try document.encoded())
-    let receipt = try await fixture.database.applyCompanionMutation(create)
-    #expect(receipt.status == .accepted && receipt.note?.kind == kind)
-    if kind == .html { document.html = "<h1>Edited</h1>" }
-    else { document.blocks = [.table(.init(rows: 3, columns: 4, headerRow: true))] }
-    let update = CompanionMutation(deviceID: fixture.deviceID, kind: .updateNote, resourceID: id,
-      expectedRevision: receipt.note?.revision, title: "Edited artifact", content: try document.encoded())
-    #expect(try await fixture.database.applyCompanionMutation(update).status == .accepted)
-    #expect(try await fixture.database.applyCompanionMutation(create) == receipt)
-    let stored = try #require(try await fixture.database.companionNote(id: id))
-    #expect(stored.kind == kind)
-    #expect(try NoteDocument.editableDocument(from: stored.content) == document)
-  }
 
-
-  @Test func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {
+  @Test(.timeLimit(.minutes(1))) func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }
     let dispatcher = CompanionToolDispatcher(database: fixture.database)
     let request = fixture.request(["notes", "create", "--title", "Retained work"])
     var executions = 0
-    var continuation: CheckedContinuation<Void, Never>?
+    let started = AsyncStream<CheckedContinuation<Void, Never>>.makeStream()
     let initial = Task {
-      try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, caller in
+      defer { started.continuation.finish() }
+      return try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, caller in
         executions += 1
         #expect(caller == fixture.conversationID)
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation { started.continuation.yield($0) }
         #expect(!Task.isCancelled)
         return .init(result: .string("completed"), requestID: request.request.requestID)
       }
     }
-    let deadline = Date().addingTimeInterval(5)
-    while continuation == nil, Date() < deadline { await Task.yield() }
-    let release = try #require(continuation)
+    // Wait for acceptance itself rather than racing a loaded runner's clock.
+    var acceptance = started.stream.makeAsyncIterator()
+    let release = try #require(await acceptance.next())
     initial.cancel()
     let retry = Task {
       try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, _ in

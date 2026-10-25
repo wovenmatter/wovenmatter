@@ -26,7 +26,7 @@ struct ActiveWorkSleepPreventionTests {
         }
     }
 
-    @Test func concurrentDispatchesShareOneAssertionAndAllowDisplaySleep() {
+    @Test func concurrentDispatchesAndShutdownReleaseAssertionsWithoutBlockingDisplaySleep() {
         let activities = Activities()
         let owner = activities.makeOwner()
         owner.setRunningConversationIDs([])
@@ -43,20 +43,14 @@ struct ActiveWorkSleepPreventionTests {
         owner.endDispatch(second)
         #expect(activities.ends == 1)
         #expect(activities.token == nil)
-    }
-
-    @Test func shutdownReleasesAndRejectsLateCallbacks() {
-        let activities = Activities()
-        let owner = activities.makeOwner()
-        let dispatch = owner.beginDispatch()
+        let shutdownDispatch = owner.beginDispatch()
         owner.setRunningConversationIDs(["running"])
         owner.stop()
         owner.stop()
         owner.setRunningConversationIDs(["late-callback"])
-        owner.endDispatch(dispatch)
+        owner.endDispatch(shutdownDispatch)
         owner.endDispatch(owner.beginDispatch())
-        #expect(activities.starts == 1)
-        #expect(activities.ends == 1)
+        #expect(activities.starts == 2 && activities.ends == 2)
         #expect(activities.token == nil)
     }
 

@@ -57,49 +57,33 @@ struct DefaultAgentCredentialTests {
         #expect(reads.current() == 3)
     }
 
-    @Test @MainActor func revisionsAreStableWhenCredentialsDoNotChange() async throws {
-        let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
-        let first = try await coordinator.prepare("local")
-        coordinator.invalidate()
-        let second = try await coordinator.prepare("local")
-        #expect(first.revision == second.revision)
-        #expect(await fixture.count() == 2)
-    }
-
-
     @Test @MainActor func preferenceChangesReuseCredentialsAndUpdatePayloadRevision() async throws {
         let fixture = CredentialRefreshFixture()
         let preferences = CredentialRevisionFixture()
+        let scopes = CredentialRevisionFixture()
         let coordinator = ProviderAccountCoordinator(
             refresh: { try await fixture.refresh($0) }, version: { 0 },
-            configurationVersion: { preferences.current() }, scopeVersion: { 0 },
+            configurationVersion: { preferences.current() }, scopeVersion: { scopes.current() },
             reconfigure: { value in
                 var updated = value
                 updated.config.defaultModel = "openai/preferred"
                 return updated
             })
         let first = try await coordinator.prepare("local")
+        coordinator.invalidate()
+        let unchanged = try await coordinator.prepare("local")
+        #expect(unchanged.revision == first.revision)
+        #expect(await fixture.count() == 2)
         preferences.advance()
         let updated = try await coordinator.prepare("local")
-        #expect(await fixture.count() == 1)
+        #expect(await fixture.count() == 2)
         #expect(updated.config.defaultModel == "openai/preferred")
         #expect(updated.credentials == first.credentials)
         #expect(updated.revision != first.revision)
-    }
-
-    @Test @MainActor func inheritanceChangesReloadCredentialOwnership() async throws {
-        let fixture = CredentialRefreshFixture()
-        let scopes = CredentialRevisionFixture()
-        let coordinator = ProviderAccountCoordinator(
-            refresh: { try await fixture.refresh($0) }, version: { 0 },
-            configurationVersion: { 0 }, scopeVersion: { scopes.current() }, reconfigure: { $0 })
-        _ = try await coordinator.prepare("local")
         scopes.advance()
         _ = try await coordinator.prepare("local")
-        #expect(await fixture.count() == 2)
+        #expect(await fixture.count() == 3)
     }
-
 
     @Test func accountMigrationSelectionOrderingAndRemovalPreserveCanonicalKey() throws {
         let keychain = DefaultAgentKeychainFixture().access
@@ -122,12 +106,14 @@ struct DefaultAgentCredentialTests {
         let keychain = DefaultAgentKeychainFixture().access
         for i in 0..<4 { try ProviderConnectionAccounts.addKey("key-\(i)", provider: "openai", keychain: keychain) }
         #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addKey("fifth", provider: "openai", keychain: keychain) }
-        var credential = DefaultAgentCredential(type: "oauth")
-        credential.access = "access"; credential.refresh = "private-refresh"; credential.accountId = "account"
+        let credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: Data(
+            #"{"type":"oauth","access":"access","refresh":"private-refresh","expires":9000000000000,"accountId":"account"}"#.utf8))
         let account = try ProviderConnectionAccounts.addOAuth(credential, provider: "openai-codex", keychain: keychain)
         let borrowed = try #require(ProviderConnectionAccounts.borrowedAccounts(provider: "openai-codex", keychain: keychain).first)
         #expect(borrowed.credential.refresh == "")
         #expect(borrowed.credential.borrowed)
+        #expect(borrowed.credential.accountId == "account")
+        #expect(!String(decoding: try JSONEncoder().encode(borrowed.credential), as: UTF8.self).contains("private-refresh"))
         #expect(try ProviderConnectionAccounts.credential(account.id, provider: "openai-codex", keychain: keychain)?.refresh == "private-refresh")
         try ProviderConnectionAccounts.remove(account.id, provider: "openai-codex", keychain: keychain)
         var renewed = credential; renewed.access = "late"
@@ -164,17 +150,6 @@ struct DefaultAgentCredentialTests {
         #expect(await fixture.count() == 2)
         _ = try await coordinator.prepare("local")
         #expect(await fixture.count() == 2)
-    }
-    @Test func borrowedExportsNeverContainRefreshTokens() throws {
-        let data = Data(
-            #"{"type":"oauth","access":"fixture-access","refresh":"owner-secret","expires":9000000000000,"accountId":"fixture-account"}"#
-                .utf8)
-        let credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: data)
-        let export = credential.borrowing()
-        #expect(export.borrowed)
-        #expect(export.refresh == "")
-        #expect(export.accountId == "fixture-account")
-        #expect(!String(decoding: try JSONEncoder().encode(export), as: UTF8.self).contains("owner-secret"))
     }
 }
 
@@ -293,5 +268,34 @@ extension DefaultAgentCredentialTests {
         #expect(accounts.first(where: \.isSelected)?.id == first.id)
         #expect(try ProviderConnectionAccounts.credential(first.id, provider: "openai", keychain: keychain)?.key == "first")
         #expect(try ProviderConnectionAccounts.credential(second.id, provider: "openai", keychain: keychain)?.key == "second")
+    }
+}
+
+
+extension DefaultAgentCredentialTests {
+    @Test func chatSettingsInheritanceDoesNotChooseCredentials() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        let shared = try ProviderConnectionAccounts.addKey("shared-key", provider: "openai", label: "Shared", keychain: keychain)
+        let owned = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
+        let fallback = try ProviderConnectionAccounts.addKey("router-key", provider: "openrouter", label: "Router", keychain: keychain)
+        var settings = DefaultAgentSettingsScope()
+        settings.global.models = ["openai/shared-model"]
+        let inherited = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
+        #expect(inherited.config.models == settings.global.models)
+        #expect(inherited.credentialAccounts?["openai"]?.first?.id == owned.id)
+        #expect(inherited.credentials["openai"]?.key == "workspace-key")
+        settings.workspaces["local"] = settings.global
+        settings.workspaces["local"]?.models = ["openai/local-model"]
+        let independent = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
+        #expect(independent.config.models == ["openai/local-model"])
+        #expect(independent.credentials == inherited.credentials)
+        #expect(independent.credentialAccounts == inherited.credentialAccounts)
+        #expect(independent.credentialAccounts?["openrouter"]?.first?.id == fallback.id)
+        let remote = try DefaultAgentSupport.snapshot(workspace: "remote-fixture", settings: settings, keychain: keychain)
+        #expect(remote.credentialAccounts?["openai"]?.first?.id == shared.id)
+        try ProviderConnectionAccounts.remove(owned.id, provider: "openai", scope: "local", keychain: keychain)
+        let reverted = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
+        #expect(reverted.credentialAccounts?["openai"]?.first?.id == shared.id)
+        #expect(reverted.config.models == independent.config.models)
     }
 }

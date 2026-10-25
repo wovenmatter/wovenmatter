@@ -55,8 +55,10 @@ struct DashboardLucideGlyph: Hashable, Sendable {
 
     static let close = Self("x", stroke: "s175")
     static let chevronDown = Self("chevron-down", stroke: "s175")
+    static let chevronsLeft = Self("chevrons-left", stroke: "s175")
     static let arrowLeft = Self("arrow-left", stroke: "s175")
     static let arrowRight = Self("arrow-right", stroke: "s175")
+    static let arrowLeftRight = Self("arrow-left-right", stroke: "s175")
     static let panelLeftOpen = Self("panel-left-open", stroke: "s175")
     static let panelRightOpen = Self("panel-right-open", stroke: "s175")
     static let panelLeftClose = Self("panel-left-close", stroke: "s175")
@@ -538,6 +540,7 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
     @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     let options: [Option]
     @Binding var selection: Option
+    var accentSelection = false
     let label: (Option) -> String
 
     var body: some View {
@@ -551,14 +554,14 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
                         .font(DashboardControlMetrics.segmentFont)
                         .foregroundStyle(
                             sidebarForeground ?? (isSelected
-                                ? DashboardPalette.foreground
+                                ? (accentSelection ? DashboardPalette.primaryForeground : DashboardPalette.foreground)
                                 : DashboardPalette.mutedForeground)
                         )
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: DashboardControlMetrics.segmentHeight)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected))
+                .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected, accentSelection: accentSelection))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
@@ -584,6 +587,7 @@ private struct DashboardSegmentButtonStyle: ButtonStyle {
     @State private var isHovering = false
 
     let isSelected: Bool
+    var accentSelection = false
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = RoundedRectangle(
@@ -596,7 +600,7 @@ private struct DashboardSegmentButtonStyle: ButtonStyle {
                 ZStack {
                     shape.fill(
                         isSelected
-                            ? DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96)
+                            ? (accentSelection ? DashboardPalette.primary : DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96))
                             : .clear
                     )
                     shape.fill(interactionColor(isPressed: configuration.isPressed))

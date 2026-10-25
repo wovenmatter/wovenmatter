@@ -5,21 +5,6 @@ import Testing
 
 struct BackendRPCTests {
 
-    @Test func rejectsPublicDirectoryAndExistingSocket() async throws {
-        let url = endpoint()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        chmod(url.deletingLastPathComponent().path, 0o755)
-        let server = BackendRPCServer(socketURL: url)
-        #expect(throws: BackendRPCError.self) { try server.start { BackendRPCResponse(id: $0.id) } }
-        chmod(url.deletingLastPathComponent().path, 0o700)
-        try server.start { BackendRPCResponse(id: $0.id) }
-        defer { server.stop() }
-        let second = BackendRPCServer(socketURL: url)
-        #expect(throws: BackendRPCError.self) { try second.start { BackendRPCResponse(id: $0.id) } }
-        #expect(try await BackendRPCClient(socketURL: url).ping().processID == getpid())
-    }
-
     private func endpoint() -> URL {
         URL(fileURLWithPath: "/private/tmp/wm-rpc-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
     }
@@ -34,30 +19,23 @@ struct BackendRPCTests {
         #expect(BackendRPCCommandIdentity(first) != BackendRPCCommandIdentity(otherContent))
     }
 
-    @Test func authenticatedRoundTripAndReadiness() async throws {
+    @Test func authenticatedConcurrentRequestsAndRestartRemainIsolated() async throws {
         let url = endpoint()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        chmod(url.deletingLastPathComponent().path, 0o755)
         let server = BackendRPCServer(socketURL: url)
+        #expect(throws: BackendRPCError.self) { try server.start { BackendRPCResponse(id: $0.id) } }
+        chmod(url.deletingLastPathComponent().path, 0o700)
         try server.start { BackendRPCResponse(id: $0.id, result: $0.payload) }
         defer { server.stop() }
-        let client = BackendRPCClient(socketURL: url)
-        let identity = try await client.ping()
+        let second = BackendRPCServer(socketURL: url)
+        #expect(throws: BackendRPCError.self) { try second.start { BackendRPCResponse(id: $0.id) } }
+        let identity = try await BackendRPCClient(socketURL: url).ping()
         #expect(identity.processID == getpid())
         #expect(identity.protocolVersion == 1)
-        let data = Data("private payload".utf8)
-        #expect(try await client.call(method: "echo", payload: data) == data)
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
-        server.stop()
-        #expect(!FileManager.default.fileExists(atPath: url.path))
-    }
-
-    @Test func concurrentRequestsAndRestartRemainIsolated() async throws {
-        let url = endpoint()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let server = BackendRPCServer(socketURL: url)
-        try server.start { BackendRPCResponse(id: $0.id, result: $0.payload) }
-        defer { server.stop() }
         try await withThrowingTaskGroup(of: Void.self) { group in
             for index in 0..<16 {
                 group.addTask {
@@ -69,6 +47,7 @@ struct BackendRPCTests {
             try await group.waitForAll()
         }
         server.stop()
+        #expect(!FileManager.default.fileExists(atPath: url.path))
         try server.start { BackendRPCResponse(id: $0.id, result: Data("restarted".utf8)) }
         #expect(try await BackendRPCClient(socketURL: url).call(method: "echo") == Data("restarted".utf8))
     }

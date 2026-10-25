@@ -285,6 +285,7 @@ final class ApplicationModel {
     var isAuthorizingUsageCredential: Bool { usage.isAuthorizingUsageCredential }
     private(set) var isReconnectingSavedCredentials = false
     private(set) var credentialAccessStatus: String?
+    private(set) var keychainAccessReady: Bool?
     var isRefreshingLocalUsage: Bool { usage.isRefreshingLocalUsage }
     var isOpenRouterCredentialConfigured: Bool { usage.isOpenRouterCredentialConfigured }
     var signingInUsageProviders: Set<ProviderKind> { usage.signingInUsageProviders }
@@ -2157,12 +2158,12 @@ final class ApplicationModel {
     func reconnectSavedCredentials() async {
         guard !isReconnectingSavedCredentials, usage.beginCredentialAuthorization() else { return }
         isReconnectingSavedCredentials = true
-        credentialAccessStatus = "Reconnecting saved credentials…"
+        keychainAccessReady = nil
+        credentialAccessStatus = "Checking Keychain access…"
         defer {
             usage.endCredentialAuthorization()
             isReconnectingSavedCredentials = false
         }
-        acknowledgeCredentialAccessDisclosure()
         do {
             try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
                 guard KeychainAccess.enforceCentralAuthorization() == 0 else {
@@ -2177,17 +2178,47 @@ final class ApplicationModel {
                 try await authorizeSavedConnections()
             }
             try Task.checkCancellation()
+            acknowledgeCredentialAccessDisclosure()
             await refreshLocalUsage(
                 range: currentUsageRange,
                 refreshLimits: true,
                 reason: .credentialChanged
             )
             remoteWorkspaces.refreshAll()
-            credentialAccessStatus = "Saved credentials are ready. Automatic refreshes will stay silent."
+            await checkSavedCredentialAccess()
+
         } catch is CancellationError {
-            credentialAccessStatus = "Credential recovery stopped. Automatic refreshes will stay silent."
+            keychainAccessReady = false
+            credentialAccessStatus = "Keychain access was cancelled. Use Restore Keychain access to try again."
         } catch {
-            credentialAccessStatus = "Credential recovery stopped: \(error.localizedDescription)"
+            keychainAccessReady = false
+            credentialAccessStatus = "Keychain access needs attention: \(error.localizedDescription)"
+        }
+    }
+
+    func keychainAccessNeedsAttention() {
+        keychainAccessReady = false
+        credentialAccessStatus = "A saved credential needs permission. Restore Keychain access to continue."
+    }
+
+    func checkSavedCredentialAccess() async {
+        guard hasAcknowledgedCredentialAccessDisclosure else { return }
+        do {
+            try await Task.detached(priority: .utility) {
+                try BrowserCredentialStore.shared.checkAccess()
+            }.value
+            if let request = connections.backendRequest {
+                _ = try await request("connections.command", JSONEncoder().encode(BackendConnectionsCommand(action: "checkKeychain")))
+            } else {
+                try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                    try DefaultAgentSupport.checkKeychainAccess()
+                }
+            }
+            keychainAccessReady = true
+            credentialAccessStatus = "Saved credentials are accessible. Background checks stay silent."
+        } catch {
+            keychainAccessReady = false
+            credentialAccessStatus = "Keychain access needs attention. Restore access to use saved credentials."
         }
     }
 
@@ -2198,11 +2229,12 @@ final class ApplicationModel {
             _ = try await sendBackendWorkspaceService(.authorizeSavedConnections)
             return
         }
-        if remoteWorkspaces.isCredentialAccessEnabled {
-            for workspace in remoteWorkspaces.workspaces {
-                try Task.checkCancellation()
-                try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
-            }
+        try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+            try DefaultAgentSupport.checkKeychainAccess(authorize: true)
+        }
+        for workspace in remoteWorkspaces.workspaces {
+            try Task.checkCancellation()
+            try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
         }
 
     }
@@ -2213,9 +2245,9 @@ final class ApplicationModel {
 
     func enableUsageProvider(
         _ provider: ProviderKind,
-        range: UsageTimeRange
+        range: UsageTimeRange? = nil
     ) async {
-        await usage.enableUsageProvider(provider, range: range)
+        await usage.enableUsageProvider(provider, range: range ?? currentUsageRange)
     }
 
     func retryUsageProviderCredentialAccess(
@@ -3520,6 +3552,7 @@ final class ApplicationModel {
     }
 
     var pendingDefaultAgentSettingsScope: String?
+    var pendingDefaultAgentModelProvider: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
 

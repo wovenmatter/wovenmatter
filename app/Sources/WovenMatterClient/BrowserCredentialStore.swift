@@ -16,8 +16,8 @@ public final class BrowserCredentialStore: @unchecked Sendable {
     case consentRequired, unavailable(OSStatus), invalidOrigin, invalidCredential
     public var errorDescription: String? {
       switch self {
-      case .consentRequired: "Enable Credential access in Settings > General to use saved website sessions and passwords."
-      case .unavailable: "Browser credential access is unavailable. Use Reconnect saved credentials in Settings > General, then reopen the browser."
+      case .consentRequired: "Enable Keychain access in Settings > General to use saved website sessions and passwords."
+      case .unavailable: "Browser credential access is unavailable. Use Restore Keychain access in Settings > General, then reopen the browser."
       case .invalidOrigin: "Passwords can only be saved and filled on a secure website."
       case .invalidCredential: "This website password could not be saved."
       }
@@ -44,6 +44,22 @@ public final class BrowserCredentialStore: @unchecked Sendable {
     origin.scheme = scheme; origin.host = host
     if let port = parts.port, port != (scheme == "https" ? 443 : 80) { origin.port = port }
     return origin.string
+  }
+
+  public func checkAccess() throws {
+    guard try read(query(service: "Chromium Safe Storage", account: "Chromium"), authorize: false) != nil else {
+      throw AccessError.unavailable(errSecItemNotFound)
+    }
+    _ = try read(vaultQuery, authorize: false)
+  }
+
+  /// Browsing may proceed without saved credentials or a persistent profile.
+  /// This probe is always noninteractive; only Settings can authorize access.
+  public func prepareForBrowsing(consented: Bool) -> Bool {
+    do {
+      try prepare(consented: consented)
+      return true
+    } catch { return false }
   }
 
   public func prepare(consented: Bool, authorize: Bool = false) throws {

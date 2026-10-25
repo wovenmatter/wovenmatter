@@ -24,7 +24,11 @@ test('tampering fails closed and repeated writes never reuse the GCM nonce', asy
   const directory = await temporary(t), vault = new CredentialVault(directory);
   await vault.unlock('fixture', randomBytes(32).toString('base64'));
   const initial = JSON.parse(await readFile(vault.path, 'utf8'));
-  await vault.modify(async value => ({ ...value, shared: { secret: 'fixture' } }));
+  await vault.modify(async value => ({ ...value, shared: { exa: { type: 'api_key', key: 'still-usable' } } }));
+  const rejected = assert.rejects(vault.unlock('fixture', randomBytes(32).toString('base64')), /decrypted/);
+  for (let i = 0; i < 20; i++) assert.equal((await vault.read()).shared.exa.key, 'still-usable');
+  await rejected;
+  assert.equal((await vault.read()).shared.exa.key, 'still-usable');
   const next = JSON.parse(await readFile(vault.path, 'utf8'));
   assert.notEqual(next.nonce, initial.nonce);
   next.tag = Buffer.alloc(16).toString('base64');
@@ -58,26 +62,20 @@ test('status checks never start login and do not equate a timeout with sign-out'
     { id: 'codex', name: 'Codex', executable: '/fixture/codex' },
     { id: 'claude_code', name: 'Claude', executable: '/fixture/claude' },
     { id: 'pi', name: 'Pi', enabled: false },
+    { id: 'opencode', executable: '/fixture/opencode' },
+    { id: 'grok_build', executable: '/fixture/grok' },
   ], async (file, args) => {
     calls.push(args);
     if (file.endsWith('claude')) throw { killed: true };
-    return { stdout: 'Logged in using ChatGPT' };
+    return { stdout: file.endsWith('opencode') ? '└  2 credentials\n└  0 environment variables' : file.endsWith('grok') ? 'Available models: fixture' : 'Logged in using ChatGPT' };
   });
   assert.equal(statuses[0].state, 'verified');
   assert.equal(statuses[1].state, 'check_failed');
   assert.equal(statuses[2].state, 'not_checked');
+  assert.equal(statuses[3].state, 'credentials_present');
+  assert.equal(statuses[4].state, 'not_checked');
   assert.deepEqual(calls[0], ['login', 'status']);
   assert.ok(!calls.some(args => args.includes('prompt')));
-});
-
-test('a rejected unlock never replaces a live workspace key', async t => {
-  const directory = await temporary(t), vault = new CredentialVault(directory);
-  await vault.unlock('fixture', randomBytes(32).toString('base64'));
-  await vault.modify(async value => ({ ...value, shared: { exa: { type: 'api_key', key: 'still-usable' } } }));
-  const rejected = assert.rejects(vault.unlock('fixture', randomBytes(32).toString('base64')), /decrypted/);
-  for (let i = 0; i < 20; i++) assert.equal((await vault.read()).shared.exa.key, 'still-usable');
-  await rejected;
-  assert.equal((await vault.read()).shared.exa.key, 'still-usable');
 });
 
 test('active sessions survive credential and settings updates and use the latest search key', async t => {
@@ -105,13 +103,4 @@ test('active sessions survive credential and settings updates and use the latest
   assert.ok(!disk.includes('new-search-secret') && !disk.includes('must-never-copy'));
   const restarted = createDefaultAgentService({ cwd: directory, directory });
   await assert.rejects(restarted.engine(), /locked/);
-});
-
-test('OpenCode lists credential presence and ambiguous successful output stays unknown', async () => {
-  const rows = await signInStatuses([
-    { id: 'opencode', executable: '/fixture/opencode' },
-    { id: 'grok_build', executable: '/fixture/grok' },
-  ], async file => ({ stdout: file.endsWith('opencode') ? '└  2 credentials\n└  0 environment variables' : 'Available models: fixture' }));
-  assert.equal(rows[0].state, 'credentials_present');
-  assert.equal(rows[1].state, 'not_checked');
 });

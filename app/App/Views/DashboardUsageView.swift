@@ -17,42 +17,6 @@ private enum DashboardUsagePage: String, CaseIterable, Identifiable {
     }
 }
 
-private enum PendingUsageCredentialAction: Identifiable {
-    case enableProvider(ProviderKind)
-    case retryProvider(ProviderKind)
-    case saveOpenRouter(String)
-    case deleteOpenRouter
-
-    var id: String {
-        switch self {
-        case .enableProvider(let provider): "enable-\(provider.rawValue)"
-        case .retryProvider(let provider): "retry-\(provider.rawValue)"
-        case .saveOpenRouter: "save-openrouter"
-        case .deleteOpenRouter: "delete-openrouter"
-        }
-    }
-
-    var purpose: String {
-        switch self {
-        case .enableProvider(let provider):
-            switch provider {
-            case .cursor:
-                "Allow Woven Matter to read Cursor’s local account session and check usage."
-            case .openRouter:
-                "Allow Woven Matter to use your saved OpenRouter key to check usage."
-            default:
-                "Allow Woven Matter to check \(provider.displayName) usage using its local sign-in."
-            }
-        case .retryProvider(let provider):
-            "Retry \(provider.displayName) credential access once. macOS may ask for permission now; future automatic refreshes remain noninteractive."
-        case .saveOpenRouter:
-            "Save your OpenRouter key in this Mac’s Keychain and use it to check usage."
-        case .deleteOpenRouter:
-            "Remove your saved OpenRouter key from this Mac’s Keychain."
-        }
-    }
-}
-
 private enum UsageLimitsLayout {
     // The standard 1,320-point window leaves 712 points inside the Usage page
     // with both 256-point sidebars visible, while the minimum compact window
@@ -79,13 +43,6 @@ struct DashboardUsageView: View {
     @State private var harnessFilter = "all"
     @State private var reasoningFilter = "all"
     @State private var searchText = ""
-    @State private var openRouterAPIKey = ""
-    @State private var openRouterAPIKeyFieldFrame = CGRect.zero
-    @State private var pendingCredentialAction: PendingUsageCredentialAction?
-    @FocusState private var openRouterAPIKeyFocused: Bool
-
-    private nonisolated static let coordinateSpaceName = "dashboard-usage-page"
-
     private var analytics: UsageAnalyticsSnapshot? { model.localUsage?.analytics }
 
     private var filteredSamples: [UsageSample] {
@@ -152,29 +109,9 @@ struct DashboardUsageView: View {
             .padding(.vertical, 40)
         }
         .scrollIndicators(.never)
-        .coordinateSpace(.named(Self.coordinateSpaceName))
-        .simultaneousGesture(
-            SpatialTapGesture().onEnded { tap in
-                guard !openRouterAPIKeyFieldFrame.contains(tap.location) else {
-                    return
-                }
-                openRouterAPIKeyFocused = false
-            }
-        )
         .background(theme.palette.workspace)
         .task {
             await model.usageDestinationAppeared(range: range)
-        }
-        .sheet(item: $pendingCredentialAction) { action in
-            CredentialAccessDisclosureView(
-                purpose: action.purpose,
-                onEnable: {
-                    model.acknowledgeCredentialAccessDisclosure()
-                    pendingCredentialAction = nil
-                    performCredentialAction(action)
-                },
-                onCancel: { pendingCredentialAction = nil }
-            )
         }
     }
 
@@ -184,7 +121,7 @@ struct DashboardUsageView: View {
                 Text("Usage")
                     .font(.system(size: 24, weight: .semibold))
                     .tracking(-0.4)
-                Text("AI activity and account allowances across connected accounts and runtimes.")
+                Text("Activity on this device and limits for your saved accounts.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -785,35 +722,19 @@ struct DashboardUsageView: View {
 
     @ViewBuilder
     private func accountConnections(_ snapshot: LocalUsageSnapshot) -> some View {
-        UsageSection {
-            HStack(alignment: .top, spacing: 12) {
-                DashboardLucideIcon(glyph: .keyRound, size: 18)
-                    .foregroundStyle(theme.palette.themeAccent)
-                    .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Connect only the accounts you choose")
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Text("Manage accounts and API keys in Connections. Enable a provider here to check usage, then choose the account whose limits you want to view.")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+        HStack {
+            Text("Account limits").font(.headline)
+            Spacer()
+            UsageSettingsLink()
         }
-
-        UsageSectionHeading(title: "Accounts")
-        let accountsByProvider = Dictionary(
-            uniqueKeysWithValues: snapshot.limits.map { ($0.provider, $0) }
-        )
-        let accounts = ProviderKind.supportedAccounts.map { provider in
-            accountsByProvider[provider] ?? UsageLimitAccount(
-                provider: provider,
-                accountLabel: provider.displayName,
-                status: .needsCredential,
-                source: "Disabled",
-                detail: model.isUsageProviderEnabled(provider) ? "Checking selected account…" : "Enable this provider to check usage.",
-                dashboardURL: provider.usageDashboardURL
-            )
+        let accounts = ProviderKind.supportedAccounts.flatMap { provider -> [UsageLimitAccount] in
+            let saved = snapshot.limits.filter { $0.provider == provider }
+            let unchecked = model.isRefreshingUsageLimits || model.localUsageError != nil
+            return saved.isEmpty ? [UsageLimitAccount(provider: provider,
+                accountLabel: provider.displayName, status: unchecked ? .unavailable : .needsCredential, source: "Saved accounts",
+                detail: model.localUsageError != nil ? "Saved accounts could not be checked. Review the error above."
+                    : model.isRefreshingUsageLimits ? "Checking saved accounts…"
+                    : "Not signed in. Add an account in Settings → Usage.", dashboardURL: provider.usageDashboardURL)] : saved
         }
         ViewThatFits(in: .horizontal) {
             LazyVGrid(
@@ -863,19 +784,8 @@ struct DashboardUsageView: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    ConnectionsLink(title: account.isStale ? "Stale" : account.status.title)
-                }
-
-                let choices = model.usageConnectionChoices.filter { $0.provider == account.provider }
-                if !choices.isEmpty {
-                    Picker("Account", selection: Binding(
-                        get: { model.selectedUsageConnections[account.provider.rawValue] ?? choices.first!.id },
-                        set: { id in Task { await model.selectUsageConnection(id, provider: account.provider, range: range) } }
-                    )) {
-                        ForEach(choices) { choice in Text(choice.label).tag(choice.id) }
-                    }
-                    .disabled(!model.isUsageProviderEnabled(account.provider))
-                    .help("Choose whose usage to view. Preferred accounts and fallback order are managed in Connections.")
+                    Text(account.isStale ? "Needs attention" : account.status.title)
+                        .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                 }
 
                 if account.provider == .codex,
@@ -967,40 +877,6 @@ struct DashboardUsageView: View {
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .lineLimit(1)
                     Spacer()
-                    if !model.isUsageProviderEnabled(account.provider) {
-                        Button("Enable") {
-                            requestCredentialAction(
-                                .enableProvider(account.provider)
-                            )
-                        }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                    } else if account.provider == .claude,
-                              account.status == .signedIn
-                                || account.status == .unavailable
-                                || account.status == .failed
-                                || account.isStale {
-                        Button("Retry access") {
-                            requestCredentialAction(.retryProvider(.claude))
-                        }
-                        .buttonStyle(DashboardIconButtonStyle())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .disabled(model.isRefreshingLocalUsage)
-                    } else {
-                        ConnectionsLink(title: "Manage connection")
-                    }
-                    if model.isUsageProviderEnabled(account.provider) {
-                        Button("Disable") {
-                            Task {
-                                await model.disableUsageProvider(
-                                    account.provider,
-                                    range: range
-                                )
-                            }
-                        }
-                        .buttonStyle(DashboardIconButtonStyle())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                    }
                     if let dashboardURL = account.dashboardURL {
                         Link("Open dashboard", destination: dashboardURL)
                             .font(.system(size: 10.5, weight: .medium))
@@ -1057,130 +933,6 @@ struct DashboardUsageView: View {
     private var selectedCodexWorkspace: CodexUsageWorkspace? {
         model.codexUsageWorkspaces.first {
             $0.id == model.selectedCodexUsageWorkspaceID
-        }
-    }
-
-    private var openRouterCredentialControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(openRouterConnectionLabel)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                Spacer()
-                if model.isOpenRouterCredentialConfigured {
-                    Button("Remove", role: .destructive) {
-                        openRouterAPIKeyFocused = false
-                        requestCredentialAction(.deleteOpenRouter)
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(DashboardPalette.danger)
-                }
-            }
-            SecureField(
-                model.isOpenRouterCredentialConfigured
-                    ? "Enter a replacement key"
-                    : "OpenRouter API key",
-                text: $openRouterAPIKey
-            )
-            .textFieldStyle(.plain)
-            .font(.system(size: 12.5))
-            .foregroundStyle(DashboardPalette.foreground)
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background(theme.palette.workspace)
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
-                    style: .continuous
-                )
-                .stroke(theme.palette.border, lineWidth: 1)
-            }
-            .focused($openRouterAPIKeyFocused)
-            .onGeometryChange(for: CGRect.self) { proxy in
-                proxy.frame(in: .named(Self.coordinateSpaceName))
-            } action: { frame in
-                openRouterAPIKeyFieldFrame = frame
-            }
-            .onSubmit(submitOpenRouterAPIKey)
-            .accessibilityLabel("OpenRouter API key")
-
-            Button(action: submitOpenRouterAPIKey) {
-                Text(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .padding(.horizontal, 9)
-                    .frame(height: 28)
-                    .contentShape(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-            }
-            .buttonStyle(DashboardIconButtonStyle())
-            .fixedSize()
-            .disabled(!canSubmitOpenRouterAPIKey)
-            .accessibilityHint("Saves the replacement key in this Mac's Keychain")
-        }
-    }
-
-    private var canSubmitOpenRouterAPIKey: Bool {
-        !openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.isRefreshingLocalUsage
-    }
-
-    private func submitOpenRouterAPIKey() {
-        guard canSubmitOpenRouterAPIKey else { return }
-        openRouterAPIKeyFocused = false
-        requestCredentialAction(.saveOpenRouter(openRouterAPIKey))
-    }
-
-    private var openRouterConnectionLabel: String {
-        if model.isOpenRouterCredentialConfigured {
-            return model.isUsageProviderEnabled(.openRouter)
-                ? "Connected" : "Saved — access disabled"
-        }
-        return "Not connected"
-    }
-
-    private func requestCredentialAction(
-        _ action: PendingUsageCredentialAction
-    ) {
-        if model.hasAcknowledgedCredentialAccessDisclosure {
-            performCredentialAction(action)
-        } else {
-            pendingCredentialAction = action
-        }
-    }
-
-    private func performCredentialAction(
-        _ action: PendingUsageCredentialAction
-    ) {
-        switch action {
-        case .enableProvider(let provider):
-            Task {
-                await model.enableUsageProvider(provider, range: range)
-            }
-        case .retryProvider(let provider):
-            Task {
-                await model.retryUsageProviderCredentialAccess(
-                    provider,
-                    range: range
-                )
-            }
-        case .saveOpenRouter(let key):
-            Task {
-                await model.saveOpenRouterAPIKey(key, range: range)
-                if model.localUsageError == nil { openRouterAPIKey = "" }
-            }
-        case .deleteOpenRouter:
-            Task {
-                await model.deleteOpenRouterAPIKey(range: range)
-                if model.localUsageError == nil { openRouterAPIKey = "" }
-            }
         }
     }
 
@@ -1674,7 +1426,7 @@ private extension UsageSourceStatus {
 private extension UsageLimitStatus {
     var title: String {
         switch self {
-        case .available: "Live"
+        case .available: "Signed in"
         case .signedIn: "Signed in"
         case .needsCredential: "Needs sign-in"
         case .unavailable: "Unavailable"

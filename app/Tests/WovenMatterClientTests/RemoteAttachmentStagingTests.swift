@@ -24,26 +24,6 @@ struct RemoteAttachmentStagingTests {
   }
 
 
-  @Test("an unexpected reply is an error, not a path")
-  func rejectsUnconfirmedPath() async throws {
-    let stager = RemoteAttachmentStager(runner: Recorder(response: "/somewhere/else").record)
-    await #expect(throws: RemoteWorkspaceClientError.self) {
-      try await withDraft(named: "notes.pdf", bytes: Data("x".utf8)) { try await stager.stage($0, in: configuration) }
-    }
-  }
-
-  @Test("a content hash that is not 64 hex characters never reaches the shell")
-  func rejectsMalformedHash() async throws {
-    let recorder = Recorder(response: "")
-    let stager = RemoteAttachmentStager(runner: recorder.record)
-    await #expect(throws: AgentMessageAttachmentError.self) {
-      try await withDraft(named: "notes.pdf", bytes: Data("x".utf8), hash: "../escape") {
-        try await stager.stage($0, in: configuration)
-      }
-    }
-    #expect(recorder.command == nil)
-  }
-
   @Test("cancelling a running attachment subprocess terminates it")
   func transferCancellation() async throws {
     let cancellation = SpawnCancellation()
@@ -98,12 +78,24 @@ struct RemoteAttachmentStagingTests {
     ))
   }
 
-  @Test("a quote in the file name survives both layers of shell quoting")
-  func quotesNestedShellArguments() async throws {
+  @Test("staging validates local bytes and remote confirmation before accepting a quoted path")
+  func validatesDraftAndConfirmationBeforeAcceptingQuotedPath() async throws {
     let expected = "/home/.woven-matter/.wovenmatter/attachments/\(Self.hash)/it's fine.pdf"
-    let recorder = Recorder(response: expected)
+    let recorder = Recorder(response: "/somewhere/else")
     let stager = RemoteAttachmentStager(runner: recorder.record)
-    _ = try await withDraft(named: "it's fine.pdf", bytes: Data("x".utf8)) { try await stager.stage($0, in: configuration) }
+    try await withDraft(named: "it's fine.pdf", bytes: Data("x".utf8)) { draft in
+      let malformed = AgentFileAttachmentDraft(kind: draft.kind, fileName: draft.fileName,
+        mimeType: draft.mimeType, sizeBytes: draft.sizeBytes, contentHash: "../escape", localURL: draft.localURL)
+      await #expect(throws: AgentMessageAttachmentError.self) { try await stager.stage(malformed, in: configuration) }
+      #expect(recorder.command == nil)
+      try Data("y".utf8).write(to: draft.localURL)
+      await #expect(throws: AgentMessageAttachmentError.self) { try await stager.stage(draft, in: configuration) }
+      #expect(recorder.command == nil)
+      try Data("x".utf8).write(to: draft.localURL)
+      await #expect(throws: RemoteWorkspaceClientError.self) { try await stager.stage(draft, in: configuration) }
+      recorder.response = expected
+      _ = try await stager.stage(draft, in: configuration)
+    }
     let command = try #require(recorder.command)
     // Inner quoting closes the path literal; outer quoting re-escapes it for bash -c.
     #expect(command.contains("it'\\''\\'\\'''\\''s fine.pdf"))
@@ -131,18 +123,6 @@ struct RemoteAttachmentStagingTests {
       }
       task?.cancel()
     }
-  }
-
-  @Test("changed local bytes are rejected before SSH")
-  func rejectsChangedBlob() async throws {
-    let recorder = Recorder(response: "")
-    let stager = RemoteAttachmentStager(runner: recorder.record)
-    await #expect(throws: AgentMessageAttachmentError.self) {
-      try await withDraft(named: "notes.pdf", bytes: Data("y".utf8)) {
-        try await stager.stage($0, in: configuration)
-      }
-    }
-    #expect(recorder.command == nil)
   }
 
   @Test("staging repairs corruption, cleans partials, and supports maximum-length names",

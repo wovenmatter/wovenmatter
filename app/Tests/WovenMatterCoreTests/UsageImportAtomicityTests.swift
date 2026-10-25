@@ -48,7 +48,7 @@ struct UsageImportAtomicityTests {
     #expect(try store.metadataDate("usage.local-import-at") == now)
   }
 
-  @Test("Only shared-account analytics observe account revision changes", arguments: [false, true])
+  @Test("Device analytics is independent of account revision changes", arguments: [false, true])
   func analyticsRevisionOwnership(sharedAccounts: Bool) async throws {
     final class ChangingRevision: @unchecked Sendable {
       private let lock = NSLock()
@@ -61,37 +61,25 @@ struct UsageImportAtomicityTests {
     // Advancing on each read deterministically represents another account
     // mutation between capture and validation, without process-global changes.
     let service = fixture.service(sharedAccounts: sharedAccounts, revision: { revision.read() })
-    if sharedAccounts {
-      await #expect(throws: CancellationError.self) {
-        try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
-          allowCredentialAccess: false, now: now)
-      }
-      #expect(revision.reads > 1)
-    } else {
-      let result = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
-        allowCredentialAccess: false, now: now)
-      #expect(result.samples.isEmpty)
-      #expect(revision.reads == 1) // Initialization only; local imports have no account ownership.
-    }
+    let result = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [],
+      allowCredentialAccess: false, now: now)
+    #expect(result.samples.isEmpty)
+    #expect(revision.reads == 1) // Initialization only; local analytics has no account ownership.
+
   }
 
-  @Test("Metadata and cursor step failures throw instead of resembling missing rows")
-  func lookupStepErrors() throws {
+  @Test("Local OpenCode activity includes every billing route with no enabled accounts")
+  func allRoutesWithoutAccountSetup() async throws {
     let fixture = try UsageSQLFixture()
-    let store = try UsageStore(databaseURL: fixture.indexURL)
-    #expect(try store.metadataDate("fixture") == nil)
-    #expect(try store.runtimeSyncState(endpoint: "fixture") == nil)
-    try fixture.execute(at: fixture.indexURL, sql: """
-      DROP TABLE usage_metadata;
-      CREATE VIEW usage_metadata AS SELECT 'fixture' AS key, json_extract('invalid', '$') AS value;
-      DROP TABLE usage_runtime_cursors;
-      CREATE VIEW usage_runtime_cursors AS SELECT 'fixture' AS endpoint,
-        json_extract('invalid', '$') AS source_id, '0' AS cursor, 0 AS synced_at,
-        'available' AS status, '' AS detail;
-      """)
-    #expect(throws: UsageStoreError.self) { try store.metadataDate("fixture") }
-    #expect(throws: UsageStoreError.self) { try store.runtimeSyncState(endpoint: "fixture") }
+    let source = try fixture.openCodeSource(now: now)
+    try fixture.execute(at: source, sql: "UPDATE message SET data = replace(data, 'opencode-go', 'openai');")
+    let result = try await fixture.service().analyticsSnapshot(range: .last24Hours,
+      enabledProviders: [], allowCredentialAccess: false, now: now)
+    #expect(result.samples.count == 1)
+    #expect(result.samples.first?.provider == .codex)
+    #expect(result.samples.first?.tokens.inputTokens == 8)
   }
+
 
   private let now = Date(timeIntervalSince1970: 1_780_000_000)
 

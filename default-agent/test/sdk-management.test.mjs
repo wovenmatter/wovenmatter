@@ -2,10 +2,11 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
 
 import { rangeFloor } from '../src/package-versions.mjs';
@@ -45,15 +46,37 @@ async function fixture(t) {
   return { directory, bundled, active, generation };
 }
 
-test('helper generation selection remains immutable while new launches see activation', async t => {
-  const f = await fixture(t), first = await f.generation(), second = await f.generation({ '@anthropic-ai/claude-agent-sdk': bump(claudeFloor) });
-  await first.activate();
-  const running = await resolveSDKRuntime({ directory: f.directory });
-  await second.activate();
-  const next = await resolveSDKRuntime({ directory: f.directory });
-  assert.equal(running.root, first.root);
-  assert.equal(next.root, second.root);
-  assert.equal(JSON.parse(await readFile(join(running.root, 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'))).version, claudeFloor);
+test('a nested helper fix supersedes an active SDK generation without removing the old generation', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-sdk-bundle-refresh-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bundle = join(root, 'bundle'), directory = join(root, 'workspace');
+  await mkdir(join(bundle, 'src/executor'), { recursive: true });
+  for (const name of ['sdk-management.mjs', 'package-versions.mjs']) {
+    await cp(new URL('../src/' + name, import.meta.url), join(bundle, 'src', name));
+  }
+  await writeFile(join(bundle, 'package.json'), JSON.stringify({ type: 'module', dependencies: {} }));
+  await writeFile(join(bundle, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }));
+  await writeFile(join(bundle, 'src/main-runtime.mjs'), 'export const fixture = true;');
+  const broker = join(bundle, 'src/executor/broker.mjs');
+  await writeFile(broker, 'export const corrected = false;');
+  const moduleURL = pathToFileURL(join(bundle, 'src/sdk-management.mjs')).href;
+  const original = await import(moduleURL + '?before-update');
+  const bundled = await original.resolveSDKRuntime({ directory });
+  const id = randomUUID(), generation = join(directory, 'sdk-runtime/generations', id);
+  await mkdir(generation, { recursive: true });
+  await cp(join(bundle, 'src'), join(generation, 'src'), { recursive: true });
+  await writeFile(join(generation, 'woven-sdk-generation.json'), JSON.stringify({ base: bundled.base, generation: id }));
+  await writeFile(join(directory, 'sdk-runtime/active.json'), JSON.stringify({ base: bundled.base, generation: id }));
+  assert.equal((await original.resolveSDKRuntime({ directory })).root, generation);
+  // Only a nested source changes; manifests and top-level helper files stay
+  // identical. A fresh module models the next app/helper launch.
+  await writeFile(broker, 'export const corrected = true;');
+  const updated = await import(moduleURL + '?after-update');
+  const runtime = await updated.resolveSDKRuntime({ directory });
+  assert.notEqual(runtime.base, bundled.base);
+  assert.equal(await realpath(runtime.root), await realpath(bundle));
+  assert.equal(runtime.generation, 'bundled-' + runtime.base);
+  assert.equal(await readFile(join(generation, 'src/executor/broker.mjs'), 'utf8'), 'export const corrected = false;');
 });
 
 test('no compatible release or a cancelled update leaves the active generation unchanged', async t => {
@@ -94,29 +117,6 @@ async function materializeManifest(_args, { cwd }) {
   return '';
 }
 
-test('mock installer failure rolls back staging and preserves the exact prior activation', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  const before = await readFile(f.active, 'utf8');
-  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi' }, mockInstaller(bump(piFloor), async () => {
-    throw Error('fixture installer failure');
-  })), /previous SDKs were kept/);
-  assert.equal(await readFile(f.active, 'utf8'), before);
-  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
-});
-
-test('successful mock installation activates coherent Pi packages and retains the untouched SDK', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  const result = await updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor) },
-    mockInstaller(bump(piFloor), materializeManifest));
-  assert.notEqual(result.generation, installed.id);
-  assert.equal(result.sdks.find(sdk => sdk.id === 'pi').installedVersion, bump(piFloor));
-  assert.equal(result.sdks.find(sdk => sdk.id === 'claude').installedVersion, claudeFloor);
-  const actual = await sdkStatus({ directory: f.directory });
-  assert.equal(actual.generation, result.generation);
-  assert.equal(actual.sdks.find(sdk => sdk.id === 'pi').consistent, true);
-  assert.ok((await readdir(join(f.directory, 'sdk-runtime/generations'))).includes(installed.id));
-});
-
 test('FIFO activation metadata is rejected without blocking on open', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   await rm(f.active);
@@ -139,14 +139,6 @@ test('cancellation after mock installation but before activation keeps the old g
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
 });
 
-test('metadata status detects an inconsistent Pi pair without loading SDKs', async t => {
-  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-ai': bump(piFloor) });
-  await installed.activate();
-  const status = await sdkStatus({ directory: f.directory });
-  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').consistent, false);
-  assert.equal(status.sdks.find(sdk => sdk.id === 'claude').consistent, true);
-});
-
 test('a per-SDK check never queries the other SDK and preserves active installation', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8'), calls = [], query = registry(piReleases([piFloor, bump(piFloor)]));
@@ -163,6 +155,8 @@ test('oversized activation and latest metadata do not block bundled fallback', a
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   await writeFile(f.active, JSON.stringify({ base: f.bundled.base, generation: installed.id, padding: 'x'.repeat(4096) }));
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).generation, f.bundled.generation);
+  await writeFile(f.active, JSON.stringify({ base: 'previous-app-release', generation: installed.id }));
+  assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
   await installed.activate();
   await writeFile(join(f.directory, 'sdk-runtime/latest.json'), 'x'.repeat(16385));
   const status = await sdkStatus({ directory: f.directory });
@@ -172,6 +166,7 @@ test('oversized activation and latest metadata do not block bundled fallback', a
 
 test('minimum declarations offer newer Pi majors and Claude 0.x minors without an app update', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const running = await resolveSDKRuntime({ directory: f.directory });
   const claudeNext = bump(claudeFloor, 1), piNext = bump(piFloor, 0);
   const releases = { ...piReleases([piFloor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudeNext] };
   const checked = await checkSDKUpdates({ directory: f.directory, fetchImplementation: registry(releases) });
@@ -180,13 +175,21 @@ test('minimum declarations offer newer Pi majors and Claude 0.x minors without a
   assert.equal(claude.notice, undefined);
   assert.deepEqual([pi.latestVersion, pi.newerVersion, pi.updateAvailable], [piNext, null, true]);
   const updated = await updateSDK({ directory: f.directory, id: 'pi', version: piNext }, mockInstaller(piNext, materializeManifest));
+  assert.notEqual(updated.generation, installed.id);
   assert.equal(updated.sdks.find(sdk => sdk.id === 'pi').installedVersion, piNext);
-});
-
-test('an app release ignores an SDK generation from the previous bundled snapshot', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  await writeFile(f.active, JSON.stringify({ base: 'previous-app-release', generation: installed.id }));
-  assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
+  assert.equal(updated.sdks.find(sdk => sdk.id === 'claude').installedVersion, claudeFloor);
+  const actual = await sdkStatus({ directory: f.directory });
+  assert.equal(actual.generation, updated.generation);
+  assert.equal(actual.sdks.find(sdk => sdk.id === 'pi').consistent, true);
+  assert.ok((await readdir(join(f.directory, 'sdk-runtime/generations'))).includes(installed.id));
+  assert.equal(running.root, installed.root);
+  const next = await resolveSDKRuntime({ directory: f.directory });
+  assert.notEqual(next.root, running.root);
+  assert.equal(JSON.parse(await readFile(join(running.root, 'node_modules/@anthropic-ai/claude-agent-sdk/package.json'))).version, claudeFloor);
+  await writeFile(join(next.root, 'node_modules/@earendil-works/pi-ai/package.json'), JSON.stringify({ version: piFloor }));
+  const inconsistent = await sdkStatus({ directory: f.directory });
+  assert.equal(inconsistent.sdks.find(sdk => sdk.id === 'pi').consistent, false);
+  assert.equal(inconsistent.sdks.find(sdk => sdk.id === 'claude').consistent, true);
 });
 
 test('Pi selects only a release every family package, including Chord, has published', async t => {
@@ -209,4 +212,37 @@ test('a candidate failing its staged API verification is discarded and the activ
   assert.equal(await readFile(f.active, 'utf8'), before);
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, installed.root);
+});
+
+
+test('one update activates both outdated SDKs together and skips current components', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const piNext = bump(piFloor), claudeNext = bump(claudeFloor);
+  const options = mockInstaller(piNext, materializeManifest);
+  options.registryFetch = registry({ ...piReleases([piFloor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudeNext] });
+  let installations = 0;
+  const run = options.run;
+  options.run = async (...args) => { if (args[1].includes('install')) ++installations; return run(...args); };
+  const updated = await updateSDK({ directory: f.directory }, options);
+  assert.equal(installations, 1);
+  assert.equal(updated.sdks.find(sdk => sdk.id === 'pi').installedVersion, piNext);
+  assert.equal(updated.sdks.find(sdk => sdk.id === 'claude').installedVersion, claudeNext);
+  const current = await updateSDK({ directory: f.directory }, options);
+  assert.equal(current.generation, updated.generation);
+  assert.equal(installations, 1);
+  options.registryFetch = registry({ ...piReleases([piFloor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudeNext, bump(claudeNext)] });
+  const one = await updateSDK({ directory: f.directory }, options);
+  assert.equal(one.sdks.find(sdk => sdk.id === 'pi').installedVersion, piNext);
+  assert.equal(one.sdks.find(sdk => sdk.id === 'claude').installedVersion, bump(claudeNext));
+});
+
+test('combined update failure preserves both active SDKs', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const before = await readFile(f.active, 'utf8');
+  const options = mockInstaller(bump(piFloor), materializeManifest);
+  options.registryFetch = registry({ ...piReleases([piFloor, bump(piFloor)]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, bump(claudeFloor)] });
+  const run = options.run;
+  options.run = async (...args) => { if (args[1].includes('--eval')) throw Error('fixture verification failure'); return run(...args); };
+  await assert.rejects(updateSDK({ directory: f.directory }, options), /previous SDKs were kept/);
+  assert.equal(await readFile(f.active, 'utf8'), before);
 });

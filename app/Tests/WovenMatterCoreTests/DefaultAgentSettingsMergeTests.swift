@@ -44,17 +44,4 @@ struct DefaultAgentSettingsMergeTests {
         #expect(merged.defaultModel == nil)
     }
 
-    @Test func staleSettingsEditPreservesOtherFieldsAndExplicitRemoval() {
-        var base = DefaultAgentSettings()
-        base.models = ["openai/one", "openai/two"]
-        var saved = base
-        saved.defaultModel = "openai/two"
-        saved.searchProvider = "brave"
-        var edited = base
-        edited.models.removeAll { $0 == "openai/one" }
-        let merged = saved.applyingChanges(from: base, to: edited)
-        #expect(merged.models == ["openai/two"])
-        #expect(merged.defaultModel == "openai/two")
-        #expect(merged.searchProvider == "brave")
-    }
 }

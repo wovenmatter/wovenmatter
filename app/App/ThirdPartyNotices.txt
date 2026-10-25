@@ -27,7 +27,7 @@ SOFTWARE.
 
 Peekaboo Automation Kit
 https://github.com/openclaw/Peekaboo
-Reference: 260fc35320d6c350af503338b944d68311e2bebb
+Reference: 5639e70501010ca9dcae5f594a0b57dd69e9b395 (4.9.7)
 
 MIT License
 
@@ -709,7 +709,7 @@ Swift Log 1.16.2
    See the License for the specific language governing permissions and
    limitations under the License.
 
-Sparkle 2.10.0
+Sparkle 2.10.1
 
 https://github.com/sparkle-project/Sparkle
 

@@ -8,14 +8,14 @@ app uses. An app and an MCP server are not necessarily one-to-one.
 
 ## Setup
 
-Open **Settings → Connections → Executor**. Choose **On this Mac**, then
+Open **Settings → General → Executor**. Choose **On this Mac**, then
 **Install and start Executor**. Woven resolves the current published Executor runtime,
 downloads it unchanged and runs it alongside its background service.
 Install or deploy again to update; there is no upper version limit.
 Node is bundled; a separate Pi or Executor CLI installation is unnecessary.
 Executor data and manager credentials live in Woven's private support directory,
 separately from the workspace database. Installation progress and failures stay
-visible in Connections, including after reopening the app.
+visible in Settings → General → Executor, including after reopening the app.
 
 For remote hosting, choose **On a Linux host** and select an existing discovered
 machine or enter its SSH host and username. Use its private Tailscale HTTPS
@@ -47,7 +47,7 @@ through the same dashboard; their scopes are independent of Woven conversations.
 ## Defaults and conversation controls
 
 Executor starts **off**. Set the global default in Woven's Tools defaults, and
-choose **Default apps for new conversations** in Connections. A new conversation
+choose **Default apps for new conversations** in Settings → General → Executor. A new conversation
 snapshots both settings. Changing defaults or adding apps does not grant them to
 existing conversations.
 

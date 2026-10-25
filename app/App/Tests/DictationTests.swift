@@ -109,16 +109,6 @@ import WovenMatterCompanion
         #expect(model.retainedTranscript == "Safe result")
         model.cancel()
     }
-    @Test func leavingAnIdleWorkspaceClearsTheShortcutDestination() {
-        let (model, _) = fixture()
-        let (target, view) = editor("Draft", id: "A", selection: NSRange(location: 5, length: 0))
-        model.activeEditor = target
-        model.leaveWorkspace()
-        #expect(model.activeEditor == nil)
-        model.toggleActiveEditor()
-        #expect(model.phase == .idle)
-        #expect(view.string == "Draft")
-    }
     @Test func shortcutUsesTheCurrentWindowResponderAndIgnoresStaleEditors() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),

@@ -133,8 +133,13 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         guard KeychainAccess.enforceCentralAuthorization() == 0 else {
             throw BrowserCredentialStore.AccessError.unavailable(-25308)
         }
-        try BrowserCredentialStore.shared.prepare(consented:
-            UserDefaults.standard.bool(forKey: BrowserCredentialStore.consentKey))
+        // Credentials are optional. Without access, CEF uses an in-memory
+        // profile and never opens or rewrites the user's saved website sessions.
+        guard BrowserCredentialStore.shared.prepareForBrowsing(consented:
+            UserDefaults.standard.bool(forKey: BrowserCredentialStore.consentKey)) else {
+            try WMBrowserRuntime.shared().start(withProfilePath: nil)
+            return
+        }
         let directory = (DevelopmentLaunch.isLiveHost ? nil : DevelopmentLaunch.supportDirectory)?.appending(path: "Browser", directoryHint: .isDirectory)
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Woven Matter/Browser", directoryHint: .isDirectory)

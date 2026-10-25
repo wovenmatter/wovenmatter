@@ -35,7 +35,7 @@ final class EmbeddedExecutionTests: XCTestCase {
     XCTAssertThrowsError(try EmbeddedWorkspace.decode(files:[["path":"FOO/a","data":"YQ=="],["path":"foo/b","data":"Yg=="]],directories:[],maxBytes:100,maxFiles:10))
   }
 
-  func testCommitAppliesCompleteSnapshotWithAtomicReceipt() throws {
+  func testCommitIsAtomicAndRejectsLaterConcurrentChanges() throws {
     let root = try directory(), id = UUID()
     try Data("old".utf8).write(to:root.appendingPathComponent("before"))
     let original = try EmbeddedWorkspace.read(root,maxBytes:100,maxFiles:10)
@@ -48,17 +48,11 @@ final class EmbeddedExecutionTests: XCTestCase {
     XCTAssertEqual(actual.directories,result.directories)
     XCTAssertEqual(actual.files,result.files)
     XCTAssertEqual(actual.fingerprint,result.fingerprint)
-  }
-
-  func testConcurrentChangesPreservedWithoutPartialCommit() throws {
-    let root = try directory()
-    try Data("initial".utf8).write(to:root.appendingPathComponent("shared"))
-    let original = try EmbeddedWorkspace.read(root,maxBytes:100,maxFiles:10)
-    try Data("new native edit".utf8).write(to:root.appendingPathComponent("shared"))
-    let result = EmbeddedWorkspace(files:["other":Data("worker output".utf8)],directories:[])
-    XCTAssertThrowsError(try result.commit(to:root,replacing:original,receipt:Data(),requestID:UUID(),maxBytes:100,maxFiles:10))
-    XCTAssertEqual(try String(contentsOf:root.appendingPathComponent("shared"),encoding:.utf8),"new native edit")
-    XCTAssertFalse(FileManager.default.fileExists(atPath:root.appendingPathComponent("other").path))
+    try Data("new native edit".utf8).write(to: root.appendingPathComponent("nested/after"))
+    let next = EmbeddedWorkspace(files: ["other": Data("worker output".utf8)], directories: [])
+    XCTAssertThrowsError(try next.commit(to: root, replacing: actual, receipt: Data(), requestID: UUID(), maxBytes: 100, maxFiles: 10))
+    XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("nested/after"), encoding: .utf8), "new native edit")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("other").path))
   }
 
 
@@ -73,21 +67,7 @@ final class EmbeddedExecutionTests: XCTestCase {
   }
 
   @MainActor
-  func testLocatesBothSwiftPMResourceLayouts() throws {
-    for nested in [false, true] {
-      let root = try directory()
-      let expected = nested ? root.appendingPathComponent("Resources", isDirectory: true) : root
-      try FileManager.default.createDirectory(at: expected, withIntermediateDirectories: true)
-      for name in EmbeddedCommandExecutor.requiredResources {
-        try Data("fixture".utf8).write(to: expected.appendingPathComponent(name))
-      }
-      XCTAssertEqual(try EmbeddedCommandExecutor.locateResources(in: root), expected)
-      XCTAssertEqual(try EmbeddedCommandExecutor(resourceURL: root).resourceURL, expected)
-    }
-  }
-
-  @MainActor
-  func testResourceLookupRejectsIncompleteOrMixedLayouts() throws {
+  func testResourceLookupAcceptsCompleteLayoutsAndRejectsMixedOrIncompleteBundles() throws {
     let root = try directory(), nested = root.appendingPathComponent("Resources", isDirectory: true)
     try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
     for (index, name) in EmbeddedCommandExecutor.requiredResources.enumerated() {
@@ -100,8 +80,14 @@ final class EmbeddedExecutionTests: XCTestCase {
     }
     // An incomplete direct directory must not hide a complete nested bundle.
     XCTAssertEqual(try EmbeddedCommandExecutor.locateResources(in: root), nested)
+    XCTAssertEqual(try EmbeddedCommandExecutor(resourceURL: root).resourceURL, nested)
     try Data().write(to: nested.appendingPathComponent("pyodide.asm.wasm"))
     XCTAssertThrowsError(try EmbeddedCommandExecutor.locateResources(in: root))
+    for name in EmbeddedCommandExecutor.requiredResources {
+      try Data("fixture".utf8).write(to: root.appendingPathComponent(name))
+    }
+    XCTAssertEqual(try EmbeddedCommandExecutor.locateResources(in: root), root)
+    XCTAssertEqual(try EmbeddedCommandExecutor(resourceURL: root).resourceURL, root)
   }
 
   @MainActor

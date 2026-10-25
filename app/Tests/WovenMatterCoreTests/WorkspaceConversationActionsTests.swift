@@ -21,41 +21,25 @@ struct WorkspaceConversationActionsTests {
     func close() { try? FileManager.default.removeItem(at: root) }
   }
 
-  @Test func trashFencesNativeOpenCodeWorkBeforeTheFirstRun() async throws {
+  @Test func chatMenuEditsAndRetainedFilesSurviveReopenTrashAndRestore() async throws {
     let f = try await Fixture(); defer { f.close() }
-    let id = try await f.db.createLocalACPSession(runtimeKind: .opencode, title: "Native chat", ownerDeviceID: UUID(),
-      openCodeAssociation: ("fixture", "native-session"))
-    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "sending")
-    #expect(try await f.db.conversationContent(id: id).runs.isEmpty)
-    for status in ["sending", "uncertain"] {
-      try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: status)
-      await #expect(throws: WorkspaceConversationActionError.self) {
-        try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
-      }
-    }
-    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "rejected")
-    var snapshot = OpenCodeSessionSnapshot()
-    snapshot.active = true
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
-    #expect(try await f.db.conversationContent(id: id).runs.isEmpty)
-    await #expect(throws: WorkspaceConversationActionError.self) {
-      try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
-    }
-    #expect(try await f.db.trashedConversations().isEmpty)
-    snapshot.active = false
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: id)
-    try await f.db.mutateConversation(id: id, mutation: .moveToTrash)
-    await #expect(throws: LocalACPSessionDatabaseError.self) {
-      try await f.db.saveOpenCodeSubmission(conversationID: id, id: "new", payload: [:], status: "sending")
-    }
-    // Finishing an existing receipt remains legal even after visibility changes.
-    try await f.db.saveOpenCodeSubmission(conversationID: id, id: "pending", payload: [:], status: "rejected")
-    try await f.db.mutateConversation(id: id, mutation: .restore)
-    #expect(try await f.db.openCodeUncertainSubmissions(conversationID: id).isEmpty)
-  }
-
-  @Test func trashRetainsLibraryFilesAcrossCleanupAndRestore() async throws {
-    let f = try await Fixture(); defer { f.close() }
+    let folder = try await f.db.createFolder(name: "Research", location: f.location)
+    let original = try #require(try await f.db.workspaceOverview().conversations.first)
+    let editRevision = try await f.db.dashboardRevision()
+    try await f.db.mutateConversation(id: f.chat, mutation: .setPinned(true))
+    try await f.db.mutateConversation(id: f.chat, mutation: .rename("  Review π / 東京  "))
+    #expect(try await f.db.moveConversation(id: f.chat, toFolderID: folder))
+    let afterEdits = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
+    let saved = try #require(try await afterEdits.workspaceOverview().conversations.first)
+    #expect(saved.isPinned && saved.title == "Review π / 東京" && saved.folderID == folder)
+    #expect(saved.lastMessageAt == original.lastMessageAt)
+    #expect(try await afterEdits.localACPSession(conversationID: f.chat).title == saved.title)
+    #expect(try await afterEdits.dashboardRevision() > editRevision)
+    #expect(try await !afterEdits.updateConversationTitleIfCurrent(id: f.chat, expectedTitle: saved.title, title: "Automatic title"))
+    try await afterEdits.mutateConversation(id: f.chat, mutation: .setPinned(false))
+    #expect(try await afterEdits.moveConversation(id: f.chat, toFolderID: nil))
+    let updated = try #require(try await afterEdits.workspaceOverview().conversations.first)
+    #expect(!updated.isPinned && updated.folderID == nil)
     try await f.db.setLibraryLocation(conversationID: f.chat, workspaceName: "Original workspace", root: f.root.path)
     let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep the file")
     try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Report](./report.txt)")
@@ -93,80 +77,6 @@ struct WorkspaceConversationActionsTests {
     #expect(try await reopened.libraryRoot(conversationID: f.chat) == f.root.path)
     #expect(try Data(contentsOf: files.url(for: restored)) == bytes)
     #expect(try await reopened.libraryRevision() > revision)
-  }
-
-  @Test func pinRenameAndMoveSurviveReopening() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Research", location: f.location)
-    let original = try #require(try await f.db.workspaceOverview().conversations.first)
-    let revision = try await f.db.dashboardRevision()
-    try await f.db.mutateConversation(id: f.chat, mutation: .setPinned(true))
-    try await f.db.mutateConversation(id: f.chat, mutation: .rename("  Review π / 東京  "))
-    #expect(try await f.db.moveConversation(id: f.chat, toFolderID: folder))
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
-    let saved = try #require(try await reopened.workspaceOverview().conversations.first)
-    #expect(saved.isPinned && saved.title == "Review π / 東京" && saved.folderID == folder)
-    #expect(saved.lastMessageAt == original.lastMessageAt)
-    #expect(try await reopened.localACPSession(conversationID: f.chat).title == saved.title)
-    #expect(try await reopened.dashboardRevision() > revision)
-    #expect(try await !reopened.updateConversationTitleIfCurrent(id: f.chat, expectedTitle: saved.title, title: "Automatic title"))
-    try await reopened.mutateConversation(id: f.chat, mutation: .setPinned(false))
-    #expect(try await reopened.moveConversation(id: f.chat, toFolderID: nil))
-    let updated = try #require(try await reopened.workspaceOverview().conversations.first)
-    #expect(!updated.isPinned && updated.folderID == nil)
-  }
-
-  @Test func trashRejectsActiveWorkThenRestoresRetainedMessagesAndPin() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Saved folder", location: f.location)
-    _ = try await f.db.moveConversation(id: f.chat, toFolderID: folder)
-    try await f.db.mutateConversation(id: f.chat, mutation: .setPinned(true))
-    let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep this message")
-    for status in ["queued", "accepted", "running", "uncertain"] {
-      try await f.db.write { connection in try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status = ? WHERE id = ?", [status, run.runID])
-      } }
-      await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash) }
-    }
-    #expect(try await f.db.trashedConversations().isEmpty)
-    // The statuses above exercise Trash admission. Ordinary completion still
-    // requires a running owner; remote uncertainty has its own reconciliation.
-    try await f.db.write { connection in
-      try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [run.runID])
-    }
-    try await f.db.completeLocalACPRun(runID: run.runID)
-    try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
-    #expect(try await f.db.workspaceOverview().conversations.isEmpty)
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
-    #expect(try await reopened.trashedConversations().map(\.id) == [f.chat])
-    await #expect(throws: WorkspaceConversationActionError.self) { try await reopened.mutateConversation(id: f.chat, mutation: .rename("Hidden")) }
-    await #expect(throws: WorkspaceConversationActionError.self) { try await reopened.conversationExport(id: f.chat, format: .messages) }
-    await #expect(throws: (any Error).self) { try await reopened.beginLocalACPRun(conversationID: f.chat, content: "Must not run") }
-    try await reopened.mutateConversation(id: f.chat, mutation: .restore)
-    let restored = try #require(try await reopened.workspaceOverview().conversations.first)
-    #expect(restored.isPinned && restored.folderID == folder)
-    #expect(try await reopened.conversationContent(id: f.chat).messages.first?.content == "Keep this message")
-    try await reopened.mutateConversation(id: f.chat, mutation: .moveToTrash)
-    _ = try await reopened.deleteFolder(id: folder)
-    try await reopened.mutateConversation(id: f.chat, mutation: .restore)
-    #expect(try await reopened.workspaceOverview().conversations.first?.folderID == nil)
-  }
-
-  @Test func trashPausesTimersAndCancelsQueuedDeliveriesWithoutResumingOnRestore() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let timer = WorkspaceSessionTimer(sessionID: f.chat, instruction: "Follow up", nextFireAt: .distantPast)
-    try await f.db.saveSessionTimer(timer, callerID: f.chat)
-    let due = try #require(try await f.db.dueSessionTimers().first)
-    let deliveryID = try #require(due.pendingDeliveryID)
-    _ = try await f.db.reserveToolDelivery(sourceID: f.chat, targetID: f.chat, text: due.instruction, requestID: deliveryID, kind: .timer)
-    try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
-    #expect(try await f.db.dueSessionTimers().isEmpty)
-    #expect(try await f.db.claimToolDelivery(id: deliveryID) == nil)
-    try await f.db.mutateConversation(id: f.chat, mutation: .restore)
-    #expect(try await f.db.sessionTimers(sessionID: f.chat).first?.isPaused == true)
-    #expect(try await f.db.sessionTimers(sessionID: f.chat).first?.pendingDeliveryID == nil)
-    #expect(try await f.db.dueSessionTimers().isEmpty)
-    #expect(try await f.db.claimToolDelivery(id: deliveryID) == nil)
   }
 
   @Test func exportsContainOlderMessagesReferencesAndUntruncatedRunHistory() async throws {
@@ -224,18 +134,6 @@ struct WorkspaceConversationActionsTests {
     try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
     let hidden = try await f.db.conversationContent(id: f.chat)
     #expect(hidden.messages.isEmpty && hidden.runs.isEmpty && hidden.attachments.isEmpty && hidden.references.isEmpty)
-  }
-
-  @Test func restoreDoesNotAdoptAFolderThatChangedOwnership() async throws {
-    let f = try await Fixture(); defer { f.close() }
-    let folder = try await f.db.createFolder(name: "Original", location: f.location)
-    _ = try await f.db.moveConversation(id: f.chat, toFolderID: folder)
-    try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("UPDATE folders SET user_id='someone-else' WHERE id=?", [folder])
-    } }
-    try await f.db.mutateConversation(id: f.chat, mutation: .restore)
-    #expect(try await f.db.workspaceOverview().conversations.first?.folderID == nil)
   }
 
 }

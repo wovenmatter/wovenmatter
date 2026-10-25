@@ -76,12 +76,11 @@ import WovenMatterClient
         #expect(viewer.error != nil)
     }
 
-    @Test func lateBackendFrameCannotRestoreRevokedWorkspaceAccess() async throws {
+    @Test func lateBackendFrameCannotRestoreRemovedWorkspace() async throws {
         let suite = "remote-browser-tests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let configuration = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
-        defaults.set(true, forKey: "wovenmatter.remote-workspaces.credential-access-enabled")
         defaults.set(try JSONEncoder().encode([configuration]), forKey: "wovenmatter.remote-workspaces.v1")
         let owner = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         let projection = RemoteWorkspacesModel(defaults: defaults, backendProjection: true)
@@ -95,12 +94,13 @@ import WovenMatterClient
         let loading = Task { try await projection.browserFrame(tabID: "first", for: configuration) }
         for _ in 0..<100 where pending == nil { await Task.yield() }
         let completion = try #require(pending)
-        owner.disableCredentialAccess()
-        projection.applyBackendSnapshot(owner.backendSnapshot())
+        defaults.set(try JSONEncoder().encode([RemoteWorkspaceConfiguration]()), forKey: "wovenmatter.remote-workspaces.v1")
+        let removed = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
+        projection.applyBackendSnapshot(removed.backendSnapshot())
         completion.resume(returning: try JSONEncoder().encode(BackendRemoteWorkspaceResponse(
             snapshot: oldSnapshot, browserFrame: frame("first"))))
         await #expect(throws: CancellationError.self) { try await loading.value }
-        #expect(!projection.isCredentialAccessEnabled)
+        #expect(projection.workspaces.isEmpty)
         #expect(projection.browserIdentity(for: configuration) == nil)
     }
 
@@ -111,18 +111,17 @@ import WovenMatterClient
         let missing = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
             payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(UUID())))
         #expect(await backend.handle(missing).error == "This workspace is no longer configured.")
-        fixture.model.remoteWorkspaces.disableCredentialAccess()
         let current = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
-            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(fixture.remote.id)))
-        #expect(await backend.handle(current).error == "Enable credential access in Settings to connect.")
+            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(UUID())))
+        #expect(await backend.handle(current).error == "This workspace is no longer configured.")
         let inputRequestID = UUID().uuidString
         var action = RemoteBrowserAction(kind: "text"); action.text = "ephemeral user input"
         let firstInput = BackendRPCRequest(id: inputRequestID, method: "remoteWorkspaces.command",
             payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(UUID(), action)))
         #expect(await backend.handle(firstInput).error == "This workspace is no longer configured.")
         let currentInput = BackendRPCRequest(id: inputRequestID, method: "remoteWorkspaces.command",
-            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(fixture.remote.id, action)))
-        #expect(await backend.handle(currentInput).error == "Enable credential access in Settings to connect.")
+            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(UUID(), action)))
+        #expect(await backend.handle(currentInput).error == "This workspace is no longer configured.")
     }
 
     @Test func nativeCanvasMapsLetterboxingAndEmitsRealPageGestures() throws {

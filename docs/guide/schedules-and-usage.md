@@ -11,7 +11,7 @@ the calendar by default. Use **Add to calendar**, **Remove from calendar**, or
 Scheduling belongs to the execution workspace. A remote service can continue
 while WovenMatter is closed or the Mac is disconnected; its host and container
 must keep running. Remote agents can update their managed databases through
-owner-local Woven tools, and the Mac displays the last complete synced data.
+owner-local Woven Matter CLI tools, and the Mac displays the last complete synced data.
 
 ## Session timers
 
@@ -66,12 +66,14 @@ last edited it, including the agent for changes made through Calendar tools.
 
 ## Usage
 
-**Usage** shows recorded activity and supported provider usage. Configure account
-access under **Settings → Usage**. Some information comes from local activity,
-and some requires a provider account check; unavailable data is not zero usage.
+**Usage analytics** combines Woven Matter records and local harness activity.
+It needs no account setup or provider switches. OpenCode activity includes all
+billing routes; account-wide API activity is excluded from device totals.
 
-Review the credential-access disclosure before enabling account checks. OpenRouter
-keys saved through these settings use the Mac's Keychain.
+**Usage limits** shows each saved account, its sign-in state, and the limits the
+provider makes available. Use **Go to Usage settings** to add or manage accounts
+in **Settings → Usage**. These accounts are shared with Pi Durable. Providers
+without a supported limits response link to their usage dashboard; unavailable
+data is never shown as zero usage or a full allowance.
 
-Use this view to follow usage across your work. Check provider records to
-confirm billing and account limits.
+Saved keys use Apple Keychain. Enable or restore access in **Settings → General**.

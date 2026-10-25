@@ -5,27 +5,20 @@ import Testing
 
 struct BrowserCredentialStoreTests {
 
-  @Test func failedSaveKeepsPriorPasswordAndRecoveryReloads() throws {
-    let fixture = BrowserKeychainFixture()
-    let store = fixture.store()
-    try store.prepare(consented: true)
-    try store.save(origin: "https://example.com", username: "alice", password: "original")
-    fixture.writeStatus = errSecInteractionNotAllowed
-    #expect(throws: BrowserCredentialStore.AccessError.self) {
-      try store.save(origin: "https://example.com", username: "alice", password: "replacement")
-    }
-    #expect(try store.savedPasswords(for: "https://example.com").first?.password == "original")
-    fixture.writeStatus = errSecSuccess
-    try store.prepare(consented: true, authorize: true)
-    try store.save(origin: "https://example.com", username: "alice", password: "replacement")
-    #expect(try store.savedPasswords(for: "https://example.com").first?.password == "replacement")
-  }
-
   @Test func savesUpdatesAndReloadsWithoutPrompting() throws {
     let fixture = BrowserKeychainFixture()
     let first = fixture.store()
     try first.prepare(consented: true)
     try first.save(origin: "https://example.com", username: "alice", password: "fixture-one")
+    fixture.writeStatus = errSecInteractionNotAllowed
+    #expect(throws: BrowserCredentialStore.AccessError.self) {
+      try first.save(origin: "https://example.com", username: "alice", password: "fixture-updated")
+    }
+    #expect(try first.savedPasswords(for: "https://example.com").first?.password == "fixture-one")
+    #expect(fixture.interactiveCalls == 0)
+    fixture.writeStatus = errSecSuccess
+    try first.prepare(consented: true, authorize: true)
+    let authorizedCalls = fixture.interactiveCalls
     try first.save(origin: "https://example.com", username: "bob", password: "fixture-two")
     try first.save(origin: "https://example.com", username: "alice", password: "fixture-updated")
     let restarted = fixture.store()
@@ -38,7 +31,7 @@ struct BrowserCredentialStoreTests {
     let production = fixture.store(scope: "production")
     try production.prepare(consented: true)
     #expect(try production.savedPasswords(for: "https://example.com").isEmpty)
-    #expect(fixture.interactiveCalls == 0)
+    #expect(fixture.interactiveCalls == authorizedCalls)
   }
 
   @Test func consentAndDenialNeverCreateReplacementSecrets() throws {
@@ -50,6 +43,27 @@ struct BrowserCredentialStoreTests {
     #expect(throws: BrowserCredentialStore.AccessError.self) { try store.prepare(consented: true) }
     #expect(fixture.writes == 0)
     #expect(fixture.interactiveCalls == 0)
+  }
+
+  @Test func browsingFallsBackWithoutUnlockingOrReplacingCredentials() throws {
+    let fixture = BrowserKeychainFixture()
+    let store = fixture.store()
+    let savedItems = fixture.values
+    #expect(!store.prepareForBrowsing(consented: false))
+    #expect(fixture.reads == 0)
+    fixture.readStatus = errSecInteractionNotAllowed
+    #expect(!store.prepareForBrowsing(consented: true))
+    #expect(throws: BrowserCredentialStore.AccessError.self) {
+      try store.savedPasswords(for: "https://example.com")
+    }
+    #expect(throws: BrowserCredentialStore.AccessError.self) {
+      try store.save(origin: "https://example.com", username: "alice", password: "fixture")
+    }
+    #expect(fixture.values == savedItems)
+    #expect(fixture.writes == 0)
+    #expect(fixture.interactiveCalls == 0)
+    fixture.readStatus = errSecSuccess
+    #expect(store.prepareForBrowsing(consented: true))
   }
 
   @Test func validatesExactSecureOrigins() {

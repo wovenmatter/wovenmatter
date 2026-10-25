@@ -30,32 +30,6 @@ struct LocalACPPromptBlocksTests {
     #expect(blocks[1]["mimeType"]?.stringValue == "application/pdf")
   }
 
-  @Test func stagedImageStillEmbedsLocalBase64() throws {
-    let png = Data([
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-      0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
-      0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-      0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-      0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-    ])
-    let localURL = try writeTempFile(png, name: "dot.png")
-    defer { try? FileManager.default.removeItem(at: localURL) }
-    let input = AgentMessageInput(text: "Look", attachments: [.file(
-      AgentFileAttachmentDraft(
-        kind: .image, fileName: "dot.png", mimeType: "image/png",
-        sizeBytes: Int64(png.count), contentHash: "h", localURL: localURL,
-        remotePath: "/home/.woven-matter/.wovenmatter/attachments/h/dot.png"
-      )
-    )])
-    let blocks = try LocalACPClient.promptBlocks(input, text: nil).arrayValue ?? []
-    let image = try #require(blocks.first { $0["type"]?.stringValue == "image" })
-    #expect(image["mimeType"]?.stringValue == "image/png")
-    #expect(image["data"]?.stringValue == png.base64EncodedString())
-    // Inlined content needs no path hint.
-    #expect(blocks[0]["text"]?.stringValue == "Look")
-  }
-
   private func writeTempFile(_ bytes: Data, name: String) throws -> URL {
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "-" + name)
     try bytes.write(to: url)

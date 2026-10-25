@@ -380,6 +380,7 @@ struct CompanionSettingsPane: View {
       ScrollView {
         VStack(spacing: 2) {
           SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Dictation", icon: .mic) { DictationHistoryPane(model: model) }
           SettingsNavigationRow(title: "Pi Durable", icon: .bot) { DeviceAgentSettingsPane(model: model) }
           SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
           SettingsNavigationRow(title: "Device Connections", icon: .monitor) { PairingPane(model: model) }

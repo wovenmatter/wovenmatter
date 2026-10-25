@@ -4,7 +4,7 @@ import WovenMatterCore
 
 /// Commands resolve existing workspace and harness identities on the execution owner.
 enum BackendRemoteWorkspaceCommand: Codable {
-    case enableCredentialAccess, disableCredentialAccess, refreshAll, discoverMachines
+    case refreshAll, discoverMachines
     case synchronizeDefaultAgent(UUID)
     case reconnect(UUID), refresh(UUID), refreshSignIn(UUID), refreshTaskGateway(UUID)
     case checkRuntimeUpdates(UUID, AgentRuntimeKind)
@@ -14,6 +14,7 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case checkHost(hostName: String, userName: String)
     case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String)
     case authorizeHostPreparation, cancelHostPreparation
+    case dismissHarnessSetup(UUID)
     case lifecycle(UUID, String), updateContainer(UUID)
     case resources(UUID, memoryLimit: String, swapLimit: String)
     case delete(UUID, removePersistentData: Bool)
@@ -60,8 +61,6 @@ struct BackendRemoteWorkspaceService {
         var actionResults: RemoteBrowserActionBatchResult?
         switch command {
         case .synchronizeDefaultAgent(let id): try await model.synchronizeDefaultAgent(workspace(id))
-        case .enableCredentialAccess: model.enableCredentialAccess()
-        case .disableCredentialAccess: model.disableCredentialAccess()
         case .refreshAll: model.refreshAll()
         case .discoverMachines: model.discoverMachines()
         case .reconnect(let id): model.reconnect(try workspace(id))
@@ -79,6 +78,7 @@ struct BackendRemoteWorkspaceService {
         case .checkHost(let host, let user): model.checkHost(hostName: host, userName: user)
         case .create(let name, let id, let host, let user, let port, let memory, let swap):
             model.create(name: name, workspaceID: id, hostName: host, userName: user, port: port, memoryLimit: memory, swapLimit: swap)
+        case .dismissHarnessSetup(let id): model.dismissHarnessSetup(id)
         case .authorizeHostPreparation: model.authorizeHostPreparation()
         case .cancelHostPreparation: model.cancelHostPreparation()
         case .lifecycle(let id, let value):

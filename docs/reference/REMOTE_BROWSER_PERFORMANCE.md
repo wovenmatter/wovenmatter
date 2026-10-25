@@ -32,8 +32,7 @@ Identical JPEGs are suppressed on the network. Heartbeats renew the captured
 frame identity every two seconds, without recapturing or retransmitting the image. The native
 viewer skips unchanged-image decoding and redraws. JPEG validation/decompression
 runs off the main actor; AppKit receives a prepared CGImage. Idle feeds expire within four seconds of their last read completing; an initial
-image read has a ten-second timeout. Credential revocation closes the owner's
-feeds immediately. The stream has a four-viewer limit, bounded image and
+image read has a ten-second timeout. Workspace update/removal closes the owner's feeds immediately; failed authentication terminates the stream. The stream has a four-viewer limit, bounded image and
 parser sizes, and no redirects or disk cache. Closing a viewer leaves agent tabs
 open. There is no Pause/Resume control.
 
@@ -107,7 +106,7 @@ are outside the steady-state frame-rate measurement.
 Regression coverage includes authenticated service routes, background-tab input,
 partial-batch failure/replay rejection, stale frames, bounded streaming parsing,
 backpressure, disconnect cleanup, late-frame rejection, metadata-independent image
-refresh, unchanged image reuse, frame-feed expiry and credential revocation.
+refresh, unchanged image reuse, frame-feed expiry and workspace identity changes.
 The opt-in native fixture exercises the production AppKit input view through the
 HTTP batch and live-stream clients against actual shared Chromium, including IME
 text. Container smoke tests repeat stream and batch checks on fresh and preserved

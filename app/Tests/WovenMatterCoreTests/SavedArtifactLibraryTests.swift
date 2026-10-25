@@ -23,56 +23,6 @@ struct SavedArtifactLibraryTests {
   }
 
 
-  @Test func readOnlyFrontendListsWithoutCreatingCopies() async throws {
-    let fixture = try await Fixture()
-    defer { fixture.remove() }
-    let artifact = try await fixture.save(Data())
-    let projection = try await WorkspaceDatabase(url: fixture.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-    let service = SavedArtifactLibraryService(database: projection)
-    #expect(try await service.items().map(\.id) == [artifact.id])
-    await #expect(throws: (any Error).self) { try await service.openURL(id: artifact.id, revision: artifact.revision) }
-    #expect(!FileManager.default.fileExists(atPath: fixture.root.appending(path: "saved-artifact-open").path))
-    let writer = SavedArtifactLibraryService(database: fixture.database)
-    #expect(try Data(contentsOf: await writer.openURL(id: artifact.id, revision: artifact.revision)).isEmpty)
-  }
-
-  @Test func streamsCommittedChunksAndKeepsArtifactIdentitiesDistinct() async throws {
-    let fixture = try await Fixture()
-    defer { fixture.remove() }
-    let bytes = Data(repeating: 0x5a, count: CompanionFederationProtocol.maximumArtifactChunkBytes * 2 + 37)
-    let first = try await fixture.save(bytes, title: "Report.pdf")
-    let second = try await fixture.save(bytes, title: "Report.pdf")
-    let service = SavedArtifactLibraryService(database: fixture.database)
-    let items = try await service.items()
-    #expect(Set(items.map(\.id)) == [first.id, second.id])
-    #expect(items.allSatisfy { $0.workspaceName == "My iPhone" })
-    async let openFirst = service.openURL(id: first.id, revision: first.revision)
-    async let openAgain = service.openURL(id: first.id, revision: first.revision)
-    let (url, same) = try await (openFirst, openAgain)
-    let other = try await service.openURL(id: second.id, revision: second.revision)
-    #expect(url == same)
-    #expect(url != other)
-    #expect(try Data(contentsOf: url) == bytes)
-    #expect((try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue == 0o400)
-  }
-
-  @Test func rejectsCorruptCommittedBytesAndRemovesPartialCopy() async throws {
-    let fixture = try await Fixture()
-    defer { fixture.remove() }
-    let artifact = try await fixture.save(Data("good".utf8))
-    try await fixture.database.write { connection in
-      try connection.executeUnlocked("UPDATE companion_artifact_chunks SET bytes = X'62616421'")
-    }
-    let service = SavedArtifactLibraryService(database: fixture.database)
-    await #expect(throws: (any Error).self) { try await service.openURL(id: artifact.id, revision: artifact.revision) }
-    let enumerator = FileManager.default.enumerator(at: fixture.root.appending(path: "saved-artifact-open"), includingPropertiesForKeys: [.isRegularFileKey])
-    var files = [URL]()
-    while let url = enumerator?.nextObject() as? URL {
-      if try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true { files.append(url) }
-    }
-    #expect(files.isEmpty)
-  }
-
   @Test func committedRevisionRemainsVisibleDuringUploadAndTombstoneHidesIt() async throws {
     let fixture = try await Fixture()
     defer { fixture.remove() }

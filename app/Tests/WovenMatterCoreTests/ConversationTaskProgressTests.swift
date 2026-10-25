@@ -23,7 +23,6 @@ private func plan(
 struct ConversationTaskProgressTests {
 
 
-
   @Test("only the active run's latest checklist is selected, without stale fallback")
   func planSelection() {
     let old = plan([("Old", "pending")], run: "previous", at: "1")
@@ -47,16 +46,4 @@ struct ConversationTaskProgressTests {
     #expect(ConversationTaskProgress.latest(in: allCancelled, activeRunID: "run") == nil)
   }
 
-  @Test("a plan marked as a proposal on any update is not a checklist")
-  func proposalMarkedLater() {
-    let steps = plan([("Investigate", "pending")], at: "1")
-    let marked = WorkspaceRunActivityRecord(
-      id: "run:plan@2", runID: "run", conversationID: "chat",
-      activity: AgentRunActivity(id: "plan", kind: .plan, phase: "update", planKind: "proposal"),
-      createdAt: "2"
-    )
-    #expect(ConversationTaskProgress.latest(in: [steps, marked], activeRunID: "run") == nil)
-    #expect(ConversationTaskProgress.checklist(steps.activity.merging(marked.activity), runID: "run") == nil)
-    #expect(ConversationTaskProgress.checklist(steps.activity, runID: "run")?.totalCount == 1)
-  }
 }

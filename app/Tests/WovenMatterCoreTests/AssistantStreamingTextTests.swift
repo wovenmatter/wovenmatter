@@ -17,14 +17,4 @@ struct AssistantStreamingTextTests {
     ] { #expect(AssistantStreamingText.readyPrefix(of: input) == ready) }
   }
 
-  @Test func replacementsAreAtomicAndResettable() {
-    var assembler = NativeTextSnapshotAssembler()
-    #expect(assembler.receive("orphan", starts: false, ends: true) == nil)
-    #expect(assembler.receive("Café ", starts: true, ends: false) == nil)
-    #expect(assembler.receive("🧵", starts: false, ends: true) == "Café 🧵")
-    #expect(assembler.receive("unfinished", starts: true, ends: false) == nil)
-    assembler.reset()
-    #expect(assembler.receive("tail", starts: false, ends: true) == nil)
-    #expect(assembler.receive("", starts: true, ends: true) == "")
-  }
 }

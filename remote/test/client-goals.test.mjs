@@ -82,13 +82,6 @@ test('token budget without provider accounting blocks before a second run',async
   await f.cli('checkpoint','--id',goal.id,'--evidence','Progress','--request-id',randomUUID())
   f.runs[0].end();await turn();await f.service.tickGoals()
   assert.equal((await f.read(id)).status,'blocked');assert.match((await f.read(id)).evidence,/usage is unavailable/);assert.equal(f.runs.length,1)
-})
-
-test('missing token usage cannot be bypassed by resuming with the budget retained',async t=>{
-  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
-  await f.mutate(id,{set:{objective:'Verify',tokenBudget:100}});await f.service.tickGoals();await turn()
-  f.runs[0].end();await turn()
-  const goal=await f.read(id)
   assert.equal((await f.mutate(id,{resume:{id:goal.id}})).status,'rejected')
   await f.service.tickGoals();assert.equal(f.runs.length,1)
   await f.mutate(id,{edit:{id:goal.id,objective:'Verify',tokenBudget:null}})

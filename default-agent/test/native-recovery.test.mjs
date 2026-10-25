@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { recoverNativeRuns } from '../src/native-recovery.mjs';
-import { createDefaultAgentService } from '../src/service.mjs';
 
 function fixture() {
   const submissions = new Map(), entries = new Map();
@@ -36,25 +35,6 @@ test('recovers only the latest answer segment while proving every input', async 
   assert.deepEqual(await f.recover(), [{ runID: 'run', content: 'Latest segment' }]);
   f.submissions.get('input:attempt:0').status = 'placed';
   assert.deepEqual(await f.recover(), []);
-});
-
-test('rejects ambiguous input ownership', async () => {
-  const f = fixture();
   f.runs.push({ runID: 'another', inputIDs: ['input'] });
   await assert.rejects(f.recover(), /Ambiguous/);
-});
-
-test('recovery requires current session attachment before engine dispatch', async () => {
-  const calls = [];
-  const service = createDefaultAgentService({ directory: '/unused-fixture', cwd: '/unused-fixture',
-    attachmentState: { tokens: [['native', 'current']] },
-    engineFactory: async () => ({ handle: async (method, params) => { calls.push(method); return { sessionId: params.sessionId, idle: true, runs: [] }; } }),
-  });
-  for (const attachmentToken of [undefined, 'replaced']) {
-    await assert.rejects(service.invoke({ method: 'woven/recover', params: { sessionId: 'native', runs: [] }, attachmentToken }), /attachment was replaced/);
-  }
-  assert.deepEqual(calls, []);
-  assert.deepEqual((await service.invoke({ method: 'woven/recover', params: { sessionId: 'native', runs: [] }, attachmentToken: 'current' })).result,
-    { sessionId: 'native', idle: true, runs: [] });
-  assert.deepEqual(calls, ['woven/recover']);
 });

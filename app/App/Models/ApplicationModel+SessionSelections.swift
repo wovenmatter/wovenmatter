@@ -7,37 +7,73 @@ extension ApplicationModel {
     /// Settings edits belong to the execution owner, which also captures defaults
     /// for scheduled and tool-created sessions. Conversation controls never call this.
     func agentSelectionDefaults(runtime: AgentRuntimeKind, workspace: String?) async throws
-        -> (stored: SessionSelections, resolved: SessionSelections) {
+        -> (stored: SessionSelections, resolved: SessionSelections, usesShared: Bool) {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.loadAgentDefaults(runtime: runtime, workspace: workspace))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            return (stored, resolved)
+            return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
+        }
+        if runtime == .defaultAgent {
+            let legacy = sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace)
+            if let id = legacy.model {
+                updatePiDefault(id, workspace: workspace)
+                sessionSelectionPreferences.removeDefault(.model, harness: runtime.rawValue, workspace: workspace)
+            }
         }
         return (sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace),
-            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace))
+            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace),
+            workspace.map { sessionSelectionPreferences.usesSharedDefaults(harness: runtime.rawValue, workspace: $0) } ?? false)
     }
 
     func saveAgentSelectionDefault(runtime: AgentRuntimeKind, workspace: String?,
         field: SessionSelectionField, selections: SessionSelections) async throws
-        -> (stored: SessionSelections, resolved: SessionSelections) {
+        -> (stored: SessionSelections, resolved: SessionSelections, usesShared: Bool) {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.saveAgentDefault(runtime: runtime, workspace: workspace,
                 field: field, selections: selections))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
-            return (stored, resolved)
+            return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
         if field == .tools, let tools = selections.tools { _ = try WorkspaceSessionTools(identifiers: tools) }
-        sessionSelectionPreferences.saveDefault(field, from: selections, harness: runtime.rawValue, workspace: workspace)
+        if runtime == .defaultAgent, field == .model {
+            updatePiDefault(selections.model, workspace: workspace)
+            sessionSelectionPreferences.removeDefault(.model, harness: runtime.rawValue, workspace: workspace)
+        } else {
+            sessionSelectionPreferences.saveDefault(field, from: selections, harness: runtime.rawValue, workspace: workspace)
+        }
         if field == .model {
             // The two writes are serialized in the execution owner's actor turn,
             // before a scheduled/new conversation can capture these defaults.
             sessionSelectionPreferences.removeDefault(.thinking, harness: runtime.rawValue, workspace: workspace)
         }
         return try await agentSelectionDefaults(runtime: runtime, workspace: workspace)
+    }
+
+    func setAgentDefaultsSharing(runtime: AgentRuntimeKind, workspace: String, shared: Bool) async throws
+        -> (stored: SessionSelections, resolved: SessionSelections, usesShared: Bool) {
+        if isBackendFrontend {
+            let result = try await sendBackendCommand(.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared))
+            guard let stored = result.selections, let resolved = result.resolvedSelections else {
+                throw ApplicationModelError.dashboardStoreUnavailable
+            }
+            return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
+        }
+        sessionSelectionPreferences.setUsesSharedDefaults(shared, harness: runtime.rawValue, workspace: workspace)
+        return try await agentSelectionDefaults(runtime: runtime, workspace: workspace)
+    }
+
+    private func updatePiDefault(_ id: String?, workspace: String?) {
+        let scope = workspace.map { $0.hasPrefix("remote:") ? String($0.dropFirst(7)) : "local" } ?? "global"
+        DefaultAgentSupport.updateSettings { settings in
+            var config = scope == "global" ? settings.global : settings.resolved(scope)
+            config.defaultModel = id
+            if let id, !config.models.contains(id) { config.models.append(id) }
+            if scope == "global" { settings.global = config } else { settings.workspaces[scope] = config }
+        }
     }
 
     /// Workspace identity includes its host. Local folders and remote paths must

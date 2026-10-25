@@ -153,7 +153,8 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
 }
 
 
-/// Desired mode is committed only as part of an explicit, validated restart.
+/// Background execution defaults on; an explicit opt-out survives updates.
+/// Changes to the running mode are committed only through a validated restart.
 /// The running frontend never changes execution ownership in place.
 @MainActor @Observable
 final class LocalBackgroundExecution {
@@ -167,9 +168,17 @@ final class LocalBackgroundExecution {
     var isAvailable: Bool { transitionHandler != nil && DevelopmentLaunch.mode == nil }
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) {
         self.defaults = defaults
-        isEnabled = defaults.bool(forKey: Self.preferenceKey)
+        isEnabled = Self.resolvedEnabled(defaults: defaults, developmentMode: developmentMode)
+    }
+
+    nonisolated static func resolvedEnabled(defaults: UserDefaults = .standard,
+                                           developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) -> Bool {
+        // Development profiles never install a login job or claim background
+        // ownership, even when a preference was copied from an older build.
+        guard developmentMode == nil else { return false }
+        return defaults.object(forKey: preferenceKey) == nil || defaults.bool(forKey: preferenceKey)
     }
 
     static func launchAgentPropertyList(bundleURL: URL, executableURL: URL, identifier: String) -> [String: Any] {
@@ -246,7 +255,7 @@ final class LocalBackgroundExecution {
 }
 
 
-/// launchd owns the process from the first opt-in restart, not just the next
+/// launchd owns the process from the first background launch, not just the next
 /// login. Successful shutdown stays stopped; unexpected exits are restarted.
 /// Tests inject a command runner and never register a real login job.
 struct LocalBackendSupervisor {
@@ -355,9 +364,19 @@ enum LocalExecutionRole: String {
 
     nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
     static let current: LocalExecutionRole = resolve(arguments: CommandLine.arguments,
-        backgroundEnabled: UserDefaults.standard.bool(forKey: LocalBackgroundExecution.preferenceKey),
+        backgroundEnabled: startupBackgroundEnabled,
         libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey),
         developmentMode: DevelopmentLaunch.mode)
+
+    private static var startupBackgroundEnabled: Bool {
+        #if COMPANION_FACADE_TESTS
+        // Facade fixtures own isolated stores; they must not attach to a login
+        // backend because a production preference now defaults on.
+        return false
+        #else
+        return LocalBackgroundExecution.resolvedEnabled()
+        #endif
+    }
 
     static func resolve(arguments: [String], backgroundEnabled: Bool, libraryClientEnabled: Bool = false,
                         developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {

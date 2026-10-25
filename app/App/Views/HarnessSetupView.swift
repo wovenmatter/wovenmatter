@@ -20,7 +20,11 @@ struct HarnessSetupView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let connectionFocus {
-                        SettingsConnectionsView(model: model, focus: connectionFocus, onBack: { self.connectionFocus = nil })
+                        SettingsConnectionsView(model: model, focus: connectionFocus, onConnected: { provider in
+                            model.pendingDefaultAgentModelProvider = provider
+                            model.pendingDefaultAgentSettingsScope = "global"
+                            finish()
+                        }, onBack: { self.connectionFocus = nil })
                     } else if step == 0 {
                         harnesses
                     } else {

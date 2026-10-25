@@ -5,12 +5,12 @@ import WovenMatterCore
 
 struct SettingsRemoteWorkspacesView: View {
     @Bindable var model: RemoteWorkspacesModel
-    let credentialDisclosureAcknowledged: Bool
-    let onAcknowledgeCredentialDisclosure: () -> Void
+    let application: ApplicationModel
     var reservesRailControlSpace = false
     var onMoreRuntime: (AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void
     var onBack: () -> Void
     @State private var selectedWorkspaceID: UUID?
+    @State private var setupWorkspace: RemoteWorkspaceConfiguration?
     @State private var name = ""
     @State private var workspaceID = ""
     @State private var hostName = ""
@@ -19,10 +19,8 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var memoryLimit = ""
     @State private var swapLimit = ""
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
-    @State private var authorizationCode = ""
     @State private var managedMemoryLimit = ""
     @State private var managedSwapLimit = ""
-    @State private var showsCredentialDisclosure = false
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
 
     var body: some View {
@@ -43,12 +41,8 @@ struct SettingsRemoteWorkspacesView: View {
                 if selectedWorkspace == nil {
                     SettingsWorkspaceSidebarVisibilityControl(.remoteWorkspaces)
                 }
-                credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
-                    SettingsSignInStatusCard(statuses: model.signInStatuses[selectedWorkspace.id] ?? [], checking: model.checkingSignIn.contains(selectedWorkspace.id), error: model.signInErrors[selectedWorkspace.id], scope: selectedWorkspace.id.uuidString.lowercased()) {
-                        Task { await model.refreshSignInStatus(selectedWorkspace) }
-                    }
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
@@ -66,7 +60,6 @@ struct SettingsRemoteWorkspacesView: View {
         }
         .id(selectedWorkspaceID)
         .task(id: selectedWorkspaceID) {
-            guard model.isCredentialAccessEnabled else { return }
             if let selectedWorkspace {
                 model.refresh(selectedWorkspace)
             } else {
@@ -77,21 +70,18 @@ struct SettingsRemoteWorkspacesView: View {
         .sheet(item: $browserWorkspace) { workspace in
             RemoteBrowserView(workspaces: model, configuration: workspace)
         }
-        .sheet(isPresented: $showsCredentialDisclosure) {
-            CredentialAccessDisclosureView(
-                purpose: "Allow Woven Matter to read remote workspace API tokens from this Mac’s Keychain and reconnect automatically.",
-                onEnable: {
-                    onAcknowledgeCredentialDisclosure()
-                    showsCredentialDisclosure = false
-                    model.enableCredentialAccess()
-                },
-                onCancel: { showsCredentialDisclosure = false }
-            )
-        }
         .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
             if let selectedWorkspaceID,
                !workspaceIDs.contains(selectedWorkspaceID) {
                 self.selectedWorkspaceID = nil
+            }
+        }
+        .onAppear { presentPendingSetup() }
+        .onChange(of: model.pendingHarnessSetupIDs) { _, _ in presentPendingSetup() }
+        .sheet(item: $setupWorkspace) { workspace in
+            RemoteHarnessSetupView(application: application, workspace: workspace) {
+                model.dismissHarnessSetup(workspace.id)
+                setupWorkspace = nil
             }
         }
         .confirmationDialog(
@@ -143,9 +133,9 @@ struct SettingsRemoteWorkspacesView: View {
         .confirmationDialog(
             "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
             isPresented: Binding(
-                get: { model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
+                get: { setupWorkspace == nil && model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
                 set: {
-                    if !$0, let prepared = model.preparedHarnessAction,
+                    if !$0, setupWorkspace == nil, let prepared = model.preparedHarnessAction,
                        prepared.action != "update" {
                         model.cancelPreparedHarnessAction(
                             workspaceID: prepared.configuration.id,
@@ -188,36 +178,10 @@ struct SettingsRemoteWorkspacesView: View {
         }
     }
 
-    private var credentialAccessCard: some View {
-        SettingsCard(
-            title: "Remote workspace access",
-            detail: model.isCredentialAccessEnabled
-                ? "Connect to your configured remote workspaces. Background checks stay silent."
-                : "Enable connections to your configured remote workspaces using saved credentials."
-        ) {
-            HStack {
-                SettingsPill(
-                    model.isCredentialAccessEnabled ? "Enabled" : "Disabled",
-                    tone: model.isCredentialAccessEnabled ? .neutral : .warning
-                )
-                Spacer()
-                if model.isCredentialAccessEnabled {
-                    Button("Disable") {
-                        model.disableCredentialAccess()
-                    }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                } else {
-                    Button("Enable remote workspaces") {
-                        if credentialDisclosureAcknowledged {
-                            model.enableCredentialAccess()
-                        } else {
-                            showsCredentialDisclosure = true
-                        }
-                    }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                }
-            }
-        }
+    private func presentPendingSetup() {
+        guard setupWorkspace == nil,
+              let workspace = model.workspaces.first(where: { model.pendingHarnessSetupIDs.contains($0.id) }) else { return }
+        setupWorkspace = workspace
     }
 
     private var selectedWorkspace: RemoteWorkspaceConfiguration? {
@@ -306,14 +270,14 @@ struct SettingsRemoteWorkspacesView: View {
 
             Button("View browser") { browserWorkspace = workspace }
                 .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(!model.isCredentialAccessEnabled || busy)
+                .disabled(busy)
 
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Keep tasks and sessions running in the background", isOn: Binding(
                     get: { workspace.backgroundExecutionEnabled },
                     set: { model.setBackgroundExecution($0, for: workspace) }
                 ))
-                .disabled(busy || model.changingTaskGatewayIDs.contains(workspace.id) || !model.isCredentialAccessEnabled)
+                .disabled(busy || model.changingTaskGatewayIDs.contains(workspace.id))
                 Text("Enabled by default. Tasks and sessions continue while this host is running. Results sync when you reconnect. Pi Durable needs this Mac to unlock credentials after a remote restart.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -530,39 +494,34 @@ struct SettingsRemoteWorkspacesView: View {
     private func harnessesCard(
         _ workspace: RemoteWorkspaceConfiguration
     ) -> some View {
-        SettingsCard(title: "\(workspace.name) runtimes") {
+        SettingsCard(title: "Harnesses") {
+            Button("Set up harnesses") { setupWorkspace = workspace }
+                .buttonStyle(SettingsQuietButtonStyle())
             let harnesses = model.currentHarnesses(for: workspace)
             if harnesses.isEmpty {
                 SettingsEmpty("Start the workspace or refresh to check for agents.")
             } else {
                 ForEach(harnesses) { harness in
-                    SettingsInset {
-                        HStack(spacing: 12) {
-                            DashboardHarnessLogoIcon(
-                                logo: DashboardHarnessLogo(runtimeKind: harness.id),
-                                size: 20
-                            )
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(harness.presentationName)
-                                    .font(.system(size: 13, weight: .medium))
-                                if !harness.detectedProviders.isEmpty {
-                                    Text("Detected: \(harness.detectedProviders.joined(separator: ", "))")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            SettingsPill(
-                                harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
-                                tone: harness.state == "ready" ? .neutral : .warning
-                            )
-                            if harness.id == .defaultAgent {
-                                Button("Settings") { onMoreRuntime(.defaultAgent, workspace) }.buttonStyle(SettingsQuietButtonStyle())
-                            } else { runtimeButtons(harness, workspace: workspace) }
-                        }
+                    SettingsHarnessDisclosure(runtime: harness.id,
+                        status: harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
+                        tone: harness.state == "ready" ? .neutral : .warning) {
                         if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
                             runtimeInventory(runtime, workspace: workspace)
                         }
+                        SettingsHarnessControlRow(title: "Preferences") {
+                            Button("Open settings") { onMoreRuntime(harness.id, workspace) }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .accessibilityLabel("Open \(harness.displayName) settings")
+                        }
+                        if harness.id == .defaultAgent {
+                            SettingsHarnessControlRow(title: "Account") {
+                                Text(HarnessAccountPresentation.providerSummary(model.signInStatuses[workspace.id] ?? []))
+                                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                                Button("Manage sign-in") { onMoreRuntime(harness.id, workspace) }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                            }
+                            if let error = model.signInErrors[workspace.id] { SettingsNote(error) }
+                        } else { runtimeButtons(harness, workspace: workspace) }
                     }
                 }
             }
@@ -570,11 +529,8 @@ struct SettingsRemoteWorkspacesView: View {
                 SettingsNote("Runtime inventory unavailable. Check for updates to retry.")
             }
 
-            if let session = model.authenticationSessions[workspace.id] {
-                signInCard(session, workspace: workspace)
-            }
-
         }
+        .task(id: workspace.id) { await model.refreshSignInStatus(workspace) }
     }
 
     @ViewBuilder
@@ -584,40 +540,33 @@ struct SettingsRemoteWorkspacesView: View {
         let running = runtime?.operation?.status == "running"
         let unavailable = model.isRuntimeInventoryUnavailable(harness.id, configuration: workspace)
         let busy = model.busyWorkspaceIDs.contains(workspace.id) || running || checking
-        VStack(alignment: .trailing, spacing: 8) {
-            HStack(spacing: 8) {
-                Button("Settings") {
-                    onMoreRuntime(harness.id, workspace)
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .accessibilityLabel("Open \(harness.displayName) settings")
-                SettingsRemoteRuntimeUpdateButton(
-                    model: model,
-                    harness: harness,
-                    configuration: workspace
-                )
-                if let runtime {
-                    Button(runtime.visible ? "Hide" : "Show") {
-                        model.setRuntimePreferences(runtime, configuration: workspace, visible: !runtime.visible)
-                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
-                    if runtime.installed {
-                        Button(runtime.enabled ? "Disable" : "Enable") {
-                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: !runtime.enabled)
-                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
-                    } else {
-                        if runtime.enabled {
-                            Button("Disable") {
-                                model.setRuntimePreferences(runtime, configuration: workspace, enabled: false)
-                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
-                        }
-                        Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry install" : "Install")) {
-                            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
-                        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(busy || unavailable)
-                    }
-                }
+        SettingsHarnessControlRow(title: "Software") {
+            if let runtime, !runtime.installed {
+                Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry install" : "Install")) {
+                    model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+                }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+            } else {
+                SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
             }
-            if let runtime, runtime.installed {
-                harnessButtons(harness, workspace: workspace).disabled(busy || unavailable)
+        }
+        if let runtime {
+            SettingsHarnessControlRow(title: "Sidebar") {
+                Toggle("Show in sidebar", isOn: Binding(get: { runtime.visible }, set: {
+                    model.setRuntimePreferences(runtime, configuration: workspace, visible: $0)
+                })).disabled(busy || unavailable)
+            }
+            SettingsHarnessControlRow(title: "Availability") {
+                Toggle("Enable harness", isOn: Binding(get: { runtime.enabled }, set: {
+                    model.setRuntimePreferences(runtime, configuration: workspace, enabled: $0)
+                })).disabled(busy || unavailable)
+            }
+            if runtime.installed {
+                SettingsHarnessControlRow(title: "Account") {
+                    Text(HarnessAccountPresentation.remoteLabel(harness))
+                        .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    Button("Manage sign-in") { onMoreRuntime(harness.id, workspace) }
+                        .buttonStyle(SettingsQuietButtonStyle())
+                }
             }
         }
     }
@@ -649,176 +598,6 @@ struct SettingsRemoteWorkspacesView: View {
         let installed = component.installed ? (component.installedVersion ?? "version unavailable") : "missing"
         let newer = component.availableUpdateVersion
         return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
-    }
-
-    @ViewBuilder
-    private func harnessButtons(
-        _ harness: RemoteHarnessStatus,
-        workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        if harness.state == "cli_missing" || harness.state == "adapter_missing" {
-            Button("Install") {
-                model.prepareHarnessAction("install", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(DashboardPrimaryButtonStyle())
-        } else if harness.state == "authentication_required" {
-            if harness.setupMethods.count == 1,
-               let method = harness.setupMethods.first {
-                Button("Set up") {
-                    startSignIn(harness, method: method, workspace: workspace)
-                }
-                .buttonStyle(DashboardPrimaryButtonStyle())
-            } else if !harness.setupMethods.isEmpty {
-                Menu("Set up…") {
-                    ForEach(harness.setupMethods) { method in
-                        Button(method.displayName) {
-                            startSignIn(harness, method: method, workspace: workspace)
-                        }
-                    }
-                }
-                .buttonStyle(DashboardPrimaryButtonStyle())
-            } else {
-                Text("No supported sign-in methods")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
-        } else {
-            Button("Recheck") {
-                model.performHarnessAction("recheck", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            if !harness.setupMethods.isEmpty {
-                Menu("Change Sign-In…") {
-                    ForEach(harness.setupMethods) { method in
-                        Button(method.displayName) {
-                            startSignIn(harness, method: method, workspace: workspace)
-                        }
-                    }
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-            }
-        }
-    }
-
-    private func startSignIn(
-        _ harness: RemoteHarnessStatus,
-        method: RemoteHarnessSetupMethod,
-        workspace: RemoteWorkspaceConfiguration
-    ) {
-        authorizationCode = ""
-        model.startHarnessSignIn(
-            harness: harness,
-            method: method,
-            configuration: workspace
-        )
-    }
-
-    private func signInCard(
-        _ session: RemoteHarnessAuthenticationSession,
-        workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        SettingsInset {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(session.methodName)
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Spacer()
-                    SettingsPill(
-                        session.state.replacingOccurrences(of: "_", with: " ").capitalized,
-                        tone: session.state == "waiting_for_user" ? .warning : .neutral
-                    )
-                    if session.state == "waiting_for_user" {
-                        Button("Cancel") {
-                            model.cancelHarnessSignIn(configuration: workspace)
-                        }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }
-                Text(session.message)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-
-                if let notice = session.notice {
-                    SettingsNote(notice)
-                }
-
-                if let url = session.verificationURL {
-                    Button("Open sign-in page") {
-                        NSWorkspace.shared.open(url)
-                    }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                }
-
-                if let userCode = session.userCode {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("One-time code")
-                                .font(.system(size: 11))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                            Text(userCode)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        Spacer()
-                        Button("Copy code") { copy(userCode) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }
-
-                if session.state == "waiting_for_user",
-                   session.acceptsAuthorizationCode {
-                    HStack {
-                        credentialInput(session, workspace: workspace)
-                        Button("Submit") {
-                            submitAuthorizationCode(workspace)
-                        }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(
-                            authorizationCode.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ).isEmpty
-                        )
-                    }
-                }
-
-                if let error = session.error {
-                    SettingsError(error)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func credentialInput(
-        _ session: RemoteHarnessAuthenticationSession,
-        workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        let label = session.credentialInputLabel ?? "Authorization code"
-        if session.credentialInputSecret == true {
-            SecureField(label, text: $authorizationCode)
-                .settingsInput()
-                .onSubmit { submitAuthorizationCode(workspace) }
-        } else {
-            TextField(label, text: $authorizationCode)
-                .settingsInput()
-                .onSubmit { submitAuthorizationCode(workspace) }
-        }
-    }
-
-    private func submitAuthorizationCode(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) {
-        let code = authorizationCode.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard !code.isEmpty else { return }
-        model.submitAuthorizationCode(code, configuration: workspace)
-        authorizationCode = ""
-    }
-
-    private func copy(_ value: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
     }
 
     private func resourceLabel(_ bytes: Int64) -> String {
