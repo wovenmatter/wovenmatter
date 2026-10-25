@@ -68,6 +68,9 @@ when an intentional design change is accepted.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
 - **Harness settings areas:** separate Accounts & installation from Chat settings.
+  Use DashboardSegmentedSelector for the area control so padding, hover, press,
+  and accessibility behavior match Sidebar layout. Use the quiet standard selection
+  in Dark; retain the existing primary selection color in Green and Cognac.
   Give accounts their own Local agent workspace / named remote workspace selector;
   only Pi Durable exposes Shared Pi Durable accounts. Keep chat inheritance controls
   inside Chat settings, never above accounts or software. Changing chat inheritance

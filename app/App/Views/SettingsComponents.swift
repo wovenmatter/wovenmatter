@@ -895,11 +895,12 @@ enum HarnessSettingsArea: String, CaseIterable {
 }
 
 struct SettingsHarnessAreaPicker: View {
+    @Environment(\.dashboardTheme) private var theme
     @Binding var selection: HarnessSettingsArea
     var body: some View {
-        Picker("Manage", selection: $selection) {
-            ForEach(HarnessSettingsArea.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-        }.pickerStyle(.segmented).frame(maxWidth: 440)
+        DashboardSegmentedSelector(options: HarnessSettingsArea.allCases, selection: $selection,
+            accentSelection: theme != .dark) { $0.rawValue }
+            .frame(maxWidth: 440)
     }
 }
 
