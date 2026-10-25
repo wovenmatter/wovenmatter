@@ -296,3 +296,18 @@ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
 IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+## Remote workspace tools
+
+The remote workspace image builds unmodified OpenSSH Portable 10.6p1 client
+sources from [OpenSSH](https://www.openssh.org/portable.html). It retains the
+upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE` in the image;
+that file contains the component copyright, permission, and disclaimer notices.
+The source archive's SHA-256 and detached signature are checked during the build.
+
+The image installs GitHub CLI from its signed official package repository and
+retains its MIT license and dependency notices. npm retains its upstream
+Artistic License 2.0 and dependency notices. Its bundled undici is replaced by the
+locked current security selection in `remote/npm-runtime`; undici retains its
+MIT license in its installed package. This replacement changes dependency
+selection and does not modify undici source.

@@ -28,12 +28,13 @@ legacy_data="$(mktemp -d "${TMPDIR:-/tmp}/wovenmatter-legacy-storage.XXXXXX")"
 base_port=$((20000 + (suffix % 18000)))
 port_a="$base_port"
 port_b=$((base_port + 1))
-token_a="container-smoke-a-${suffix}"
-token_b="container-smoke-b-${suffix}"
+token_a="$(openssl rand -hex 32)"
+token_b="$(openssl rand -hex 32)"
 
 cleanup() {
   docker rm --force "$container_a" "$container_b" "$legacy_container" >/dev/null 2>&1 || true
   docker volume rm "$volume_a" "$volume_b" >/dev/null 2>&1 || true
+  docker network rm "wovenmatter-$workspace_a" "wovenmatter-$workspace_b" >/dev/null 2>&1 || true
   rm -rf -- "$legacy_data"
 }
 trap cleanup EXIT HUP INT TERM
@@ -70,6 +71,21 @@ printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(docker exec "$container_a" sh -c 'printf %s "$HOME"')" = /home ]
 [ "$(docker exec "$container_a" getent passwd woven | cut -d: -f6)" = /home ]
 [ "$(docker exec "$container_a" sh -c 'test -w /home && printf writable')" = writable ]
+[ "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$container_a")" = 512 ]
+[ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$container_a")" = true ]
+[ "$(docker inspect -f '{{.Config.User}}' "$container_a")" = 10001:10001 ]
+[ "$(docker exec "$container_a" stat -c '%a' /home/.woven-matter)" = 700 ]
+docker exec "$container_a" ssh -V
+docker exec "$container_a" node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); const expected=require("/opt/wovenmatter/npm-runtime/node_modules/undici/package.json").version; if(npm("undici/package.json").version!==expected)process.exit(1)'
+
+# Even possession of the other workspace's API token cannot cross its bridge.
+ip_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_a")"
+if docker exec "$container_b" curl -fsS --connect-timeout 2 --max-time 3 \
+  -H "Authorization: Bearer $token_a" "http://${ip_a}:7337/v1/health" >/dev/null 2>&1; then
+  printf '%s\n' 'workspace networks unexpectedly allow sibling API access' >&2
+  exit 1
+fi
+
 
 docker exec "$container_a" sh -c 'printf persistent > "$HOME/.woven-matter/smoke-marker"'
 printf '%s\n' 'Checking storage reporting and restart/update preservation.'

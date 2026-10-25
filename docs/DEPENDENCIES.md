@@ -42,7 +42,32 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   nightlies and prereleases. CI and release builds use the same release
   (`node-version-file: default-agent/.node-version`). Linux images follow the
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
-  newest patch and Debian security updates on every image build.
+  newest patch and Debian security updates on every image build. The workspace
+  image also raises npm to its tested current stable minimum (`>=12.2.1`), since
+  Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
+  floor; locked installs and the container smoke test validate CLI compatibility.
+  Unused bundled Yarn is removed from the workspace image.
+- **Remote workspace tools** use GitHub CLI's official signed stable APT
+  repository (tested minimum 2.103.2), with the published keyring SHA-256 checked
+  before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
+  reviews both the floor and signing-key record against upstream.
+  OpenSSH clients are built from the current 10.6p1 source in a separate image
+  stage: the Dockerfile records the exact release/SHA-256 and verifies its
+  detached signature against the upstream release-key fingerprint. This
+  security exception replaces Debian's client, which retains CVE-2026-60002
+  even in current backports. Maintenance must refresh the source record with
+  every new upstream stable release; image construction runs OpenSSH's unit
+  tests, and container validation checks the installed clients. Build tools
+  and the SSH server are not included in the final image.
+  npm 12.2.1 still bundles affected undici 6.29.0. The workspace image replaces
+  that vendored module with the current, independently locked security selection
+  in `remote/npm-runtime` (tested 8.12.3), addressing GHSA-xjj6-f33q-929c and the
+  related denial-of-service advisories. npm ignores overrides for its bundled
+  dependencies, so this replacement is explicit in the image definition.
+  Maintenance reviews npm's vendored selection on every refresh and removes
+  the replacement once npm ships a secure version. Image construction tests
+  actual npm registry installation and `npm ci`; container validation checks
+  that npm resolves the intended module. Audit both lockfiles separately.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact

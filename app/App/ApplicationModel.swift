@@ -494,12 +494,14 @@ final class ApplicationModel {
 
     #if COMPANION_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
+    var remoteSSHOptionsFixture: (@Sendable (String) throws -> [String])?
 
     /// Installs explicit inert provider metadata while preserving real routing,
     /// session preferences, tools, persistence and note recovery.
     func configureCompanionFixture(directory: URL) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         titleGenerationSettings.isEnabled = false
+        remoteSSHOptionsFixture = { _ in [] }
         let runtimes = AgentRuntimeKind.allCases.filter { $0 != .opencode }
         localACPLaunchConfigurations = Dictionary(uniqueKeysWithValues: runtimes.map {
             ($0, LocalACPRuntimeLaunchConfiguration(runtimeKind: $0,
@@ -3323,13 +3325,18 @@ final class ApplicationModel {
             let processDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
                 ?? FileManager.default.homeDirectoryForCurrentUser
 
+            var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
+            #if COMPANION_FACADE_TESTS
+            if let fixture = remoteSSHOptionsFixture { sshOptions = fixture }
+            #endif
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
                 runtimeKind: runtimeKind,
                 processWorkingDirectory: processDirectory,
                 workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
                 workingDirectory: inheritedRoot,
-                durableChannelID: conversation.id
+                durableChannelID: conversation.id,
+                tailnetSSHOptions: sshOptions
             )
         }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
