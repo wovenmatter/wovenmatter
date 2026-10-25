@@ -76,7 +76,7 @@ printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(docker inspect -f '{{.Config.User}}' "$container_a")" = 10001:10001 ]
 [ "$(docker exec "$container_a" stat -c '%a' /home/.woven-matter)" = 700 ]
 docker exec "$container_a" ssh -V
-docker exec "$container_a" node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); const expected=require("/opt/wovenmatter/npm-runtime/node_modules/undici/package.json").version; if(npm("undici/package.json").version!==expected)process.exit(1)'
+docker exec "$container_a" node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); for(const name of ["undici","ip-address"]){const expected=require("/opt/wovenmatter/npm-runtime/node_modules/"+name+"/package.json").version; if(npm(name+"/package.json").version!==expected)process.exit(1)}'
 
 # Even possession of the other workspace's API token cannot cross its bridge.
 ip_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_a")"

@@ -40,9 +40,13 @@ graph with `npm update --package-lock-only --ignore-scripts` before hardening.
   image now installs npm at that tested minimum (newer stable releases eligible)
   and removes unused legacy Yarn. npm 12.2.1 itself bundles affected undici
   6.29.0, so the image replaces that module with separately locked undici 8.12.3
-  from `remote/npm-runtime`; that graph also audits clean. Actual registry
+  from `remote/npm-runtime`; ip-address 10.7.5 also replaces its affected
+  vendored copy (CVE-2026-111997). That graph also audits clean. Actual registry
   installation and `npm ci` validate CLI compatibility. Build caches are kept
   outside the persistent home and removed after installation.
+- curl/libcurl use the signed Debian stable-backports 8.21.0 packages, including
+  all installed TLS variants. Other OS packages retain Debian's stable security
+  channel rather than mixing testing/unstable libraries into the runtime.
 - Debian's gh 2.46.0 retains CVE-2026-48501. The image now uses the official
   signed stable GitHub CLI repository, verifies its published signing-keyring
   checksum, and requires at least the current 2.103.2 release.
@@ -84,6 +88,7 @@ review date; they are point-in-time evidence.
 | Root-owned lifecycle locks could follow a precreated symlink. | Require an owned ordinary lock directory before setting permissions or acquiring locks. |
 | Process creation and newly created file permissions were insufficiently constrained. | Limit containers to 512 processes, disable core dumps, set service umask 077, and use nodev temporary mounts. |
 | Administration requests could follow redirects away from their tunnel. | Restrict the native service client to its loopback origin, disable system proxies and cookies, and refuse redirects per task. |
+| Deployment contexts and app resources could retain local install caches or environment files. | Restrict Docker context inputs, exclude node_modules and environment files from SSH deployment archives, and trim these from bundled remote resources. |
 | HTTP parsing and error responses offered unnecessary attack surface. | Bound headers/upload deadlines/connections, reject browser-origin and absolute-form targets, use a fixed parsing origin, and mask unexpected internal error details. |
 
 ## Existing controls reviewed
@@ -104,9 +109,21 @@ Installers require HTTPS and bounded downloads; reviewed script digests must mat
 at execution. npm packages retain registry integrity verification. Tests use
 provider-free fixtures; no live sign-in or provider request is part of this review.
 
+## Residual image findings
+
+The fresh image scan has zero detected Node/npm vulnerabilities after the
+vendored-module replacements. The distribution still reports one critical and
+103 high package findings, including issues with deferred or unavailable Debian
+stable fixes. They are not suppressed or marked resolved. See the
+[complete high/critical advisory inventory and triage](REMOTE_WORKSPACE_IMAGE_FINDINGS.md),
+including Debian’s lower-severity assessment of the libxml2 critical finding and
+the outstanding GitHub CLI Go-module advisory. This PR does not claim the image
+is vulnerability-free or authorize its deployment.
+
 ## Validation and remaining operational boundary
 
-Focused daemon-transport tests inspect OpenSSH’s effective configuration with conflicting SSH settings and cover peer selection, unusable daemon/peer state,
+Focused daemon-transport tests inspect OpenSSH’s effective configuration with
+conflicting SSH settings and cover peer selection, unusable daemon/peer state,
 ambiguity, and IPv6 peers. Existing service and container smoke suites exercise
 API authorization and scope separation, parser rejection, permissions, isolation,
 restart/update persistence and explicit deletion. LAN behavior has no
@@ -117,8 +134,15 @@ The local Mac has no running Docker daemon. Real image construction, container
 lifecycle, private bridge isolation, ownership/permission checks, and deletion
 were therefore exercised in disposable containers on an existing Linux host via
 Tailscale. Images used unique test-only tags, and test resources were removed.
-No installed workspace was replaced. Live Tailnet policy, host firewall,
+Linux image validation and scanning used amd64; the arm64 image was not locally
+exercised. No installed workspace was replaced. Live Tailnet policy, host firewall,
 OS/package inventory, and existing installed workspace images were not changed
 or penetration-tested. Accepting this source change does not patch installed
 containers: users must explicitly update them. Tailnet operators must restrict
 SSH and Serve ports using their access policy and maintain host security updates.
+
+Local static, default-agent, remote, SwiftPM, and desktop companion integration
+checks passed. The full local command reached the macOS build and was blocked
+by missing CMake. iOS UI validation built but could not run because Xcode's
+simulator reported `DTServiceHubClient failed to bless service hub`. These are
+unpassed local native/UI checks; hosted CI results are recorded in the PR.

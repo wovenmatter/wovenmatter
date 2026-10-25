@@ -6,8 +6,10 @@ FROM node:26-trixie-slim AS workspace-ssh-build
 ARG OPENSSH_VERSION=10.6p1
 ARG OPENSSH_SHA256=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
 RUN export DEBIAN_FRONTEND=noninteractive \
+    && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends build-essential ca-certificates curl gnupg pkg-config libssl-dev zlib1g-dev libfido2-dev libedit-dev \
+    && apt-get install -y --no-install-recommends -t trixie-backports curl libcurl4t64 libcurl3t64-gnutls \
     && mkdir -m 700 /tmp/openssh-signatures \
     && curl --proto '=https' --tlsv1.2 -fsSL "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-${OPENSSH_VERSION}.tar.gz" -o /tmp/openssh.tar.gz \
     && echo "${OPENSSH_SHA256}  /tmp/openssh.tar.gz" | sha256sum --check --status \
@@ -33,11 +35,14 @@ LABEL com.wovenmatter.workspace-uid="10001" \
       com.wovenmatter.workspace-gid="10001"
 
 RUN export DEBIAN_FRONTEND=noninteractive \
+    && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
       bash ca-certificates chromium curl git jq libedit2 libfido2-1 \
       procps python3 python3-venv ripgrep tini util-linux \
+    && apt-get install -y --no-install-recommends -t trixie-backports curl libcurl4t64 libcurl3t64-gnutls \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.21.0 \
     && mkdir -p /etc/apt/keyrings \
     && curl --proto '=https' --tlsv1.2 -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg \
     && echo '6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b  /etc/apt/keyrings/githubcli.gpg' | sha256sum --check --status \
@@ -67,8 +72,9 @@ COPY --chown=woven:woven default-agent/package*.json ./default-agent/
 RUN export npm_config_cache=/tmp/wovenmatter-npm-build-cache \
     && npm install --global --ignore-scripts --no-audit --no-fund 'npm@>=12.2.1' \
     && npm ci --prefix npm-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
-    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
-    && ln -s /opt/wovenmatter/npm-runtime/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici \
+    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/ip-address /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && cp -a /opt/wovenmatter/npm-runtime/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici \
+    && cp -a /opt/wovenmatter/npm-runtime/node_modules/ip-address /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && npm install --global --ignore-scripts --no-audit --no-fund \
       "playwright@$(node -p 'require("./default-agent/package-lock.json").packages["node_modules/playwright-core"].version')" \
     && cd default-agent && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \

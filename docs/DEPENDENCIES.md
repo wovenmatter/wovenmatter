@@ -47,7 +47,10 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.
   Unused bundled Yarn is removed from the workspace image.
-- **Remote workspace tools** use GitHub CLI's official signed stable APT
+- **Remote workspace tools** take curl/libcurl from signed Debian stable
+  backports (tested 8.21.0) to avoid the affected stable-distribution version;
+  other distro libraries remain on Debian's supported stable security channel.
+  They use GitHub CLI's official signed stable APT
   repository (tested minimum 2.103.2), with the published keyring SHA-256 checked
   before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
   reviews both the floor and signing-key record against upstream.
@@ -61,10 +64,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and the SSH server are not included in the final image.
   npm 12.2.1 still bundles affected undici 6.29.0. The workspace image replaces
   that vendored module with the current, independently locked security selection
-  in `remote/npm-runtime` (tested 8.12.3), addressing GHSA-xjj6-f33q-929c and the
+  in `remote/npm-runtime` (tested undici 8.12.3 and ip-address 10.7.5), addressing CVE-2026-111997,
+  GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
-  Maintenance reviews npm's vendored selection on every refresh and removes
+  Maintenance reviews npm's vendored selections on every refresh and removes
   the replacement once npm ships a secure version. Image construction tests
   actual npm registry installation and `npm ci`; container validation checks
   that npm resolves the intended module. Audit both lockfiles separately.

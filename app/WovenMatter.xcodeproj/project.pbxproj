@@ -644,7 +644,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/usr/bin/find \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote\" -type d -name node_modules -prune -exec /bin/rm -rf {} +\n/usr/bin/find \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote\" -type f -name \".env*\" -delete\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
 		BCEF00000000000000000001 /* Prepare Chromium */ = {
 			isa = PBXShellScriptBuildPhase;

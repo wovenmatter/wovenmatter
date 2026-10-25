@@ -26,7 +26,7 @@ public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable
     public let hostName: String
     public let displayName: String
     public let online: Bool
-    /// Preserve the SSH alias separately from the DNS name required for HTTPS.
+    /// Keep the Tailnet short name and the DNS name required for private HTTPS.
     public let dnsName: String?
 
     public var id: String { hostName }
@@ -858,6 +858,9 @@ public actor RemoteWorkspaceSSHClient {
             arguments: [
                 "--no-mac-metadata", "-czf", "-",
                 "--exclude=.DS_Store",
+                "--exclude=*/node_modules",
+                "--exclude=*/.env",
+                "--exclude=*/.env.*",
                 "--exclude=remote/test",
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
