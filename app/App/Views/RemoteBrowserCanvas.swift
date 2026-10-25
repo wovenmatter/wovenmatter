@@ -94,6 +94,9 @@ final class RemoteBrowserInputView: NSView, @preconcurrency NSTextInputClient {
         guard rect.width > 0, rect.height > 0 else { resetInput(); return }
         action.actionID = UUID().uuidString.lowercased()
         action.kind = release ? "pointerUp" : "pointerMove"
+        // Continue against the image now displayed; the service keeps the
+        // gesture bound to its original document even after old frames expire.
+        action.frameID = frameID ?? action.frameID
         // A release outside the image must still release the remote button.
         action.x = min(1, max(0, (location.x - rect.minX) / rect.width))
         action.y = min(1, max(0, (location.y - rect.minY) / rect.height))

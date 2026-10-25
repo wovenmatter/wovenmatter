@@ -322,3 +322,22 @@ test('cleanup from an obsolete viewer cannot stop replacement capture', async ()
   assert.equal(f.sessions[1].listenerCount('Page.screencastFrame'), 1)
   newStop(); await f.service.close()
 })
+
+
+test('an active drag can use fresh frames after its press frame expires, but cannot cross documents', async t => {
+  const f = fixture(); await f.service.connect(); const page = f.addPage()
+  const tab = (await f.service.tabs()).tabs[0], first = await f.service.frame(tab.id), gestureID = uuid()
+  const action = (kind, frameID) => ({ actionID: uuid(), gestureID, tabID: tab.id, frameID, kind, x: 0.3, y: 0.4 })
+  await f.service.action(action('pointerDown', first.frameID))
+  const later = Date.now() + 31000
+  t.mock.method(Date, 'now', () => later)
+  const current = await f.service.frame(tab.id)
+  await assert.rejects(f.service.action(action('pointerMove', first.frameID)), /browser_page_changed/)
+  assert.equal((await f.service.action(action('pointerMove', current.frameID))).accepted, true)
+  assert.equal((await f.service.action(action('pointerUp', current.frameID))).accepted, true)
+  await f.service.action(action('pointerDown', current.frameID))
+  page.emit('framenavigated', page)
+  const navigated = await f.service.frame(tab.id)
+  await assert.rejects(f.service.action(action('pointerMove', navigated.frameID)), /browser_pointer_changed/)
+  await f.service.close()
+})

@@ -142,6 +142,7 @@ import WovenMatterClient
         #expect(actions.map(\.kind) == ["pointerDown", "pointerUp"])
         #expect(actions.first?.gestureID == actions.last?.gestureID)
         #expect(actions.first?.frameID == "pressed-frame")
+        #expect(actions.last?.frameID == "newer-frame")
         #expect(actions.first?.x == 0.5 && actions.first?.y == 0.5)
         canvas.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(actions.count == 2) // Composition remains local until committed.
@@ -297,6 +298,20 @@ import WovenMatterClient
         #expect(Int(observed["level"] ?? "0") ?? 0 > 80)
         #expect(observed["held"] == "true") // The DOM changes before mouse-up.
         #expect(Int(observed["moves"] ?? "0") ?? 0 > 0)
+        if ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_LONG_DRAG"] == "1" {
+            // Exercise real frame expiry while continuing the same held gesture.
+            for index in 0..<32 {
+                try await Task.sleep(for: .seconds(1))
+                await viewer.refresh(includeTabs: false)
+                canvas.image = viewer.image; canvas.frameID = viewer.frameID
+                try mouse(.leftMouseDragged, index.isMultiple(of: 2) ? 280 : 290, 220)
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            observed = try await state()
+            #expect(observed["held"] == "true")
+            #expect(Int(observed["level"] ?? "0") ?? 0 > 80)
+            #expect(viewer.inputError == nil)
+        }
         canvas.resetInput() // Dismissal/focus loss releases without requiring mouse-up.
         for _ in 0..<100 {
             observed = try await state()
@@ -327,6 +342,38 @@ import WovenMatterClient
         for _ in 0..<100 where batches.count < 4 { await Task.yield() }
         #expect(batches.map(\.count) == [1, 32, 32, 6])
         #expect(batches.flatMap { $0 }.allSatisfy { $0.key == "a" && $0.frameID == "frame-first" })
+        viewer.clear()
+    }
+
+    @Test func dragCoalescesAcrossFreshFramesWithoutDroppingRelease() async throws {
+        var pending: CheckedContinuation<RemoteBrowserActionBatchResult, any Error>?
+        var batches: [[RemoteBrowserAction]] = []
+        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) },
+            loadFrame: { id, _ in try frame(id) }, sendBatch: { actions in
+                batches.append(actions)
+                if batches.count == 1 { return try await withCheckedThrowingContinuation { pending = $0 } }
+                return .init(results: actions.map { .init(tabID: $0.tabID, accepted: true) })
+            })
+        await viewer.refresh()
+        var down = RemoteBrowserAction(kind: "pointerDown")
+        down.gestureID = UUID().uuidString; down.x = 0.1; down.y = 0.1
+        viewer.enqueue(down)
+        for _ in 0..<100 where pending == nil { await Task.yield() }
+        let completion = try #require(pending)
+        for i in 1...70 {
+            var move = RemoteBrowserAction(kind: "pointerMove")
+            move.gestureID = down.gestureID; move.frameID = "new-frame-\(i)"; move.x = Double(i) / 100; move.y = 0.1
+            viewer.enqueue(move)
+        }
+        var up = RemoteBrowserAction(kind: "pointerUp")
+        up.gestureID = down.gestureID; up.frameID = "new-frame-70"; up.x = 0.7; up.y = 0.1
+        viewer.enqueue(up)
+        completion.resume(returning: .init(results: [.init(tabID: "first", accepted: true)]))
+        for _ in 0..<100 where batches.count < 2 { await Task.yield() }
+        #expect(batches.map(\.count) == [1, 2])
+        #expect(batches.last?.map(\.kind) == ["pointerMove", "pointerUp"])
+        #expect(batches.last?.first?.frameID == "new-frame-70")
+        #expect(batches.last?.first?.x == 0.7)
         viewer.clear()
     }
 

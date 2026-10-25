@@ -85,7 +85,8 @@ final class RemoteBrowserViewerModel {
         if action.frameID.isEmpty { action.frameID = frameID }
         if action.kind == "pointerCancel" { cancelPointer(action.gestureID); return }
         // Coalesce pointer motion and wheel bursts while preserving input order.
-        if let last = pendingInput.last, last.frameID == action.frameID, last.kind == action.kind,
+        if let last = pendingInput.last, last.kind == action.kind,
+           last.frameID == action.frameID || action.kind == "pointerMove",
            ["move", "scroll", "text", "pointerMove"].contains(action.kind), last.gestureID == action.gestureID,
            action.kind != "text" || ((last.text ?? "") + (action.text ?? "")).utf8.count <= 16384 {
             if action.kind == "scroll" {

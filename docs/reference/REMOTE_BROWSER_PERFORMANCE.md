@@ -23,7 +23,9 @@ second execution deadline. DOM keydown/keyup semantics are retained. Navigation,
 a stale frame or any failure stops the remaining batch; uncertain input is never
 retried. Mouse-down, held movement and mouse-up reach Chromium separately, so
 sliders and selections update during the gesture. Pending movement is coalesced;
-clicks and keys retain their order. Focus loss, dismissal, disconnect, navigation
+clicks and keys retain their order. Continued drags use fresh frame identities
+without losing their original gesture/document binding, so active drags can
+outlast the 30-second frame expiry. Focus loss, dismissal, disconnect, navigation
 and a 15-second pointer inactivity deadline release held buttons. Cancellation
 remembers the gesture ID, so an overtaken press cannot arrive after cancellation.
 Clipboard text is copied only after an explicit acknowledged Copy.
@@ -118,7 +120,8 @@ environment. Pass its printed loopback URL as `WOVENMATTER_BROWSER_INPUT_FIXTURE
 to `swift test --package-path app --filter RemoteBrowserViewerTests`. The fixture
 verifies rapid consecutive clicks, keyboard/IME input, a slider changing before
 mouse-up, cancellation release and image refresh on a background Chromium tab.
-Stop the fixture with SIGINT/SIGTERM; it closes its browser and removes its profile.
+Set `WOVENMATTER_BROWSER_LONG_DRAG=1` to also exercise an extended real drag
+beyond the 30-second frame expiry. Stop the fixture with SIGINT/SIGTERM; it closes its browser and removes its profile.
 
 For the isolated native cost sample, add `WOVENMATTER_BROWSER_PERFORMANCE=1` and
 filter to `measureNativeViewerWhenRequested`. It opens and closes one temporary
