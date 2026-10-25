@@ -5,6 +5,15 @@ import WovenMatterCore
 
 @Suite("Usage account selection")
 struct UsageConnectionSelectionTests {
+  @Test func multipleAccountsHaveDistinctDisplayIdentities() {
+    let first = UsageLimitAccount(provider: .codex, accountScopeID: "first", accountLabel: "First",
+      status: .signedIn, source: "fixture", detail: "")
+    let second = UsageLimitAccount(provider: .codex, accountScopeID: "second", accountLabel: "Second",
+      status: .signedIn, source: "fixture", detail: "")
+    #expect(first.id != second.id)
+    #expect(first.stale().id == first.id)
+  }
+
 
 
     @Test("API key selections cannot show subscription quota or another account's identity")
@@ -15,7 +24,7 @@ struct UsageConnectionSelectionTests {
         #expect(value.accountLabel == choice.label)
         #expect(value.quotaWindows.isEmpty)
         #expect(value.balance == nil)
-        #expect(value.status == .unavailable)
-        #expect(ProviderLimitCollector.apiKeyAccount(.codex, choice: choice, present: false, now: Date()).status == .needsCredential)
+        #expect(value.status == .signedIn)
+        #expect(ProviderLimitCollector.apiKeyAccount(.codex, choice: choice, present: false, now: Date()).status == .unavailable)
     }
 }

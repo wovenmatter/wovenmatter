@@ -19,10 +19,42 @@ public final class SessionSelectionPreferences {
     defaults(in: read(), harness: harness, workspace: workspace)
   }
 
-  public func usesProductPermissionDefault(harness: String, workspace: String?) -> Bool {
+  public func usesSharedDefaults(harness: String, workspace: String) -> Bool {
     let document = read()
+    return document.independentWorkspaces?[workspace]?.contains(harness) != true
+      && storedDefaults(in: document, harness: harness, workspace: workspace).isEmpty
+  }
+
+  /// Change inheritance atomically. Independent workspaces retain their current
+  /// choices, including native defaults, without following later shared edits.
+  public func setUsesSharedDefaults(_ shared: Bool, harness: String, workspace: String) {
+    var document = read()
+    var independent = document.independentWorkspaces ?? [:]
+    var harnesses = independent[workspace] ?? []
+    var selections = SessionSelections()
+    if shared {
+      harnesses.remove(harness)
+    } else {
+      selections = defaults(in: document, harness: harness, workspace: workspace)
+      if usesProductPermissionDefault(in: document, harness: harness, workspace: workspace) {
+        selections.permission = nil
+      }
+      harnesses.insert(harness)
+    }
+    independent[workspace] = harnesses.isEmpty ? nil : harnesses
+    document.independentWorkspaces = independent
+    setDefaults(selections, in: &document, harness: harness, workspace: workspace)
+    write(document)
+  }
+
+  public func usesProductPermissionDefault(harness: String, workspace: String?) -> Bool {
+    usesProductPermissionDefault(in: read(), harness: harness, workspace: workspace)
+  }
+
+  private func usesProductPermissionDefault(in document: Document, harness: String, workspace: String?) -> Bool {
+    let independent = workspace.map { document.independentWorkspaces?[$0]?.contains(harness) == true } ?? false
     return (workspace.flatMap { document.workspaceDefaults[$0]?[harness]?.permission }
-        ?? document.harnessDefaults[harness]?.permission) == nil
+        ?? (independent ? nil : document.harnessDefaults[harness]?.permission)) == nil
       && Self.productDefaults(harness: harness).permission != nil
   }
 
@@ -94,7 +126,7 @@ public final class SessionSelectionPreferences {
       desiredSelections: desired,
       requiresApplication: true,
       usesProductPermissionDefault: usesProductPermissionDefault ?? (selections.permission == nil
-        && (document.workspaceDefaults[workspace]?[harness]?.permission ?? document.harnessDefaults[harness]?.permission) == nil
+        && self.usesProductPermissionDefault(in: document, harness: harness, workspace: workspace)
         && desired.permission != nil && desired.permission == Self.productDefaults(harness: harness).permission)
     )
     document.conversations[id] = snapshot
@@ -221,6 +253,7 @@ public final class SessionSelectionPreferences {
     var harnessDefaults: [String: SessionSelections] = [:]
     var workspaceDefaults: [String: [String: SessionSelections]] = [:]
     var conversations: [String: SessionSelectionSnapshot] = [:]
+    var independentWorkspaces: [String: Set<String>]?
   }
 
   private func read() -> Document {
@@ -265,7 +298,8 @@ public final class SessionSelectionPreferences {
       .overlaying(Self.productDefaults(harness: harness))
     guard let workspace else { return harnessDefaults }
     return (document.workspaceDefaults[workspace]?[harness] ?? SessionSelections())
-      .overlaying(harnessDefaults)
+      .overlaying(document.independentWorkspaces?[workspace]?.contains(harness) == true
+        ? Self.productDefaults(harness: harness) : harnessDefaults)
   }
 
   /// The app's starting policy for new conversations, below explicit user

@@ -128,8 +128,8 @@ export class ExecutorBroker {
       const staged = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8'));
       if (staged.version !== version) throw new Error('Executor installation did not match the selected release. Existing runtime was retained.');
     }
-    const packageJSON = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => { throw new Error('Install Executor in Settings → Connections first.'); }));
-    if (!supportsExecutorVersion(packageJSON.version)) throw new Error('This Executor runtime version is unsupported. Reinstall it in Connections.');
+    const packageJSON = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => { throw new Error('Install Executor in Settings → General first.'); }));
+    if (!supportsExecutorVersion(packageJSON.version)) throw new Error('This Executor runtime version is unsupported. Reinstall it in Settings → General → Executor.');
     const hadRunningRuntime = this.child?.exitCode === null && this.child.signalCode === null;
     if (hadRunningRuntime) {
       await this.shutdownClients();

@@ -270,3 +270,32 @@ extension DefaultAgentCredentialTests {
         #expect(try ProviderConnectionAccounts.credential(second.id, provider: "openai", keychain: keychain)?.key == "second")
     }
 }
+
+
+extension DefaultAgentCredentialTests {
+    @Test func chatSettingsInheritanceDoesNotChooseCredentials() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        let shared = try ProviderConnectionAccounts.addKey("shared-key", provider: "openai", label: "Shared", keychain: keychain)
+        let owned = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
+        let fallback = try ProviderConnectionAccounts.addKey("router-key", provider: "openrouter", label: "Router", keychain: keychain)
+        var settings = DefaultAgentSettingsScope()
+        settings.global.models = ["openai/shared-model"]
+        let inherited = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
+        #expect(inherited.config.models == settings.global.models)
+        #expect(inherited.credentialAccounts?["openai"]?.first?.id == owned.id)
+        #expect(inherited.credentials["openai"]?.key == "workspace-key")
+        settings.workspaces["local"] = settings.global
+        settings.workspaces["local"]?.models = ["openai/local-model"]
+        let independent = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
+        #expect(independent.config.models == ["openai/local-model"])
+        #expect(independent.credentials == inherited.credentials)
+        #expect(independent.credentialAccounts == inherited.credentialAccounts)
+        #expect(independent.credentialAccounts?["openrouter"]?.first?.id == fallback.id)
+        let remote = try DefaultAgentSupport.snapshot(workspace: "remote-fixture", settings: settings, keychain: keychain)
+        #expect(remote.credentialAccounts?["openai"]?.first?.id == shared.id)
+        try ProviderConnectionAccounts.remove(owned.id, provider: "openai", scope: "local", keychain: keychain)
+        let reverted = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
+        #expect(reverted.credentialAccounts?["openai"]?.first?.id == shared.id)
+        #expect(reverted.config.models == independent.config.models)
+    }
+}

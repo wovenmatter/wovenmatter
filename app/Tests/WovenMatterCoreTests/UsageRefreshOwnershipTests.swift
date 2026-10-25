@@ -6,6 +6,42 @@ import WovenMatterCore
 @Suite("Usage refresh ownership")
 struct UsageRefreshOwnershipTests {
 
+  @Test("Limits include each saved account without changing the preferred account")
+  func limitsIncludeAllAccounts() async throws {
+    let fixture = try UsageOwnershipDirectory()
+    let choices = [
+      UsageConnectionChoice(provider: .codex, connectionID: "openai-codex", accountID: "primary", label: "Personal", preferred: true),
+      UsageConnectionChoice(provider: .codex, connectionID: "openai-codex", accountID: "backup", label: "Work", preferred: false),
+    ]
+    let service = LocalUsageService(homeDirectory: fixture.url, fileManager: .default,
+      credentialStore: UsageNoCredentials(), usageDatabaseURL: fixture.databaseURL,
+      usesSharedConnections: true, sharedConnectionRevision: { 0 },
+      sharedConnectionChoices: { _ in choices }, limitCollector: { request in
+        request.selectedConnections.values.map { choice in
+          UsageLimitAccount(provider: choice.provider, accountScopeID: choice.id, accountLabel: choice.label,
+            status: .available, source: "fixture", detail: "", observedAt: request.now)
+        }
+      })
+    let result = try await service.limitsSnapshot(refresh: true, enabledProviders: [.codex])
+    #expect(result.accounts.map(\.accountLabel) == ["Personal", "Work"])
+    #expect(Set(result.accounts.map(\.id)).count == 2)
+    let cached = try await service.limitsSnapshot(refresh: false, enabledProviders: [.codex])
+    #expect(cached.accounts == result.accounts)
+  }
+
+  @Test("Denied account enumeration is not reported as signed out")
+  func deniedAccountEnumeration() async throws {
+    struct Denied: Error {}
+    let fixture = try UsageOwnershipDirectory()
+    let service = LocalUsageService(homeDirectory: fixture.url, fileManager: .default,
+      credentialStore: UsageNoCredentials(), usageDatabaseURL: fixture.databaseURL,
+      usesSharedConnections: true, sharedConnectionRevision: { 0 },
+      sharedConnectionChoices: { _ in throw Denied() })
+    await #expect(throws: Denied.self) {
+      try await service.limitsSnapshot(refresh: true, enabledProviders: [.codex])
+    }
+  }
+
   @Test("Late provider limits cannot overwrite latest memory or persistent snapshot")
   func serviceLimitsOwnership() async throws {
     let fixture = try UsageOwnershipDirectory()
@@ -50,6 +86,15 @@ struct UsageRefreshOwnershipTests {
       enabledProviders: [.cursor], allowCredentialAccess: false) }
     await gate.waitForStarts(1)
     let store = try await AsyncUsageStore(databaseURL: fixture.databaseURL)
+    // Shared accounts are session-cached only, so invalidate while their network
+    // refresh is pending; there is deliberately no database write to queue.
+    if sharedAccountChange {
+      revision.advance()
+      await gate.release(1, value: [account("obsolete", now: Date())])
+      await #expect(throws: CancellationError.self) { try await pending.value }
+      #expect(try await store.usageLimitAccounts(providers: [.cursor]).isEmpty)
+      return
+    }
     let workers = DatabaseWorkers.shared(url: fixture.databaseURL)
     let entered = AsyncStream<Void>.makeStream()
     let release = DispatchSemaphore(value: 0)

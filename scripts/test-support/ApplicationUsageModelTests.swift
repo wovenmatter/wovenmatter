@@ -21,7 +21,7 @@ struct ApplicationUsageModelTests {
         defaults.set(true, forKey: "wovenmatter.openrouter-credential.configured")
 
         let model = ApplicationUsageModel(applicationDefaults: defaults)
-        precondition(model.enabledUsageProviders == [.codex])
+        precondition(model.enabledUsageProviders == Set(ProviderKind.supportedAccounts))
         precondition(model.selectedCodexUsageWorkspaceID == "saved-workspace")
         precondition(model.isOpenRouterCredentialConfigured)
         precondition(!model.hasAcknowledgedCredentialAccessDisclosure)
@@ -38,7 +38,7 @@ struct ApplicationUsageModelTests {
         precondition(defaults.bool(forKey: "wovenmatter.credential-access.disclosure-acknowledged"))
         let restored = ApplicationUsageModel(applicationDefaults: defaults)
         precondition(restored.hasAcknowledgedCredentialAccessDisclosure)
-        precondition(restored.enabledUsageProviders == [.codex])
+        precondition(restored.enabledUsageProviders == Set(ProviderKind.supportedAccounts))
         precondition(restored.selectedCodexUsageWorkspaceID == "saved-workspace")
 
         let repeatedConsentChanges = ChangeRecorder()
@@ -60,10 +60,10 @@ struct ApplicationUsageModelTests {
         precondition(errorChanges.count == 1)
         precondition(model.localUsageError == "Enable Cursor usage tracking before signing in.")
         precondition(model.signingInUsageProviders.isEmpty)
-        precondition(model.enabledUsageProviders == [.codex])
+        precondition(model.enabledUsageProviders == Set(ProviderKind.supportedAccounts))
 
         let connectionRequests = ChangeRecorder()
-        let observer = NotificationCenter.default.addObserver(forName: .init("wovenmatter.open-connections"), object: nil, queue: nil) { _ in
+        let observer = NotificationCenter.default.addObserver(forName: .init("wovenmatter.open-usage-settings"), object: nil, queue: nil) { _ in
             connectionRequests.record()
         }
         model.signInUsageProvider(.claude)

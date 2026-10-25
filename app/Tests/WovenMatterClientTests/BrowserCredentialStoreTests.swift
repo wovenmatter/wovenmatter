@@ -45,6 +45,27 @@ struct BrowserCredentialStoreTests {
     #expect(fixture.interactiveCalls == 0)
   }
 
+  @Test func browsingFallsBackWithoutUnlockingOrReplacingCredentials() throws {
+    let fixture = BrowserKeychainFixture()
+    let store = fixture.store()
+    let savedItems = fixture.values
+    #expect(!store.prepareForBrowsing(consented: false))
+    #expect(fixture.reads == 0)
+    fixture.readStatus = errSecInteractionNotAllowed
+    #expect(!store.prepareForBrowsing(consented: true))
+    #expect(throws: BrowserCredentialStore.AccessError.self) {
+      try store.savedPasswords(for: "https://example.com")
+    }
+    #expect(throws: BrowserCredentialStore.AccessError.self) {
+      try store.save(origin: "https://example.com", username: "alice", password: "fixture")
+    }
+    #expect(fixture.values == savedItems)
+    #expect(fixture.writes == 0)
+    #expect(fixture.interactiveCalls == 0)
+    fixture.readStatus = errSecSuccess
+    #expect(store.prepareForBrowsing(consented: true))
+  }
+
   @Test func validatesExactSecureOrigins() {
     #expect(BrowserCredentialStore.origin(for: "https://EXAMPLE.com:443/login?q=1") == "https://example.com")
     #expect(BrowserCredentialStore.origin(for: "https://example.com:8443/login") == "https://example.com:8443")

@@ -54,6 +54,7 @@ struct SettingsPage<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.never)
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .contentShape(Rectangle())
         .onTapGesture {
             NSApp.keyWindow?.makeFirstResponder(nil)
@@ -223,169 +224,44 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-struct SettingsHarnessRuntimeMaintenanceView: View {
-    @Bindable var model: ApplicationModel
-    let runtimeKind: AgentRuntimeKind
-    var workspaceID: UUID?
-
-    private var localAvailability: LocalACPRuntimeAvailability? {
-        model.localACPRuntimeAvailability.first { $0.runtimeKind == runtimeKind }
-    }
-
-    private var remoteWorkspace: RemoteWorkspaceConfiguration? {
-        workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
-    }
-
-    private var remoteRuntime: RemoteRuntimeMaintenance? {
-        guard let workspaceID else { return nil }
-        return model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first {
-            $0.id == runtimeKind
-        }
-    }
-
-    private var remoteHarness: RemoteHarnessStatus? {
-        guard let remoteWorkspace else { return nil }
-        return model.remoteWorkspaces.currentHarnesses(for: remoteWorkspace).first {
-            $0.id == runtimeKind
-        }
-    }
+/// One compact harness header; maintenance controls stay in labeled rows below it.
+struct SettingsHarnessDisclosure<Content: View>: View {
+    @Environment(\.dashboardTheme) private var theme
+    let runtime: AgentRuntimeKind
+    let status: String
+    var tone: SettingsPillTone = .neutral
+    @ViewBuilder var content: Content
 
     var body: some View {
-        SettingsCard(
-            title: workspaceID == nil
-                ? "Local agent workspace"
-                : remoteWorkspace?.name ?? "Remote agent workspace"
-        ) {
-            SettingsInset {
-                HStack(alignment: .center, spacing: 12) {
-                    DashboardHarnessLogoIcon(
-                        logo: DashboardHarnessLogo(runtimeKind: runtimeKind),
-                        size: 24
-                    )
-                    .frame(width: 28, height: 28)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(runtimeKind.displayName)
-                            .font(.system(size: 13, weight: .medium))
-                        Text(runtimeDetail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    SettingsPill(
-                        runtimeStatus,
-                        tone: runtimeIsReady ? .neutral : .warning
-                    )
-
-                    if let workspaceID {
-                        if let remoteWorkspace, let remoteHarness {
-                            SettingsRemoteRuntimeUpdateButton(
-                                model: model.remoteWorkspaces,
-                                harness: remoteHarness,
-                                configuration: remoteWorkspace
-                            )
-                        } else {
-                            Button("Unavailable") {}
-                                .buttonStyle(SettingsQuietButtonStyle())
-                                .disabled(true)
-                                .accessibilityLabel("Runtime controls unavailable for remote workspace \(workspaceID.uuidString)")
-                        }
-                    } else {
-                        SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
-                    }
-                }
-            }
-            if workspaceID == nil, runtimeKind != .defaultAgent {
-                SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
-            }
-
-            if let error = runtimeError {
-                SettingsError(error)
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) { content }
+                .padding(.top, 10)
+        } label: {
+            HStack(spacing: 10) {
+                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtime), size: 22)
+                Text(runtime.displayName).font(.system(size: 13, weight: .medium))
+                Spacer(minLength: 8)
+                SettingsPill(status, tone: tone)
             }
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+        .padding(12)
+        .background(theme.palette.themeWhisper)
+        .clipShape(DashboardShapes.card)
     }
+}
 
-    private var runtimeIsReady: Bool {
-        if workspaceID != nil {
-            guard let remoteWorkspace else { return false }
-            return model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace)
-        }
-        if runtimeKind == .opencode {
-            return model.openCode?.isInstalled == true
-        }
-        return !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
-            && localAvailability?.isReady == true
-            && model.isLocalACPAgentReady(runtimeKind)
-    }
+struct SettingsHarnessControlRow<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
 
-    private var runtimeStatus: String {
-        if let workspaceID {
-            if model.remoteWorkspaces.checkingRuntimeIDs[workspaceID]?.contains(runtimeKind) == true {
-                return "Checking"
-            }
-            guard let remoteWorkspace, let remoteRuntime else { return "Not checked" }
-            if model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace) {
-                return "Ready"
-            }
-            if !remoteRuntime.installed
-                || model.remoteWorkspaces.isRuntimeInventoryUnavailable(
-                    runtimeKind,
-                    configuration: remoteWorkspace
-                )
-                || remoteRuntime.operation?.status == "running" {
-                return "Unavailable"
-            }
-            if !remoteRuntime.enabled { return "Not enabled" }
-            let state = remoteHarness?.state
-                .replacingOccurrences(of: "_", with: " ")
-                .capitalized
-            return state == "Ready" ? "Unavailable" : state ?? "Not checked"
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            Spacer(minLength: 8)
+            content
         }
-        if runtimeKind == .opencode {
-            guard let openCode = model.openCode else { return "Checking" }
-            return openCode.isInstalled ? "Installed" : "Not installed"
-        }
-        if model.checkingLocalACPRuntimeKinds.contains(runtimeKind) { return "Checking" }
-        if localAvailability?.isReady == true,
-           !model.isLocalACPAgentReady(runtimeKind) {
-            return "Workspace unavailable"
-        }
-        guard let localAvailability else { return "Checking" }
-        return switch localAvailability.state {
-        case .ready: "Ready"
-        case .cliMissing: "CLI required"
-        case .adapterMissing: "Adapter required"
-        case .adapterOutdated: "Update required"
-        case .authenticationRequired: "Sign in required"
-        case .executableUnavailable: "Setup required"
-        }
-    }
-
-    private var runtimeDetail: String {
-        if workspaceID != nil {
-            guard let remoteRuntime else { return "Runtime inventory unavailable." }
-            return remoteRuntime.components.map { component in
-                let installed = component.installed
-                    ? component.installedVersion ?? "version unavailable"
-                    : "missing"
-                let newer = component.availableUpdateVersion.map { " → \($0)" } ?? ""
-                return "\(component.displayName) \(installed)\(newer)"
-            }.joined(separator: " · ")
-        }
-        if let inventory = model.runtimeInventories[runtimeKind] {
-            return inventory.summary
-        }
-        return localAvailability?.detail ?? "Checking the local runtime…"
-    }
-
-    private var runtimeError: String? {
-        if let workspaceID {
-            return model.remoteWorkspaces.runtimeMaintenanceError(runtimeKind, workspaceID: workspaceID)
-        }
-        return model.runtimeFailureDetails[runtimeKind]
+        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
     }
 }
 
@@ -400,19 +276,32 @@ struct SettingsLocalRuntimeInventoryRow: View {
     }
 
     var body: some View {
+        SettingsRuntimeSummaryRow(runtimeKind: runtimeKind,
+            summary: model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…",
+            status: status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning) {
+            SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+        }
+    }
+}
+
+struct SettingsRuntimeSummaryRow<Actions: View>: View {
+    let runtimeKind: AgentRuntimeKind
+    let summary: String
+    let status: String
+    var tone: SettingsPillTone = .neutral
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
         SettingsInset {
             HStack(spacing: 12) {
-                DashboardHarnessLogoIcon(
-                    logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20
-                ).frame(width: 28, height: 28)
+                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20)
+                    .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(runtimeKind.displayName).font(.system(size: 13, weight: .medium))
-                    Text(model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(summary).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                SettingsPill(status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning)
-                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+                SettingsPill(status, tone: tone)
+                actions
             }
         }
     }
@@ -889,7 +778,7 @@ struct CredentialAccessDisclosureView: View {
                         Circle().fill(DashboardPalette.primary.opacity(0.1))
                     )
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Enable credential access")
+                    Text("Enable Keychain access")
                         .font(.system(size: 17, weight: .semibold))
                     Text(purpose)
                         .font(.system(size: 12.5))
@@ -900,7 +789,7 @@ struct CredentialAccessDisclosureView: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 disclosureRow(
-                    "This is one saved choice for Woven Matter across the features you enable."
+                    "Woven Matter saves your credentials in Apple Keychain."
                 )
                 disclosureRow(
                     "Enabled features can reuse saved credentials. Automatic background refreshes never request permission."
@@ -911,18 +800,19 @@ struct CredentialAccessDisclosureView: View {
             }
 
             DisclosureGroup("Keychain prompts") {
-                Text("macOS may ask when you use Credential access in General settings. This app-wide choice stays saved; opening the browser and background refreshes stay silent.")
+                Text("macOS may ask when you use Keychain access in General settings. Choose Always Allow to remember access to the requested item. Background refreshes stay silent.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 6)
             }
+            .disclosureGroupStyle(SettingsDisclosureGroupStyle())
 
             HStack {
                 Spacer()
                 Button("Not now", role: .cancel, action: onCancel)
                     .buttonStyle(SettingsQuietButtonStyle())
-                Button("Enable credential access", action: onEnable)
+                Button("Enable Keychain access", action: onEnable)
                     .buttonStyle(DashboardPrimaryButtonStyle())
             }
         }
@@ -959,18 +849,25 @@ struct SettingsHarnessSignInControl: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if signedIn {
-                    Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    if compact {
+                        Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
+                            .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    } else {
+                        SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Signed in")
+                    }
+                    if !compact {
+                        Spacer()
+                        Button("Change sign-in…") { signIn.signIn(runtimeKind) }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                            .disabled(model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind))
+                    }
                 } else {
                     if compact, signIn.statuses[runtimeKind]?.state == "credentials_present" {
                         Text("Credentials found").font(.system(size: 11.5))
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     if !compact {
-                        Text(signIn.statuses[runtimeKind]?.label ?? "Checking sign-in…")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                        SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Checking sign-in…")
                         Spacer()
                     }
                     Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Sign in…") {
@@ -989,5 +886,88 @@ struct SettingsHarnessSignInControl: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refreshHarnessSignIn(runtimeKind) }
         }
+    }
+}
+
+enum HarnessSettingsArea: String, CaseIterable {
+    case accounts = "Accounts & installation"
+    case defaults = "Chat settings"
+}
+
+struct SettingsHarnessAreaPicker: View {
+    @Environment(\.dashboardTheme) private var theme
+    @Binding var selection: HarnessSettingsArea
+    var body: some View {
+        DashboardSegmentedSelector(options: HarnessSettingsArea.allCases, selection: $selection,
+            accentSelection: theme != .dark) { $0.rawValue }
+            .frame(maxWidth: 440)
+    }
+}
+
+/// Account location is independent of preference inheritance.
+struct SettingsAccountWorkspacePicker: View {
+    @Binding var scope: String
+    let workspaces: [RemoteWorkspaceConfiguration]
+    var supportsSharedAccounts = false
+    var body: some View {
+        Picker("Accounts for", selection: $scope) {
+            if supportsSharedAccounts { Text("Shared Pi Durable accounts").tag("global") }
+            Text("Local agent workspace").tag("local")
+            ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
+        }.frame(maxWidth: 480, alignment: .leading)
+    }
+}
+
+/// Only chat preferences inherit; accounts have their own location selector.
+struct SettingsWorkspaceScope: View {
+    @Binding var scope: String
+    @Binding var expanded: Bool
+    let workspaces: [RemoteWorkspaceConfiguration]
+    var inherits: Binding<Bool>?
+    var detail: String?
+
+    private var label: String {
+        scope == "global" ? "Shared" : scope == "local" ? "Local agent workspace"
+            : workspaces.first { $0.id.uuidString.lowercased() == scope }?.name ?? "Workspace"
+    }
+    var body: some View {
+        DisclosureGroup("Chat settings · \(label)", isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Settings for", selection: $scope) {
+                    Text("Shared chat settings").tag("global")
+                    Text("Local agent workspace").tag("local")
+                    ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
+                }.frame(maxWidth: 440, alignment: .leading)
+                if scope != "global", let inherits {
+                    Toggle("Use shared chat settings", isOn: inherits)
+                    if let detail { SettingsNote(detail) }
+                } else if scope == "global" {
+                    SettingsNote("Used by workspaces with shared chat settings enabled. Accounts are managed separately.")
+                }
+            }.padding(.top, 8)
+        }
+    }
+}
+
+
+struct SettingsHarnessAccountDetails: View {
+    let status: AgentSignInStatus?
+    let fallback: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(status?.label ?? fallback).font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            if let accounts = status?.accounts, !accounts.isEmpty {
+                ForEach(Array(accounts.enumerated()), id: \.offset) { _, account in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.name ?? account.method).font(.system(size: 12.5, weight: .medium))
+                        Text(account.name == nil ? "\(account.method) · Name not provided by harness" : account.method)
+                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                }
+            } else if ["verified", "credentials_present"].contains(status?.state ?? "") {
+                SettingsNote("Account details not provided by this harness.")
+            }
+        }.textSelection(.enabled)
     }
 }

@@ -157,6 +157,37 @@ struct ClosedLidProtectionTests {
 }
 
 @MainActor struct ClosedLidWorkProtectionTests {
+    @Test func helperSetupFailuresAreDistinctAndRecoverWithoutChangingPolicy() {
+        let fixture = DefaultsFixture(), connection = FakeLeaseConnection()
+        var setup = ClosedLidHelperSetup.unavailable
+        let protection = ClosedLidWorkProtection(ownsExecution: true, defaults: fixture.defaults,
+            helperStatus: { setup }, connect: { connection })
+        defer { protection.stop(); withExtendedLifetime(fixture) {} }
+        protection.setPolicy(.init(externalPower: true))
+        protection.setWorking(true)
+        #expect(protection.snapshot.message == "Closed-lid protection is unavailable in this build.")
+        setup = .notRegistered
+        protection.beat()
+        #expect(protection.snapshot.message == "Set up closed-lid protection in General settings.")
+        setup = .approvalRequired
+        protection.beat()
+        #expect(protection.snapshot.message?.contains("Approve") == true)
+        #expect(connection.policies.isEmpty)
+        #expect(!protection.snapshot.isProtecting)
+        setup = .ready
+        protection.beat()
+        connection.reply?(true, nil)
+        #expect(protection.snapshot.isProtecting && protection.snapshot.message == nil)
+        #expect(connection.policies == [.init(externalPower: true)])
+        setup = .unavailable
+        protection.beat()
+        #expect(connection.isClosed && !protection.snapshot.isProtecting)
+        connection.reply?(true, nil)
+        #expect(!protection.snapshot.isProtecting)
+        protection.setPolicy(.init())
+        #expect(protection.snapshot.policy == .init() && protection.snapshot.message == nil)
+    }
+
     @Test func frontendNeverLeasesOrOverwritesOwnerPolicy() {
         let fixture = DefaultsFixture(), connection = FakeLeaseConnection()
         defer { withExtendedLifetime(fixture) {} }

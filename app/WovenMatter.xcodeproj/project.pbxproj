@@ -154,6 +154,10 @@
 		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
 		D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000001; };
 		D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000003; };
+		C28E61FFA047C5F1D80D55AB /* HarnessAccountPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC0FDA57D036F2833D4D5F28 /* HarnessAccountPresentation.swift */; };
+		908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */; };
+		B9FFAB8DAB6312F403B44CAC /* SettingsRemoteHarnessAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */; };
+		D2446456FA6CA90EADAABF29 /* RemoteHarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -302,6 +306,10 @@
 		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
 		D0C000000000000000000001 /* DashboardDocumentPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardDocumentPane.swift"; sourceTree = SOURCE_ROOT; };
 		D0C000000000000000000003 /* ConversationFilePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationFilePreviews.swift"; sourceTree = SOURCE_ROOT; };
+		EC0FDA57D036F2833D4D5F28 /* HarnessAccountPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessAccountPresentation.swift; sourceTree = "<group>"; };
+		D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHarnessAccounts.swift; sourceTree = "<group>"; };
+		56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteHarnessAccountView.swift; sourceTree = "<group>"; };
+		A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHarnessSetupView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -411,6 +419,7 @@
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
 				F10000000000000000000002 /* AgentDatabases.swift */,
 				A13000000000000000000002 /* RemoteWorkspacesModel.swift */,
+				EC0FDA57D036F2833D4D5F28 /* HarnessAccountPresentation.swift */,
 				D49100000000000000000003 /* ConversationMarkdownDocument.swift */,
 				D49300000000000000000003 /* ConversationMessageLayout.swift */,
 			);
@@ -481,6 +490,9 @@
 				013E364D3F71552BF924C602 /* SettingsDictationView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
 				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
+				A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */,
+				56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */,
+				D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */,
 				5E7A0000000000000000000E /* SettingsUsageView.swift */,
 			);
 			path = Views;
@@ -716,7 +728,11 @@
 				DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */,
 				F10000000000000000000001 /* AgentDatabases.swift in Sources */,
 				A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */,
+				C28E61FFA047C5F1D80D55AB /* HarnessAccountPresentation.swift in Sources */,
 				A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */,
+				D2446456FA6CA90EADAABF29 /* RemoteHarnessSetupView.swift in Sources */,
+				B9FFAB8DAB6312F403B44CAC /* SettingsRemoteHarnessAccountView.swift in Sources */,
+				908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */,
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,

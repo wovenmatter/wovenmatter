@@ -5,7 +5,7 @@ your local agent workspace or a remote workspace.
 It includes Pi's file and shell tools, Woven Matter's existing note/workspace
 integration, and web search. You do not need to install Pi, Node, or Claude Code.
 
-Open **Settings → Connections** to connect providers:
+Open **Settings → Pi Durable** to connect providers:
 
 - **OpenAI:** connect a ChatGPT subscription, an OpenAI API key, or both.
 - **OpenRouter / OpenCode Go:** add an API key. The global OpenRouter key is
@@ -19,7 +19,8 @@ Open **Settings → Connections** to connect providers:
 
 Open **Settings → Pi Durable** to choose a default, show or hide models,
 change their selector order, and choose an ordered list of fallback models.
-Only the default model is shown initially; explicitly enable any others. Filter
+After connecting an account, the page opens its model browser. Choose the models
+you want in chat; the first selection becomes the default. The default is always shown. Filter
 the catalog by connection type, model lab across connections, or subscriptions.
 
 See [Connections and dictation](connections-and-dictation.md) for account and microphone setup.
@@ -27,7 +28,7 @@ See [Connections and dictation](connections-and-dictation.md) for account and mi
 Use **All workspaces** for shared Pi Durable settings. Choose a particular workspace and
 turn off **Use settings from All workspaces** to override its preferences.
 Workspace-specific API keys override the global keys; otherwise global keys
-are reused. Changes synchronize to connected workspaces automatically. **Apply to workspaces** retries synchronization immediately.
+are reused. Changes synchronize to connected workspaces automatically. **Workspace synchronization → Retry synchronization** retries immediately.
 New workspaces inherit these settings automatically. An offline workspace gets
 the current settings when it reconnects.
 
@@ -55,8 +56,8 @@ running. Reopening the conversation recovers the completed response; reconnectin
 to an unfinished response waits for that remote turn to finish. A container or
 service restart interrupts active work and requires an explicit retry.
 
-Connections owns shared provider accounts for Pi Durable, Usage, and
-Dictation. Subscription connections remain distinct from separately billed API
+Pi Durable and Usage settings manage the same saved provider accounts.
+Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
 keys. Signing in here does not sign in
 Codex, Claude Code, external Pi, or the other installed harnesses, and their
 credential files are not imported.
@@ -69,7 +70,7 @@ expiry-aware background check keep those workspaces current. Ordinary message
 submissions check cached state; opening conversation history does not refresh
 authentication. Token lifetimes come from each provider, not a fixed number of days.
 
-In Connections, use **Sign in** with a remote workspace selected for an independent subscription
+In Pi Durable settings, use **Sign in** with a remote workspace selected for an independent subscription
 connection there. **Use shared sign-in** removes that independent connection and
 returns to shared credentials. An active remote helper can keep working while
 the Mac is offline. If borrowed access expires, it waits before the next model
@@ -94,7 +95,7 @@ the key in memory; after a helper/container restart, reconnect Woven Matter to
 unlock it. Updates do not restart active sessions.
 
 If the Mac's workspace key is lost, use **Reset workspace credentials** on that
-workspace in Connections. This removes independent ChatGPT/Grok sign-ins and
+workspace in Pi Durable settings. This removes independent ChatGPT/Grok sign-ins and
 restores shared connections. Claude’s native sign-in is separate; use its
 **Remove** button to disconnect that account. Files and conversations remain.
 Existing Pi Durable plaintext stores migrate after secure storage succeeds;
@@ -120,10 +121,10 @@ a separate boundary: interrupted sends are not automatically repeated. See
 
 ## Claude models
 
-In **Settings → Connections → Anthropic**, expand **Claude subscriptions** and click
+In **Settings → Pi Durable → Anthropic**, expand **Claude subscriptions** and click
 **Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
-Paste the full code returned by Claude into Connections and click **Continue**.
-Connections refreshes when sign-in completes. Woven Matter bundles the unmodified
+Paste the full code returned by Claude into the sign-in form and click **Continue**.
+The account list refreshes when sign-in completes. Woven Matter bundles the unmodified
 official runtime; this sign-in is separate from an independently installed Claude Code harness.
 An API key uses the separate **Claude API key** option and is billed separately.
 

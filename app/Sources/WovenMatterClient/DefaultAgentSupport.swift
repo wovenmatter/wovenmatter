@@ -6,9 +6,12 @@ public enum DefaultAgentSupport {
     public static let settingsKey = "wovenmatter.default-agent.settings.v1"
     private static let settingsLock = NSLock()
     private static func readSettings() -> DefaultAgentSettingsScope {
-        UserDefaults.standard.data(forKey: settingsKey).flatMap {
+        var value = UserDefaults.standard.data(forKey: settingsKey).flatMap {
             try? JSONDecoder().decode(DefaultAgentSettingsScope.self, from: $0)
         } ?? .init()
+        value.global = value.global.withAvailableProviders
+        for key in value.workspaces.keys { value.workspaces[key] = value.workspaces[key]?.withAvailableProviders }
+        return value
     }
     public static var settings: DefaultAgentSettingsScope {
         get { settingsLock.withLock { readSettings() } }
@@ -45,7 +48,7 @@ public enum DefaultAgentSupport {
                 runtimeKind: .defaultAgent, displayName: AgentRuntimeKind.defaultAgent.displayName,
                 state: ready ? .ready : .executableUnavailable,
                 detail: ready
-                    ? "Included with Woven Matter. Manage connections in Settings → Connections."
+                    ? "Included with Woven Matter. Manage connections in Settings → Pi Durable."
                     : "The bundled Pi Durable helper is missing. Rebuild or reinstall Woven Matter.",
                 executablePath: executable?.path),
             launchConfiguration: ready
@@ -83,31 +86,36 @@ public enum DefaultAgentSupport {
         NotificationCenter.default.post(name: credentialsChanged, object: nil)
     }
     public static func snapshot(workspace: String) throws -> DefaultAgentPayload {
-        let scope = settings
-        let keyScope = workspace == "global" || scope.workspaces[workspace] == nil ? "global" : workspace
+        try snapshot(workspace: workspace, settings: settings, keychain: .init(), servers: LocalModelServerStore.servers)
+    }
+    static func snapshot(workspace: String, settings scope: DefaultAgentSettingsScope,
+                         keychain: KeychainAccess, servers: [LocalModelServer] = []) throws -> DefaultAgentPayload {
+        // Credentials are workspace-owned, with shared accounts as a fallback,
+        // regardless of whether chat preferences inherit shared settings.
+        let keyScope = workspace
         var credentials: [String: DefaultAgentCredential] = [:]
         for id in ["openai", "openrouter", "opencode-go", "anthropic", "xai-api", "exa"] {
-            if let key = try key(id, scope: keyScope) ?? (keyScope == "global" ? nil : key(id, scope: "global")),
+            if let key = try key(id, scope: keyScope, keychain: keychain) ?? (keyScope == "global" ? nil : key(id, scope: "global", keychain: keychain)),
                 !key.isEmpty
             {
                 credentials[id] = .init(type: "api_key", key: key)
             }
         }
-        for server in LocalModelServerStore.servers {
-            if let key = try key(server.id), !key.isEmpty { credentials[server.id] = .init(type: "api_key", key: key) }
+        for server in servers {
+            if let key = try key(server.id, keychain: keychain), !key.isEmpty { credentials[server.id] = .init(type: "api_key", key: key) }
         }
         for id in ["openai-codex", "xai"] {
-            if let value = try oauth(id, scope: keyScope) ?? (keyScope == "global" ? nil : oauth(id)) {
+            if let value = try oauth(id, scope: keyScope, keychain: keychain) ?? (keyScope == "global" ? nil : oauth(id, keychain: keychain)) {
                 credentials[id] = value.borrowing()
             }
         }
         var config = workspace == "global" ? scope.global : scope.resolved(workspace)
-        config.customServers = LocalModelServerStore.servers
+        config.customServers = servers
         var payload = DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
         var accounts: [String: [DefaultAgentCredentialAccount]] = [:]
         for id in ["openai", "openai-codex", "anthropic", "claude-subscription", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
-            var entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope)
-            if entries.isEmpty && keyScope != "global" { entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id) }
+            var entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope, keychain: keychain)
+            if entries.isEmpty && keyScope != "global" { entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, keychain: keychain) }
             if !entries.isEmpty {
                 accounts[id] = entries
                 payload.credentials[id] = entries[0].credential
@@ -223,6 +231,11 @@ public enum DefaultAgentSupport {
             throw DefaultAgentError.message("The provider key could not be saved in Keychain (\(status)).")
         }
     }
+    public static func checkKeychainAccess(authorize: Bool = false, keychain: KeychainAccess = .init()) throws {
+        try keychain.checkStoredItems(services: [WovenMatterKeychainService.current + ".default-agent",
+            WovenMatterKeychainService.current + ".usage", "com.wovenmatter.remote-workspaces"], authorize: authorize)
+    }
+
     private static func keyQuery(_ provider: String, scope: String) -> [String: Any] {
         // The global OpenRouter key is the same item already used by Usage.
         let shared = provider == "openrouter" && scope == "global"

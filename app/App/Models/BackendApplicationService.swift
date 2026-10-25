@@ -31,6 +31,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case toolsMutation(BackendToolsMutation)
     case loadAgentDefaults(runtime: AgentRuntimeKind, workspace: String?)
     case saveAgentDefault(runtime: AgentRuntimeKind, workspace: String?, field: SessionSelectionField, selections: SessionSelections)
+    case setAgentDefaultsSharing(runtime: AgentRuntimeKind, workspace: String, shared: Bool)
     case prepareSelections(conversationID: String, defaults: SessionSelections?, usesProductPermissionDefault: Bool?)
     case applySelections(conversationID: String)
     case recordSelections(conversationID: String, metadata: LocalACPSessionMetadata)
@@ -74,6 +75,7 @@ struct BackendApplicationResult: Codable, Sendable {
     var metadata: LocalACPSessionMetadata?
     var selections: SessionSelections?
     var resolvedSelections: SessionSelections?
+    var usesSharedDefaults: Bool?
     var attachments: [AgentMessageAttachmentDraft]?
     var requiresTimerPauseConfirmation: Bool = false
     var history: GatewayJSONValue?
@@ -221,11 +223,14 @@ final class BackendApplicationService {
             return try await executeToolsMutation(mutation)
         case let .loadAgentDefaults(runtime, workspace):
             let values = try await model.agentSelectionDefaults(runtime: runtime, workspace: workspace)
-            return .init(selections: values.stored, resolvedSelections: values.resolved)
+            return .init(selections: values.stored, resolvedSelections: values.resolved, usesSharedDefaults: values.usesShared)
         case let .saveAgentDefault(runtime, workspace, field, selections):
             let values = try await model.saveAgentSelectionDefault(runtime: runtime, workspace: workspace,
                 field: field, selections: selections)
-            return .init(selections: values.stored, resolvedSelections: values.resolved)
+            return .init(selections: values.stored, resolvedSelections: values.resolved, usesSharedDefaults: values.usesShared)
+        case let .setAgentDefaultsSharing(runtime, workspace, shared):
+            let values = try await model.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared)
+            return .init(selections: values.stored, resolvedSelections: values.resolved, usesSharedDefaults: values.usesShared)
         case let .prepareSelections(id, defaults, usesProductPermissionDefault):
             try await model.prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults,
                 usesProductPermissionDefault: usesProductPermissionDefault)

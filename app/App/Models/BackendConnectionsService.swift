@@ -31,6 +31,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var resolvedDefaultModelID: String?
     var providers: [DefaultAgentSettingsModel.Provider]
     var searchConfigured: Bool
+    var sharedAccounts: [String: [ProviderConnectionAccounts.Account]]?
     var accounts: [String: [ProviderConnectionAccounts.Account]]
     var signInProvider: String?
     var signInOutcome: DefaultAgentSettingsModel.SignInOutcome?
@@ -48,7 +49,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         scope = model.scope; settings = model.settings; catalog = model.catalog; providers = model.providers
         catalogIncludesAllModels = model.catalogIncludesAllModels
         resolvedDefaultModelID = model.resolvedDefaultModelID
-        searchConfigured = model.searchConfigured; accounts = model.accounts
+        searchConfigured = model.searchConfigured; accounts = model.accounts; sharedAccounts = model.sharedAccounts
         signInProvider = model.signInProvider
         signInOutcome = model.signInOutcome
         busy = model.busy; error = model.error; notice = model.notice
@@ -74,6 +75,10 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)
             switch c.action {
+            case "checkKeychain":
+                try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                    try DefaultAgentSupport.checkKeychainAccess()
+                }
             case "localServers": break
             case "connectServer":
                 let enteredKey = (c.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -21,12 +21,14 @@ struct SettingsDefaultAgentSDKView: View {
     }
 
     var body: some View {
-        SettingsCard(title: "Agent SDKs", detail: "Running turns finish with their current SDK. Updates apply to subsequent turns.") {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(workspaces) { workspace in
                 let state = connections.sdks.state(for: workspace.id)
                 if workspace.remoteID == nil {
                     VStack(alignment: .leading, spacing: 10) {
-                        workspaceLabel(workspace, state: state)
+                        if connections.scope == "global" {
+                            workspaceLabel(workspace, state: state)
+                        }
                         workspaceContent(workspace, state: state)
                     }
                     .padding(.vertical, 3)
@@ -64,16 +66,24 @@ struct SettingsDefaultAgentSDKView: View {
 
     @ViewBuilder private func workspaceContent(_ workspace: Workspace, state: DefaultAgentSDKWorkspaceState) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let status = state.status {
-                ForEach(status.sdks) { sdk in
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 12) { sdkLabel(sdk); Spacer(minLength: 12); sdkActions(sdk, state: state, workspace: workspace) }
-                        VStack(alignment: .leading, spacing: 8) { sdkLabel(sdk); sdkActions(sdk, state: state, workspace: workspace) }
-                    }
-                }
-                if let notice = status.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
-            } else if !state.busy {
-                Button("Load SDK versions") { perform(.status, in: workspace) }.buttonStyle(SettingsQuietButtonStyle())
+            let hasUpdate = state.status?.sdks.contains { $0.updateAvailable || $0.consistent == false } == true
+            let summary = state.status?.sdks.map { sdk in
+                let installed = sdk.installedVersion ?? "Not installed"
+                let update = sdk.updateAvailable ? sdk.latestVersion.map { " → \($0)" } ?? "" : ""
+                return "\(sdk.displayName) \(installed)\(update)"
+            }.joined(separator: " · ") ?? "Checking installed components…"
+            SettingsRuntimeSummaryRow(runtimeKind: .defaultAgent, summary: summary,
+                status: state.busy ? (state.operation?.action == .update ? "Updating" : "Checking")
+                    : state.status == nil ? "Not checked"
+                    : state.status?.sdks.allSatisfy({ $0.installedVersion != nil }) == true ? "Installed" : "Not installed") {
+                Button(state.busy ? (state.operation?.action == .update ? "Updating…" : "Checking…")
+                    : hasUpdate ? "Update" : "Check for updates") {
+                    perform(hasUpdate ? .update : .check, in: workspace)
+                }.buttonStyle(SettingsQuietButtonStyle()).disabled(state.busy)
+            }
+            if let notice = state.status?.notice { SettingsNote(notice) }
+            ForEach(state.status?.sdks.filter { $0.notice != nil } ?? []) { sdk in
+                SettingsNote("\(sdk.displayName): \(sdk.notice ?? "")")
             }
             if let operation = state.operation {
                 HStack(spacing: 8) {
@@ -85,35 +95,11 @@ struct SettingsDefaultAgentSDKView: View {
         }
     }
 
-    private func sdkLabel(_ sdk: DefaultAgentSDKStatus.SDK) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(sdk.displayName).font(.callout.weight(.medium))
-            Text(sdk.installedVersion.map { "Version \($0)" } ?? "Not installed").font(.caption).monospacedDigit().foregroundStyle(.secondary)
-            if sdk.updateAvailable, let latest = sdk.latestVersion {
-                Text("Version \(latest) available").font(.caption).foregroundStyle(.secondary)
-            } else if sdk.latestVersion != nil && sdk.notice == nil && sdk.consistent != false {
-                Text("Up to date").font(.caption).foregroundStyle(.secondary)
-            }
-            if let notice = sdk.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
-        }
-    }
-
-    private func sdkActions(_ sdk: DefaultAgentSDKStatus.SDK, state: DefaultAgentSDKWorkspaceState, workspace: Workspace) -> some View {
-        HStack(spacing: 8) {
-            Button("Check for updates") { perform(.check, id: sdk.id, in: workspace) }
-            if sdk.updateAvailable, let latest = sdk.latestVersion {
-                Button("Update") { perform(.update, id: sdk.id, version: latest, in: workspace) }
-                    .accessibilityLabel("Update \(sdk.displayName) in \(workspace.name)")
-            }
-        }.buttonStyle(SettingsQuietButtonStyle()).disabled(state.busy).fixedSize()
-    }
-
     private func progress(_ request: DefaultAgentSDKRequest) -> String {
-        let name = request.id == "claude" ? "Claude SDK" : request.id == "pi" ? "Pi Durable SDK" : "SDKs"
         switch request.action {
-        case .status: return "Loading SDK versions…"
-        case .check: return "Checking \(name) for updates…"
-        case .update: return "Updating \(name)…"
+        case .status: return "Loading versions…"
+        case .check: return "Checking for updates…"
+        case .update: return "Updating Pi Durable…"
         }
     }
 

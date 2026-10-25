@@ -213,3 +213,36 @@ test('a candidate failing its staged API verification is discarded and the activ
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, installed.root);
 });
+
+
+test('one update activates both outdated SDKs together and skips current components', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const piNext = bump(piFloor), claudeNext = bump(claudeFloor);
+  const options = mockInstaller(piNext, materializeManifest);
+  options.registryFetch = registry({ ...piReleases([piFloor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudeNext] });
+  let installations = 0;
+  const run = options.run;
+  options.run = async (...args) => { if (args[1].includes('install')) ++installations; return run(...args); };
+  const updated = await updateSDK({ directory: f.directory }, options);
+  assert.equal(installations, 1);
+  assert.equal(updated.sdks.find(sdk => sdk.id === 'pi').installedVersion, piNext);
+  assert.equal(updated.sdks.find(sdk => sdk.id === 'claude').installedVersion, claudeNext);
+  const current = await updateSDK({ directory: f.directory }, options);
+  assert.equal(current.generation, updated.generation);
+  assert.equal(installations, 1);
+  options.registryFetch = registry({ ...piReleases([piFloor, piNext]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, claudeNext, bump(claudeNext)] });
+  const one = await updateSDK({ directory: f.directory }, options);
+  assert.equal(one.sdks.find(sdk => sdk.id === 'pi').installedVersion, piNext);
+  assert.equal(one.sdks.find(sdk => sdk.id === 'claude').installedVersion, bump(claudeNext));
+});
+
+test('combined update failure preserves both active SDKs', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const before = await readFile(f.active, 'utf8');
+  const options = mockInstaller(bump(piFloor), materializeManifest);
+  options.registryFetch = registry({ ...piReleases([piFloor, bump(piFloor)]), '@anthropic-ai/claude-agent-sdk': [claudeFloor, bump(claudeFloor)] });
+  const run = options.run;
+  options.run = async (...args) => { if (args[1].includes('--eval')) throw Error('fixture verification failure'); return run(...args); };
+  await assert.rejects(updateSDK({ directory: f.directory }, options), /previous SDKs were kept/);
+  assert.equal(await readFile(f.active, 'utf8'), before);
+});

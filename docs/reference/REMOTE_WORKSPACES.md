@@ -109,7 +109,7 @@ installed package metadata, without initializing an agent, unlocking credentials
 or checking the network. `POST` to the same endpoint accepts
 `{"action":"check","id":"claude"}` for an explicit registry check, or
 `{"action":"update","id":"claude","version":"x.y.z"}` for an update.
-The SDK identifier is `pi` or `claude`; omit it from a check to check both SDKs.
+The SDK identifier is `pi` or `claude`; omit it from a check or update to manage both SDKs. A combined update stages all outdated components and activates them together.
 The checked version is optional on updates. Responses contain `sdks` entries with `id`,
 `name`, `installedVersion`, `latestVersion`, and `updateAvailable`, plus the
 installation `generation` and an optional `notice`. Request bodies are bounded

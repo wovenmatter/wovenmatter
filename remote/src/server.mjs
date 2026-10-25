@@ -996,9 +996,11 @@ export async function defaultAgentSDKRequest(request, response, service) {
   const body = await readJSON(request, 4_096)
   if (!body || typeof body !== 'object' || Array.isArray(body)
     || !['check', 'update'].includes(body.action)) throw httpError(400, 'invalid_sdk_action')
-  if ((body.action === 'update' || body.id != null) && !['pi', 'claude'].includes(body.id)) throw httpError(400, 'invalid_sdk_identifier')
+  if (body.id != null && !['pi', 'claude'].includes(body.id)) throw httpError(400, 'invalid_sdk_identifier')
   if (body.version != null && (typeof body.version !== 'string'
     || !/^\d+\.\d+\.\d+$/.test(body.version))) throw httpError(400, 'invalid_sdk_version')
+
+  if (body.id == null && body.version != null) throw httpError(400, 'invalid_sdk_version')
 
   const controller = new AbortController()
   const abort = () => controller.abort()
@@ -1011,8 +1013,8 @@ export async function defaultAgentSDKRequest(request, response, service) {
   try {
     controller.signal.throwIfAborted()
     return body.action === 'check'
-      ? await service.checkSDKUpdates({ id: body.id, signal: controller.signal })
-      : await service.updateSDK({ id: body.id, version: body.version, signal: controller.signal })
+      ? await service.checkSDKUpdates({ id: body.id ?? undefined, signal: controller.signal })
+      : await service.updateSDK({ id: body.id ?? undefined, version: body.version ?? undefined, signal: controller.signal })
   } finally {
     clearTimeout(timeout)
     request.removeListener('aborted', abort)

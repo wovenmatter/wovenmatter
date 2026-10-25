@@ -208,8 +208,9 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
   const lockController = new AbortController();
   signal = signal ? AbortSignal.any([signal, lockController.signal]) : lockController.signal;
   aborted(signal);
-  const definition = definitions.find(value => value.id === id);
-  if (!definition) throw fail('Choose Pi Durable SDK or Claude SDK.');
+  const selectedDefinitions = id === undefined ? definitions : definitions.filter(value => value.id === id);
+  if (!selectedDefinitions.length) throw fail('Choose Pi Durable SDK or Claude SDK.');
+  if (id === undefined && version !== undefined) throw fail('Check for updates again.');
   const p = paths(directory);
   await privateDirectory(p.root); await privateDirectory(p.generations);
   const unlock = await lock(p.lock, () => lockController.abort());
@@ -217,9 +218,10 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
   try {
     const before = await resolveSDKRuntime({ directory });
     const checked = await checkSDKUpdates({ directory, id, signal, fetchImplementation: registryFetch });
-    const selected = checked.sdks.find(value => value.id === id);
-    if (version !== undefined && version !== selected.latestVersion) throw fail('The available SDK version changed. Check for updates again.');
-    if (!selected.updateAvailable && selected.consistent) return checked;
+    const candidates = checked.sdks.filter(sdk => selectedDefinitions.some(definition => definition.id === sdk.id));
+    if (version !== undefined && version !== candidates[0].latestVersion) throw fail('The available SDK version changed. Check for updates again.');
+    const updates = candidates.filter(sdk => sdk.updateAvailable || !sdk.consistent);
+    if (!updates.length) return checked;
     aborted(signal);
     const generation = randomUUID();
     stage = join(p.generations, '.staging-' + generation);
@@ -233,7 +235,9 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
       const installed = installedGraph?.packages?.[`node_modules/${name}`]?.version;
       if (installed) manifest.dependencies[name] = installed;
     }
-    for (const pkg of definition.packages) manifest.dependencies[pkg] = selected.latestVersion;
+    for (const selected of updates) {
+      for (const pkg of definitions.find(value => value.id === selected.id).packages) manifest.dependencies[pkg] = selected.latestVersion;
+    }
     await writeFile(join(stage, 'package.json'), JSON.stringify(manifest), { mode: 0o600 });
     // Preserve the untouched SDK and every other locked dependency.
     await cp(join(before.root, 'package-lock.json'), join(stage, 'package-lock.json'));
@@ -243,7 +247,11 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     await writeFile(config, '', { mode: 0o600 }); await writeFile(globalConfig, '', { mode: 0o600 });
     const env = safeEnvironment(home, temporary);
     await run(process.execPath, [await installer(), 'install', '--prefix', stage, '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--save-exact', '--engine-strict', '--registry=https://registry.npmjs.org', '--userconfig=' + config, '--globalconfig=' + globalConfig, '--cache=' + join(stage, '.npm-cache')], { cwd: stage, env, timeout: 600000, signal });
-    for (const pkg of definition.packages) if (await packageVersion(stage, pkg) !== selected.latestVersion) throw fail('The SDK installation did not match the requested version. The previous SDKs were kept.');
+    for (const selected of updates) {
+      for (const pkg of definitions.find(value => value.id === selected.id).packages) {
+        if (await packageVersion(stage, pkg) !== selected.latestVersion) throw fail('The SDK installation did not match the requested version. The previous SDKs were kept.');
+      }
+    }
     // Imports only: no credentials, model discovery, account checks, or inference.
     await run(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage,
       env: { ...env, WOVENMATTER_INSTRUCTIONS_FILE: fileURLToPath(new URL('../../harnesses/woven-instructions.txt', import.meta.url)) }, signal });
@@ -259,8 +267,8 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     aborted(signal);
     // Atomic activation is the only mutation visible to new helper processes.
     // Existing generations are intentionally retained for live conversations.
-    const installed = { ...checked, generation, sdks: checked.sdks.map(sdk => sdk.id === id
-      ? { ...sdk, installedVersion: selected.latestVersion, consistent: true, updateAvailable: false, notice: undefined }
+    const installed = { ...checked, generation, sdks: checked.sdks.map(sdk => updates.some(value => value.id === sdk.id)
+      ? { ...sdk, installedVersion: sdk.latestVersion, consistent: true, updateAvailable: false, notice: undefined }
       : sdk), notice: 'SDK updated. Running turns finish with their current SDK; new turns use the update.' };
     await atomicJSON(p.active, { base: before.base, generation });
     // No fallible metadata reads after activation: a late cancellation/error

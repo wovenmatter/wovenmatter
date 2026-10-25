@@ -50,7 +50,7 @@ enum ClaudeUsageCredentialError: LocalizedError {
     case .invalid:
       "The saved Claude credential could not be read. Sign in to Claude again to replace it."
     case .keychain(let status):
-      "Claude credential access was not granted (Keychain status \(status)). Automatic refresh will stay quiet; use Reconnect saved credentials in Settings > General when ready."
+      "Claude credential access was not granted (Keychain status \(status)). Automatic refresh will stay quiet; use Restore Keychain access in Settings > General when ready."
     }
   }
 }
@@ -99,10 +99,11 @@ enum ProviderLimitCollector {
           }
           if sharedCredentials != nil, provider == .claude {
             return UsageLimitAccount(provider: .claude, accountScopeID: choice.map { "wovenmatter.shared." + $0.id }, accountLabel: claudeStatus?.account ?? choice?.label ?? "Claude subscription",
-              status: claudeStatus?.connected == true ? .signedIn : (claudeStatus?.state == "sign_in_required" ? .needsCredential : .unavailable),
+              status: claudeStatus?.connected == true ? .signedIn
+                : (claudeStatus?.state == "sign_in_required" || choice == nil && sharedCredentials?["claude-subscription"] == nil ? .needsCredential : .unavailable),
               source: "Pi Durable · Claude SDK", detail: claudeStatus?.connected == true
                 ? "Claude manages this sign-in. Check subscription limits and extra usage in your Claude account. API keys are billed separately."
-                : "Manage Claude subscription sign-in and API keys in Settings → Connections.", observedAt: now,
+                : "Manage Claude subscription sign-in and API keys in Settings → Usage.", observedAt: now,
               dashboardURL: ProviderDashboardURL.claude)
           }
           if let sharedCredentials, [.codex, .grok, .openCodeGo, .openRouter].contains(provider) {
@@ -206,7 +207,7 @@ enum ProviderLimitCollector {
         accountScopeID: accountScopeID,
         accountLabel: accountLabel,
         detail: provider == .claude
-          ? "Claude limits could not be read quietly. Use Reconnect saved credentials in Settings > General to restore saved access, or sign in if needed."
+          ? "Claude limits could not be read quietly. Use Restore Keychain access in Settings > General to restore saved access, or sign in if needed."
           : "Account limits are temporarily unavailable. Background refresh does not start the provider's credential-reading CLI. Check the existing provider sign-in if this continues.",
         now: now
       )
@@ -532,11 +533,11 @@ enum ProviderLimitCollector {
 
   static func apiKeyAccount(_ provider: ProviderKind, choice: UsageConnectionChoice, present: Bool, now: Date) -> UsageLimitAccount {
     UsageLimitAccount(provider: provider, accountScopeID: "wovenmatter.shared.\(choice.id)",
-      accountLabel: choice.label, status: present ? .unavailable : .needsCredential,
-      source: "Woven Matter Connections",
+      accountLabel: choice.label, status: present ? .signedIn : .unavailable,
+      source: "Saved accounts",
       detail: present
         ? "API key saved. This connection does not expose subscription usage limits here. Check API billing and limits in the provider dashboard."
-        : "This key is no longer available. Choose another account or update it in Connections.",
+        : "This saved key could not be read. Check Keychain access or update it in Settings → Usage.",
       observedAt: now, dashboardURL: provider == .codex ? URL(string: "https://platform.openai.com/usage")
         : provider == .claude ? URL(string: "https://platform.claude.com/settings/usage")
         : URL(string: "https://console.x.ai/"))
@@ -552,8 +553,10 @@ enum ProviderLimitCollector {
     default: return unavailable(provider, detail: "This provider has no shared connection.", now: now)
     }
     guard let credential = credentials[id], let token = credential.access ?? credential.key else {
-      return UsageLimitAccount(provider: provider, accountLabel: provider.displayName, status: .needsCredential,
-        source: "Woven Matter Connections", detail: "Connect this account in Settings → Connections.", observedAt: now)
+      return UsageLimitAccount(provider: provider, accountScopeID: choice.map { "wovenmatter.shared." + $0.id },
+        accountLabel: choice?.label ?? provider.displayName, status: choice == nil ? .needsCredential : .unavailable,
+        source: "Saved accounts", detail: choice == nil ? "Not signed in. Add an account in Settings → Usage."
+          : "This saved account could not be read. Check Keychain access in Settings → General.", observedAt: now)
     }
     do {
       let account: UsageLimitAccount
@@ -585,7 +588,7 @@ enum ProviderLimitCollector {
       }
       return UsageLimitAccount(provider: provider, accountScopeID: "wovenmatter.shared.\(choice?.id ?? id)",
         accountLabel: choice?.label ?? credential.accountLabel ?? provider.displayName, status: rejected ? .needsCredential : .unavailable,
-        source: "Woven Matter Connections", detail: rejected ? "Reconnect this account in Settings → Connections." : "Usage could not be checked. Manage or refresh this account in Connections.", observedAt: now)
+        source: "Saved accounts", detail: rejected ? "Reconnect this account in Settings → Usage." : "Usage could not be checked. Manage or refresh this account in Settings → Usage.", observedAt: now)
     }
   }
 

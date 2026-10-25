@@ -251,7 +251,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
       try {
         controller.signal.throwIfAborted();
         const credential = model.provider === 'anthropic' ? await credentials.read('anthropic') : undefined;
-        if (model.provider === 'anthropic' && !credential?.key) throw new DefaultAgentError('Authentication required. Add a Claude API key in Settings → Connections.');
+        if (model.provider === 'anthropic' && !credential?.key) throw new DefaultAgentError('Authentication required. Add a Claude API key in Settings → Pi Durable.');
         const env = await claude.environment(credential?.key);
         // The host owns compaction policy. An inherited flag from the former
         // ephemeral bridge must not disable native SDK context maintenance.
@@ -377,7 +377,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
           return;
         }
         if (!gate.state.complete || gate.state.status !== 200 || gate.state.error) {
-          if (timedOut) throw new DefaultAgentError('The Claude request timed out. Retry or check Settings → Connections.');
+          if (timedOut) throw new DefaultAgentError('The Claude request timed out. Retry or check Settings → Pi Durable.');
           throw gate.state.error ?? new DefaultAgentError(nativeFailure ? (accessFailure(nativeFailure) ?? contextOverflowDiagnostic(nativeFailure, model.provider) ?? operationErrorMessage(nativeFailure)) : 'The Claude runtime stopped before completing its response.');
         }
         const response = gate.state.message;

@@ -63,6 +63,11 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
     public let name: String
     public let state: String
     public let detail: String
+    public struct Account: Codable, Equatable, Sendable {
+        public let method: String
+        public let name: String?
+    }
+    public var accounts: [Account]? = nil
     public var displayName: String {
         if id == AgentRuntimeKind.defaultAgent.rawValue { return AgentRuntimeKind.defaultAgent.displayName }
         // Normalize provider labels returned by older workspace services.
@@ -162,7 +167,7 @@ public final class ProviderAccountCoordinator {
         try await waitForPending()
         try Task.checkCancellation()
         guard signInID == nil else {
-            throw DefaultAgentError.message("Finish the current sign-in in Connections first.")
+            throw DefaultAgentError.message("Finish the current sign-in in Settings → Pi Durable first.")
         }
         let id = UUID()
         signInID = id
@@ -190,7 +195,7 @@ public final class ProviderAccountCoordinator {
                 try updateCachedConfiguration()
                 return cached[workspace]!
             }
-            throw DefaultAgentError.message("Finish sign-in in Connections before connecting this workspace.")
+            throw DefaultAgentError.message("Finish sign-in in Settings → Pi Durable before connecting this workspace.")
         }
         let scopes = Array(knownScopes)
         let revision = version()
@@ -257,7 +262,7 @@ public final class ProviderAccountCoordinator {
     public func renewRejectedAccess(provider: String, access: String) async throws -> DefaultAgentCredential? {
         let current = try await prepare("global").credentials[provider]
         guard current?.access == access else { return current }
-        guard signInID == nil else { throw DefaultAgentError.message("Finish sign-in in Connections first.") }
+        guard signInID == nil else { throw DefaultAgentError.message("Finish sign-in in Pi Durable settings first.") }
         let operation = Task {
             try await renewRejected(provider, access)
             invalidate()
@@ -295,14 +300,14 @@ public final class ProviderAccountCoordinator {
             (renewed.expires ?? 0) > Date().timeIntervalSince1970 * 1000
         else {
             throw DefaultAgentError.message(
-                "This subscription could not be renewed. Reconnect it in Settings → Connections.")
+                "This subscription could not be renewed. Reconnect it in Settings → Pi Durable.")
         }
         try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: "global")
     }
     nonisolated public static func refreshStored(_ scopes: [String]) async throws -> [String: DefaultAgentPayload] {
         try DefaultAgentSupport.migrateLocalOAuth()
         let settings = DefaultAgentSupport.settings
-        let keyScopes = Set(["global"] + Array(settings.workspaces.keys))
+        let keyScopes = Set(["global"] + scopes + Array(settings.workspaces.keys))
         var issues: [String: [String: String]] = [:]
         for scope in keyScopes {
             for provider in ["openai-codex", "xai"] {
@@ -330,7 +335,7 @@ public final class ProviderAccountCoordinator {
         var result: [String: DefaultAgentPayload] = [:]
         for scope in scopes {
             var value = try DefaultAgentSupport.snapshot(workspace: scope)
-            let keyScope = settings.workspaces[scope] == nil ? "global" : scope
+            let keyScope = scope
             for id in ["openai-codex", "xai"] {
                 let owner = try DefaultAgentSupport.oauth(id, scope: keyScope) == nil ? "global" : keyScope
                 if issues[owner]?[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }

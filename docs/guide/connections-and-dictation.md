@@ -1,6 +1,6 @@
-# Connections and dictation
+# Accounts and dictation
 
-Open **Settings → Connections**, immediately below General, to manage shared
+Open **Settings → Pi Durable** or **Settings → Usage** to manage shared
 accounts. Account/status links in Usage and Pi Durable lead here.
 
 The page groups **Model providers**, **Web search**, and **Local models**.
@@ -22,16 +22,19 @@ workspace can also own one independent ChatGPT/Grok sign-in ahead of its shared
 accounts. **Use shared sign-in** removes that independent override.
 
 Workspace overrides apply to Pi Durable. Usage uses global accounts.
-In **Usage → Usage limits**, each provider's **Account** selector chooses whose
-limits to display without changing the preferred inference account or fallback
-order. API keys without a supported limits endpoint show that limitation rather
+**Usage → Usage limits** shows a separate card for each saved account, plus providers
+that need sign-in. Use **Go to Usage settings** to add or reconnect an account.
+Device analytics imports Woven Matter and local harness history without account
+setup, provider enable switches, or Keychain access. It excludes account-wide
+OpenRouter API history from device totals and includes all OpenCode billing routes.
+API keys without a supported limits endpoint show that limitation rather
 than subscription quota. External harnesses keep their separate sign-ins.
 Disabling a feature keeps its connection; removing a connection affects the
 features using it.
 
 ## Executor
 
-Connections also manages one local or remote Linux Executor runtime, shared by
+**Settings → General → Connected apps · Executor** manages one local or remote Linux Executor runtime, shared by
 every agent through Woven’s CLI. Configure apps in its dashboard, choose defaults,
 and select apps per conversation. See [Executor apps](executor.md) for setup,
 permissions and recovery.
@@ -69,7 +72,7 @@ there is no cloud transcription fallback.
 
 ## Local Model Server
 
-At the bottom of Connections, enter a **Server URL** and **API key**, then click
+In **Settings → Pi Durable → Local model servers**, enter a **Server URL** and **API key**, then click
 **Connect**. Use an OpenAI Responses-compatible base URL, such as
 `http://localhost:32100/v1`, or the server's address on your Tailscale network.
 No advanced settings are needed. Add up to 12 servers.

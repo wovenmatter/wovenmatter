@@ -50,7 +50,9 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WMBrowserRuntime : NSObject
 + (void)prepareApplication;
 + (instancetype)sharedRuntime;
-- (BOOL)startWithProfilePath:(NSString *)profilePath error:(NSError **)error;
+// Pass nil to browse in memory without opening the saved profile. The mode
+// stays fixed for this app process; restarting restores access to saved sessions.
+- (BOOL)startWithProfilePath:(nullable NSString *)profilePath error:(NSError **)error;
 - (nullable WMBrowserPage *)createPage;
 // Resolve unload prompts before committing an update/restart. Keep CEF alive
 // and block new tabs until shutdown, or cancel the preparation after a failure.

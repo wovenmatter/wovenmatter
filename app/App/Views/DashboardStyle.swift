@@ -540,6 +540,7 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
     @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     let options: [Option]
     @Binding var selection: Option
+    var accentSelection = false
     let label: (Option) -> String
 
     var body: some View {
@@ -553,14 +554,14 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
                         .font(DashboardControlMetrics.segmentFont)
                         .foregroundStyle(
                             sidebarForeground ?? (isSelected
-                                ? DashboardPalette.foreground
+                                ? (accentSelection ? DashboardPalette.primaryForeground : DashboardPalette.foreground)
                                 : DashboardPalette.mutedForeground)
                         )
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: DashboardControlMetrics.segmentHeight)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected))
+                .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected, accentSelection: accentSelection))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
@@ -586,6 +587,7 @@ private struct DashboardSegmentButtonStyle: ButtonStyle {
     @State private var isHovering = false
 
     let isSelected: Bool
+    var accentSelection = false
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = RoundedRectangle(
@@ -598,7 +600,7 @@ private struct DashboardSegmentButtonStyle: ButtonStyle {
                 ZStack {
                     shape.fill(
                         isSelected
-                            ? DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96)
+                            ? (accentSelection ? DashboardPalette.primary : DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96))
                             : .clear
                     )
                     shape.fill(interactionColor(isPressed: configuration.isPressed))

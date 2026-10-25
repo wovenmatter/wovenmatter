@@ -121,7 +121,7 @@ export async function openDurableSession(engine, id, requested) {
       const scoped = engine.credentials.context.getStore();
       const accountID = scope === record && scoped?.provider === model.provider ? scoped.id : scope.accountID;
       const account = accountID ? accounts.find(value => value.id === accountID) : accounts[0];
-      if (!account) throw new DefaultAgentError('The selected account is unavailable. Check Settings → Connections.');
+      if (!account) throw new DefaultAgentError('The selected account is unavailable. Check Settings → Pi Durable.');
       if (scope === record && record.resuming && ((account.owned === true) !== record.accountOwned || credentialRouteIdentity(record, account) !== record.credentialIdentity)) throw new DefaultAgentError('The interrupted native run connection changed. No account fallback was attempted.');
       if (scope !== record && ((account.owned === true) !== scope.connectionPin.accountOwned || credentialRouteIdentity(record, account) !== scope.connectionPin.credentialIdentity)) throw new DefaultAgentError('The child connection changed or became unavailable. Choose an available connection explicitly; no account fallback was attempted.');
       return account;
