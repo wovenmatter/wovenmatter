@@ -2,10 +2,11 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
 
 import { rangeFloor } from '../src/package-versions.mjs';
@@ -44,6 +45,39 @@ async function fixture(t) {
   }
   return { directory, bundled, active, generation };
 }
+
+test('a nested helper fix supersedes an active SDK generation without removing the old generation', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-sdk-bundle-refresh-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bundle = join(root, 'bundle'), directory = join(root, 'workspace');
+  await mkdir(join(bundle, 'src/executor'), { recursive: true });
+  for (const name of ['sdk-management.mjs', 'package-versions.mjs']) {
+    await cp(new URL('../src/' + name, import.meta.url), join(bundle, 'src', name));
+  }
+  await writeFile(join(bundle, 'package.json'), JSON.stringify({ type: 'module', dependencies: {} }));
+  await writeFile(join(bundle, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }));
+  await writeFile(join(bundle, 'src/main-runtime.mjs'), 'export const fixture = true;');
+  const broker = join(bundle, 'src/executor/broker.mjs');
+  await writeFile(broker, 'export const corrected = false;');
+  const moduleURL = pathToFileURL(join(bundle, 'src/sdk-management.mjs')).href;
+  const original = await import(moduleURL + '?before-update');
+  const bundled = await original.resolveSDKRuntime({ directory });
+  const id = randomUUID(), generation = join(directory, 'sdk-runtime/generations', id);
+  await mkdir(generation, { recursive: true });
+  await cp(join(bundle, 'src'), join(generation, 'src'), { recursive: true });
+  await writeFile(join(generation, 'woven-sdk-generation.json'), JSON.stringify({ base: bundled.base, generation: id }));
+  await writeFile(join(directory, 'sdk-runtime/active.json'), JSON.stringify({ base: bundled.base, generation: id }));
+  assert.equal((await original.resolveSDKRuntime({ directory })).root, generation);
+  // Only a nested source changes; manifests and top-level helper files stay
+  // identical. A fresh module models the next app/helper launch.
+  await writeFile(broker, 'export const corrected = true;');
+  const updated = await import(moduleURL + '?after-update');
+  const runtime = await updated.resolveSDKRuntime({ directory });
+  assert.notEqual(runtime.base, bundled.base);
+  assert.equal(await realpath(runtime.root), await realpath(bundle));
+  assert.equal(runtime.generation, 'bundled-' + runtime.base);
+  assert.equal(await readFile(join(generation, 'src/executor/broker.mjs'), 'utf8'), 'export const corrected = false;');
+});
 
 test('no compatible release or a cancelled update leaves the active generation unchanged', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();

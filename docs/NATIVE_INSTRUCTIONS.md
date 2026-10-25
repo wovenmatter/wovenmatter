@@ -13,7 +13,7 @@ layout and never overwrites project instructions or user global instructions.
 - Codex ACP 2.2.2 accepts `CODEX_CONFIG`; Woven appends `developer_instructions`
   to any supplied developer text and keeps the native base prompt and project
   instruction discovery. See [adapter configuration](https://github.com/agentclientprotocol/codex-acp).
-- Claude ACP 0.94.0 forwards `_meta.systemPrompt.append` to the native Claude Code
+- Claude ACP 0.95.0 forwards `_meta.systemPrompt.append` to the native Claude Code
   preset. Woven adds the block when creating a session, retaining existing preset
   options. Existing sessions retain their original instructions. See [adapter](https://github.com/agentclientprotocol/claude-agent-acp).
 - Grok Build accepts `_meta.rules` on session creation and appends it to its native

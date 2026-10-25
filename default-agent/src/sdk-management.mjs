@@ -57,7 +57,9 @@ async function fingerprint() {
   return fingerprintPromise ??= (async () => {
     const hash = createHash('sha256').update(process.platform + '/' + process.arch);
     // An app update must never execute a stale copy of its helper source.
-    for (const name of ['package.json', 'package-lock.json', ...(await readdir(join(bundledRoot, 'src'))).filter(n => n.endsWith('.mjs')).sort().map(n => 'src/' + n)]) {
+    const sources = (await readdir(join(bundledRoot, 'src'), { recursive: true }))
+      .filter(name => name.endsWith('.mjs')).sort().map(name => join('src', name));
+    for (const name of ['package.json', 'package-lock.json', ...sources]) {
       hash.update(name); hash.update(await readFile(join(bundledRoot, name)));
     }
     return hash.digest('hex');

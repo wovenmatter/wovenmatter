@@ -426,7 +426,9 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
           id: probeID,
           method: 'initialize',
           params: {
-            protocolVersion: 2,
+            // Match the stable session API used by local and remote clients;
+            // Claude ACP 0.95 routes a version 2 offer to its draft v2 API.
+            protocolVersion: harness.id === 'claude_code' ? 1 : 2,
             clientCapabilities: {},
             clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
           },
