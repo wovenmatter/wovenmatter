@@ -170,6 +170,12 @@ struct SettingsView: View {
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
                 )
+                SettingsDestinationRow(
+                    title: "Dictation",
+                    detail: "Read and copy your previous dictations.",
+                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    action: { section = .dictation }
+                )
                 }
 
                 SettingsDestinationRow(
@@ -225,12 +231,6 @@ struct SettingsView: View {
                 )
                 }
                 if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Dictation",
-                    detail: "Read and copy your previous dictations.",
-                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
-                    action: { section = .dictation }
-                )
                 SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",
