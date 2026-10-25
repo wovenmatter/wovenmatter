@@ -72,7 +72,8 @@ extension ApplicationModel {
 
     func startBackgroundServer() async throws {
         guard !DevelopmentLaunch.isClient else { throw BackendRPCError.remote("This client does not own the local server.") }
-        try await LocalBackgroundExecution.launchBackendProcess()
+        // The connection path performs one launch only when no owner answers.
         await startBackendClient()
+        if case let .failed(message) = state { throw BackendRPCError.remote(message) }
     }
 }
