@@ -1833,6 +1833,9 @@ public actor LocalACPSessionCoordinator {
         else { cliConnection = launch.cliConnection }
         // The launch descriptor is shared across conversations; permission is not.
         var scopedEnvironment = launch.environment
+        if descriptor.runtimeKind == .defaultAgent && descriptor.remoteWorkspaceID == nil {
+            scopedEnvironment["WOVEN_DEFAULT_AGENT_DATABASE"] = database.fileURL.path
+        }
         if descriptor.runtimeKind == .codex, let systemPrompt, !systemPrompt.isEmpty {
             scopedEnvironment["WOVENMATTER_ADDITIONAL_INSTRUCTIONS"] = systemPrompt
         }
