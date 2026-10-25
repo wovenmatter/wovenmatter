@@ -479,9 +479,6 @@ struct WovenMatterApp: App {
                     lifecycleDelegate.model = applicationModel
                     DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
-                    LocalBackgroundExecution.shared.transitionHandler = { enabled in
-                        try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)
-                    }
                 }
                 .frame(minWidth: 760, minHeight: 640)
                 .scrollIndicators(.never)

@@ -10,7 +10,6 @@ struct SettingsGeneralView: View {
     // execution workspace owns sleep policies and live protection state.
     var executionModel: ApplicationModel?
     var clientAnalytics: MobileAnalyticsModel?
-    var showsBackgroundExecution = true
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
@@ -50,7 +49,6 @@ struct SettingsGeneralView: View {
             }
             dictationCard
             conversationTitlesCard
-            if showsBackgroundExecution { backgroundExecutionCard }
             idleSleepProtectionCard
             closedLidProtectionCard
             if let clientAnalytics {
@@ -81,43 +79,6 @@ struct SettingsGeneralView: View {
                 },
                 onCancel: { showsCredentialDisclosure = false }
             )
-        }
-    }
-
-    private var backgroundExecutionCard: some View {
-        let background = LocalBackgroundExecution.shared
-        return SettingsCard(title: "Background execution",
-                            detail: "Keep scheduled tasks and sessions running on this Mac while the app is closed.") {
-            Toggle("Keep tasks and sessions running in the background", isOn: Binding(
-                get: { background.pendingEnabled ?? background.isEnabled }, set: { background.setEnabled($0) }
-            ))
-            .toggleStyle(DashboardSwitchToggleStyle())
-            .disabled(background.isChanging || !background.isAvailable)
-            if !background.isAvailable {
-                Text("Background execution is not available in this build.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let enabled = background.pendingEnabled {
-                HStack {
-                    Text("Restart Woven Matter to change execution ownership. Finish active runs first.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button(background.isChanging ? "Restarting…" : enabled ? "Enable and restart" : "Disable and restart") {
-                        Task { await background.applyPendingChange() }
-                    }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(background.isChanging)
-                }
-            }
-            Text(background.isEnabled
-                 ? "A separate backend starts at login and keeps tasks, sessions, and connections running after you quit the app. This Mac must remain logged in."
-                 : "Tasks and sessions run while Woven Matter is open. Background execution is off on this Mac.")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("Choose sleep protection below for work running in either mode.")
-                .font(.caption).foregroundStyle(.secondary)
-            if let message = background.errorMessage {
-                Text(message).font(.caption).foregroundStyle(.red)
-            }
         }
     }
 

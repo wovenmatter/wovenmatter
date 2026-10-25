@@ -68,7 +68,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
 
     func close(_ tab: WorkspaceAssetTabs.Tab) {
         switch tab {
-        case .note: tabs.close(tab)
+        case .note, .inspection: tabs.close(tab)
         case .document(let id):
             documents.removeValue(forKey: id)
             tabs.close(tab)
@@ -84,6 +84,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     func title(for tab: WorkspaceAssetTabs.Tab, notes: [WorkspaceNoteRecord]) -> String {
         switch tab {
         case .document(let id): documents[id]?.lastPathComponent ?? "Document"
+        case .inspection: "Chat activity"
         case .note(let id): notes.first { $0.id == id }?.title ?? "Note"
         case .browser(let id):
             pages[id].map { $0.title.isEmpty ? "New tab" : $0.title } ?? "New tab"

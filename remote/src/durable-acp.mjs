@@ -360,6 +360,11 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     return result
   }
   return { handle,
+    inspection: () => [...channels.values()].map(channel => ({
+      id:'acp:'+channel.id,parentID:'server:remote',kind:'runtime',title:catalog.get(channel.harnessID)?.displayName ?? channel.harnessID,
+      state:channel.state,processID:channel.process?.exitCode === null ? channel.process.pid : undefined,
+      nativeSessionID:channel.snapshot.session?.sessionId,
+    })),
     hasActiveRuntime: id => [...channels.values()].some(channel => channel.process && (!id || channel.harnessID === id)),
     stopAll: () => serialize(async () => {
       await Promise.all([...channels.values()].map(channel => new Promise(resolve => {

@@ -158,6 +158,8 @@
 		908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */; };
 		B9FFAB8DAB6312F403B44CAC /* SettingsRemoteHarnessAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */; };
 		D2446456FA6CA90EADAABF29 /* RemoteHarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */; };
+		FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000002 /* SettingsBackgroundServerView.swift */; };
+		FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -310,6 +312,8 @@
 		D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHarnessAccounts.swift; sourceTree = "<group>"; };
 		56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteHarnessAccountView.swift; sourceTree = "<group>"; };
 		A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHarnessSetupView.swift; sourceTree = "<group>"; };
+		FBC100000000000000000002 /* SettingsBackgroundServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/SettingsBackgroundServerView.swift"; sourceTree = SOURCE_ROOT; };
+		FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+RuntimeInspection.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -395,6 +399,7 @@
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
 				848A38FA567146749E61538D /* ApplicationModel+Goals.swift */,
+				FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */,
 				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
 				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
 				E7E000000000000000000006 /* ExecutorRuntime.swift */,
@@ -487,6 +492,7 @@
 				E7E000000000000000000004 /* ExecutorControls.swift */,
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
+				FBC100000000000000000002 /* SettingsBackgroundServerView.swift */,
 				013E364D3F71552BF924C602 /* SettingsDictationView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
 				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
@@ -794,6 +800,8 @@
 				E7E000000000000000000003 /* ExecutorControls.swift in Sources */,
 				D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */,
 				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
+				FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */,
+				FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */,
 				A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */,
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,

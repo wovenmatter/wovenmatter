@@ -153,7 +153,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
 }
 
 
-/// Background execution defaults on; an explicit opt-out survives updates.
+/// Production execution always belongs to the background server.
 /// Changes to the running mode are committed only through a validated restart.
 /// The running frontend never changes execution ownership in place.
 @MainActor @Observable
@@ -161,11 +161,6 @@ final class LocalBackgroundExecution {
     static let shared = LocalBackgroundExecution()
     nonisolated static let preferenceKey = "localBackgroundExecutionEnabled"
     private(set) var isEnabled: Bool
-    var pendingEnabled: Bool?
-    private(set) var isChanging = false
-    private(set) var errorMessage: String?
-    var transitionHandler: ((Bool) async throws -> Void)?
-    var isAvailable: Bool { transitionHandler != nil && DevelopmentLaunch.mode == nil }
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard, developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) {
@@ -175,10 +170,10 @@ final class LocalBackgroundExecution {
 
     nonisolated static func resolvedEnabled(defaults: UserDefaults = .standard,
                                            developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) -> Bool {
-        // Development profiles never install a login job or claim background
-        // ownership, even when a preference was copied from an older build.
+        // Development profiles use separate processes without installing a
+        // login job, even when a preference was copied from an older build.
         guard developmentMode == nil else { return false }
-        return defaults.object(forKey: preferenceKey) == nil || defaults.bool(forKey: preferenceKey)
+        return true // Legacy off preferences no longer select a production execution owner.
     }
 
     static func launchAgentPropertyList(bundleURL: URL, executableURL: URL, identifier: String) -> [String: Any] {
@@ -190,30 +185,6 @@ final class LocalBackgroundExecution {
          "LimitLoadToSessionType": "Aqua",
          "ProcessType": "Background",
          "WorkingDirectory": bundleURL.deletingLastPathComponent().path]
-    }
-
-    func setEnabled(_ enabled: Bool) {
-        pendingEnabled = enabled == isEnabled ? nil : enabled
-        errorMessage = nil
-    }
-
-    func applyPendingChange() async {
-        guard let enabled = pendingEnabled, !isChanging else { return }
-        guard let transitionHandler else {
-            errorMessage = "Background execution is not ready. Please reopen Woven Matter and try again."
-            return
-        }
-        isChanging = true
-        defer { isChanging = false }
-        do {
-            // Handler validates idle state and owns safe execution-owner handoff.
-            // It calls commitEnabled only after shutdown can safely proceed.
-            try await transitionHandler(enabled)
-            pendingEnabled = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = "Background execution could not be changed: " + error.localizedDescription
-        }
     }
 
     static func launchBackendProcess() async throws { try await WovenMatterBackendProcess.launch() }
@@ -360,13 +331,19 @@ enum LocalExecutionTransition {
 /// Captured once at startup; changing the preference cannot change a running
 /// process's ownership role. Standalone and backend share the execution lease.
 enum LocalExecutionRole: String {
-    case standalone, frontend, backend, libraryClient
+    case developmentHost, frontend, backend, libraryClient
 
     nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
+    #if COMPANION_FACADE_TESTS
+    // Test processes own explicitly injected, isolated stores and never connect
+    // to or install the user's production server.
+    static let current: LocalExecutionRole = .developmentHost
+    #else
     static let current: LocalExecutionRole = resolve(arguments: CommandLine.arguments,
         backgroundEnabled: startupBackgroundEnabled,
         libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey),
         developmentMode: DevelopmentLaunch.mode)
+    #endif
 
     private static var startupBackgroundEnabled: Bool {
         #if COMPANION_FACADE_TESTS
@@ -380,18 +357,21 @@ enum LocalExecutionRole: String {
 
     static func resolve(arguments: [String], backgroundEnabled: Bool, libraryClientEnabled: Bool = false,
                         developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {
-        if let developmentMode { return developmentMode == .client ? .libraryClient : .standalone }
+        if let developmentMode {
+            if developmentMode == .client { return .libraryClient }
+            return arguments.contains("--backend") ? .backend : .frontend
+        }
         if arguments.contains("--backend") { return .backend }
         if libraryClientEnabled { return .libraryClient }
-        return backgroundEnabled ? .frontend : .standalone
+        return .frontend
     }
 
-    var ownsExecution: Bool { self == .standalone || self == .backend }
+    var ownsExecution: Bool { self == .developmentHost || self == .backend }
     var leaseFileName: String {
         switch self {
         case .frontend: "frontend-owner.lock"
         case .libraryClient: "library-client-owner.lock"
-        case .standalone, .backend: "workspace-owner.lock"
+        case .developmentHost, .backend: "workspace-owner.lock"
         }
     }
 
@@ -457,6 +437,22 @@ enum WovenMatterBackendProcess {
     }
 
     static func launch() async throws {
+        if DevelopmentLaunch.mode != nil {
+            guard !DevelopmentLaunch.isClient, let executable = Bundle.main.executableURL else {
+                throw NSError(domain: "BackgroundExecution", code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "A library client does not own a local background server."])
+            }
+            // Snapshot/live profiles use the same server protocol and ownership
+            // boundary, but never register a production or development login job.
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = ["--backend"]
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            return
+        }
         guard LocalBackgroundExecution.shared.isEnabled else {
             throw NSError(domain: "BackgroundExecution", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "Background execution is disabled on this Mac."])

@@ -91,6 +91,10 @@ struct DashboardAssetPane: View {
                     if let url = assets.documents[id] {
                         DashboardDocumentPane(url: url).id(id)
                     }
+                case .inspection(let id):
+                    ScrollView {
+                        RuntimeInspectionView(model: model, conversationID: id).padding(20)
+                    }.scrollIndicators(.never).id(id)
                 case nil: EmptyView()
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -111,6 +115,7 @@ struct DashboardAssetPane: View {
         case .browser: "globe"
         case .note: "doc.text"
         case .document: "doc.richtext"
+        case .inspection: "waveform.path"
         }
     }
     private func close(_ tab: WorkspaceAssetTabs.Tab) {

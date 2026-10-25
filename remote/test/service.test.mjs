@@ -24,6 +24,21 @@ import { authenticationInput, authenticationDeadline, downloadInstallerSource, p
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
 
+test('runtime inspection is authenticated and never starts a Pi worker', async context => {
+  const root = await temporaryFixture(context, 'woven-runtime-inspection-')
+  const service = await startService({workspace:root, home:root, catalog:catalogPath, token:'inspection-fixture-secret'})
+  context.after(() => stopService(service.child))
+  assert.equal((await fetch(service.url+'/v1/runtime/inspection')).status,401)
+  const response = await fetch(service.url+'/v1/runtime/inspection', {headers:{Authorization:'Bearer inspection-fixture-secret'}})
+  assert.equal(response.status,200)
+  const snapshot = await response.json()
+  assert.equal(snapshot.ownerID,'remote')
+  assert.ok(Math.abs(snapshot.observedAt - (Date.now()/1000-978307200)) < 5)
+  assert.equal(snapshot.items.find(item=>item.kind==='service').processID,service.child.pid)
+  assert.ok(!snapshot.items.some(item=>item.id==='pi-worker'))
+  assert.ok(!JSON.stringify(snapshot).includes('inspection-fixture-secret'))
+})
+
 test('installer download rejects non-HTTPS sources and redirect destinations', async () => {
   let requests = 0
   const fetchImplementation = async () => {

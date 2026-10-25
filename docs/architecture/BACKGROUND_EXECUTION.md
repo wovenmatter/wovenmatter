@@ -1,18 +1,23 @@
 # Background execution
 
 Background execution moves execution ownership out of the macOS window process.
-The local preference is on by default; an explicitly saved off choice is preserved.
-Development profiles keep their foreground execution mode and never enable a
-background login job. Remote workspaces have independent
-preferences, enabled by default. The normal app remains the execution owner when
-local background execution is disabled.
+The production Mac library host always executes in the background server. Its visible app
+is a client; legacy off preferences no longer select a foreground execution owner.
+Development profiles use isolated background servers and never install login jobs.
+Remote workspaces retain their own independent execution preferences.
+
+The separate paired-library-client architecture still hosts its optional secondary
+Mac execution workspace inside the client process. This change does not convert
+that federation transport into a background service. Client development profiles
+continue to use that architecture; snapshot profiles test the library host server.
+
 
 ## Local ownership
 
 The backend runs the existing application services in a headless process. It owns
 SQLite writes, session transports, remote connections, scheduled task admission,
 credential operations, library maintenance, and usage collection. An exclusive
-workspace lease prevents a standalone app and backend from owning the same
+workspace lease prevents an isolated development host and backend from owning the same
 workspace simultaneously. The frontend has a separate window-process lease.
 
 The frontend keeps the existing observable models and rendering caches. It reads
@@ -27,9 +32,9 @@ the cursor so reconnect cannot silently miss the update. OpenCode transfers
 session revisions rather than transcript bodies; visible sessions load through
 the existing database presentation path. The backend does not render chat text.
 
-Execution-mode changes require idle sessions and completed approvals. Admission
+Library-role changes require idle sessions and completed approvals. Admission
 is fenced before shutdown. Notes flush before the frontend exits or switches
-modes. Failed transitions restore the previous preference and restart its owner.
+library roles. Failed transitions restore the previous role and restart its owner.
 Quitting the frontend does not shut down backend-owned sessions.
 
 ## Active work and display sleep
@@ -49,7 +54,7 @@ When neither level selects the current source, the owner uses
 `.userInitiatedAllowingIdleSystemSleep`, preserving App Nap protection while allowing
 system sleep. This does not end the work or its dispatch leases.
 
-Both levels apply in standalone and backend modes; the frontend never owns an
+Both levels apply in development-host and backend modes; the frontend never owns an
 assertion. Preferences and actual protection state are published by the execution
 owner. Keeping the backend awake lets active work continue after the frontend quits.
 On a secondary Mac, General settings targets that Mac's local execution model
@@ -201,3 +206,19 @@ Repeat with background execution enabled and the frontend closed, and verify
 recovery after terminating the owner/helper. Confirm `pmset -g` and
 `pmset -g assertions` before and after each case. Do not infer hardware acceptance
 from the provider-free tests.
+
+## Server controls and inspection
+
+Settings → Background Server displays owner-reported activity for this Mac or a
+remote workspace. Stop first asks the server to check its current work. Active
+work requires an explicit confirmation; confirming fences new admissions, cancels
+owned work through its normal Stop path, flushes notes, and shuts the server down.
+Maintenance operations must finish before shutdown. Restart uses the same Stop
+confirmation and waits for the old owner to release its lease before starting.
+Closing the app leaves the production server running. Start reconnects a stopped
+server. A missing server never promotes the UI into an execution owner.
+
+Inspect chat activity opens a conversation-scoped tab alongside notes and browser
+tabs. Inspection is passive and does not start Pi workers or replay agent input.
+Disconnected inspectors retain their last observation with its timestamp and mark
+it disconnected; saved records are never evidence that a process is still alive.

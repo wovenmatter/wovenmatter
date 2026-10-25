@@ -1845,6 +1845,7 @@ public actor LocalACPSessionCoordinator {
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
         )
+        launch.inspectionConversationID = descriptor.conversationID
         launch.cliConnection = cliConnection
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,

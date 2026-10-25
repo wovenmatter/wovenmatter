@@ -322,6 +322,8 @@ public struct LocalACPRuntimeWrappedCommand: Sendable {
 }
 
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
+    /// Owner metadata; never forwarded into the harness environment or command.
+    public var inspectionConversationID: String? = nil
     public var historyRecorder: WorkspaceWireRecorder? = nil
     public var cliConnection: AgentCLIContext? = nil
     public let runtimeKind: AgentRuntimeKind

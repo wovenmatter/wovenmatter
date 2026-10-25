@@ -324,6 +324,7 @@ final class ApplicationModel {
     @ObservationIgnored var backendApplicationService: BackendApplicationService?
     @ObservationIgnored var backendClientTask: Task<Void, Never>?
     @ObservationIgnored var backendStopping = false
+    @ObservationIgnored var backgroundServerTermination: @MainActor () -> Void = { WovenMatterLifecycleDelegate.requestTerminationAfterUpdate() }
     @ObservationIgnored var backendCommandsInFlight = 0
     @ObservationIgnored private var backendExecutionErrorIDs: Set<String> = []
     @ObservationIgnored private var backendStopRequestedForLifecycle = false
@@ -2582,6 +2583,7 @@ final class ApplicationModel {
         admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
         dispatchFence suppliedFence: AgentDispatchFence? = nil
     ) async throws -> (accepted: Bool, identifiers: LocalACPRunIdentifiers?) {
+        guard !backendStopping else { throw BackendRPCError.remote("The background server is stopping.") }
         let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: conversation.id)
         defer { if suppliedFence == nil { finishAgentDispatch(conversationID: conversation.id, fence: dispatchFence) } }
         try dispatchFence.check()
@@ -4422,7 +4424,7 @@ extension ApplicationModel {
         }
     }
 
-    private func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
+    func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         let isCommand = request.method.hasSuffix(".command")
         guard !backendStopping else { return .init(id: request.id, error: "The background service is stopping.") }
         if isCommand { backendCommandsInFlight += 1 }
@@ -4491,22 +4493,50 @@ extension ApplicationModel {
             if request.method == "application.state" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendApplicationState()))
             }
-            if request.method == "application.stop" {
-                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, !connections.sdks.isBusy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
-                      !remoteWorkspaces.isCreating, runningToolSessionIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
-                      pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
-                    throw BackendRPCError.remote("Wait for running sessions and pending approvals before stopping the background service.")
+            if request.method == "server.inspect" {
+                let query = try JSONDecoder().decode(RuntimeInspectionRequest.self, from: request.payload)
+                return .init(id: request.id, result: try JSONEncoder().encode(await runtimeInspection(query)))
+            }
+            if request.method == "server.stop" || request.method == "application.stop" {
+                let confirmed = request.method == "server.stop"
+                    ? try JSONDecoder().decode(BackgroundServerStopRequest.self, from: request.payload).confirmed : false
+                let activeIDs = runningToolSessionIDs.union(pendingAgentDispatches.keys)
+                    .union(pendingLocalACPPermissions.map(\.conversationID))
+                    .union(pendingLocalACPInteractions.map(\.conversationID))
+                let activeCount = activeIDs.count + pendingLocalACPPermissions.count + pendingLocalACPInteractions.count
+                    + executorRuntime.jobs.count + pendingSessionAccess.count
+                if activeCount > 0 && !confirmed {
+                    if request.method == "application.stop" {
+                        throw BackendRPCError.remote("Finish active work before restarting the background server.")
+                    }
+                    return .init(id: request.id, result: try JSONEncoder().encode(
+                        BackgroundServerStopResult(confirmationRequired: true, activeWorkCount: activeCount)))
                 }
+                guard backendCommandsInFlight == 0, !connections.busy, !connections.sdks.isBusy,
+                      remoteWorkspaces.busyWorkspaceIDs.isEmpty, !remoteWorkspaces.isCreating,
+                      installingLocalACPRuntimeKinds.isEmpty, updatingRuntimeKinds.isEmpty,
+                      !executorRuntime.isSettingUp else {
+                    throw BackendRPCError.remote("Wait for setup and maintenance operations before stopping the background server.")
+                }
+                // Fence admissions before awaiting cancellation. A new input cannot
+                // enter while confirmed work is being withdrawn and drained.
                 backendStopping = true
                 do {
                     guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                    executorRuntime.cancelAll()
+                    try await dashboardStore?.database.cancelPendingCoordinationAccess()
+                    pendingSessionAccess.removeAll()
+                    let stops = activeIDs.map { beginAgentStop(conversationID: $0) }
+                    for stop in stops { try await stop.value }
                     try await prepareOpenCodeInstancesToQuit()
+                    agentTools?.stop()
                 } catch { backendStopping = false; throw error }
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(150))
-                    WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
+                    backgroundServerTermination()
                 }
-                return .init(id: request.id, result: Data("{}".utf8))
+                return .init(id: request.id, result: try JSONEncoder().encode(
+                    BackgroundServerStopResult(confirmationRequired: false, activeWorkCount: activeCount)))
             }
             guard let service = backendApplicationService else { throw BackendRPCError.remote("The background service is starting.") }
             return await service.handle(request)
@@ -4618,7 +4648,7 @@ extension ApplicationModel {
                    let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
                     guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                     guard status.completeClientRouting else {
-                        throw BackendRPCError.remote("Background execution is not ready in this build. Keep using the normal app while integration is completed.")
+                        throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
                     }
                     ready = true; break
                 }
@@ -4841,41 +4871,6 @@ extension ApplicationModel {
         }, recover: {
             if self.isLibraryClient { await self.libraryClient.restoreExecutionAfterFailedTransition() }
             else if self.isBackendFrontend { try await self.recoverBackendAfterFailedUpdate() }
-            else { await self.restoreOpenCodeInstances() }
-        })
-        isPreparedForExecutionRestart = true
-        WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
-    }
-
-    func changeLocalBackgroundExecution(enabled: Bool) async throws {
-        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Development instances keep execution within their own app process.") }
-        guard !DictationModel.shared.isBusy else { throw BackendRPCError.remote("Finish dictation before switching execution modes.") }
-        guard !executionHasPendingOperations, localRunningConversationIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
-              pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
-            throw BackendRPCError.remote("Wait for running sessions and pending approvals before switching execution modes.")
-        }
-        let wasSuspended = noteEditingSuspended
-        suspendNoteEditing()
-        defer {
-            if !isPreparedForExecutionRestart {
-                WorkspaceAssetSession.cancelPreparedRestart()
-                if !wasSuspended { resumeNoteEditing() }
-            }
-        }
-        guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
-        guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
-        let previous = LocalBackgroundExecution.shared.isEnabled
-        try await LocalExecutionTransition.perform(prepare: {
-            if self.isBackendFrontend { try await self.prepareBackendForUpdate() }
-            else { try await self.prepareOpenCodeInstancesToQuit() }
-        }, commit: {
-            try LocalBackgroundExecution.shared.commitEnabled(enabled)
-        }, relaunch: {
-            try LocalBackgroundExecution.relaunchAfterCurrentProcessExits()
-        }, rollback: {
-            try LocalBackgroundExecution.shared.commitEnabled(previous)
-        }, recover: {
-            if self.isBackendFrontend { try await self.recoverBackendAfterFailedUpdate() }
             else { await self.restoreOpenCodeInstances() }
         })
         isPreparedForExecutionRestart = true
