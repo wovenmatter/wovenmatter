@@ -158,7 +158,7 @@ The automation server and Executor client bundle the v2
 under Apache-2.0. Their complete upstream licenses and notices remain in the
 bundled Node dependencies.
 
-## Sparkle 2.10.0
+## Sparkle 2.10.1
 
 https://github.com/sparkle-project/Sparkle
 
