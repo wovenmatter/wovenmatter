@@ -69,7 +69,7 @@ struct SettingsDefaultAgentView: View {
                 Text("Provider accounts").font(.headline)
                 SettingsConnectionsView(model: model, focus: .providers, embedded: true,
                     onConnected: connected, onManageShared: manageSharedAccounts, onBack: {})
-                Text("Web search account").font(.headline)
+                Text("Web search accounts").font(.headline)
                 SettingsConnectionsView(model: model, focus: .webSearch, embedded: true,
                     onManageShared: manageSharedAccounts, onBack: {})
                 DisclosureGroup("Local model servers · Shared connections") { LocalModelServerConnections(agent: agent) }
@@ -89,6 +89,17 @@ struct SettingsDefaultAgentView: View {
             }.id("pi-models")
             SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope,
                 showsModel: false)
+            SettingsCard(title: "Web search") {
+                Picker("Search provider", selection: Binding(get: { agent.configuration.searchProvider }, set: {
+                    var config = agent.configuration; config.searchProvider = $0; agent.configuration = config
+                })) {
+                    ForEach(ProviderConnectionID.searchProviders) { provider in
+                        Text(provider.name).tag(provider.id)
+                    }
+                }.disabled(!editable)
+                Text("Exa and Firecrawl search the web and read pages. Brave returns search context; use the browser to read pages. Add keys in Accounts → Web search accounts.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             SettingsCard(title: "Code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
                 Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
                     var config = agent.configuration; config.codeMode = $0; agent.configuration = config

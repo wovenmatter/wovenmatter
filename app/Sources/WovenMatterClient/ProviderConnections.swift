@@ -10,6 +10,10 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
     case openRouter = "openrouter"
     case openCodeGo = "opencode-go"
     case exa
+    case brave
+    case firecrawl
+    public static let searchProviders: [Self] = [.exa, .brave, .firecrawl]
+    public var isSearchProvider: Bool { Self.searchProviders.contains(self) }
     public var id: String { rawValue }
     public var name: String {
         switch self {
@@ -22,6 +26,8 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
         case .openRouter: "OpenRouter"
         case .openCodeGo: "OpenCode Go"
         case .exa: "Exa search"
+        case .brave: "Brave Search"
+        case .firecrawl: "Firecrawl"
         }
     }
     public var isSubscription: Bool { self == .chatGPT || self == .grok || self == .claudeSubscription }

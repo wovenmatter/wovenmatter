@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { localServers } from './local-servers.mjs';
 
 export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai', 'xai-api', 'claude-subscription', 'anthropic'];
+export const searchProviderNames = { exa: 'Exa', brave: 'Brave', firecrawl: 'Firecrawl' };
 export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription', 'xai-api': 'xAI · API key', 'claude-subscription': 'Claude · Subscription', anthropic: 'Claude · API key' };
 export const emptyConfig = { providers, models: [], defaultModel: null, fallbackModels: [], searchProvider: 'exa', codeMode: 'on', subagentConcurrency: 8 };
 
@@ -37,7 +38,7 @@ export function validateConfig(input) {
   const supported = [...providers, ...customServers.map(s => s.id)];
   return { customServers, providers: uniqueStrings(input.providers ?? providers).filter(p => supported.includes(p)),
     models: uniqueStrings(input.models), defaultModel: typeof input.defaultModel === 'string' ? input.defaultModel : null,
-    fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: 'exa', codeMode: ['on', 'only', 'off'].includes(input.codeMode) ? input.codeMode : 'on',
+    fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: typeof input.searchProvider === 'string' && Object.hasOwn(searchProviderNames, input.searchProvider) ? input.searchProvider : 'exa', codeMode: ['on', 'only', 'off'].includes(input.codeMode) ? input.codeMode : 'on',
     subagentConcurrency: Number.isInteger(input.subagentConcurrency) && input.subagentConcurrency >= 2 && input.subagentConcurrency <= 24 ? input.subagentConcurrency : 8 };
 }
 // Deliberately excludes generic 429s, transport failures and ambiguous permission errors.

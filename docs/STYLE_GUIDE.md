@@ -99,7 +99,7 @@ when an intentional design change is accepted.
   Add account, preferred/backup labels, or ordering controls. API keys retain their
   account lists. Mobile permits one subscription connection per provider per device,
   with reconnect through the saved connection.
-  OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
+  OpenRouter, OpenCode, Exa, Brave, and Firecrawl show API-key controls directly when expanded.
   Keep their content at the same indentation as the content
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness

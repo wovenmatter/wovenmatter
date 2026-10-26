@@ -25,7 +25,7 @@ command output, account data, paths, or credentials.
 
 | Runtime | Actual local architecture | Release source and action |
 | --- | --- | --- |
-| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. Adapter minimum is 2.2.2; it is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
+| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. Adapter minimum is 2.3.0; it is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
 | Claude Code | `claude-agent-acp`, bundled `@anthropic-ai/claude-agent-sdk` and its platform-native Claude engine (legacy `cli.js` also supported), standalone `claude` sign-in CLI; inherited executable override is reported | Official npm adapter release; `claude update` for an outdated standalone CLI. |
 | OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Newest stable `@opencode/cli` 2.x release; each install/update resolves a fresh compatible release even if upstream `latest` advances to a new major. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |

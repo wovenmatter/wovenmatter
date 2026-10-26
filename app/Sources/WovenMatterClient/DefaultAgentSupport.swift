@@ -94,7 +94,7 @@ public enum DefaultAgentSupport {
         // regardless of whether chat preferences inherit shared settings.
         let keyScope = workspace
         var credentials: [String: DefaultAgentCredential] = [:]
-        for id in ["openai", "openrouter", "opencode-go", "anthropic", "xai-api", "exa"] {
+        for id in ["openai", "openrouter", "opencode-go", "anthropic", "xai-api"] + ProviderConnectionID.searchProviders.map(\.rawValue) {
             if let key = try key(id, scope: keyScope, keychain: keychain) ?? (keyScope == "global" ? nil : key(id, scope: "global", keychain: keychain)),
                 !key.isEmpty
             {

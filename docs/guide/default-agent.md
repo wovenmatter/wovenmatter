@@ -13,7 +13,11 @@ Open **Settings → Pi Durable** to connect providers:
 - **Claude:** use your Claude subscription through Anthropic’s native sign-in,
   an Anthropic API key, or both. They appear as separate model connections.
 - **Grok/xAI:** connect a Grok subscription or a separately billed xAI API key.
-- **Web search:** add an Exa key. Chat and workspace tools work without it.
+- **Web search:** add Exa, Brave, or Firecrawl keys under **Accounts → Web search
+  accounts**, then choose a **Search provider** under **Chat settings → Web search**.
+  Exa remains the default. Exa and Firecrawl also read webpages; Brave returns
+  search context, with the browser available for page reading. Chat and workspace
+  tools work without a search key.
 - **Local Model Server:** connect up to 12 OpenAI Responses-compatible servers.
   Their models appear in the existing Pi Durable model picker.
 

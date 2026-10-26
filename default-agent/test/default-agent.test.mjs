@@ -21,7 +21,7 @@ async function temporary(t) {
 test('search needs its own key and sends bounded, cited results through Exa', async () => {
   await assert.rejects(searchTools()[0].execute('1', { query: 'anything' }), /Add an Exa API key/);
   let request;
-  const tool = searchTools('fixture-key', async (url, options) => {
+  const tool = searchTools({ key: 'fixture-key' }, async (url, options) => {
     request = { url, ...options };
     return { ok: true, json: async () => ({ results: [{ title: 'Source', url: 'https://example.com', text: 'x'.repeat(20000) }] }) };
   })[0];
