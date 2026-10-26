@@ -82,7 +82,7 @@ async function main() {
     for (const address of interfaces.filter(value => value.family === 'IPv4' && !value.internal)) {
       await assert.rejects(fetch(`http://${address.address}:${endpoint.port}/json/version`, { signal: AbortSignal.timeout(1500) }));
     }
-    browser = await chromium.connectOverCDP(stdout.trim());
+    browser = await chromium.connectOverCDP(stdout.trim(), { noDefaults: true });
     const sharedPage = await browser.contexts()[0].newPage();
     await sharedPage.goto(url);
     const sharedTab = (await (await request('tabs')).json()).tabs.find(tab => tab.url === url);
@@ -117,7 +117,7 @@ async function main() {
     await browser.close(); browser = undefined;
     assert.ok((await (await request('tabs')).json()).tabs.some(tab => tab.id === sharedTab.id));
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);
-    browser = await chromium.connectOverCDP(stdout.trim());
+    browser = await chromium.connectOverCDP(stdout.trim(), { noDefaults: true });
     await browser.contexts()[0].pages().find(page => page.url() === sharedPage.url()).close();
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 410);
     await browser.close(); browser = undefined;
