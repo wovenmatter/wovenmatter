@@ -131,29 +131,12 @@ struct RuntimeBoundaryTests {
     #expect(recorder.command?.contains("'" + imageID + "'") == true)
 
 
-    let launch = try RemoteHarnessLaunchResolver.resolve(
-      configuration: configuration,
-      runtimeKind: .codex,
-      processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] }
-    )
-    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] })
-    #expect(builtIn.launch.arguments.last?.contains("default-agent/src/main.mjs") == true)
-    #expect(builtIn.launch.arguments.last?.contains("'--remote'") == true)
-    #expect(builtIn.launch.arguments.last?.contains("runtime-operation.lock") == false)
-    #expect(launch.workspace.rootURL.path == "/home/.woven-matter")
-    #expect(launch.launch.arguments.last?.contains("'HOME=/home'") == true)
-    #expect(launch.launch.arguments.last?.contains("flock --shared --nonblock 9") == true)
-    #expect(launch.launch.arguments.last?.contains("/home/.wovenmatter/runtime-operation.lock") == true)
-    #expect(launch.launch.arguments.last?.contains("Runtime maintenance is in progress") == true)
+    // The retained lifecycle helper is not a supported workspace launch path.
     for runtime in AgentRuntimeKind.allCases {
-      let directory = URL(fileURLWithPath: "/home/projects/a quoted ' directory")
-      let inherited = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
-        processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
-        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory, tailnetSSHOptions: { _ in [] })
-      #expect(inherited.workspace.rootURL == directory)
-      #expect(inherited.workspace.databasesURL.path == "/home/.local/share/wovenmatter/databases")
-      #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
-      #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
+      #expect(throws: RemoteWorkspaceClientError.self) {
+        try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
+          processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"), tailnetSSHOptions: { _ in [] })
+      }
     }
 
     let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)

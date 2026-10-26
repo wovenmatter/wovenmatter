@@ -1,18 +1,20 @@
 # Remote workspaces
 
-Run agents on a Linux machine while using Woven Matter on your Mac. Choose
-**Linux host** to run directly on the machine with its existing tools and
-sign-ins, or **Container** for a separate persistent container home. Both keep
-execution and SQLite state on Linux while the Mac is disconnected.
+Run agents on a Linux machine while using Woven Matter on your Mac. Every remote
+workspace runs Woven Matter directly as a native Linux service, using the SSH
+account's existing tools and sign-ins. Execution and SQLite state remain on Linux
+while the Mac is disconnected.
+
+Remote container workspaces are deprecated and no longer offered or reconnected.
+Native Linux hosts replace that workflow. The separate Docker Executor feature
+is unchanged.
 
 ## What you need
 
 - An online amd64 or arm64 Linux host in your Tailnet.
 - Connected Tailscale on both machines, plus working OpenSSH authentication and trusted host keys.
-- For Linux host: a regular SSH account, Python 3 and a working systemd user
+- A regular SSH account, Python 3 and a working systemd user
   manager. Full root access uses that account's existing passwordless sudo.
-- For Container: Docker Engine 28 or newer, or a supported Ubuntu/Debian host
-  that the app can prepare using existing administrative access.
 - Enough host disk space for workspace files, harnesses, and caches.
 
 Tailscale is required for every remote connection. Select an online Tailnet
@@ -24,19 +26,18 @@ there is no fallback connection mode.
 
 ## Create a workspace
 
-1. Open **Settings → Remote Agent Workspaces**, choose Linux host or Container,
-   and select or enter a host. For Linux host, choose Full root or Normal user
-   permissions for the whole workspace.
+1. Open **Settings → Remote Agent Workspaces** and select or enter a Linux host.
+   Choose Full root or Normal user permissions for the whole workspace.
 2. Selecting a discovered machine checks it automatically. For a hostname entered
    manually, choose **Inspect host**. Inspection does not install software.
 3. If the host needs setup, choose **Prepare host** and authorize the listed
    changes. Native setup installs missing browser dependencies and enables
-   background service startup. Container setup installs or starts Docker.
+   background service startup.
    Preparation does not create a workspace.
 4. Once that host is ready, the workspace form appears. Give the workspace a name
    and ID, acknowledge the host permission notice where shown, and create it.
    Native hosts reuse existing signed-in tools; install any missing adapters or
-   harnesses from setup or Settings. Changing the host, SSH user, kind or access
+   harnesses from setup or Settings. Changing the host, SSH user or access
    choice requires a matching host check.
 5. Choose its agent in **New chat**. Installed harnesses appear automatically;
    there is no separate enable or sidebar visibility setting. Complete sign-in
@@ -47,18 +48,8 @@ Chromium, then proves the browser sandbox works. Failed activation restores the
 previous service. Native host workspaces do not require Docker. See
 [Native Linux hosts](../reference/REMOTE_HOSTS.md) for permissions and details.
 
-The first container workspace on a host builds its image and shows each build phase.
-Later creations reuse a matching image built within the last 24 hours, skipping
-that download and build. Changed or older images rebuild automatically. The
-workspace's **Update** action always builds a fresh image.
-
 If preparation is blocked, resolve the reported requirement on the host and
-inspect again. The app does not remove conflicting container packages or change
-your SSH account's Docker group membership for you. Existing Docker Engine
-installations on other Linux distributions, including Arch and Omarchy, work
-without host preparation. Inspection identifies the Engine component even when
-the distribution omits Docker's display name; an old API, a remote Docker
-endpoint, or an unsupported runtime gets its own explanation.
+inspect again.
 
 ## Browse inside a workspace
 
@@ -66,10 +57,6 @@ Native hosts install matching Chromium and Playwright with a verified browser
 sandbox. Separate browser profiles keep website logins and storage apart; choose
 a profile in the viewer when more than one exists. Agents can pass `profile`
 to `woven_browser`. Host browsing is headless and runs directly on Linux.
-
-Every container workspace image includes Chromium, the Playwright CLI, and the Playwright
-JavaScript library. Agents can run headless browsing from their shell without
-installing packages or downloading a browser.
 
 ### See the agent's tabs in Woven Matter
 
@@ -120,37 +107,21 @@ Each workspace has its own browser; viewing uses the existing authenticated SSH
 connection. The browser-control endpoint is execution-host-loopback-only and is never
 forwarded to the Mac or published on the host.
 
-CommonJS scripts can use `require("playwright")` from any workspace directory.
-ES modules can import from `/usr/local/lib/node_modules/playwright/index.mjs`.
-For a different project-installed Playwright version, set `PLAYWRIGHT_BROWSERS_PATH`
-to a writable project cache before installing and launching its matching browsers,
-or use the embedded version above. Only Chromium is preinstalled; interactive
-headed browsing requires a display server.
-
-The matching Playwright browsers live in the image at `/opt/ms-playwright`, so
-an existing persistent home cannot hide the browser supplied by an image update.
-Use the workspace's **Update** control to apply this support to an existing
-workspace. System Chromium also remains available as `chromium`.
-
-This browser runs on the remote host. The agent's **Browser Use** tool controls
-the embedded browser on your Mac; use shell commands for browsing within the
-remote workspace, including access to its local development servers.
+Use `woven_browser` for the shared native browser, including local development
+servers on the host. Woven installs the matching browser runtime under its
+managed data directory; use **Update server** to refresh that installation.
 
 ## Manage ongoing work
 
-Use the workspace's controls to start, stop, and update it, maintain its
-harnesses, and set resource limits. RAM and additional swap are separate settings. Workspace
-storage uses the host's available capacity; it has no fixed per-workspace quota.
-A stopped workspace may show storage usage as unavailable.
+Use the workspace's Start, Stop, Restart, Update server and Logs controls to
+manage its native service. Workspace storage uses the host's available disk
+space. The host operating system controls memory and swap.
 
-Closing the Mac app is different from stopping a remote container. Supported
-remote scheduling can keep running while the app is closed, provided the host,
-container, agent service, and provider access remain available.
+Closing the Mac app does not stop the remote service. Supported scheduling keeps
+running while the Linux host, agent service and provider access remain available.
+Updates preserve the workspace's durable data. Uninstall and removal of workspace
+data are separate explicit actions.
 
-Updates preserve the persistent home. When deleting a workspace, read the data
-removal choice carefully: deleting that volume removes its files and credentials.
-
-Connections use an authenticated service over an SSH tunnel carried exclusively
-by Tailscale to a host-loopback port. Run **Update container** for existing
-workspaces to apply the private network and image hardening before starting them. For isolation, rollback, storage measurement, and host preparation details,
-see the [technical reference](../reference/REMOTE_WORKSPACES.md).
+Connections use an authenticated service over a Tailscale SSH tunnel to a host
+loopback port. See [Native Linux hosts](../reference/REMOTE_HOSTS.md) for
+permissions, browser verification, storage and service lifecycle details.
