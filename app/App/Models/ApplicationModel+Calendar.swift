@@ -188,7 +188,7 @@ extension ApplicationModel {
         guard let store = dashboardStore, let id = UUID(uuidString: run.sessionID) else { throw ApplicationModelError.dashboardStoreUnavailable }
         let config = run.task.configuration
         if config.runtimeKind == .opencode, config.workspaceID == nil, openCode?.isEnabled != true {
-            throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
+            throw WorkspaceToolError.invalid("Install and connect OpenCode in Local agent workspace before running this task.")
         }
         guard var path = config.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
             throw WorkspaceToolError.invalid("The task has no captured working directory. Edit it before running.")

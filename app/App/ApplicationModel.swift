@@ -129,9 +129,39 @@ final class ApplicationModel {
                     await self.refreshConversation(id: id)
                 }
             }
-            if remoteWorkspaces.isRuntimeEnabled(.opencode, in: configuration) {
+            if remoteWorkspaces.isRuntimeInstalled(.opencode, in: configuration) {
                 if !instance.isReady && !instance.isConnecting && instance.canRestoreAutomatically { await instance.restore() }
             } else { await instance.suspendConnection() }
+        }
+    }
+
+    /// The database owns sidebar membership; live inventory only discovers additions.
+    /// Saved agents remain browsable while a workspace is stopped or unreachable.
+    func synchronizeRemoteAgentCatalog() async {
+        guard !isBackendFrontend, let dashboardStore else { return }
+        do {
+            let ownerID = try await dashboardStore.dashboardDeviceID()
+            var saved = try await dashboardStore.database.dashboardAgents()
+            for configuration in remoteWorkspaces.workspaces {
+                // Pi Durable ships with every managed workspace. Other harnesses
+                // enter the catalog after a verified installation, before sign-in.
+                let installed = Set((remoteWorkspaces.runtimeMaintenance[configuration.id] ?? [])
+                    .filter(\.installed).map(\.id)).union([.defaultAgent])
+                for kind in installed.sorted(by: { $0.presentationRank < $1.presentationRank }) {
+                    guard remoteWorkspaces.configuration(id: configuration.id) == configuration else { break }
+                    guard !saved.contains(where: {
+                        $0.governingPlane == .remoteWorkspace && $0.authorityDeviceID == ownerID
+                            && $0.runtimeDeviceID == configuration.id && $0.runtimeKind == kind
+                    }) else { continue }
+                    _ = try await dashboardStore.database.ensureRemoteHarnessAgent(
+                        runtimeKind: kind, remoteWorkspaceID: configuration.id,
+                        remoteWorkspaceName: configuration.name, ownerDeviceID: ownerID, status: .offline)
+                    saved = try await dashboardStore.database.dashboardAgents()
+                }
+            }
+            await refreshWorkspaceIfChanged()
+        } catch {
+            NSLog("Could not save remote workspace agents: %@", error.localizedDescription)
         }
     }
 
@@ -300,8 +330,7 @@ final class ApplicationModel {
     var selectedCodexUsageWorkspaceID: String? { usage.selectedCodexUsageWorkspaceID }
     private var currentUsageRange: UsageTimeRange { usage.currentUsageRange }
 
-    private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
-    private(set) var shownLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var installedLocalACPRuntimeKinds: Set<AgentRuntimeKind> = [.defaultAgent]
 
     let analytics = ProductAnalyticsModel()
     private(set) var dashboardStore: DashboardStore?
@@ -346,7 +375,6 @@ final class ApplicationModel {
     @ObservationIgnored var applyInitialSessionToolIDs: ((String, [String]) async throws -> Void)?
     @ObservationIgnored var applyingSessionSelectionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored
-    private let localACPRuntimePreferences: LocalACPRuntimePreferences
     @ObservationIgnored
     private let localACPWorkspaceStore: LocalACPWorkspaceConfigurationStore
     @ObservationIgnored
@@ -405,9 +433,6 @@ final class ApplicationModel {
             usageDatabaseURL: (CompanionTestWorkspace.supportDirectory ?? DevelopmentLaunch.supportDirectory)?
                 .appending(path: "workspace.sqlite")))
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
-        self.localACPRuntimePreferences = LocalACPRuntimePreferences(
-            defaults: applicationDefaults
-        )
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
         self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
             homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
@@ -415,11 +440,6 @@ final class ApplicationModel {
                 ?? FileManager.default.homeDirectoryForCurrentUser,
             databasesDirectory: try? Self.dashboardSupportDirectory().appendingPathComponent("ManagedDatabases", isDirectory: true))
         self.dashboardStore = dashboardStore
-        let localACPRuntimePreferenceState = localACPRuntimePreferences.state
-        enabledLocalACPRuntimeKinds =
-            localACPRuntimePreferenceState.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds =
-            localACPRuntimePreferenceState.shownRuntimeKinds
         if applicationDefaults.object(
             forKey: Self.titleGenerationEnabledDefaultsKey
         ) == nil {
@@ -508,8 +528,7 @@ final class ApplicationModel {
                 executableURL: directory.appending(path: "fake-provider"), arguments: [],
                 environment: [:]))
         })
-        enabledLocalACPRuntimeKinds = Set(runtimes)
-        shownLocalACPRuntimeKinds = Set(runtimes)
+        installedLocalACPRuntimeKinds = Set(runtimes)
         localACPWorkspaceLaunchConfiguration = .init(rootURL: directory)
         localACPDatabaseReadyRuntimeKinds = Set(runtimes)
         try await dashboardStore.prepareLocalWorkspace()
@@ -668,9 +687,11 @@ final class ApplicationModel {
                 return try await self.changeRemoteCalendarGateway(configuration, enabled: enabled)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
+                await self?.synchronizeRemoteAgentCatalog()
                 await self?.synchronizeRemoteOpenCodeInstances()
                 await self?.refreshDatabases()
             }
+            await synchronizeRemoteAgentCatalog()
             remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
             await synchronizeRemoteOpenCodeInstances()
             localACPDatabaseReadyRuntimeKinds = Set(
@@ -908,7 +929,7 @@ final class ApplicationModel {
             body["harnesses"] = LocalACPRuntimeCatalog.definitions.filter { $0.runtimeKind != .defaultAgent }.map { definition -> [String: Any] in
                 let executable = resolver.executable(named: definition.underlyingCLIName ?? definition.commandName)?.path
                 return ["id": definition.runtimeKind.rawValue, "name": definition.displayName,
-                        "enabled": enabledLocalACPRuntimeKinds.contains(definition.runtimeKind), "executable": executable ?? NSNull() as Any]
+                        "enabled": installedLocalACPRuntimeKinds.contains(definition.runtimeKind), "executable": executable ?? NSNull() as Any]
             }
             struct Result: Decodable { let statuses: [AgentSignInStatus] }
             let response = try await DefaultAgentControl.run(JSONSerialization.data(withJSONObject: body))
@@ -928,15 +949,8 @@ final class ApplicationModel {
         )
     }
 
-    var visibleOrderedLocalCLIAgents: [WorkspaceAgent] {
-        let visibleRuntimeKinds = LocalACPRuntimePreferences.visibleRuntimeKinds(
-            in: orderedLocalCLIAgents.map(\.runtimeKind),
-            shownRuntimeKinds: shownLocalACPRuntimeKinds
-        )
-        let visibleRuntimeKindSet = Set(visibleRuntimeKinds)
-        return orderedLocalCLIAgents.filter {
-            visibleRuntimeKindSet.contains($0.runtimeKind)
-        }
+    var installedOrderedLocalCLIAgents: [WorkspaceAgent] {
+        orderedLocalCLIAgents.filter { installedLocalACPRuntimeKinds.contains($0.runtimeKind) }
     }
 
     var orderedLocalACPRuntimeDefinitions: [LocalACPRuntimeDefinition] {
@@ -2279,55 +2293,6 @@ final class ApplicationModel {
 
     func reconnectSelectedCodexUsageWorkspace() {
         usage.reconnectSelectedCodexUsageWorkspace()
-    }
-
-    func isLocalACPRuntimeCredentialAccessEnabled(
-        _ runtimeKind: AgentRuntimeKind
-    ) -> Bool {
-        enabledLocalACPRuntimeKinds.contains(runtimeKind)
-    }
-
-    func isLocalACPRuntimeShown(_ runtimeKind: AgentRuntimeKind) -> Bool {
-        shownLocalACPRuntimeKinds.contains(runtimeKind)
-    }
-
-    func setLocalACPRuntimeShown(
-        _ isShown: Bool,
-        runtimeKind: AgentRuntimeKind
-    ) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setShown(runtimeKind, isShown)); return }
-        let state = localACPRuntimePreferences.setShown(
-            isShown,
-            for: runtimeKind
-        )
-        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-    }
-
-    func enableLocalACPRuntimeCredentialAccess(
-        _ runtimeKind: AgentRuntimeKind
-    ) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setCredentialAccess(runtimeKind, true)); return }
-        guard runtimeInventories[runtimeKind]?.isInstalled == true,
-              installingLocalACPRuntimeKinds.isEmpty else { return }
-        acknowledgeCredentialAccessDisclosure()
-        let state = localACPRuntimePreferences.enable(runtimeKind)
-        enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-        refreshLocalACPRuntimesNow(checkCredentialsFor: [runtimeKind])
-    }
-
-    func disableLocalACPRuntimeCredentialAccess(
-        _ runtimeKind: AgentRuntimeKind
-    ) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setCredentialAccess(runtimeKind, false)); return }
-        guard enabledLocalACPRuntimeKinds.contains(runtimeKind) else {
-            return
-        }
-
-        let state = localACPRuntimePreferences.disable(runtimeKind)
-        enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-        refreshLocalACPRuntimesNow()
     }
 
     @discardableResult
@@ -3862,9 +3827,7 @@ final class ApplicationModel {
         let installed = Set(resolutions.compactMap { resolution in
             resolution.availability.executablePath == nil ? nil : resolution.availability.runtimeKind
         })
-        let preferences = localACPRuntimePreferences.adoptInstalled(installed)
-        enabledLocalACPRuntimeKinds = preferences.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds = preferences.shownRuntimeKinds
+        installedLocalACPRuntimeKinds = installed.union([.defaultAgent])
         localACPLaunchConfigurations = resolutions.reduce(into: [:]) {
             configurations, resolution in
             if let launchConfiguration = resolution.launchConfiguration {
@@ -4937,7 +4900,7 @@ extension ApplicationModel {
             launchableKinds: Set(localACPLaunchConfigurations.keys),
             reconciliationError: localACPAgentReconciliationError,
             checkingKinds: checkingLocalACPRuntimeKinds,
-            enabledKinds: enabledLocalACPRuntimeKinds, shownKinds: shownLocalACPRuntimeKinds,
+            installedKinds: installedLocalACPRuntimeKinds,
             inventories: runtimeInventories, failures: runtimeFailures, failureDetails: runtimeFailureDetails,
             checkingInventory: checkingRuntimeInventory, checkingUpdates: checkingRuntimeKinds,
             checkedUpdates: checkedRuntimeKinds, updatingKinds: updatingRuntimeKinds,
@@ -4956,8 +4919,7 @@ extension ApplicationModel {
         backendLaunchableRuntimeKinds = value.launchableKinds
         localACPAgentReconciliationError = value.reconciliationError
         checkingLocalACPRuntimeKinds = value.checkingKinds
-        enabledLocalACPRuntimeKinds = value.enabledKinds
-        shownLocalACPRuntimeKinds = value.shownKinds
+        installedLocalACPRuntimeKinds = value.installedKinds
         runtimeInventories = value.inventories
         runtimeFailures = value.failures
         runtimeFailureDetails = value.failureDetails
@@ -5015,10 +4977,6 @@ extension ApplicationModel {
         case .cancelInstall: cancelPreparedLocalACPRuntimeInstall()
         case .refreshRuntimes(let kinds): refreshLocalACPRuntimesNow(checkCredentialsFor: kinds)
         case .refreshSignIn: await refreshLocalSignInStatus()
-        case .setShown(let kind, let shown): setLocalACPRuntimeShown(shown, runtimeKind: kind)
-        case .setCredentialAccess(let kind, let enabled):
-            if enabled { enableLocalACPRuntimeCredentialAccess(kind) }
-            else { disableLocalACPRuntimeCredentialAccess(kind) }
         case .setUpWorkspace(let url): setUpLocalACPWorkspace(homeDirectory: url)
         case .titleEnabled(let enabled): setTitleGenerationEnabled(enabled)
         case .titleModel(let model): setTitleGenerationModel(model)

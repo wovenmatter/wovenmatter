@@ -71,6 +71,27 @@ containers or installing measurement packages. In particular, usage for a
 stopped named-volume workspace is unavailable because Woven Matter does not
 start a measurement container or access Docker-managed volume contents directly.
 
+## Image reuse and build progress
+
+Creation checks a SHA-256 fingerprint of the bundled Docker inputs before
+packing or uploading them. It reuses a Linux image only when its fingerprint
+and host architecture match and it was built less than 24 hours ago. This bounds
+the delay for upstream base/security updates; it is not an upstream package
+check. Missing, changed, or older images rebuild with `--pull --no-cache`.
+**Update container** always rebuilds, regardless of age.
+
+Builds serialize for the SSH user and recheck after acquiring the lock. Creation
+uses the resulting immutable image ID, so another build cannot change the image
+between verification and container creation. The app streams named build phases
+(base image, Linux dependencies, browser/agent dependencies, and image export)
+without inventing a percentage or duration. A failed build leaves the previous
+image available and does not create a workspace from it.
+
+Build-time npm caches stay outside `/home` and are removed from the image.
+Harness installation uses a workspace-owned npm cache so preserved homes with a
+legacy root-owned `~/.npm` do not prevent adapter installation. Operation IDs are
+normalized when polling installation progress.
+
 ## Updates and deletion
 
 **Update container** rebuilds the app's bundled image definition with a fresh
@@ -93,6 +114,18 @@ an explicit migration.
 [remote/compose.yaml](../../remote/compose.yaml) is a single-workspace example.
 The app uses [remote-workspace.sh](../../scripts/remote-workspace.sh) to manage
 several independently named workspaces.
+
+## Harness availability
+
+Installed harnesses are automatically available and shown in the local and remote
+workspace interfaces. Authentication and verified runtime components still gate
+chat readiness; there are no separate harness enable or visibility preferences.
+Old local preferences are ignored. When connecting to an older workspace image,
+the Mac app clears retired hidden/disabled flags for verified installations.
+New workspace services derive compatibility fields from installed components and
+ignore legacy preference writes; they persist diagnostic failure counts only.
+This migration does not sign in or copy credentials, start conversations, or
+change the workspace's background-execution setting.
 
 ## Maintaining runtime dependencies
 

@@ -163,7 +163,8 @@ ENV HOME=/home \
     WOVENMATTER_WORKSPACE=/home/.woven-matter \
     WOVENMATTER_LISTEN_HOST=0.0.0.0 \
     WOVENMATTER_LISTEN_PORT=7337 \
-    PLAYWRIGHT_BROWSERS_PATH=/home/.cache/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    NODE_PATH=/usr/local/lib/node_modules
 
 COPY --from=workspace-ssh-build /openssh-install/ /
 COPY --from=workspace-security-build /archive-tar-install/usr/local/share/perl/ /usr/local/share/perl/
@@ -173,6 +174,7 @@ COPY --chown=woven:woven default-agent/package*.json ./default-agent/
 # npm bundles an affected undici even in its current release. Replace that
 # vendored module with the locked current API-compatible security selection.
 # The workspace Playwright CLI matches playwright-core in the tested lockfile.
+# Keep browsers outside /home so persistent volumes cannot hide image updates.
 RUN export npm_config_cache=/tmp/wovenmatter-npm-build-cache \
     && npm install --global --ignore-scripts --no-audit --no-fund 'npm@>=12.2.1' \
     && npm ci --prefix npm-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
@@ -181,6 +183,10 @@ RUN export npm_config_cache=/tmp/wovenmatter-npm-build-cache \
     && cp -a /opt/wovenmatter/npm-runtime/node_modules/ip-address /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && npm install --global --ignore-scripts --no-audit --no-fund \
       "playwright@$(node -p 'require("./default-agent/package-lock.json").packages["node_modules/playwright-core"].version')" \
+    && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/* \
+    && find /usr -xdev -type f -perm /6000 -exec chmod a-s '{}' + \
     && cd default-agent && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && rm -rf "$npm_config_cache"
 COPY --chown=woven:woven default-agent/src ./default-agent/src
@@ -189,7 +195,8 @@ COPY --chown=woven:woven remote/src ./src
 COPY --chown=woven:woven remote/entrypoint.sh ./entrypoint.sh
 COPY --chown=woven:woven harnesses ./harnesses
 
-RUN ln -s /opt/wovenmatter/src/wovenmatter /usr/local/bin/wovenmatter
+RUN ln -s /opt/wovenmatter/src/wovenmatter /usr/local/bin/wovenmatter \
+    && ln -s /opt/wovenmatter/src/woven-browser /usr/local/bin/woven-browser
 
 USER woven
 EXPOSE 7337

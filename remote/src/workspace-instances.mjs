@@ -84,7 +84,7 @@ export function createWorkspaceInstances(options) {
     } catch (error) { return { ...base, state: 'unavailable', lastError: publicError(error) } }
   }
   async function start() {
-    if (!await isEnabled('opencode')) throw fail(409, 'runtime_disabled')
+    if (!await isEnabled('opencode')) throw fail(409, 'runtime_not_installed')
     prepareCLI()
     const existing = await registration()
     if (existing && alive(existing.pid)) { await health(existing); return }
@@ -157,7 +157,7 @@ export function createWorkspaceInstances(options) {
     return status(kind)
   }
   async function proxy(request, response, url) {
-    if (!await isEnabled('opencode')) throw fail(409, 'runtime_disabled')
+    if (!await isEnabled('opencode')) throw fail(409, 'runtime_not_installed')
     const path = url.pathname.slice(prefix.length)
     if (!path.startsWith('/api/') || path.includes('\\')) throw fail(400, 'invalid_opencode_path')
     const info = await registration()
@@ -219,6 +219,6 @@ export function createWorkspaceInstances(options) {
 
 function publicError(error) {
   // Only our fixed identifiers are safe to expose. Never child stderr, auth, or URLs.
-  return /^(opencode|workspace_instance|runtime_disabled)[a-z_]*$/.test(error.message ?? '')
+  return /^(opencode|workspace_instance|runtime_not_installed)[a-z_]*$/.test(error.message ?? '')
     ? error.message : 'workspace_instance_operation_failed'
 }

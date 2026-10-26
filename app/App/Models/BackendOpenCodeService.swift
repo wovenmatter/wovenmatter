@@ -5,7 +5,7 @@ import WovenMatterDashboardStore
 
 enum BackendOpenCodeCommand: Codable, Sendable {
     case browserURL
-    case restore, resolve, download, stop, restart, suspend, disable
+    case restore, resolve, download, stop, restart, suspend
     case connect(Bool)
     case serverPreferences(Bool, Bool)
     case create(URL, UUID?, String?, String?, Bool, SessionCreationRoot)
@@ -48,7 +48,6 @@ struct BackendOpenCodeService {
         case .stop: try await model.stopServer()
         case .restart: try await model.restartServer()
         case .suspend: await model.suspendConnection()
-        case .disable: await model.disable()
         case .connect(let start): try await model.connectLocal(allowStart: start)
         case .serverPreferences(let start, let stop): model.startServerOnLaunch = start; model.stopServerOnQuit = stop
         case .create(let workspace, let id, let title, let native, let allowMissingCalendarFolder, let executionRoot):

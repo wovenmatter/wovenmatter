@@ -90,22 +90,22 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   const loaded = readFile(statePath, 'utf8').then(text => {
     const saved = JSON.parse(text)
     for (const h of catalog.values()) {
-      if (typeof saved[h.id]?.enabled === 'boolean') states.set(h.id, { enabled: saved[h.id].enabled, visible: saved[h.id]?.visible !== false, failureCount: Number(saved[h.id]?.failureCount) || 0 })
+      states.set(h.id, { failureCount: Number(saved[h.id]?.failureCount) || 0 })
     }
-  }).catch(error => {
-    // Missing preferences predate runtime management. Unreadable/corrupt saved
-    // preferences must not accidentally turn an explicitly disabled runtime on.
-    if (error.code !== 'ENOENT') for (const h of catalog.values()) states.set(h.id, { enabled: false, visible: true, failureCount: 0 })
-  })
-  async function state(id) { await loaded; if (!states.has(id)) states.set(id, { enabled: undefined, visible: true, failureCount: 0 }); return states.get(id) }
+  }).catch(() => {})
+  async function state(id) { await loaded; if (!states.has(id)) states.set(id, { failureCount: 0 }); return states.get(id) }
   function persist() {
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       await mkdir(dirname(statePath), { recursive: true, mode: 0o700 })
-      const data = Object.fromEntries([...states].filter(([, s]) => typeof s.enabled === 'boolean').map(([id, s]) => [id, { enabled: s.enabled, visible: s.visible, failureCount: s.failureCount }]))
+      const data = Object.fromEntries([...states].map(([id, s]) => [id, { failureCount: s.failureCount }]))
       await writeFile(statePath + '.tmp', JSON.stringify(data), { mode: 0o600 }); await rename(statePath + '.tmp', statePath)
     }); return saveQueue
   }
-  const run = (command, timeout) => execute(command, environment(), workspaceRoot, timeout)
+  // Older images copied a root-owned $HOME/.npm into named home volumes.
+  // Keep all installer subprocesses on a cache owned by this workspace user.
+  const run = (command, timeout) => execute(command, {
+    ...environment(), npm_config_cache: resolve(workspaceRoot, '.wovenmatter/npm-cache'),
+  }, workspaceRoot, timeout)
   async function component(id, name, command, required = true) {
     const found = await run(`command -v ${quote(command)}`)
     const path = found.code === 0 ? found.output.trim().split('\n')[0] : null
@@ -185,19 +185,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     const storedOperation = operations.get(h.id) ?? null
     const operation = storedOperation && !storedOperation.finishedAt ? { ...storedOperation, status: 'running' } : storedOperation
     const installed = components.every(c => !c.required || c.installed)
-    if (s.enabled === undefined) {
-      // Before preferences existed, installed runtimes were usable immediately.
-      // Preserve that state once, after verifying all required components. A
-      // missing runtime stays disabled even if it is installed on a later run.
-      s.enabled = installed
-      await persist()
-    }
+    s.installed = installed
     let notice = h.id === 'opencode' ? 'OpenCode v2 releases can be updated independently.' : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
     const bundled = components.find(c => c.id === 'bundled')
     if (bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
     if (checkLatest && (main.latestVersion === null || (bundled && (!bundled.latestVersion || !bundled.updateTargetVersion)))) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
     s.notice = checkLatest ? notice : notice ?? s.notice ?? null
-    return { id: h.id, displayName: h.displayName, enabled: s.enabled, visible: s.visible, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => precedes(c.installedVersion, updateTarget(c))) }
+    return { id: h.id, displayName: h.displayName, enabled: installed, visible: true, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => precedes(c.installedVersion, updateTarget(c))) }
   }
   async function busy(h) {
     if (await hasActiveRuntime(h.id)) return true
@@ -280,29 +274,24 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       operations.set(h.id, { id: randomUUID(), harnessID: h.id, action, status: 'failed', output: '', error: sanitize(error.message, environment()), startedAt: now, finishedAt: now })
       await persist()
     },
-    async isEnabled(id) {
-      const s = await state(id)
-      if (s.enabled === undefined && catalog.has(id)) await inventory(catalog.get(id))
-      return s.enabled === true
+    async isInstalled(id) {
+      const harness = catalog.get(id)
+      if (!harness) return false
+      const current = await state(id)
+      // Hot execution paths use the last verified inventory; refresh/install
+      // updates it without spawning version probes for every API request.
+      return current.installed ?? (await inventory(harness)).installed
     },
     isBusy(id) { return Boolean(operations.get(id) && !operations.get(id).finishedAt) },
-    operation: id => { const op = [...operations.values()].find(op => op.id === id); return op && !op.finishedAt ? { ...op, status: 'running' } : op },
+    operation: id => { const op = [...operations.values()].find(op => op.id === String(id).toLowerCase()); return op && !op.finishedAt ? { ...op, status: 'running' } : op },
     start,
     async list() { return { runtimes: await Promise.all([...catalog.values()].map(h => inventory(h))) } },
     async check() {
       if (!checks) checks = (async () => ({ runtimes: await Promise.all([...catalog.values()].map(async h => {
-        const s = await state(h.id)
-        if (s.enabled === undefined) await inventory(h)
-        return inventory(h, s.enabled === true)
+        const current = await inventory(h)
+        return current.installed ? inventory(h, true) : current
       })) }))().finally(() => { checks = null })
       return checks
-    },
-    async preferences(h, body) {
-      const s = await state(h.id)
-      if (body.enabled === true && !(await inventory(h)).installed) throw failure('runtime_requirements_not_verified')
-      if (typeof body.enabled === 'boolean') s.enabled = body.enabled
-      if (typeof body.visible === 'boolean') s.visible = body.visible
-      await persist(); return inventory(h)
     },
   }
 }
