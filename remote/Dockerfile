@@ -29,18 +29,47 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && install -m 0644 ssh_config /openssh-install/etc/ssh/ssh_config \
     && install -m 0644 LICENCE /openssh-install/usr/local/share/licenses/openssh/LICENCE
 
+# Current upstream Python avoids carrying the old Debian interpreter and its
+# vulnerable venv wheel bundle. Both runtimes use the same stable Debian ABI.
+FROM python:3.15-slim-trixie AS workspace-python
+RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.2.2' 'setuptools>=84.2.1' \
+    && find /usr/local -type f -executable ! -name '*tkinter*' -exec ldd '{}' ';' 2>/dev/null \
+      | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
+      | sort -u | xargs -r dpkg-query --search \
+      | awk 'sub(":$", "", $1) { print $1 }' | sort -u > /python-runtime-packages
+
+# Reviewed source repairs preserve runtime SONAMEs and Debian's symbol checks.
+# Signed APT source indexes authenticate the selected original sources.
+FROM workspace-ssh-build AS workspace-security-build
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
+    && echo 'deb-src http://deb.debian.org/debian sid main' > /etc/apt/sources.list.d/wovenmatter-sid-source.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends python3 devscripts debhelper patch autoconf automake libtool util-linux \
+    && useradd --system --create-home wm-build
+COPY remote/security /security
+RUN chmod -R a+rX /security \
+    && python3 /security/build-backports.py \
+    && curl --proto '=https' --tlsv1.2 -fsSL https://cpan.metacpan.org/authors/id/B/BI/BINGOS/Archive-Tar-3.14.tar.gz -o /tmp/archive-tar.tgz \
+    && echo '177ce0506124afbe3ef95836761fb0799c941b87b79bac489bddc6cda860d904  /tmp/archive-tar.tgz' | sha256sum --check --status \
+    && tar --no-same-owner --no-same-permissions -xzf /tmp/archive-tar.tgz -C /tmp \
+    && cd /tmp/Archive-Tar-3.14 && perl Makefile.PL && make test \
+    && make install DESTDIR=/archive-tar-install
+
 FROM node:26-trixie-slim
 
 LABEL com.wovenmatter.workspace-uid="10001" \
       com.wovenmatter.workspace-gid="10001"
 
+COPY --from=workspace-python /python-runtime-packages /tmp/python-runtime-packages
+COPY --from=workspace-python /usr/local/ /usr/local/
+COPY --from=workspace-security-build /security-output/ /tmp/security-output/
 RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
       bash ca-certificates chromium curl git jq libedit2 libfido2-1 \
-      procps python3 python3-venv ripgrep tini util-linux \
+      procps ripgrep tini util-linux $(cat /tmp/python-runtime-packages) \
     && apt-get install -y --no-install-recommends -t trixie-backports curl libcurl4t64 libcurl3t64-gnutls \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.21.0 \
     && mkdir -p /etc/apt/keyrings \
@@ -49,12 +78,19 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' gh)" ge 2.103.2 \
-    && rm -rf /var/lib/apt/lists/* \
+    && apt-get install -y --no-install-recommends /tmp/security-output/*.deb \
+    && mkdir -p /usr/local/share/wovenmatter/security \
+    && cp -a /tmp/security-output/provenance /usr/local/share/wovenmatter/security/ \
+    && rm -rf /var/lib/apt/lists/* /tmp/security-output /tmp/python-runtime-packages \
     && userdel --remove node \
     && groupadd --gid 10001 woven \
     && useradd --no-create-home --home-dir /home --shell /bin/bash --uid 10001 --gid 10001 woven \
     && chown woven:woven /home \
-    && chmod 0750 /home
+    && chmod 0750 /home \
+    && test ! -e /usr/bin/python3 && ln -s /usr/local/bin/python3 /usr/bin/python3 \
+    && rm -f /usr/bin/xdg-email \
+    && find /usr -xdev -type f -perm /6000 -exec chmod a-s '{}' + \
+    && ldconfig
 
 ENV HOME=/home \
     WOVENMATTER_WORKSPACE=/home/.woven-matter \
@@ -63,6 +99,7 @@ ENV HOME=/home \
     PLAYWRIGHT_BROWSERS_PATH=/home/.cache/ms-playwright
 
 COPY --from=workspace-ssh-build /openssh-install/ /
+COPY --from=workspace-security-build /archive-tar-install/usr/local/share/perl/ /usr/local/share/perl/
 WORKDIR /opt/wovenmatter
 COPY remote/npm-runtime/package*.json ./npm-runtime/
 COPY --chown=woven:woven default-agent/package*.json ./default-agent/

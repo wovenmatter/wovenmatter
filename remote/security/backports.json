@@ -1,0 +1,161 @@
+[
+  {
+    "source": "libxml2",
+    "version": "2.12.7+dfsg+really2.9.14-2.1+deb13u3",
+    "binaries": [
+      "libxml2"
+    ],
+    "patches": [
+      {
+        "file": "patches/libxml2-CVE-2026-6653.patch",
+        "sha256": "6c2b8a7b6fa470efcb1854e5c73bd7e1ae1663d8b111e27ce9232bbc1fe44f54",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-6653.patch?h=ubuntu/noble-security"
+      },
+      {
+        "file": "patches/libxml2-CVE-2026-74860.patch",
+        "sha256": "546cc59a213567f925437c46ba85e60cb5fc92fd6337c83ccd074e91cc64cc1e",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-74860.patch?h=ubuntu/noble-security"
+      },
+      {
+        "file": "patches/libxml2-CVE-2026-86138.patch",
+        "sha256": "05e5da494f3e7b5ea9500ffe6c0ef0ebac762aae956c9b8808826dc24871f003",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-86138.patch?h=ubuntu/noble-security"
+      },
+      {
+        "file": "patches/libxml2-CVE-2026-86140.patch",
+        "sha256": "6f3e6bd911a1b0d58ebad1ff752e2302f9e8b92ec32c7461774aa998c1a2b3c0",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-86140.patch?h=ubuntu/noble-security"
+      },
+      {
+        "file": "patches/libxml2-CVE-2026-86142.patch",
+        "sha256": "ee0b790809fb0fa3b0af19ef8dd61c10707c9e2f9bbfae52b63d735a15bfafd8",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-86142.patch?h=ubuntu/noble-security"
+      },
+      {
+        "file": "patches/libxml2-CVE-2026-86143.patch",
+        "sha256": "e809e00ceeb0c4b12997bf46cc411970f4a269ef7e3548acba9973bb5535cea8",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-86143.patch?h=ubuntu/noble-security"
+      },
+      {
+        "file": "patches/libxml2-CVE-2026-86144.patch",
+        "sha256": "85809cce7c841d76de73d133fc681614850123dcf27f93b179e2e9ac5426c8f7",
+        "origin": "https://git.launchpad.net/ubuntu/+source/libxml2/plain/debian/patches/CVE-2026-86144.patch?h=ubuntu/noble-security"
+      }
+    ]
+  },
+  {
+    "source": "ncurses",
+    "version": "6.5+20250216-2",
+    "binaries": [
+      "ncurses-bin",
+      "ncurses-base",
+      "libtinfo6",
+      "libncursesw6"
+    ],
+    "patches": [
+      {
+        "file": "patches/ncurses-CVE-2025-69720.patch",
+        "sha256": "e8c2ead2b87a64f38cf071d561846815d81403fbcac31db342b321c0a46f912c",
+        "origin": "https://git.launchpad.net/ubuntu/+source/ncurses/plain/debian/patches/CVE-2025-69720.patch?h=ubuntu/noble-security"
+      }
+    ]
+  },
+  {
+    "source": "libsndfile",
+    "version": "1.2.2-2+deb13u1",
+    "binaries": [
+      "libsndfile1"
+    ],
+    "patches": [
+      {
+        "file": "patches/libsndfile-CVE-2026-37555.patch",
+        "sha256": "19828cfdc17b80f13c8d1fcc8b828ea5c328071d91171c6d80f94a2e1499b719",
+        "origin": "https://github.com/libsndfile/libsndfile/pull/1123.patch"
+      }
+    ]
+  },
+  {
+    "source": "libx11",
+    "version": "2:1.8.12-1",
+    "binaries": [
+      "libx11-6",
+      "libx11-xcb1",
+      "libx11-data"
+    ],
+    "patches": [
+      {
+        "file": "patches/libx11-CVE-2026-88806.patch",
+        "sha256": "dd9ecf20d2ca40c7ec3d8cdf3727c729f9fae3b6cc010e9436f152ae7cd6da31",
+        "origin": "https://gitlab.freedesktop.org/xorg/lib/libx11/-/commit/6d4432b13c0b3b6a644c13de9c793a14db48d545.patch"
+      }
+    ]
+  },
+  {
+    "source": "libxrender",
+    "version": "1:0.9.12-1",
+    "binaries": [
+      "libxrender1"
+    ],
+    "patches": [
+      {
+        "file": "patches/libxrender-CVE-2026-88807.patch",
+        "sha256": "565e816e88ca223cebc6f833cfcfa63d20aaa22c8293d878bdd059910c4a66fc",
+        "origin": "https://gitlab.freedesktop.org/xorg/lib/libxrender/-/commit/0564bce5446550c1b1681f3d8a933c20ea1455f7.patch"
+      }
+    ]
+  },
+  {
+    "source": "libxtst",
+    "version": "2:1.2.5-1",
+    "binaries": [
+      "libxtst6"
+    ],
+    "patches": [
+      {
+        "file": "patches/libxtst-CVE-2026-94286.patch",
+        "sha256": "351f3b043c4e0604fdb11c2d944e93c7b130301d9562ec2d27ad2e2a0fe8b27c",
+        "origin": "https://gitlab.freedesktop.org/xorg/lib/libxtst/-/commit/b84737d8400db7f06293822838d0e1c374cf71c4.patch"
+      }
+    ]
+  },
+  {
+    "source": "tiff",
+    "version": "4.7.2-1",
+    "binaries": [
+      "libtiff6"
+    ],
+    "patches": [],
+    "suite": "sid"
+  },
+  {
+    "source": "acl",
+    "version": "2.4.0-1",
+    "binaries": [
+      "libacl1"
+    ],
+    "patches": [],
+    "suite": "sid"
+  },
+  {
+    "source": "util-linux",
+    "version": "2.41.5-0+deb13u1",
+    "binaries": [
+      "bsdutils",
+      "libblkid1",
+      "liblastlog2-2",
+      "libmount1",
+      "libsmartcols1",
+      "libuuid1",
+      "login",
+      "mount",
+      "util-linux"
+    ],
+    "patches": [
+      {
+        "file": "patches/util-linux-2.41.6-security.patch",
+        "sha256": "e8ef8694af9ce8702747fde00e0e8355ae59e0795dc35a753ecadd2af0aac31a",
+        "origin": "https://github.com/util-linux/util-linux/compare/v2.41.5...ba905a1874959c70fd706aa7d49df61076864e0a"
+      }
+    ]
+  }
+]

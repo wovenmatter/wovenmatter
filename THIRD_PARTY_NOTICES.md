@@ -311,3 +311,22 @@ Artistic License 2.0 and dependency notices. Its bundled undici is replaced by t
 locked current security selection in `remote/npm-runtime`; undici retains its
 MIT license in its installed package. This replacement changes dependency
 selection and does not modify undici source.
+
+The image includes the official Python 3.15 runtime and the current pip and
+setuptools distributions. Their installed license and notice files are retained.
+Archive::Tar 3.14 is installed from its checksummed CPAN release under the same
+terms as Perl; its module documentation is retained.
+
+The standalone Executor image replaces the runtime's bundled sharp selection
+with locked sharp 0.35.5 and the corresponding prebuilt libvips packages.
+Their Apache-2.0, LGPL-3.0-or-later, and dependency notices remain in the
+installed packages. The replacement changes dependency selection and does not
+modify upstream source.
+
+Selected Debian runtime libraries are rebuilt from authenticated Debian source
+packages. Reviewed Ubuntu or upstream security patches are applied where Debian
+stable has not yet published a fixed binary. Package copyright files remain
+under `/usr/share/doc`; exact source versions, patch origins, hashes, and Debian
+build provenance are retained under
+`/usr/local/share/wovenmatter/security/provenance` in the image and in
+`remote/security/backports.json` in this repository.

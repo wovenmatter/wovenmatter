@@ -7,6 +7,8 @@ remote/**
 !remote/package.json
 !remote/src/
 !remote/src/**
+!remote/security/
+!remote/security/**
 !remote/npm-runtime/
 remote/npm-runtime/**
 !remote/npm-runtime/package.json

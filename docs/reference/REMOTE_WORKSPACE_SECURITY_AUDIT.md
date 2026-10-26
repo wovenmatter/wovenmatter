@@ -5,9 +5,9 @@
 Reviewed the desktop connection, SSH provisioning/lifecycle, attachment and shared
 file transfer, Docker image/Compose definitions, control HTTP service, scoped
 execution grants, runtime installers, instance proxies, persistent storage,
-scheduling, and client publication paths. The separate Executor application and
-host-wide services are not workspace container components; this change does not
-upgrade or redeploy either.
+scheduling, client publication paths, and the separate managed Executor image
+and deployment flow. Host-wide services are outside the image boundary. No
+installed workspace, Executor, Docker daemon, or Tailscale daemon was changed.
 
 The external network boundary is Tailscale. Peer selection comes from the local
 trusted daemon, and SSH streams use that daemon's `DialTCP` transport through
@@ -45,8 +45,26 @@ graph with `npm update --package-lock-only --ignore-scripts` before hardening.
   installation and `npm ci` validate CLI compatibility. Build caches are kept
   outside the persistent home and removed after installation.
 - curl/libcurl use the signed Debian stable-backports 8.21.0 packages, including
-  all installed TLS variants. Other OS packages retain Debian's stable security
-  channel rather than mixing testing/unstable libraries into the runtime.
+  all installed TLS variants. Python uses the current official 3.15 slim runtime
+  with current pip and setuptools rather than Debian's affected 3.13 runtime.
+- Libraries that Debian stable has not repaired are rebuilt from authenticated
+  source against the stable runtime ABI. Fixed current Debian sources supply
+  tiff and acl. Util-linux is rebuilt from Debian stable with the missing 2.41.6
+  security fixes plus the stable-branch correction that makes the symlink guard
+  effective on older glibc. Reviewed security patches also cover stable libxml2,
+  ncurses, libsndfile, libX11, libXrender, and libXtst. Exact source versions,
+  patch origins, and patch hashes live in `remote/security/backports.json`; build
+  provenance remains in the image. CVE-2026-6653 is reproduced with the public
+  fixture under AddressSanitizer before the libxml2 patch, then the identical
+  check must pass after patching.
+- The Executor image applies the same locked npm undici/ip-address replacements,
+  upgrades npm to 12.2.1, and replaces its upstream-bundled sharp 0.35.4 runtime
+  with locked sharp 0.35.5/libvips 1.3.4. It rebuilds only the Debian source
+  repairs its smaller runtime needs: ncurses, acl, and util-linux.
+- Archive::Tar is replaced by upstream 3.14 after its own tests pass. Components
+  implicated only in absent executables are kept out of the runtime: no CUPS
+  server, systemd-homed, tiffcrop, Thunderbird, libxml2 Python bindings, or
+  xdg-email entry point is present. All setuid and setgid bits are stripped.
 - Debian's gh 2.46.0 retains CVE-2026-48501. The image now uses the official
   signed stable GitHub CLI repository, verifies its published signing-keyring
   checksum, and requires at least the current 2.103.2 release.
@@ -63,6 +81,9 @@ graph with `npm update --package-lock-only --ignore-scripts` before hardening.
   upgrades remain operator actions; no installed machine was changed by this PR.
   The enforced Docker security floor is 28, which contains the localhost
   publishing isolation fix. Current patch releases are still required by policy.
+- CI builds and runs the full image lifecycle independently on native amd64 and
+  arm64 GitHub-hosted runners. Build stages contain compilers; the final runtime
+  does not.
 
 Sources: [Node security release](https://nodejs.org/en/blog/release/v26.12.1),
 [Docker releases](https://github.com/moby/moby/releases),
@@ -79,10 +100,11 @@ review date; they are point-in-time evidence.
 
 | Finding | Change |
 | --- | --- |
-| Arbitrary SSH hosts and SSH proxy configuration could select a LAN/public path. | Every production workspace SSH entry point uses a verified online Tailnet peer and a forced daemon transport. Removed optional-Tailscale setup language and generic host guidance. No LAN mode or compatibility path remains. |
+| Arbitrary SSH hosts and SSH proxy configuration could select a LAN/public path. | Every production workspace and Executor-deployment SSH entry point independently resolves one verified online Tailnet peer and forces `tailscale nc`. Removed optional-Tailscale setup language and generic host guidance. No LAN mode or compatibility path remains. |
 | A multiplexed SSH connection or a tunnel cached only by configuration ID could survive a destination change. | Disable SSH multiplexing and reuse a tunnel only when the full configuration and freshly resolved peer transport options still agree. |
 | Older Docker localhost publications can be reachable from adjacent hosts. | Reject Docker Engine versions below 28 in inspection and lifecycle operations. |
 | Workspaces shared Docker's default bridge. | Dedicated owned NAT bridges, inter-container communication disabled, no trusted external interfaces, and loopback-only publication. Start/share checks reject containers that have not been updated. |
+| The standalone Executor used Docker host networking. | It now uses its own managed bridge with inter-container communication disabled and publishes only to `127.0.0.1`. Tailscale Serve is the sole remote route. A failed upgrade never restores a legacy host-network container. |
 | Lifecycle could operate on an unrelated container with the expected name. | Require matching workspace ownership labels before reading status or changing/deleting/sharing a container; retain volume ownership validation. |
 | API tokens appeared in `docker`/`sudo` process arguments. | Use a private, automatically cleaned environment file; validate credential length and characters before activation. The image health check also reads its credential inside Node rather than putting it in curl arguments. Docker administrators can still inspect container environment, as expected under the host trust model. |
 | Root-owned lifecycle locks could follow a precreated symlink. | Require an owned ordinary lock directory before setting permissions or acquiring locks. |
@@ -99,9 +121,11 @@ use random bearer secrets and hashed token lookup; revocation is persisted.
 Unlock envelopes and publisher credentials use authenticated encryption bound to
 the workspace/device identity. The outbound publisher refuses redirects.
 
-Container processes retain non-root UID/GID 10001, dropped capabilities,
+Container processes retain non-root identities, dropped capabilities,
 `no-new-privileges`, read-only image layers, private home volumes, bounded rotated
-logs, and image replacement with rollback. File retention opens bounded regular
+logs, and image replacement with rollback. The standalone Executor has the same
+read-only root, capability, privilege, PID, loopback-publish, and private-bridge
+controls; its persistent data bind mount is the only writable state. File retention opens bounded regular
 files without following final symlinks and checks the opened descriptor's
 confinement and identity. Managed databases and project operations restrict their
 paths. Instance proxies validate loopback registrations and reject redirects.
@@ -111,20 +135,21 @@ provider-free fixtures; no live sign-in or provider request is part of this revi
 
 ## Residual image findings
 
-The fresh image scan has zero detected Node/npm vulnerabilities after the
-vendored-module replacements. The distribution still reports one critical and
-103 high package findings, including issues with deferred or unavailable Debian
-stable fixes. They are not suppressed or marked resolved. See the
-[complete high/critical advisory inventory and triage](REMOTE_WORKSPACE_IMAGE_FINDINGS.md),
-including Debian’s lower-severity assessment of the libxml2 critical finding and
-the outstanding GitHub CLI Go-module advisory. This PR does not claim the image
-is vulnerability-free or authorize its deployment.
+The clean workspace scan reports 1 critical and 81 high raw records; the clean
+Executor scan reports 0 critical and 54 high. No record was suppressed. Source
+repairs, current releases, absent vulnerable entry points, and stale embedded
+SBOM entries account for every raw high/critical family; after that evidence-based
+triage, no known unmitigated high/critical finding remains in the live runtime.
+See the [complete disposition](REMOTE_WORKSPACE_IMAGE_FINDINGS.md), including
+why the locally repaired libxml2 critical record remains visible and the
+outstanding unknown-severity GitHub CLI Go-module record. This PR does not claim
+either image is vulnerability-free or authorize deployment.
 
 ## Validation and remaining operational boundary
 
 Focused daemon-transport tests inspect OpenSSH’s effective configuration with
 conflicting SSH settings and cover peer selection, unusable daemon/peer state,
-ambiguity, and IPv6 peers. Existing service and container smoke suites exercise
+ambiguity, IPv6 peers, and the standalone Executor deployer. Existing service and container smoke suites exercise
 API authorization and scope separation, parser rejection, permissions, isolation,
 restart/update persistence and explicit deletion. LAN behavior has no
 compatibility fixture or retained implementation.
@@ -134,15 +159,15 @@ The local Mac has no running Docker daemon. Real image construction, container
 lifecycle, private bridge isolation, ownership/permission checks, and deletion
 were therefore exercised in disposable containers on an existing Linux host via
 Tailscale. Images used unique test-only tags, and test resources were removed.
-Linux image validation and scanning used amd64; the arm64 image was not locally
-exercised. No installed workspace was replaced. Live Tailnet policy, host firewall,
+Linux image validation and scanning used amd64; the arm64 image is owned by
+hosted native-arm64 CI. No installed workspace was replaced. Live Tailnet policy, host firewall,
 OS/package inventory, and existing installed workspace images were not changed
 or penetration-tested. Accepting this source change does not patch installed
 containers: users must explicitly update them. Tailnet operators must restrict
 SSH and Serve ports using their access policy and maintain host security updates.
 
-Local static, default-agent, remote, SwiftPM, and desktop companion integration
-checks passed. The full local command reached the macOS build and was blocked
-by missing CMake. iOS UI validation built but could not run because Xcode's
-simulator reported `DTServiceHubClient failed to bless service hub`. These are
-unpassed local native/UI checks; hosted CI results are recorded in the PR.
+Local deterministic remote validation, deployment fixtures, default-agent
+transport tests, clean amd64 image builds, container lifecycle checks, native
+helper checks, provider-free Executor behavior checks, and checksum-verified
+image scans passed. Hosted macOS, companion, iOS, amd64, and native arm64 results
+are recorded in the PR.

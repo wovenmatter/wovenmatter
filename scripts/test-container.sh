@@ -77,6 +77,23 @@ printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(docker exec "$container_a" stat -c '%a' /home/.woven-matter)" = 700 ]
 docker exec "$container_a" ssh -V
 docker exec "$container_a" node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); for(const name of ["undici","ip-address"]){const expected=require("/opt/wovenmatter/npm-runtime/node_modules/"+name+"/package.json").version; if(npm(name+"/package.json").version!==expected)process.exit(1)}'
+printf '%s\n' 'Checking patched system runtimes and excluded vulnerable components.'
+docker exec "$container_a" sh -ec '
+  python3 -c "import sqlite3, ssl, sys; assert sys.version_info >= (3, 15, 1)"
+  perl -MArchive::Tar -e '\''exit(Archive::Tar->VERSION ge "3.14" ? 0 : 1)'\''
+  dpkg --compare-versions "$(dpkg-query -W -f=\${Version} libxml2)" ge "2.12.7+dfsg+really2.9.14-2.1+deb13u3+wmsecurity1"
+  dpkg --compare-versions "$(dpkg-query -W -f=\${Version} libtiff6)" ge "4.7.2-1"
+  dpkg --compare-versions "$(dpkg-query -W -f=\${Version} libacl1)" ge "2.4.0-1"
+  dpkg --compare-versions "$(dpkg-query -W -f=\${Version} util-linux)" ge "2.41.5-0+deb13u1+wmsecurity1"
+  command -v chromium >/dev/null
+  ! command -v cupsd >/dev/null
+  ! command -v systemd-homed >/dev/null
+  ! command -v tiffcrop >/dev/null
+  ! command -v thunderbird >/dev/null
+  ! command -v xdg-email >/dev/null
+  ! python3 -c "import libxml2" >/dev/null 2>&1
+  ! find /usr -xdev -type f -perm /6000 -print -quit | grep -q .
+'
 
 # Even possession of the other workspace's API token cannot cross its bridge.
 ip_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container_a")"

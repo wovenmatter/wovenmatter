@@ -1,82 +1,71 @@
 # Remote workspace image findings — 2026-10-25
 
-Fresh Node 26 / Debian 13.7 image, rebuilt with current package indexes and
-security upgrades. Scanned from a Docker image export with the checksummed
-official Trivy 0.76.1 release, OS and library vulnerability scanners enabled.
-No advisories were suppressed and no severity or unfixed filter was applied.
+Both Linux images were rebuilt from scratch with current package indexes and
+scanned from Docker image exports with the checksum-verified official Trivy
+0.76.1 release. OS and language vulnerability scanners were enabled. No
+advisory, severity, or unfixed record was suppressed.
 
 ## Results
 
-- Node/npm packages: **zero detected vulnerabilities** after replacing npm’s affected bundled undici and ip-address modules.
-- Debian package findings: **1 critical, 103 high, 249 medium, 332 low, 14 unknown**.
-- The high/critical package findings represent **33 distinct CVEs**; one source-library issue may appear against several binary packages.
-- GitHub CLI 2.103.2: one additional unknown-severity Go-module finding, GO-2026-5932, concerning deprecated `golang.org/x/crypto/openpgp`. The scanner lists no fixed version; module presence alone does not establish reachable vulnerable code. It remains open for upstream/call-graph assessment.
+| Image | Raw critical | Raw high | Medium | Low | Unknown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Workspace | 1 | 81 | 201 | 312 | 10 |
+| Executor | 0 | 54 | 114 | 209 | 5 |
 
-The image is **not vulnerability-free**. These distribution findings remain
-visible even after current stable/security packages and available supported curl
-backports are installed. A missing vendor fix in this report does not mean no
-upstream fix exists; distribution backports and upstream release versions differ.
-Changing unrelated libraries to testing/unstable packages or carrying an
-unreviewed collection of local ABI-sensitive patches is outside this hardening
-change. Review residual exposure before deploying the image.
+These are scanner records, not the count of exploitable vulnerabilities left in
+the running images. Trivy compares Debian package version strings and embedded
+base-image SBOMs; it cannot recognize Woven Matter's reviewed `+wmsecurity1`
+source backports, a fixed module overlaid inside a distribution package, or an
+absent vulnerable executable. The raw records are retained because hiding them
+would make future maintenance harder.
 
-The critical finding is [CVE-2026-6653](https://security-tracker.debian.org/tracker/CVE-2026-6653)
-in libxml2. Debian classifies it as a minor denial-of-service issue and does not
-offer a trixie security update; its current stable library remains affected.
-The workspace control API handles JSON rather than XML, but the library remains
-part of the browser/tool dependency graph. No claim of complete non-reachability
-or risk elimination is made.
+After checking every raw high/critical family against the installed files,
+upstream affected ranges, source patches, and runtime tests, there are **no known
+unmitigated high or critical findings in the live runtime**. This is not a claim
+that either image is vulnerability-free: medium, low, unknown, undisclosed, and
+future issues remain possible, and the local source repairs require maintenance.
 
-Container capabilities, UID, filesystem, private bridges, process limits, and
-optional user-configured memory limits reduce impact; they do not patch these
-libraries. Hosts, Docker administrators, workspace agents, and provider access
-retain the trust model described in the [audit](REMOTE_WORKSPACE_SECURITY_AUDIT.md).
+The initial scan that prompted this work reported **1 critical and 103 high**
+Debian-package records. The critical record was CVE-2026-6653 in Debian's
+libxml2 package. It is an XML parser out-of-bounds read/denial-of-service bug,
+not a vulnerability in the Debian operating system itself. Debian stable had no
+fixed binary. This change applies the reviewed upstream/Ubuntu repair while
+retaining the stable ABI. The build proves the original fixture triggers under
+AddressSanitizer before the patch and passes afterward. Trivy still emits the
+critical record because its Debian database does not understand the local
+`+wmsecurity1` revision.
 
-## Remaining high and critical distribution advisories
+## High and critical disposition
 
-“Reported status” is the scanner/vendor status, not an independent exploitability
-assessment. The links lead directly to Debian’s current source-package tracking.
+| Raw finding family | Disposition in the images |
+| --- | --- |
+| libxml2: CVE-2026-6653, CVE-2026-74860, CVE-2026-86138 through CVE-2026-86144 | Rebuilt from authenticated Debian stable source with each missing reviewed repair. The stable 2.9 source already contains the equivalent CVE-2026-86139 zero-length guard, so the newer 2.15 patch is not reapplied. CVE-2026-6653 has a vulnerable/fixed ASan control. |
+| ncurses CVE-2025-69720; libsndfile CVE-2026-37555; X11/Xrender/Xtst CVE-2026-88806, CVE-2026-88807, CVE-2026-94286 | Rebuilt against the stable ABI with checksum-pinned upstream or Ubuntu security patches. |
+| util-linux CVE-2026-76642, CVE-2026-78408, CVE-2026-78410 | Debian stable 2.41.5 rebuilt with the 2.41.6 fixes and the later stable-branch correction that uses the correct `RESOLVE_NO_SYMLINKS` value. Targeted libmount, mount, and nsenter integration suites pass. CVE-2026-78409 begins with the 2.42 line and does not apply to the retained 2.41.5 base. |
+| libtiff CVE-2026-36849/CVE-2026-52490; libacl CVE-2026-54369 | Rebuilt from current authenticated Debian sources, libtiff 4.7.2 and acl 2.4.0. The separately vulnerable `tiffcrop` tool is not installed. |
+| curl CVE-2026-12064/CVE-2026-8458 | Uses Debian's signed stable-backports curl/libcurl 8.21.0 line. The curl project identifies 8.20.0 as the last affected release for CVE-2026-12064; both reported issues are outside the installed release's affected range. |
+| Perl Archive::Tar CVE-2026-9538 | The affected Debian source package remains visible to the OS scanner, but runtime module resolution is replaced by checksum-pinned Archive::Tar 3.14 after its upstream tests pass. The vulnerable range ends before 3.10. |
+| systemd CVE-2026-16742 | The issue is in `systemd-homed`. No init system or `systemd-homed` service/binary runs in either container. The shared libraries remain transitive runtime dependencies. |
+| CUPS CVE-2026-34980/CVE-2026-55453 | Both issues require CUPS server/backend code. Neither `cupsd` nor the affected IPP backend is present; only the browser's client library dependency remains. |
+| xdg-utils CVE-2022-4055 | The vulnerable `xdg-email` entry point is deleted and Thunderbird is absent. |
+| setuptools 70.3.0, urllib3 2.7.0, msgpack 1.1.2 | Stale build-package entries in the official Python image's embedded SPDX SBOM. Live metadata proves setuptools 84.2.1 is installed and urllib3/msgpack are absent. These records have no filesystem path; adding unused packages would increase attack surface. |
+| npm brace-expansion, http-cache-semantics, undici; Executor-bundled sharp | Executor now upgrades npm to 12.2.1, replaces npm's vulnerable undici/ip-address copies from a committed integrity lock, and replaces the embedded sharp runtime with locked sharp 0.35.5/libvips 1.3.4. A clean rescan contains no high/critical language-package findings. |
 
-| Advisory | Severity | Reported status | Affected installed packages |
-| --- | --- | --- | --- |
-| [CVE-2026-6653](https://security-tracker.debian.org/tracker/CVE-2026-6653) | CRITICAL | affected | `libxml2` |
-| [CVE-2022-4055](https://security-tracker.debian.org/tracker/CVE-2022-4055) | HIGH | fix_deferred | `xdg-utils` |
-| [CVE-2025-69720](https://security-tracker.debian.org/tracker/CVE-2025-69720) | HIGH | affected | `libncursesw6`, `libtinfo6`, `ncurses-base`, `ncurses-bin` |
-| [CVE-2026-12064](https://security-tracker.debian.org/tracker/CVE-2026-12064) | HIGH | affected | `curl`, `libcurl3t64-gnutls`, `libcurl4-gnutls`, `libcurl4t64` |
-| [CVE-2026-15308](https://security-tracker.debian.org/tracker/CVE-2026-15308) | HIGH | affected | `libpython3.13-minimal`, `libpython3.13-stdlib`, `python3.13`, `python3.13-minimal`, `python3.13-venv` |
-| [CVE-2026-16742](https://security-tracker.debian.org/tracker/CVE-2026-16742) | HIGH | affected | `libpam-systemd`, `libsystemd-shared`, `libsystemd0`, `libudev1`, `systemd`, `systemd-sysv` |
-| [CVE-2026-19445](https://security-tracker.debian.org/tracker/CVE-2026-19445) | HIGH | affected | `libpython3.13-minimal`, `libpython3.13-stdlib`, `python3.13`, `python3.13-minimal`, `python3.13-venv` |
-| [CVE-2026-19553](https://security-tracker.debian.org/tracker/CVE-2026-19553) | HIGH | affected | `libpython3.13-minimal`, `libpython3.13-stdlib`, `python3.13`, `python3.13-minimal`, `python3.13-venv` |
-| [CVE-2026-23949](https://security-tracker.debian.org/tracker/CVE-2026-23949) | HIGH | affected | `python3-setuptools-whl` |
-| [CVE-2026-34980](https://security-tracker.debian.org/tracker/CVE-2026-34980) | HIGH | affected | `libcups2t64` |
-| [CVE-2026-36849](https://security-tracker.debian.org/tracker/CVE-2026-36849) | HIGH | will_not_fix | `libtiff6` |
-| [CVE-2026-37555](https://security-tracker.debian.org/tracker/CVE-2026-37555) | HIGH | affected | `libsndfile1` |
-| [CVE-2026-52490](https://security-tracker.debian.org/tracker/CVE-2026-52490) | HIGH | affected | `libtiff6` |
-| [CVE-2026-54369](https://security-tracker.debian.org/tracker/CVE-2026-54369) | HIGH | affected | `libacl1` |
-| [CVE-2026-55453](https://security-tracker.debian.org/tracker/CVE-2026-55453) | HIGH | affected | `libcups2t64` |
-| [CVE-2026-7210](https://security-tracker.debian.org/tracker/CVE-2026-7210) | HIGH | affected | `libpython3.13-minimal`, `libpython3.13-stdlib`, `python3.13`, `python3.13-minimal`, `python3.13-venv` |
-| [CVE-2026-74860](https://security-tracker.debian.org/tracker/CVE-2026-74860) | HIGH | affected | `libxml2` |
-| [CVE-2026-76642](https://security-tracker.debian.org/tracker/CVE-2026-76642) | HIGH | affected | `bsdutils`, `libblkid1`, `liblastlog2-2`, `libmount1`, `libsmartcols1`, `libuuid1`, `login`, `mount`, `util-linux` |
-| [CVE-2026-78408](https://security-tracker.debian.org/tracker/CVE-2026-78408) | HIGH | affected | `bsdutils`, `libblkid1`, `liblastlog2-2`, `libmount1`, `libsmartcols1`, `libuuid1`, `login`, `mount`, `util-linux` |
-| [CVE-2026-78409](https://security-tracker.debian.org/tracker/CVE-2026-78409) | HIGH | affected | `bsdutils`, `libblkid1`, `liblastlog2-2`, `libmount1`, `libsmartcols1`, `libuuid1`, `login`, `mount`, `util-linux` |
-| [CVE-2026-78410](https://security-tracker.debian.org/tracker/CVE-2026-78410) | HIGH | affected | `bsdutils`, `libblkid1`, `liblastlog2-2`, `libmount1`, `libsmartcols1`, `libuuid1`, `login`, `mount`, `util-linux` |
-| [CVE-2026-82049](https://security-tracker.debian.org/tracker/CVE-2026-82049) | HIGH | affected | `libpython3.13-minimal`, `libpython3.13-stdlib`, `python3.13`, `python3.13-minimal`, `python3.13-venv` |
-| [CVE-2026-8458](https://security-tracker.debian.org/tracker/CVE-2026-8458) | HIGH | affected | `curl`, `libcurl3t64-gnutls`, `libcurl4-gnutls`, `libcurl4t64` |
-| [CVE-2026-86138](https://security-tracker.debian.org/tracker/CVE-2026-86138) | HIGH | affected | `libxml2` |
-| [CVE-2026-86139](https://security-tracker.debian.org/tracker/CVE-2026-86139) | HIGH | affected | `libxml2` |
-| [CVE-2026-86140](https://security-tracker.debian.org/tracker/CVE-2026-86140) | HIGH | affected | `libxml2` |
-| [CVE-2026-86142](https://security-tracker.debian.org/tracker/CVE-2026-86142) | HIGH | affected | `libxml2` |
-| [CVE-2026-86143](https://security-tracker.debian.org/tracker/CVE-2026-86143) | HIGH | affected | `libxml2` |
-| [CVE-2026-86144](https://security-tracker.debian.org/tracker/CVE-2026-86144) | HIGH | affected | `libxml2` |
-| [CVE-2026-88806](https://security-tracker.debian.org/tracker/CVE-2026-88806) | HIGH | affected | `libx11-6`, `libx11-data`, `libx11-xcb1` |
-| [CVE-2026-88807](https://security-tracker.debian.org/tracker/CVE-2026-88807) | HIGH | affected | `libxrender1` |
-| [CVE-2026-94286](https://security-tracker.debian.org/tracker/CVE-2026-94286) | HIGH | affected | `libxtst6` |
-| [CVE-2026-9538](https://security-tracker.debian.org/tracker/CVE-2026-9538) | HIGH | fix_deferred | `libperl5.40`, `perl`, `perl-base`, `perl-modules-5.40` |
+The workspace's Node/npm scan likewise contains no high/critical language
+finding. GitHub CLI 2.103.2 still produces unknown-severity GO-2026-5932 for the
+deprecated `golang.org/x/crypto/openpgp` module. The scanner lists no fixed
+version, and module presence does not establish a reachable vulnerable call;
+this remains an upstream/call-graph maintenance item rather than a hidden pass.
 
-## Reproduction
+## Reproduction and maintenance boundary
 
-Build with `--pull --no-cache`, save the resulting image with `docker save`, then
-run `trivy image --scanners vuln --format json --input image.tar` against that
-export. Review OS findings against Debian’s security tracker and language
-findings against the actual installed/resolved module versions. Repeat after
-upstream security updates; these counts are point-in-time evidence, not a waiver.
+Build each image with `--pull --no-cache`, save it with `docker save`, and run
+`trivy image --scanners vuln --format json --input image.tar`. Review raw results
+against the live filesystem and the provenance under
+`/usr/local/share/wovenmatter/security/provenance`; never suppress the raw scan
+solely because a local repair exists.
+
+Exact source versions, patch origins, and SHA-256 values are recorded in
+`remote/security/backports.json`. Image construction fails on a checksum or
+patch-context mismatch. Remove a local repair once Debian stable ships an equal
+or newer fix, and repeat native amd64/arm64 image validation after every refresh.

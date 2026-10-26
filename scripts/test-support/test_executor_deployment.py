@@ -1,6 +1,7 @@
 """Exercise the real deployment script with deterministic Docker/Tailscale commands.
 No Docker daemon, SSH, accounts, or network services are used on the test machine.
 """
+import base64
 import hashlib
 import json
 import os
@@ -12,10 +13,19 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = (ROOT / 'remote/executor-deploy.sh').read_text()
 DOCKERFILE = (ROOT / 'remote/Executor.Dockerfile').read_text()
+NPM_RUNTIME_PACKAGE = (ROOT / 'remote/npm-runtime/package.json').read_text()
+NPM_RUNTIME_LOCK = (ROOT / 'remote/npm-runtime/package-lock.json').read_text()
+EXECUTOR_RUNTIME_PACKAGE = (ROOT / 'remote/executor-runtime/package.json').read_text()
+EXECUTOR_RUNTIME_LOCK = (ROOT / 'remote/executor-runtime/package-lock.json').read_text()
+SECURITY_MANIFEST = json.loads((ROOT / 'remote/security/backports.json').read_text())
+SECURITY_PATHS = ['backports.json', 'build-backports.py'] + [
+    patch['file'] for record in SECURITY_MANIFEST if record['source'] in {'ncurses', 'acl', 'util-linux'}
+    for patch in record['patches']]
+SECURITY_FILES = {path: base64.b64encode((ROOT / 'remote/security' / path).read_bytes()).decode() for path in SECURITY_PATHS}
 CURRENT_IMAGE = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(DOCKERFILE.encode()).hexdigest()[:16]
 
 class ExecutorDeploymentTests(unittest.TestCase):
-    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False, refresh=False):
+    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False, refresh=False, legacy=False):
         commands = root / 'commands'
         commands.mkdir()
         log = root / 'commands.log'
@@ -33,16 +43,32 @@ class ExecutorDeploymentTests(unittest.TestCase):
 import json, os, pathlib, sys
 args=sys.argv[1:]; path=pathlib.Path(os.environ['WM_FIXTURE_STATE']); state=json.loads(path.read_text())
 with open(os.environ['WM_FIXTURE_LOG'], 'a') as out: out.write(json.dumps(['docker']+args)+'\\n')
-if args[0]=='inspect':
+if args[0]=='version': print('29.9.2')
+elif args[0]=='network':
+    if '--format' in args: print('managed-v1')
+elif args[0]=='inspect':
     name=args[-1]
     if name not in state: sys.exit(1)
     if '--format' in args:
-        print(state[name] if '.Config.Image' in args[2] else 'foreign' if os.environ.get('WM_FIXTURE_FOREIGN') else 'managed-v1')
+        fmt=args[args.index('--format')+1]
+        legacy=bool(os.environ.get('WM_FIXTURE_LEGACY'))
+        values={
+            '.Config.Image': state[name],
+            'index .Config.Labels': 'foreign' if os.environ.get('WM_FIXTURE_FOREIGN') else 'managed-v1',
+            '.HostConfig.NetworkMode': 'host' if legacy else 'wovenmatter-executor',
+            '.HostConfig.ReadonlyRootfs': 'false' if legacy else 'true',
+            '.Config.User': '' if legacy else '1000:1000',
+            'json .HostConfig.PortBindings': '{}' if legacy else '{"4312/tcp":[{"HostIp":"127.0.0.1","HostPort":"4312"}]}',
+            'json .HostConfig.CapDrop': 'null' if legacy else '["ALL"]',
+            'json .HostConfig.SecurityOpt': 'null' if legacy else '["no-new-privileges"]',
+            '.HostConfig.PidsLimit': '0' if legacy else '512',
+        }
+        print(next(value for key, value in values.items() if key in fmt))
 elif args[0]=='rename':
     if os.environ.get('WM_FIXTURE_RENAME_FAIL') and args[1]=='wovenmatter-executor': sys.exit(1)
     state[args[2]]=state.pop(args[1])
 elif args[0]=='rm': state.pop(args[-1], None)
-elif args[0]=='run': state['wovenmatter-executor']=args[-1]
+elif args[0]=='run' and '--name' in args: state['wovenmatter-executor']=args[-1]
 path.write_text(json.dumps(state))
 ''')
         (commands / 'sudo').write_text('#!/bin/sh\nexit 1\n')
@@ -77,9 +103,13 @@ elif sys.argv[1:]==['serve','status','--json']:
         docker.chmod(0o755)
         tailscale.chmod(0o755)
         payload = root / 'setup.json'
-        payload.write_text(json.dumps({'origin': 'https://fixture.tailnet.ts.net:8443', 'apiKey': 'a'*64, 'encryptionKey': 'b'*64, 'version': '2.0.0-beta.12', 'dockerfile': DOCKERFILE, **({'generation':'11111111-1111-4111-8111-111111111111'} if refresh else {})}))
+        payload.write_text(json.dumps({'origin': 'https://fixture.tailnet.ts.net:8443', 'apiKey': 'a'*64, 'encryptionKey': 'b'*64, 'version': '2.0.0-beta.12', 'dockerfile': DOCKERFILE,
+            'npmRuntimePackage': NPM_RUNTIME_PACKAGE, 'npmRuntimeLock': NPM_RUNTIME_LOCK,
+            'executorRuntimePackage': EXECUTOR_RUNTIME_PACKAGE, 'executorRuntimeLock': EXECUTOR_RUNTIME_LOCK,
+            'securityFiles': SECURITY_FILES,
+            **({'generation':'11111111-1111-4111-8111-111111111111'} if refresh else {})}))
         env = {**os.environ, 'PATH': str(commands)+':/usr/bin:/bin', 'WM_FIXTURE_LOG': str(log), 'WM_FIXTURE_STATE': str(state), 'PYTHONPATH': str(root)}
-        for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure)]:
+        for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure), ('WM_FIXTURE_LEGACY', legacy)]:
             if value: env[flag] = '1'
         # Replace only the home directory anchor; every deployment command and
         # credential/route/ownership check runs from the production source.
@@ -93,12 +123,26 @@ elif sys.argv[1:]==['serve','status','--json']:
             result, log = self.fixture(root)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            run = next(call for call in calls if call[:2] == ['docker', 'run'])
+            run = next(call for call in calls if call[:2] == ['docker', 'run'] and '--name' in call)
             self.assertIn('--network', run)
-            self.assertIn('host', run)
+            self.assertIn('wovenmatter-executor', run)
+            self.assertNotIn('host', run)
+            self.assertIn('--publish', run)
+            self.assertIn('127.0.0.1:4312:4312', run)
             self.assertIn('--restart', run)
             self.assertIn('--env-file', run)
             self.assertIn('--mount', run)
+            self.assertIn('--user', run)
+            self.assertIn('--read-only', run)
+            self.assertIn('--tmpfs', run)
+            self.assertIn('--cap-drop', run)
+            self.assertIn('--security-opt', run)
+            self.assertIn('--pids-limit', run)
+            self.assertIn('--init', run)
+            migration = next(call for call in calls if call[:2] == ['docker', 'run'] and '--entrypoint' in call)
+            self.assertIn('none', migration)
+            self.assertIn('CHOWN', migration)
+            self.assertIn('no-new-privileges', migration)
             build = next(call for call in calls if call[:2] == ['docker', 'build'])
             self.assertIn('--pull', build)
             self.assertIn('--no-cache', build)
@@ -108,7 +152,10 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertIn('EXECUTOR_BROWSER_ORIGIN=https://fixture.tailnet.ts.net:8443', env.read_text())
             self.assertNotIn('a'*64, result.stdout.decode()+result.stderr.decode()+log.read_text())
             self.assertEqual((root / 'runtime/Dockerfile').read_text(), DOCKERFILE)
-            self.assertEqual((root / 'runtime/.dockerignore').read_text(), '*\n!Dockerfile\n')
+            self.assertEqual((root / 'runtime/npm-runtime/package-lock.json').read_text(), NPM_RUNTIME_LOCK)
+            self.assertEqual((root / 'runtime/executor-runtime/package-lock.json').read_text(), EXECUTOR_RUNTIME_LOCK)
+            self.assertEqual((root / 'runtime/security/backports.json').read_text(), (ROOT / 'remote/security/backports.json').read_text())
+            self.assertEqual((root / 'runtime/.dockerignore').read_text(), '*\n!Dockerfile\n!npm-runtime/\n!npm-runtime/package*.json\n!executor-runtime/\n!executor-runtime/package*.json\n!security/\n!security/**\n')
 
     def test_retry_restarts_only_owned_container(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -163,6 +210,19 @@ elif sys.argv[1:]==['serve','status','--json']:
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
             self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.7'})
+
+    def test_failed_replacement_never_restores_legacy_host_network_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result, log = self.fixture(root, existing=True, old_version=True, readiness_failure=True, legacy=True)
+            self.assertNotEqual(result.returncode, 0)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            build = next(i for i, call in enumerate(calls) if call[:2] == ['docker', 'build'])
+            stop = next(i for i, call in enumerate(calls) if call == ['docker', 'stop', 'wovenmatter-executor'])
+            self.assertLess(stop, build)
+            self.assertNotIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
+            self.assertNotIn(['docker', 'start', 'wovenmatter-executor-previous'], calls)
+            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor-previous': 'wovenmatter/executor:2.0.0-beta.7'})
 
     def test_failed_rename_restarts_current_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:

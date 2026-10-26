@@ -20,7 +20,7 @@ struct RemoteWorkspaceSettingsTests {
         // starting SSH, or requiring an unrelated global enable action.
         model.create(name: "", workspaceID: "", hostName: "", userName: "", port: 7337,
                      memoryLimit: "", swapLimit: "")
-        #expect(model.errorMessage == "Enter a name, workspace ID, and SSH hostname.")
+        #expect(model.errorMessage == "Enter a name, workspace ID, and Tailscale machine name.")
         #expect(!model.isCreating)
 
         let projection = RemoteWorkspacesModel(defaults: defaults, backendProjection: true)
