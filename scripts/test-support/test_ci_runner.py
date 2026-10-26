@@ -15,7 +15,7 @@ SUITES = ('release_approval', 'release_notarization', 'release_parallel',
 
 
 class CIRunnerTests(unittest.TestCase):
-    def run_fixture(self, paths, fail=False):
+    def run_fixture(self, paths, fail=False, fail_host=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             scripts = root / 'scripts'
@@ -29,9 +29,13 @@ class CIRunnerTests(unittest.TestCase):
             for suite in SUITES:
                 (support / f'test_{suite}.py').write_text('')
             for name in ('scan-public-tree.sh', 'test-release.sh',
-                         'test-dev-signing.sh', 'test-remote-workspace.sh'):
+                         'test-dev-signing.sh', 'test-remote-workspace.sh',
+                         'test-remote-host.sh'):
                 script = scripts / name
-                script.write_text('#!/bin/sh\nexit 0\n')
+                recorded = name in ('test-remote-workspace.sh', 'test-remote-host.sh')
+                log = f"printf '%s\\n' '{json.dumps([name])}' >> \"$CI_FIXTURE_CALLS\"\n" if recorded else ''
+                reject = 'if [ "${CI_FIXTURE_HOST_FAIL:-0}" = 1 ]; then exit 43; fi\n' if name == 'test-remote-host.sh' else ''
+                script.write_text('#!/bin/sh\n' + log + reject + 'exit 0\n')
                 script.chmod(0o755)
             (root / 'harnesses').mkdir()
             (root / 'harnesses/catalog.json').write_text(json.dumps({
@@ -59,7 +63,8 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
             calls = root / 'calls.jsonl'
             result = subprocess.run(['bash', str(scripts / 'test-ci.sh'), '--files', str(changed)],
                 env=dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
-                         CI_FIXTURE_CALLS=str(calls), CI_FIXTURE_FAIL='1' if fail else '0'),
+                         CI_FIXTURE_CALLS=str(calls), CI_FIXTURE_FAIL='1' if fail else '0',
+                         CI_FIXTURE_HOST_FAIL='1' if fail_host else '0'),
                 capture_output=True, text=True, timeout=30)
             recorded = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
             self.assertFalse(any(call[0] in ('swift', 'xcodebuild', 'docker') for call in recorded))
@@ -101,6 +106,17 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
     def test_service_failure_cannot_pass_ci(self):
         result, _ = self.run_fixture(['remote/src/server.mjs'], fail=True)
         self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertNotIn('Portable CI passed.', result.stdout)
+
+    def test_native_host_change_runs_portable_workspace_fixtures_once(self):
+        result, calls = self.run_fixture(['scripts/remote-host.sh'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['test-remote-workspace.sh'], ['test-remote-host.sh']])
+
+    def test_native_host_fixture_failure_cannot_pass_ci(self):
+        result, calls = self.run_fixture(['scripts/remote-host.sh'], fail_host=True)
+        self.assertEqual(result.returncode, 43, result.stderr)
+        self.assertEqual(calls, [['test-remote-workspace.sh'], ['test-remote-host.sh']])
         self.assertNotIn('Portable CI passed.', result.stdout)
 
 
