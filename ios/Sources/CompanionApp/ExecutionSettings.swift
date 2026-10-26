@@ -17,8 +17,8 @@ struct ExecutionSettingsPane: View {
         }
       }
       Section("Add connection") {
-        ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") &&
-          (!InferenceConnectionPolicy.isSingleSubscription($0.id) || !model.inferenceConnections.contains(where: { connection in connection.provider == $0.id })) }) { provider in
+        ForEach(InferenceCatalog.providers.filter { provider in !provider.id.hasPrefix("local-server-") &&
+          (!InferenceConnectionPolicy.isSingleSubscription(provider.id) || !model.inferenceConnections.contains(where: { $0.provider == provider.id })) }) { provider in
           NavigationLink(provider.name) { InferenceConnectionEditor(model: model, connection: nil, provider: provider.id) }
         }
       }
@@ -309,8 +309,8 @@ private struct InferenceConnectionEditor: View {
       else if state.mode == .hosted {
         Section {
           Picker("Provider", selection: Binding(get: { state.provider }, set: { chooseProvider($0) })) {
-            ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") &&
-              (!InferenceConnectionPolicy.isSingleSubscription($0.id) || !model.inferenceConnections.contains(where: { connection in connection.provider == $0.id && connection.id != state.original?.id })) }) { Text($0.name).tag($0.id) }
+            ForEach(InferenceCatalog.providers.filter { provider in !provider.id.hasPrefix("local-server-") &&
+              (!InferenceConnectionPolicy.isSingleSubscription(provider.id) || !model.inferenceConnections.contains(where: { $0.provider == provider.id && $0.id != state.original?.id })) }) { Text($0.name).tag($0.id) }
           }.disabled(state.original != nil)
         }
         hostedFields
