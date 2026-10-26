@@ -706,8 +706,67 @@ def expose(workspace_id,port,https_port='8443'):
     if not verified_configuration(): fail('tailscale_serve_unverified','Private sharing could not be verified.',69)
     return {'endpoint':'https://'+endpoint+route}
 
+def cleanup_private_routes(workspace_id,port):
+    route='/wovenmatter-execution/'+workspace_id
+    target='http://127.0.0.1:'+str(port)
+    def configuration():
+        response=run(['tailscale','serve','status','--json'])
+        if response.returncode:
+            fail('tailscale_cleanup_unavailable','Private Tailscale routes could not be checked. Restore Tailscale access and retry uninstall; the workspace was preserved.',69)
+        try:
+            value=json.loads(response.stdout)
+            if not isinstance(value,dict): raise ValueError()
+            return value
+        except ValueError: fail('tailscale_cleanup_unavailable','Private Tailscale routes returned invalid status. The workspace was preserved.',69)
+    def owned(config):
+        result=[]
+        for endpoint,web in config.get('Web',{}).items():
+            name,separator,https_port=endpoint.rpartition(':')
+            if not separator or not https_port.isdigit() or config.get('TCP',{}).get(https_port,{}).get('HTTPS') is not True: continue
+            for path,handler in web.get('Handlers',{}).items():
+                if path.rstrip('/')==route and handler.get('Proxy')==target:
+                    result.append((endpoint,path,https_port))
+        return result
+    before=configuration(); routes=owned(before)
+    if not routes: return 0
+    # An endpoint changed to Funnel is no longer our private sharing setup.
+    # Preserve that configuration and require an explicit repair, not a reset.
+    if any(before.get('AllowFunnel',{}).get(endpoint) for endpoint,_,_ in routes):
+        fail('tailscale_cleanup_conflict','A matching workspace route now belongs to a Funnel endpoint. Remove that route explicitly before uninstall; other sharing was preserved.',78)
+    response=run(['tailscale','status','--json'])
+    try:
+        status=json.loads(response.stdout); dns=status['Self']['DNSName'].rstrip('.').lower()
+        if response.returncode or status.get('BackendState')!='Running' or not re.fullmatch(r'[a-z0-9.-]+\.ts\.net',dns): raise ValueError()
+    except (ValueError,KeyError): fail('tailscale_cleanup_unavailable','The current private Tailscale name could not be verified. The workspace was preserved.',69)
+    if any(endpoint.rpartition(':')[0].lower()!=dns for endpoint,_,_ in routes):
+        fail('tailscale_cleanup_conflict','A matching workspace route uses a former Tailscale name. Remove that exact route explicitly before uninstall; other sharing was preserved.',78)
+    identities={(endpoint,path) for endpoint,path,_ in routes}
+    protected_handlers={(endpoint,path):handler for endpoint,web in before.get('Web',{}).items() for path,handler in web.get('Handlers',{}).items() if (endpoint,path) not in identities}
+    removable_ports={https_port for endpoint,_,https_port in routes if not any(other.rpartition(':')[2]==https_port for other,_ in protected_handlers)}
+    protected_tcp={key:value for key,value in before.get('TCP',{}).items() if key not in removable_ports}
+    owned_endpoints={endpoint for endpoint,_,_ in routes}
+    protected_funnel={key:value for key,value in before.get('AllowFunnel',{}).items() if key not in owned_endpoints}
+    other_configuration={key:value for key,value in before.items() if key not in ('Web','TCP','AllowFunnel')}
+    removed=0
+    for endpoint,path,https_port in routes:
+        current=configuration()
+        handler=current.get('Web',{}).get(endpoint,{}).get('Handlers',{}).get(path)
+        if handler is None: continue
+        if handler.get('Proxy')!=target or current.get('TCP',{}).get(https_port,{}).get('HTTPS') is not True or current.get('AllowFunnel',{}).get(endpoint):
+            fail('tailscale_cleanup_conflict','Private sharing changed during uninstall. The workspace was preserved; retry after checking that route.',78)
+        result=run(['tailscale','serve','--https='+https_port,'--set-path='+path,'off'])
+        if result.returncode:
+            fail('tailscale_route_cleanup_failed','The workspace private route could not be removed. Restore this account’s Tailscale operator access and retry uninstall; the workspace was preserved.',69)
+        removed+=1
+    after=configuration()
+    if owned(after): fail('tailscale_route_cleanup_failed','Tailscale still reports a matching workspace route. The workspace was preserved.',69)
+    if any(after.get('Web',{}).get(endpoint,{}).get('Handlers',{}).get(path)!=handler for (endpoint,path),handler in protected_handlers.items()) or any(after.get('TCP',{}).get(key)!=value for key,value in protected_tcp.items()) or any(after.get('AllowFunnel',{}).get(key)!=value for key,value in protected_funnel.items()) or {key:value for key,value in after.items() if key not in ('Web','TCP','AllowFunnel')}!=other_configuration:
+        fail('tailscale_cleanup_unverified','Unrelated Tailscale sharing could not be verified after route removal. The workspace was preserved.',78)
+    return removed
+
 def uninstall(workspace_id,remove_data=False):
-    require_owner(workspace_id)
+    installed=require_owner(workspace_id)
+    removed_routes=cleanup_private_routes(workspace_id,installed['port'])
     run(['systemctl','--user','disable','--now',UNIT_NAME],check=True)
     with contextlib.suppress(FileNotFoundError): UNIT.unlink()
     with contextlib.suppress(FileNotFoundError): ENV_FILE.unlink()
@@ -719,7 +778,7 @@ def uninstall(workspace_id,remove_data=False):
     if remove_data:
         if ROOT.is_symlink() or ROOT.stat().st_uid!=os.getuid(): fail('unsafe_host_path','The data root is unsafe; no data was removed.',78)
         shutil.rmtree(ROOT)
-    return {'deleted':True,'id':workspace_id,'containerExisted':False,'persistentDataRemoved':remove_data,'kind':'host'}
+    return {'deleted':True,'id':workspace_id,'containerExisted':False,'persistentDataRemoved':remove_data,'kind':'host','privateRoutesRemoved':removed_routes,'privateRoutesCleanupVerified':True}
 
 def main(args):
     if not args: fail('invalid_command','A host lifecycle command is required.',64)

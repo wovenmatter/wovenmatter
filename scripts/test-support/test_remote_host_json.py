@@ -312,6 +312,46 @@ class HostFixtures(unittest.TestCase):
             configuration.pop('AllowFunnel'); configuration['Web'][endpoint]['Handlers'][route]['Proxy']='http://127.0.0.1:9001'
             with self.assertRaises(self.m.Failure): self.m.expose('fixture','7337','8443')
         self.assertFalse(any(call[:2]==['tailscale','serve'] for call in self.calls))
+    def test_uninstall_removes_only_owned_private_routes_and_preserves_foreign_and_funnel(self):
+        self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
+        endpoint='fixture.test.ts.net:8443'; other='fixture.test.ts.net:9443'; public='fixture.test.ts.net:443'; route='/wovenmatter-execution/fixture'
+        configuration={'TCP':{'8443':{'HTTPS':True},'9443':{'HTTPS':True},'443':{'HTTPS':True}},
+            'Web':{endpoint:{'Handlers':{route:{'Proxy':'http://127.0.0.1:7337'},'/other':{'Proxy':'http://127.0.0.1:9000'}}},
+                other:{'Handlers':{route:{'Proxy':'http://127.0.0.1:9555'}}},public:{'Handlers':{'/public':{'Proxy':'http://127.0.0.1:8000'}}}},'AllowFunnel':{public:True}}
+        removals=[]
+        def fake(args,**kwargs):
+            if list(args[:3])==['tailscale','serve','status']: return subprocess.CompletedProcess(args,0,json.dumps(configuration).encode(),b'')
+            if args[0:2]==['tailscale','serve']:
+                removals.append(args); del configuration['Web'][endpoint]['Handlers'][route]
+                return subprocess.CompletedProcess(args,0,b'',b'')
+            return self.command(args,**kwargs)
+        with mock.patch.object(self.m,'run',side_effect=fake): result=self.m.uninstall('fixture')
+        self.assertEqual(result['privateRoutesRemoved'],1); self.assertTrue(result['privateRoutesCleanupVerified'])
+        self.assertEqual(removals,[['tailscale','serve','--https=8443','--set-path='+route,'off']])
+        self.assertIn('/other',configuration['Web'][endpoint]['Handlers']); self.assertIn(route,configuration['Web'][other]['Handlers'])
+        self.assertEqual(configuration['AllowFunnel'],{public:True})
+    def test_failed_route_cleanup_preserves_installed_service_and_data(self):
+        self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
+        endpoint='fixture.test.ts.net:8443'; route='/wovenmatter-execution/fixture'
+        configuration={'TCP':{'8443':{'HTTPS':True}},'Web':{endpoint:{'Handlers':{route:{'Proxy':'http://127.0.0.1:7337'}}}}}
+        def fake(args,**kwargs):
+            if list(args[:3])==['tailscale','serve','status']: return subprocess.CompletedProcess(args,0,json.dumps(configuration).encode(),b'')
+            if args[0:2]==['tailscale','serve']: return subprocess.CompletedProcess(args,1,b'',b'operator required')
+            return self.command(args,**kwargs)
+        with mock.patch.object(self.m,'run',side_effect=fake):
+            with self.assertRaises(self.m.Failure) as error: self.m.uninstall('fixture',True)
+        self.assertEqual(error.exception.code,'tailscale_route_cleanup_failed'); self.assertTrue(self.m.UNIT.exists()); self.assertTrue(self.m.RECORD.exists()); self.assertTrue(self.active)
+        self.assertFalse(any(call[:3]==['systemctl','--user','disable'] for call in self.calls))
+    def test_unavailable_status_or_owned_funnel_route_never_claims_cleanup_success(self):
+        self.save_install()
+        with mock.patch.object(self.m,'run',return_value=subprocess.CompletedProcess([],1,b'',b'unavailable')):
+            with self.assertRaises(self.m.Failure) as error: self.m.uninstall('fixture')
+        self.assertEqual(error.exception.code,'tailscale_cleanup_unavailable')
+        endpoint='fixture.test.ts.net:8443'; route='/wovenmatter-execution/fixture'
+        config={'TCP':{'8443':{'HTTPS':True}},'Web':{endpoint:{'Handlers':{route:{'Proxy':'http://127.0.0.1:7337'}}}},'AllowFunnel':{endpoint:True}}
+        with mock.patch.object(self.m,'run',return_value=subprocess.CompletedProcess([],0,json.dumps(config).encode(),b'')):
+            with self.assertRaises(self.m.Failure) as error: self.m.uninstall('fixture')
+        self.assertEqual(error.exception.code,'tailscale_cleanup_conflict'); self.assertTrue(self.m.RECORD.exists())
     def test_uninstall_keeps_data_and_explicit_data_removal(self):
         self.save_install(); (self.m.ROOT/'releases').mkdir(); (self.m.ROOT/'workspace').mkdir(); (self.m.ROOT/'workspace/keep').write_text('kept')
         self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')

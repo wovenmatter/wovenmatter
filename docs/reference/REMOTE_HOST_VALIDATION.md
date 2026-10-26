@@ -67,12 +67,16 @@ non-default loopback port, connected through the production Tailnet tunnel and
 verified the installed fingerprint. Node and Playwright selections come from
 the committed runtime records.
 
-The remote Node suite passed all 209 tests on Linux; macOS passed 208 with one
-Linux-only skip. The final focused native Swift suites passed 99 tests, host
-lifecycle/bundle fixtures passed all 24 checks, and ShellCheck passed. The broad
-local validation also passed desktop source validation and package suites before
-iOS simulator tests were blocked by Xcode's `DTServiceHubClient failed to bless
-service hub` environment failure. Those simulator tests remain unpassed.
+The final remote Node suite passed all 215 tests on Linux; macOS passed 214 with
+one Linux-only skip. The default-agent suite passed 215 with one platform skip.
+The full desktop package suites, app validation, packaged tools across all five
+harnesses, host lifecycle/bundle fixtures and ShellCheck also passed. Shared protocol tests passed 40 checks and
+companion integration passed 29 complete flows. Latest main was integrated before
+these final checks.
+
+The broad local run reached iOS simulator tests, which were blocked by Xcode's
+`DTServiceHubClient failed to bless service hub` environment failure. Those
+simulator tests remain unpassed.
 
 Observed checks include:
 
@@ -87,7 +91,12 @@ Observed checks include:
   operation approvals.
 - Private source verification, archive attack rejection, target-native locked
   dependencies, explicit private npm tooling, shell configuration protection,
-  source ownership and atomic rollback fixtures.
+  source ownership and atomic rollback fixtures. Guards permit ordinary CLI
+  temporary/session/log activity and identical-byte rewrites while protecting
+  configuration, credentials, unknown paths, modes and symlink targets. Shell
+  configuration restoration includes writes through nested symlinks.
+- A real relocated SDK staging directory initializes the actual engine and
+  embeds an HTML image without a sibling harnesses directory or network access.
 - Mac source compilation, signed native Dev app launch and inspection of actual
   Tailnet discovery, preflight, workspace access choices and host notice.
 - Deployment using the signed Dev app's actual packaged resources, followed by
