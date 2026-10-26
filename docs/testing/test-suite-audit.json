@@ -1102,24 +1102,24 @@
     "lines": {
       "baseline_executable": 89563,
       "baseline_covered": 43979,
-      "candidate_covered_in_baseline": 43126,
-      "retained_baseline_coverage": 43116,
-      "lost_covered": 863,
-      "relative_loss_percent": 1.9623001887264375,
-      "loss_percentage_points": 0.9635675446333866,
+      "candidate_covered_in_baseline": 43128,
+      "retained_baseline_coverage": 43120,
+      "lost_covered": 859,
+      "relative_loss_percent": 1.953204938720753,
+      "loss_percentage_points": 0.9591014146466733,
       "baseline_percent": 49.10398267141565,
-      "candidate_percent": 48.15158045174905
+      "candidate_percent": 48.1538135167424
     },
     "regions": {
       "baseline_executable": 62586,
       "baseline_covered": 28323,
-      "candidate_covered_in_baseline": 27200,
-      "retained_baseline_coverage": 27193,
-      "lost_covered": 1130,
-      "relative_loss_percent": 3.9896903576598524,
-      "loss_percentage_points": 1.8055156105199246,
+      "candidate_covered_in_baseline": 27205,
+      "retained_baseline_coverage": 27198,
+      "lost_covered": 1125,
+      "relative_loss_percent": 3.9720368605020653,
+      "loss_percentage_points": 1.7975266033937303,
       "baseline_percent": 45.25452976704055,
-      "candidate_percent": 43.4601987664973
+      "candidate_percent": 43.46818777362349
     },
     "limits": {
       "relative_line_loss_percent": 2,
@@ -1139,7 +1139,9 @@
     "optional_skips": [
       "OpenCodeStableCompatibilityTests/stableServiceContract",
       "WorkspaceAgentToolsServiceTests/packagedHTMLToolsWorkAcrossHarnesses"
-    ]
+    ],
+    "production_change": "Three existing HTTPSCompanionTransport.executeMCP data method calls are qualified with self to compile on Swift 6.2; source line numbers are unchanged.",
+    "final_refresh": "Reran all tests in the four rebuilt test binaries; reused profiles only for seven binaries with identical SHA-256 hashes."
   },
   "toolchain": {
     "xcode": "27.0 (27A5194q)",
