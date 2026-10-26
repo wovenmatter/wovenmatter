@@ -676,6 +676,7 @@ final class RemoteWorkspacesModel {
     }
 
     private func requestIdentity(_ configuration: RemoteWorkspaceConfiguration) throws -> RemoteWorkspaceRequestIdentity {
+        try configuration.kind.requireSupported()
         guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
         let epoch = workspaceEpochs[configuration.id] ?? UUID()
         workspaceEpochs[configuration.id] = epoch
@@ -715,7 +716,7 @@ final class RemoteWorkspacesModel {
     func preflight(
         hostName: String,
         userName: String,
-        kind: RemoteWorkspaceKind = .container,
+        kind: RemoteWorkspaceKind = .host,
         accessMode: RemoteWorkspaceAccessMode = .user
     ) -> RemoteWorkspacePreflight? {
         guard !hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -724,7 +725,11 @@ final class RemoteWorkspacesModel {
         return checkedPreflight
     }
 
-    func checkHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user) {
+    func checkHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user) {
+        guard kind.isSupported else {
+            errorMessage = "Remote container workspaces are deprecated. Create a native Linux host workspace."
+            return
+        }
         if forwardToBackend(.checkHost(hostName: hostName, userName: userName, kind: kind, accessMode: accessMode)) { return }
         guard !isCreating else { return }
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -764,7 +769,11 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func prepareHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user) {
+    func prepareHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user) {
+        guard kind.isSupported else {
+            errorMessage = "Remote container workspaces are deprecated. Create a native Linux host workspace."
+            return
+        }
         if forwardToBackend(.prepareHost(hostName: hostName, userName: userName, kind: kind, accessMode: accessMode)) { return }
         guard !isCreating, !isCheckingHost else { return }
         guard let inspection = preflight(hostName: hostName, userName: userName, kind: kind, accessMode: accessMode),
@@ -786,9 +795,13 @@ final class RemoteWorkspacesModel {
         port: Int,
         memoryLimit: String,
         swapLimit: String,
-        kind: RemoteWorkspaceKind = .container,
+        kind: RemoteWorkspaceKind = .host,
         accessMode: RemoteWorkspaceAccessMode = .user
     ) {
+        guard kind.isSupported else {
+            errorMessage = "Remote container workspaces are deprecated. Create a native Linux host workspace."
+            return
+        }
         if forwardToBackend(.create(name: name, workspaceID: workspaceID, hostName: hostName, userName: userName, port: port, memoryLimit: memoryLimit, swapLimit: swapLimit, kind: kind, accessMode: accessMode)) { return }
         guard !isCreating else { return }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1591,7 +1604,8 @@ final class RemoteWorkspacesModel {
                 [RemoteWorkspaceConfiguration].self,
                 from: data
               ) else { return }
-        workspaces = decoded
+        // Deprecated containers never reconnect, launch agents or appear in management UI.
+        workspaces = decoded.filter { $0.kind.isSupported }
     }
 
     private func save() {
@@ -1682,7 +1696,7 @@ final class RemoteWorkspacesModel {
 
     func applyBackendSnapshot(_ snapshot: BackendSnapshot) {
         guard isBackendProjection else { return }
-        workspaces = snapshot.workspaces
+        workspaces = snapshot.workspaces.filter { $0.kind.isSupported }
         taskGatewayStatuses = snapshot.taskGatewayStatuses
         taskGatewayErrors = snapshot.taskGatewayErrors
         changingTaskGatewayIDs = snapshot.changingTaskGatewayIDs

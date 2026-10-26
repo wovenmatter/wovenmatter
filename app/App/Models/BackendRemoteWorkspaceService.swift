@@ -10,9 +10,9 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case checkRuntimeUpdates(UUID, AgentRuntimeKind)
     case workspaceInstance(UUID, AgentRuntimeKind, action: String?)
     case backgroundExecution(UUID, Bool)
-    case checkHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user)
-    case prepareHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user)
-    case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user)
+    case checkHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
+    case prepareHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
+    case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
     case authorizeHostPreparation, cancelHostPreparation
     case dismissHarnessSetup(UUID)
     case lifecycle(UUID, String), updateContainer(UUID)

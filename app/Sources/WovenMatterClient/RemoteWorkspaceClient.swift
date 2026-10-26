@@ -143,6 +143,7 @@ public enum RemoteHarnessLaunchResolver {
         durableChannelID: String? = nil,
         tailnetSSHOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
     ) throws -> RemoteHarnessLaunchContext {
+        try configuration.kind.requireSupported()
         let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
             throw RemoteWorkspaceClientError.invalidWorkspaceID
@@ -1015,6 +1016,7 @@ public actor RemoteWorkspaceTunnel {
         localPort: Int,
         readinessProbe: @escaping @Sendable (Int) async -> Bool
     ) async throws {
+        try configuration.kind.requireSupported()
         // Revalidate the peer even when reusing a healthy tunnel.
         let destination: String
         let tailnetOptions: [String]
