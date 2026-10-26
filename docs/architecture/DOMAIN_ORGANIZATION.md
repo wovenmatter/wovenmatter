@@ -169,6 +169,6 @@ Public value/error types: `WorkspaceFolderMutationError`, `WorkspaceCalendarMuta
 
 - `bindDeviceOwnership`, `macSurfaceProfile`, `updateMacSurfaceProfile`, `surfaceProfileUnlocked`.
 - `createFolder`, `renameFolder`, `setFolderPinned`, `moveFolder`.
-- `deleteFolder`, `dashboardRecordCounts`, `calendarItems`, `createCalendarItem`.
+- `deleteFolder`, `dashboardRecordCounts`, `calendarItems`.
 - `workspaceOverview`, `canonicalWorkspaceOperatorIDUnlocked`, `localMutationOperatorIDUnlocked`, `validateFolderUnlocked`.
 - `agentOrderJSON`, `agentOrder`.
