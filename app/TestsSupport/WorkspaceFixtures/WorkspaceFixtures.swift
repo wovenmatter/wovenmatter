@@ -38,6 +38,9 @@ extension WorkspaceDatabase {
     if let id { configuration = try await toolSessionCreationConfiguration(targetID: id.uuidString.lowercased()) }
     else { configuration = nil }
     if let explicit { return .init(folderID: configuration?.folderID, location: explicit, defaultPath: explicit.rootPath) }
+    if let id, let existing = try await sessionExecutionRoot(id: id.uuidString.lowercased()) {
+      return .init(folderID: configuration?.folderID, location: existing, defaultPath: existing.rootPath)
+    }
     let path = configuration?.nativeWorkingDirectory ?? FileManager.default.temporaryDirectory.path
     let location: WorkspaceFolderLocation
     if let folderID = configuration?.folderID,
