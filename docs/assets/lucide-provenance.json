@@ -146,10 +146,6 @@
       "upstream": "panel-left-open.svg",
       "sha256": "225cc5feb10053b3b164a2afdc01614ed2abcdc3d244f070a2cfc51d0580ef18"
     },
-    "app/App/SharedAssets.xcassets/Lucide/lucide-panel-right-close-s175.imageset/lucide-panel-right-close-s175.svg": {
-      "upstream": "panel-right-close.svg",
-      "sha256": "cc3924adbaed09924947deb28732e3b4f08b100da926163eebd06eef90c94ac1"
-    },
     "app/App/SharedAssets.xcassets/Lucide/lucide-panel-right-open-s175.imageset/lucide-panel-right-open-s175.svg": {
       "upstream": "panel-right-open.svg",
       "sha256": "4a4bd2ff87e8c24316999cf6927c315fd4df68dcc1fe6174d2c58b94a591b500"

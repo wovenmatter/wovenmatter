@@ -284,12 +284,6 @@ extension CompanionModel {
     }
     return executionOnline ? executionName : "\(executionName) unavailable · draft saved here"
   }
-  var composerHelp: String? {
-    if selectedExecutionWorkspaceID == "local", selectedInferenceConnection == nil { return "Add a cloud or Tailscale inference connection in Settings. Pi Durable and its tools run on this device." }
-    if !executionOnline { return "This workspace is unavailable. You can keep writing; your draft is saved on this device." }
-    if activeRunID != nil && activeProvider?.canSteer != true { return "This agent is running. Stop it or wait before sending another message." }
-    return nil
-  }
   var canResumeLocalRun: Bool {
     guard let id = selectedConversationID else { return false }
     return executionRecords[id]?.status == "interrupted" && localRunTasks[id] == nil && !localStopping.contains(id) && !localInterrupting.contains(id)
@@ -375,12 +369,6 @@ extension CompanionModel {
     if id != "local" { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
     do { try persistExecutionConfiguration() } catch { errorMessage = error.localizedDescription }
   }
-  func selectInferenceConnection(_ id: String) {
-    guard selectedConversationID == nil else { return }
-    inferenceConnectionID = id
-    do { try persistExecutionConfiguration() } catch { errorMessage = error.localizedDescription }
-  }
-
   func sendOnDevice(userInitiated: Bool = true) async {
     guard !sending, !startingChat, selectedConversationID.map({ !configuringDeviceSessions.contains($0) }) ?? true, executionOnline, activeRunID == nil, !canResumeLocalRun,
           !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }

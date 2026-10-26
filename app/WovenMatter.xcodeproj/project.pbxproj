@@ -75,7 +75,6 @@
 		F10100000000000000000001 /* ArtifactEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10100000000000000000002 /* ArtifactEditor.swift */; };
 		F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10200000000000000000002 /* DashboardDatabasesView.swift */; };
 		ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */; };
-		2A71A302AFFA410CB30E65F3 /* DashboardConversationReferencePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */; };
 		8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */; };
 		97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */; };
 		E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */; };
@@ -235,7 +234,6 @@
 		F10100000000000000000002 /* ArtifactEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactEditor.swift; sourceTree = "<group>"; };
 		F10200000000000000000002 /* DashboardDatabasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDatabasesView.swift; sourceTree = "<group>"; };
 		FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationState.swift; sourceTree = "<group>"; };
-		87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationReferencePreview.swift; sourceTree = "<group>"; };
 		879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDrafts.swift; sourceTree = "<group>"; };
 		890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSidebar.swift; sourceTree = "<group>"; };
 		B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversation.swift; sourceTree = "<group>"; };
@@ -433,7 +431,6 @@
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
 				26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */,
 				A71B00000000000000000102 /* LibraryModel.swift */,
-				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
 				ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -749,7 +746,6 @@
 				97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */,
 				8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */,
 				F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */,
-				2A71A302AFFA410CB30E65F3 /* DashboardConversationReferencePreview.swift in Sources */,
 				C06300000000000000000001 /* ApplicationUsageModel.swift in Sources */,
 				ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */,
 				DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */,

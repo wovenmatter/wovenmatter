@@ -89,10 +89,6 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
         }
     }
 }
-public struct DefaultAgentStatus: Decodable, Sendable {
-    public let providers: [AgentSignInStatus]
-    public let locked: Bool?
-}
 public struct DefaultAgentSyncReceipt: Decodable, Sendable {
     public let saved: Bool
     public let revision: String

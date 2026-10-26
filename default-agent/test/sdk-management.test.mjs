@@ -9,11 +9,9 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
 
-import { rangeFloor } from '../src/package-versions.mjs';
-
 // Fixtures follow the bundled declarations, which are the updater's policy.
 const declared = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).dependencies;
-const piFloor = rangeFloor(declared['@earendil-works/pi-durable']), claudeFloor = rangeFloor(declared['@anthropic-ai/claude-agent-sdk']);
+const piFloor = declared['@earendil-works/pi-durable'].slice(2), claudeFloor = declared['@anthropic-ai/claude-agent-sdk'].slice(2);
 const bump = (version, part = 2, by = 1) => version.split('.').map((value, index) => index < part ? value : index === part ? String(Number(value) + by) : '0').join('.');
 const piPackages = ['@earendil-works/pi-durable', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent', '@earendil-works/chord'];
 // npm registry fixture: `releases` maps package names to published versions.

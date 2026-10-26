@@ -117,25 +117,6 @@ final class WorkspaceJournalTests: XCTestCase {
     XCTAssertEqual(state.commands.values.first?.command, command)
   }
 
-  func testNativeToolCASRejectsSameRevisionEditorChangesAndCancellation() async throws {
-    let store = try MobileStore(file: path())
-    let initial = CompanionNote(id: "note", title: "Shared", content: "Initial", revision: 5)
-    try await store.apply(CompanionSnapshot(workspaceID: "library", cursor: 1, notes: [initial]))
-    try await store.editNote(id: initial.id, title: initial.title, content: "Editor", folderID: nil, base: initial)
-    do {
-      try await store.editNoteIfUnchanged(id: initial.id, title: initial.title, content: "Tool", folderID: nil, expected: initial)
-      XCTFail("A stale tool read must not overwrite an unacknowledged editor write")
-    } catch MobileStore.Failure.conflictingNote { }
-    let current = await store.snapshot().notes[initial.id]!
-    XCTAssertEqual(current.content, "Editor"); XCTAssertEqual(current.revision, initial.revision)
-    let cancelled = Task {
-      while !Task.isCancelled { await Task.yield() }
-      try await store.editNoteIfUnchanged(id: initial.id, title: initial.title, content: "Cancelled", folderID: nil, expected: current)
-    }
-    cancelled.cancel()
-    do { try await cancelled.value; XCTFail("Cancelled tools must not write") } catch is CancellationError { }
-    let after = await store.snapshot(); XCTAssertEqual(after.notes[initial.id]?.content, "Editor")
-  }
   func testWorkspaceNoteImportPreservesIdentityAndDoesNotResurrectDeletedNote() async throws {
     let store = try MobileStore(file: path())
     let note = CompanionNote(id: "agent-note", title: "Result", content: "saved output", revision: 3)

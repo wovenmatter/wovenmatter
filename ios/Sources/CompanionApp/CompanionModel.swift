@@ -71,7 +71,6 @@ import CompanionInference
   @ObservationIgnored var networkMonitor: MobileNetworkMonitor?
   var workspaceRefreshAfter: [String: Date] = [:]
   var workspaceRetryCount: [String: Int] = [:]
-  var offlineOperationIDs: Set<String> = []
   var offlineProblems: [String: String] = [:]
   var saveStates: [String: String] = [:]
   var draftTitles: [String: String] = [:]
@@ -187,7 +186,6 @@ import CompanionInference
   var centralProvider: CompanionProvider? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
   var allPending: [CompanionPendingInteraction] { pending + localPending + remotePending.values.flatMap { $0 } }
   var currentPending: [CompanionPendingInteraction] { allPending.filter { $0.conversationID == selectedConversationID } }
-  var unresolvedCommands: [MobileCommandRecord] { state.commands.filter { $0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown } }
 
   func run() async {
     guard !isolatedTestHost else { return }

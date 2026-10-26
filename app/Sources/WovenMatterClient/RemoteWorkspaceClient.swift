@@ -1409,9 +1409,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/runtime/inspection", method: "GET", body: nil)
     }
 
-    public func defaultAgentStatus() async throws -> DefaultAgentStatus {
-        try await request(path: "v1/default-agent/status", method: "GET", body: nil)
-    }
     public func defaultAgentSDKs(_ command: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
         try await request(path: "v1/default-agent/sdks", method: command.action == .status ? "GET" : "POST",
                           body: command.action == .status ? nil : JSONEncoder().encode(command))
@@ -1538,11 +1535,6 @@ public actor RemoteWorkspaceCredentialStore {
     public func authorizeToken(for id: UUID) throws -> String? {
         if blocked[id] == nil, let token = cachedTokens[id] { return token }
         return try loadToken(for: id, allowInteraction: true)
-    }
-
-    public func clearCachedTokens() {
-        cachedTokens.removeAll()
-        blocked.removeAll()
     }
 
     private func loadToken(for id: UUID, allowInteraction: Bool) throws -> String? {

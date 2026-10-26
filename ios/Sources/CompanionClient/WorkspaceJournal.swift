@@ -498,13 +498,6 @@ public actor WorkspaceClient {
     let receipt = try await submit(launch.initialSend)
     return try await store.rememberLaunchReceipt(receipt, launchID: launch.id) ?? launch
   }
-  public func unresolvedCommand(matching command: CompanionCommand) async -> CompanionCommand? {
-    await store.journal.commandRecords(workspaceID: workspaceID).first {
-      ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && $0.command.kind == command.kind &&
-      $0.command.conversationID == command.conversationID && $0.command.runID == command.runID &&
-      $0.command.text == command.text && $0.command.interactionID == command.interactionID
-    }?.command
-  }
   public func submit(_ requested: CompanionCommand) async throws -> CompanionCommandReceipt {
     guard requested.workspaceID == nil || requested.workspaceID == workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     try await verify()

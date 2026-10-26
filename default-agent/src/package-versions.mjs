@@ -31,7 +31,6 @@ export function satisfiesRange(version, range) {
   if (operator === '~' || Number(major) === 0) return vMajor === Number(major) && vMinor === Number(minor);
   return vMajor === Number(major);
 }
-export const rangeFloor = range => /^(?:>=|[~^]?)(\d+\.\d+\.\d+)$/.exec(range ?? '')?.[1] ?? null;
 
 async function registry(name, suffix, { signal, fetchImplementation = fetch }) {
   const response = await fetchImplementation(`https://registry.npmjs.org/${encodeURIComponent(name)}${suffix}`, {

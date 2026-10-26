@@ -394,32 +394,6 @@ public actor DashboardStore {
     try await database.updateNote(id: id, title: title, content: content, expectedRevision: expectedRevision)
   }
 
-  public func handleNoteEditingRequest(
-    _ request: NoteEditingRequest
-  ) async throws -> NoteEditingResponse {
-    do {
-      let response: NoteEditingResponse = switch request.command {
-      case .read: try await database.readNoteForEditing(id:request.noteID)
-      case .apply: try await database.applyNoteEdits(request)
-      }
-      if case .apply = request.command {
-        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven",kind:"mcp.mutation",
-          payload:String(decoding:try JSONEncoder().encode([
-            "action":"apply", "noteID":request.noteID, "success":"true"
-          ]),as:UTF8.self)))
-      }
-      return response
-    } catch {
-      if case .apply = request.command {
-        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven",kind:"mcp.mutation",
-          payload:String(decoding:try JSONEncoder().encode([
-            "action":"apply", "noteID":request.noteID, "success":"false"
-          ]),as:UTF8.self)))
-      }
-      throw error
-    }
-  }
-
   @discardableResult
   public func updateConversationTitleIfCurrent(
     id: String,

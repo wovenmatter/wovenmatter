@@ -4,47 +4,6 @@ import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
-struct DashboardUnavailableUtility: View {
-    @Environment(\.dashboardTheme) private var theme
-    let icon: DashboardLucideGlyph
-    let title: String
-    var detail: String? = nil
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 18) {
-                HStack(spacing: 10) {
-                    DashboardLucideIcon(glyph: icon, size: 18)
-                        .foregroundStyle(DashboardPalette.primary)
-                        .frame(width: 36, height: 36)
-                        .background(DashboardPalette.muted)
-                        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(.system(size: 22, weight: .semibold))
-                            .tracking(-0.3)
-                    }
-                    Spacer()
-                }
-            }
-            .padding(.horizontal, 32)
-            .padding(.top, 56)
-            DashboardConversationEmptyState(icon: icon, title: emptyTitle, detail: detail)
-                .frame(maxHeight: .infinity)
-        }
-        .background(theme.palette.workspace)
-    }
-
-    private var emptyTitle: String {
-        switch title {
-        case "Calendar": "No calendar items yet"
-        case "Scheduled Tasks": "No scheduled jobs"
-        default: "Library is not available yet."
-        }
-    }
-
-}
-
 struct DashboardConversationEmptyState: View {
     let icon: DashboardLucideGlyph
     let title: String

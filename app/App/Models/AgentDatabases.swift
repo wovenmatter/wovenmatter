@@ -57,11 +57,14 @@ struct DashboardDatabasesSnapshot: Equatable, Codable, Sendable {
 enum DashboardDatabaseLinkError: LocalizedError {
     case databaseUnavailable
     case remoteDataUnavailable
+    case sqliteQueryRequired
 
     var errorDescription: String? {
         switch self {
         case .databaseUnavailable:
             "The linked database is no longer available."
+        case .sqliteQueryRequired:
+            "Add a read-only SQLite query to this artifact link."
         case .remoteDataUnavailable:
             "This remote database is not reachable from this Mac."
         }

@@ -518,37 +518,5 @@ private struct WorkspaceSettingsPane: View {
   }
 }
 
-struct SyncRecoveryPane: View {
-  @Bindable var model: CompanionModel
-  var body: some View {
-    List {
-      CompanionInlineError(model: model)
-      if (model.synchronizationStatus.lanes[.calendar]?.conflictCount ?? 0) > 0 {
-        NavigationLink("Calendar conflicts") { CalendarPane(model: model) }
-      }
-      ForEach(Array(model.state.conflicts.keys).sorted(), id: \.self) { id in
-        Button(model.state.notes[id]?.title ?? "Note conflict") { Task { await model.openNote(id) } }
-      }
-      ForEach(model.state.launches.filter { !$0.accepted }) { launch in
-        VStack(alignment: .leading, spacing: 8) {
-          Text(launch.initialSend.text ?? "New conversation").lineLimit(3)
-          if let message = launch.sendReceipt?.message ?? launch.createReceipt?.message { Text(message).font(.caption) }
-          if !launch.terminalFailure {
-            Button("Retry saved request") { Task { await model.continueLaunch(launch) } }
-              .disabled(launch.create.workspaceID.map { model.workspaceReachable[$0] != true } ?? !model.online)
-          }
-        }
-      }
-      ForEach(model.unresolvedCommands) { record in
-        VStack(alignment: .leading, spacing: 8) {
-          Text(record.command.text ?? record.command.kind.rawValue).lineLimit(3)
-          if let message = record.receipt?.message { Text(message).font(.caption) }
-          if record.receipt == nil { Button("Retry saved command") { Task { await model.retry(record) } }.disabled(!model.online) }
-        }
-      }
-    }.listStyle(.plain).scrollContentBackground(.hidden).mobileNavigationPage("Pending changes")
-  }
-}
-
 import CompanionClient
 import WovenMatterCompanion

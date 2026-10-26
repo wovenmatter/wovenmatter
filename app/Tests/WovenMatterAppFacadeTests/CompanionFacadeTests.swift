@@ -120,8 +120,7 @@ struct CompanionFacadeTests {
         usageService = LocalUsageService(homeDirectory: directory.appending(path: "ProviderFixtureHome"),
             fileManager: .default, credentialStore: FacadeNoCredentials(probe: probe),
             usageDatabaseURL: directory.appending(path: "usage.sqlite"), sharedConnectionRevision: { 0 },
-            limitCollector: { request in probe.collectLimits(request); return [] },
-            openRouterActivityFetcher: { _ in probe.record("fetch"); throw FixtureError.configurationRejected })
+            limitCollector: { request in probe.collectLimits(request); return [] })
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
             localUsageService: usageService)
         let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)

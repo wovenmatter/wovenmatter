@@ -17,16 +17,6 @@ struct NativeHarnessArchiveTests {
         #expect(metadata.messageScalars["stopReason"] == "length")
     }
 
-    @Test func archivedHermesExportRetainsMetadata() throws {
-        let identity = HermesSessionArchive.identity(home: "/remote-workspaces/11111111-1111-1111-1111-111111111111/home/.hermes", storedID: "native-session", imported: true)
-        let message: HermesValue = ["id": .number(7), "role": "tool", "content": "full result", "tool_call_id": "call-1", "unknown_metadata": ["preserved": .bool(true)]]
-        let snapshot: HermesValue = ["id": "native-session", "messages": .array([message]), "compression_parent": "older-session"]
-        let batch = try HermesSessionImport(identity: identity, title: "Imported", createdAt: .now, messages: [message], nativeSnapshot: snapshot).nativeArchiveBatch()
-        #expect(batch.records.contains { $0.id == "message:7" && $0.payload.contains("unknown_metadata") })
-        #expect(batch.records.contains { $0.id == "session.export" && $0.payload.contains("compression_parent") })
-    }
-
-
     @Test(.timeLimit(.minutes(3)))
     func oversizedNativeRecordsRemainCompleteSearchableAndUseSanitizedOffsets() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -1870,24 +1870,6 @@ final class ApplicationModel {
         await refreshWorkspace()
     }
 
-    @discardableResult
-    private func adoptNoteEditingResponseDraft(_ response: NoteEditingResponse) -> Bool {
-        guard response.success, let document = response.document,
-              let content = try? document.encoded() else { return false }
-        if var draft = noteDrafts[response.noteID] {
-            draft.title = response.title ?? draft.title
-            draft.content = content
-            draft.saveState = .saved
-            draft.editRevision = 0
-            draft.persistedRevision = 0
-            draft.sourceRevision = response.revision
-            draft.sourceContent = content
-            draft.sourceTitle = response.title ?? draft.title
-            noteDrafts[response.noteID] = draft
-        }
-        return true
-    }
-
     func prepareNoteDraft(_ note: WorkspaceNoteRecord) {
         guard var draft = noteDrafts[note.id] else {
             noteDrafts[note.id] = noteDraft(for: note)
@@ -4148,7 +4130,7 @@ final class ApplicationModel {
         }
         if let databaseURL = database.localURL {
             return try await Task.detached(priority: .utility) {
-                guard let query = link.sqliteQuery else { throw DatabaseLinkedDataError.sqliteQueryRequired }
+                guard let query = link.sqliteQuery else { throw DashboardDatabaseLinkError.sqliteQueryRequired }
                 return try AgentDatabaseCatalog.query(id: database.databaseID, sql: query,
                     in: databaseURL.deletingLastPathComponent())
             }.value

@@ -62,7 +62,6 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let panelLeftOpen = Self("panel-left-open", stroke: "s175")
     static let panelRightOpen = Self("panel-right-open", stroke: "s175")
     static let panelLeftClose = Self("panel-left-close", stroke: "s175")
-    static let panelRightClose = Self("panel-right-close", stroke: "s175")
     static let rotate = Self("rotate-ccw", stroke: "s175")
     static let calendarDaysControl = Self("calendar-days", stroke: "s175")
     static let calendarClockControl = Self("calendar-clock", stroke: "s175")

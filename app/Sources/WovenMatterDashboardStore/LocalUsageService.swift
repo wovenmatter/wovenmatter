@@ -147,11 +147,9 @@ struct UsageLimitsRequest: Sendable {
 public actor LocalUsageService {
   private typealias ImportOutcome = UsageTranscriptImporter.Outcome
 
-  private static let parserVersion = "usage-index-v3"
   private static let retention: TimeInterval = 120 * 24 * 60 * 60
   private static let localRefreshInterval: TimeInterval = 5 * 60
   private static let viewRefreshInterval: TimeInterval = 60
-  private static let remoteRefreshInterval: TimeInterval = 15 * 60
 
   private let homeDirectory: URL
   private let fileManager: FileManager
@@ -162,7 +160,6 @@ public actor LocalUsageService {
   private let sharedConnectionRevision: @Sendable () -> UInt64
   private let sharedConnectionChoices: @Sendable (Set<ProviderKind>) throws -> [UsageConnectionChoice]
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
-  private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
   private var limitsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
   private var analyticsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
   private var usageStore: AsyncUsageStore?
@@ -185,8 +182,6 @@ public actor LocalUsageService {
   // Keychain again during the refresh triggered by a one-time Allow response.
   private var openRouterAPIKey: String?
   private var openRouterCredentialRevision: UInt64
-  private var openRouterStatus: UsageSourceStatus = .unavailable
-  private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
 
   public init(
     homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -234,7 +229,6 @@ public actor LocalUsageService {
         ? try? await BuiltInClaudeSignIn.status(profile: credentials["claude-subscription"]?.accountId) : nil
       return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
     }
-    openRouterActivityFetcher = { try await OpenRouterActivityClient.fetch(apiKey: $0) }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"
     )
@@ -251,9 +245,6 @@ public actor LocalUsageService {
     importPreparationWorker: DatabaseWorker? = nil,
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
-    },
-    openRouterActivityFetcher: @escaping @Sendable (String) async throws -> OpenRouterActivityResult = {
-      try await OpenRouterActivityClient.fetch(apiKey: $0)
     }
   ) {
     self.homeDirectory = homeDirectory
@@ -265,7 +256,6 @@ public actor LocalUsageService {
     self.sharedConnectionChoices = sharedConnectionChoices
     openRouterCredentialRevision = sharedConnectionRevision()
     self.limitCollector = limitCollector
-    self.openRouterActivityFetcher = openRouterActivityFetcher
     databaseURL = usageDatabaseURL
   }
 
@@ -557,8 +547,7 @@ public actor LocalUsageService {
     let sources = await coverage(
       store: store,
       interval: interval,
-      enabledProviders: localProviders,
-      allowCredentialAccess: false
+      enabledProviders: localProviders
     )
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
     return UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources)
@@ -572,8 +561,6 @@ public actor LocalUsageService {
     openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
-    openRouterStatus = .unavailable
-    openRouterDetail = "The new credential has not been checked yet."
   }
 
   /// Agent reads use only the existing index. They never refresh a provider,
@@ -592,8 +579,6 @@ public actor LocalUsageService {
     openRouterAPIKey = nil
     limitsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
-    openRouterStatus = .unavailable
-    openRouterDetail = "Add an OpenRouter management key to import official account activity."
   }
 
   /// Explicit saved-credential recovery. Never launches Claude or a sign-in flow.
@@ -678,22 +663,6 @@ public actor LocalUsageService {
     }
   }
 
-  private func shouldImportOpenRouter(
-    store: AsyncUsageStore,
-    reason: UsageRefreshReason,
-    now: Date
-  ) async -> Bool {
-    let lastAttempt = try? await store.metadataDate("usage.openrouter-attempt-at")
-    switch reason {
-    case .rangeChanged, .runCompleted:
-      return false
-    case .manual, .credentialChanged:
-      return true
-    case .startup, .viewAppeared, .periodic:
-      return lastAttempt.map { now.timeIntervalSince($0) >= Self.remoteRefreshInterval } ?? true
-    }
-  }
-
   private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
     enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date) async -> Bool {
     let home = homeDirectory
@@ -723,44 +692,10 @@ public actor LocalUsageService {
     do { try generation.check(); return true } catch { return false }
   }
 
-  private func importOpenRouterActivity(store: AsyncUsageStore, generation: UsageRefreshOwnership, now: Date) async {
-    do {
-      guard let key = try loadOpenRouterAPIKey() else {
-        openRouterStatus = .unavailable
-        openRouterDetail = "Add an OpenRouter management key to import official account activity."
-        return
-      }
-      let activity = try await openRouterActivityFetcher(key)
-      guard isCurrentAnalytics(generation) else { return }
-      for (date, samples) in activity.samplesByUTCDate {
-        guard isCurrentAnalytics(generation) else { return }
-        try await store.replace(
-          sourceID: "openrouter:activity:\(date)",
-          sourceName: "OpenRouter activity",
-          location: "OpenRouter Activity API",
-          provider: .openRouter,
-          harness: nil,
-          fingerprint: "\(Self.parserVersion):\(now.timeIntervalSince1970)",
-          samples: uniqueSourceEvents(samples),
-          importedAt: now,
-          validating: { try generation.check() }
-        )
-      }
-      guard isCurrentAnalytics(generation) else { return }
-      openRouterStatus = .available
-      openRouterDetail = activity.detail
-    } catch {
-      guard isCurrentAnalytics(generation) else { return }
-      openRouterStatus = error is OpenRouterActivityError ? .partial : .failed
-      openRouterDetail = error.localizedDescription
-    }
-  }
-
   private func coverage(
     store: AsyncUsageStore,
     interval: DateInterval,
-    enabledProviders: Set<ProviderKind>,
-    allowCredentialAccess: Bool
+    enabledProviders: Set<ProviderKind>
   ) async -> [UsageSourceCoverage] {
     var sources: [UsageSourceCoverage] = []
     if enabledProviders.contains(.codex) { await sources.append(sourceCoverage(
@@ -1023,33 +958,6 @@ public actor LocalUsageService {
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let components = calendar.dateComponents([.year, .month, .day], from: sample.timestamp)
     return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0):\(sample.modelFamily):\(sample.billingRoute)"
-  }
-
-  private func uniqueSourceEvents(_ samples: [UsageSample]) -> [UsageSample] {
-    var seen: Set<String> = []
-    return samples.filter { seen.insert($0.sourceEventID).inserted }
-  }
-
-  private func files(
-    root: URL,
-    cutoff: Date,
-    predicate: (URL) -> Bool
-  ) -> [URL] {
-    guard fileManager.fileExists(atPath: root.path) else { return [] }
-    let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey]
-    guard let enumerator = fileManager.enumerator(
-      at: root,
-      includingPropertiesForKeys: Array(keys),
-      options: [.skipsHiddenFiles, .skipsPackageDescendants]
-    ) else { return [] }
-    var result: [URL] = []
-    for case let url as URL in enumerator where predicate(url) {
-      guard let values = try? url.resourceValues(forKeys: keys),
-            values.isRegularFile == true,
-            (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
-      result.append(url)
-    }
-    return result.sorted { $0.path < $1.path }
   }
 
   private func abbreviated(_ url: URL) -> String {

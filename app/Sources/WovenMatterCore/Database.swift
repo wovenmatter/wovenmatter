@@ -14,23 +14,6 @@ public enum AgentDatabasePreference: String, Codable, CaseIterable, Sendable {
   }
 }
 
-public struct AgentDatabaseManifest: Codable, Equatable, Sendable {
-  public static let currentSchema = "wovenmatter.database.v1"
-
-  public var schema: String
-  public var preference: AgentDatabasePreference
-
-  public init(
-    schema: String = Self.currentSchema,
-    preference: AgentDatabasePreference = .none
-  ) {
-    self.schema = schema
-    self.preference = preference
-  }
-
-  public var isSupported: Bool { schema == Self.currentSchema }
-}
-
 public struct AgentDatabaseQueryResponse: Codable, Equatable, Sendable {
   public let contractVersion: Int
   public let columns: [String]

@@ -5,11 +5,6 @@ import Observation
 import WovenMatterCompanion
 import WovenMatterCore
 
-enum CentralLibraryClientConfiguration {
-    static let preferenceKey = LocalExecutionRole.libraryClientPreferenceKey
-    static func isEnabled(defaults: UserDefaults = .standard) -> Bool { defaults.bool(forKey: preferenceKey) }
-}
-
 /// A secondary Mac owns a replica, never another copy of the authoritative database.
 /// The portable store journals edits and command identities before network submission.
 @MainActor @Observable
@@ -336,11 +331,6 @@ final class CentralLibraryClientModel {
         if let engine { try await engine.keepArtifactOffline(id) }
         await reload()
     }
-    func keepConversationOffline(_ id: String) async throws {
-        try await store?.setTranscriptPinned(id, true)
-        if let engine { try await engine.keepTranscriptOffline(id) }
-        await reload()
-    }
     private var executionDirectory: URL {
         if let executionDirectoryOverride { return executionDirectoryOverride }
         let root = CompanionTestWorkspace.supportDirectory
@@ -429,18 +419,6 @@ final class CentralLibraryClientModel {
                 directClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: connection)
             }
         }
-    }
-    func enableDirectAccess(_ workspaceID: String) async {
-        guard let transport else { return }
-        let generation = connectionGeneration
-        do {
-            let value = try await transport.executionCredential(workspaceID: workspaceID)
-            guard generation == connectionGeneration else { return }
-            try WorkspaceCredentialVault.save(value)
-            try configureDirectClients()
-            selectedExecutionWorkspaceID = workspaceID
-            await selectExecutionWorkspace(workspaceID)
-        } catch { errorMessage = error.localizedDescription }
     }
     func selectExecutionWorkspace(_ id: String) async {
         selectedExecutionWorkspaceID = id

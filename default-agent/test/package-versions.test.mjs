@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { satisfiesRange, rangeFloor, selectPackageRelease } from '../src/package-versions.mjs';
+import { satisfiesRange, selectPackageRelease } from '../src/package-versions.mjs';
 const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest') ? { version: latest } : { versions: Object.fromEntries(versions.map(v => [v, {}])) }));
 test('declared minimums have no upper cap; explicit caret and tilde limits still apply', () => {
   const cases = {
@@ -18,7 +18,6 @@ test('declared minimums have no upper cap; explicit caret and tilde limits still
   }
   // Unsupported range forms fail closed instead of matching everything.
   for (const range of ['>1.0.0', '1.x', 'latest', '*', '', undefined]) assert.equal(satisfiesRange('1.0.0', range), false, String(range));
-  assert.equal(rangeFloor('>=0.3.306'), '0.3.306');
 });
 
 test('a minimum selects the newest stable major even when the latest tag lags', async () => {

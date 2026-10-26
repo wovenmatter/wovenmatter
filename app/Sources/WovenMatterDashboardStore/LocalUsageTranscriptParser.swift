@@ -13,14 +13,6 @@ struct CodexUsageScanState {
   var forkCopyAnchor: Date?
 }
 
-struct HarnessUsageScanState {
-  var sessionID = ""
-  var model = ""
-  var provider = ""
-  var reasoningLevel: String?
-  var workspace: String?
-}
-
 enum LocalUsageTranscriptParser {
   static let forkCopyMaximumGap: TimeInterval = 1
 
@@ -263,87 +255,6 @@ enum LocalUsageTranscriptParser {
       tokens: tokens,
       costUSD: number(part["cost"]),
       sourceEventID: partID
-    )
-  }
-
-  static func parseHarness(
-    line: String,
-    lineNumber: Int,
-    harness: String,
-    state: inout HarnessUsageScanState
-  ) -> UsageSample? {
-    guard let root = object(line), let type = string(root["type"]) else { return nil }
-
-    if type == "session" {
-      state.sessionID = string(root["id"] ?? root["session_id"]) ?? state.sessionID
-      state.workspace = string(root["cwd"]).map(lastPathComponent) ?? state.workspace
-      return nil
-    }
-    if type == "model_change" {
-      state.model = string(root["modelId"] ?? root["model_id"] ?? root["model"])
-        ?? state.model
-      state.provider = string(root["provider"] ?? root["providerId"] ?? root["provider_id"])
-        ?? state.provider
-      return nil
-    }
-    if type == "thinking_level_change" {
-      state.reasoningLevel = string(root["thinkingLevel"] ?? root["thinking_level"])
-        ?? state.reasoningLevel
-      return nil
-    }
-    guard type == "message", let message = dictionary(root["message"]),
-          string(message["role"]) == "assistant",
-          let usage = dictionary(message["usage"]),
-          let timestamp = date(root["timestamp"] ?? message["timestamp"]) else { return nil }
-
-    let model = string(message["model"] ?? message["modelId"] ?? message["model_id"])
-      ?? state.model
-    guard !model.isEmpty else { return nil }
-    let providerIdentifier = string(
-      message["provider"] ?? message["providerId"] ?? message["provider_id"]
-    ) ?? state.provider
-    let route = billingRoute(providerIdentifier)
-    let tokens = UsageTokenCounts(
-      inputTokens: integer(usage["input"] ?? usage["input_tokens"]),
-      cachedInputTokens: integer(
-        usage["cacheRead"] ?? usage["cache_read"] ?? usage["cached_input_tokens"]
-      ),
-      cacheCreationTokens: integer(
-        usage["cacheWrite"] ?? usage["cache_write"] ?? usage["cache_creation_input_tokens"]
-      ),
-      outputTokens: integer(usage["output"] ?? usage["output_tokens"]),
-      reasoningTokens: integer(usage["reasoning"] ?? usage["reasoning_tokens"]),
-      reportedTotalTokens: integer(usage["totalTokens"] ?? usage["total_tokens"]).positiveValue
-    )
-    guard tokens.totalTokens > 0 else { return nil }
-
-    let sessionID = state.sessionID.nilIfEmpty
-      ?? string(root["sessionId"] ?? root["session_id"])
-      ?? "Unknown"
-    let responseID = string(message["responseId"] ?? message["response_id"])
-      ?? string(message["id"] ?? root["id"])
-    let identity = responseID
-      ?? "\(sessionID):\(lineNumber):\(timestamp.timeIntervalSince1970)"
-    let cost = dictionary(usage["cost"]).flatMap { number($0["total"]) }
-      ?? number(usage["cost"] ?? usage["cost_usd"])
-    return UsageSample(
-      id: "\(harness.lowercased()):\(identity)",
-      provider: route.provider,
-      timestamp: timestamp,
-      sessionID: sessionID,
-      accountLabel: "Unknown",
-      model: model,
-      billingProvider: route.billingProvider,
-      billingRoute: route.billingRoute,
-      reasoningLevel: string(message["thinkingLevel"] ?? message["thinking_level"])
-        ?? state.reasoningLevel,
-      harness: harness,
-      application: harness,
-      workspace: state.workspace,
-      tokens: tokens,
-      costUSD: cost,
-      sourceEventID: identity,
-      dedupeKey: responseID.map { "\(providerIdentifier):\($0)" }
     )
   }
 

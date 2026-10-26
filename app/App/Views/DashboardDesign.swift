@@ -369,10 +369,6 @@ struct DashboardAgentPresentation: Equatable {
 }
 
 extension DashboardHarnessLogo {
-    static var displayCases: [DashboardHarnessLogo] {
-        AgentRuntimeKind.presentationOrder.map(Self.init(runtimeKind:))
-    }
-
     init(runtimeKind: AgentRuntimeKind) {
         switch runtimeKind {
         case .codex: self = .codex
@@ -569,17 +565,6 @@ struct DashboardRailBackground: View {
             }
             .onHover { hovered = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: hovered)
-    }
-}
-
-struct DashboardSectionHeading: View {
-    let title: String
-
-    var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(1.8)
-            .foregroundStyle(DashboardPalette.mutedForeground)
     }
 }
 
