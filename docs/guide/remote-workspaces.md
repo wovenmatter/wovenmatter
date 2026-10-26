@@ -19,13 +19,15 @@ rather than maintaining a separate SSH key store.
 ## Create a workspace
 
 1. Open **Settings → Remote Agent Workspaces** and select or enter a host.
-2. Inspect the host and review the result; inspection does not install software.
-3. If the host needs setup, choose **Prepare host and create workspace**, then
-   review and authorize the listed changes. The app installs Docker on supported
-   Ubuntu/Debian hosts or starts an existing Docker service, verifies the result,
-   and continues creating the workspace.
-4. Create the workspace, then install and authenticate the harnesses you want
-   inside it.
+2. Selecting a discovered machine checks it automatically. For a hostname entered
+   manually, choose **Inspect host**. Inspection does not install software.
+3. If the host needs setup, choose **Prepare host** and authorize the listed
+   changes. The app installs Docker on supported Ubuntu/Debian hosts or starts
+   an existing Docker service, then verifies the result. Preparation does not
+   create a workspace.
+4. Once that host is ready, the workspace form appears. Give the workspace a name
+   and ID, create it, then install and authenticate the harnesses you want inside
+   it. Changing the hostname or SSH username requires a matching host check.
 5. Choose its agent in **New chat**.
 
 If preparation is blocked, resolve the reported requirement on the host and

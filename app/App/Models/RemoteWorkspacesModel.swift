@@ -25,9 +25,10 @@ struct RemoteHarnessChatTarget: Equatable, Identifiable {
 @Observable
 final class RemoteWorkspacesModel {
     struct PendingHostPreparation: Codable, Equatable, Identifiable {
-        let configuration: RemoteWorkspaceConfiguration
+        let hostName: String
+        let userName: String?
         let inspection: RemoteWorkspacePreflight
-        var id: UUID { configuration.id }
+        var id: String { RemoteWorkspacesModel.hostKey(hostName: hostName, userName: userName ?? "") }
     }
 
     struct PreparedHarnessAction: Codable, Equatable, Identifiable {
@@ -76,10 +77,11 @@ final class RemoteWorkspacesModel {
     private(set) var errorMessage: String?
     private(set) var checkedPreflight: RemoteWorkspacePreflight?
     private var checkedHostKey: String?
+    private var hostInspectionID = UUID()
 
     let isBackendProjection: Bool
     var backendRequest: (@MainActor (String, Data) async throws -> Data)?
-    private let sshClient = RemoteWorkspaceSSHClient()
+    private let sshClient: RemoteWorkspaceSSHClient
     private let credentials = RemoteWorkspaceCredentialStore()
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
     private let defaults: UserDefaults
@@ -141,8 +143,10 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    init(defaults: UserDefaults = .standard, backendProjection: Bool = LocalExecutionRole.current == .frontend) {
+    init(defaults: UserDefaults = .standard, backendProjection: Bool = LocalExecutionRole.current == .frontend,
+         sshClient: RemoteWorkspaceSSHClient = RemoteWorkspaceSSHClient()) {
         self.defaults = defaults
+        self.sshClient = sshClient
         self.isBackendProjection = backendProjection
         guard !backendProjection else { return }
         // Configured workspaces are always available. Keychain reads remain silent;
@@ -703,27 +707,30 @@ final class RemoteWorkspacesModel {
         hostName: String,
         userName: String
     ) -> RemoteWorkspacePreflight? {
-        checkedHostKey == Self.hostKey(
-            hostName: hostName,
-            userName: userName
-        )
-            ? checkedPreflight
-            : nil
+        guard !hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isCheckingHost,
+              checkedHostKey == Self.hostKey(hostName: hostName, userName: userName) else { return nil }
+        return checkedPreflight
     }
 
     func checkHost(hostName: String, userName: String) {
         if forwardToBackend(.checkHost(hostName: hostName, userName: userName)) { return }
-        guard !isCheckingHost else { return }
+        guard !isCreating else { return }
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanUser = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanHost.isEmpty else {
             errorMessage = "Enter an SSH hostname before checking the host."
             return
         }
+        let inspectionID = UUID()
+        hostInspectionID = inspectionID
+        checkedPreflight = nil
+        checkedHostKey = nil
+        pendingHostPreparation = nil
         isCheckingHost = true
         errorMessage = nil
         Task {
-            defer { isCheckingHost = false }
+            defer { if hostInspectionID == inspectionID { isCheckingHost = false } }
             do {
                 _ = try RemoteWorkspaceSSHClient.validatedDestination(
                     hostName: cleanHost,
@@ -733,15 +740,31 @@ final class RemoteWorkspacesModel {
                     hostName: cleanHost,
                     userName: cleanUser.nilIfEmpty
                 )
+                guard hostInspectionID == inspectionID else { return }
                 checkedHostKey = Self.hostKey(
                     hostName: cleanHost,
                     userName: cleanUser
                 )
                 checkedPreflight = result
             } catch {
+                guard hostInspectionID == inspectionID else { return }
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func prepareHost(hostName: String, userName: String) {
+        if forwardToBackend(.prepareHost(hostName: hostName, userName: userName)) { return }
+        guard !isCreating, !isCheckingHost else { return }
+        guard let inspection = preflight(hostName: hostName, userName: userName),
+              inspection.canPrepare == true else {
+            errorMessage = "Inspect this host before preparing it."
+            return
+        }
+        pendingHostPreparation = .init(
+            hostName: hostName.trimmingCharacters(in: .whitespacesAndNewlines),
+            userName: userName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            inspection: inspection)
     }
 
     func create(
@@ -760,6 +783,10 @@ final class RemoteWorkspacesModel {
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty, !cleanID.isEmpty, !cleanHost.isEmpty else {
             errorMessage = "Enter a name, workspace ID, and SSH hostname."
+            return
+        }
+        guard preflight(hostName: cleanHost, userName: userName)?.ready == true else {
+            errorMessage = "Select and inspect a ready host before creating a workspace."
             return
         }
         let configuration = RemoteWorkspaceConfiguration(
@@ -821,19 +848,8 @@ final class RemoteWorkspacesModel {
                     userName: configuration.userName ?? ""
                 )
                 checkedPreflight = preflight
-                if preflight.preparationRequired == true {
-                    guard preflight.canPrepare == true else {
-                        let blockers = preflight.blockingIssues ?? []
-                        throw RemoteWorkspaceClientError.commandFailed(
-                            (blockers.isEmpty ? preflight.limitations : blockers)
-                                .joined(separator: " ")
-                        )
-                    }
-                    pendingHostPreparation = PendingHostPreparation(
-                        configuration: configuration,
-                        inspection: preflight
-                    )
-                    return
+                if preflight.preparationRequired == true, preflight.canPrepare == true {
+                    throw RemoteWorkspaceClientError.commandFailed("Prepare this host before creating a workspace.")
                 }
                 guard preflight.ready else {
                     throw RemoteWorkspaceClientError.commandFailed(
@@ -854,44 +870,33 @@ final class RemoteWorkspacesModel {
 
     func authorizeHostPreparation() {
         if forwardToBackend(.authorizeHostPreparation) { return }
-        guard let pending = pendingHostPreparation, !isCreating else { return }
+        guard let pending = pendingHostPreparation, !isCreating, !isCheckingHost else { return }
         pendingHostPreparation = nil
         isCreating = true
         errorMessage = nil
         Task {
-            defer {
-                isCreating = false
-                progress = nil
-            }
+            defer { isCreating = false; progress = nil }
             do {
-                progress = "Preparing the authorized remote host…"
-                _ = try await sshClient.prepareHost(
-                    hostName: pending.configuration.hostName,
-                    userName: pending.configuration.userName
-                )
-                progress = "Verifying the prepared host…"
-                let verified = try await sshClient.preflight(
-                    hostName: pending.configuration.hostName,
-                    userName: pending.configuration.userName
-                )
-                checkedHostKey = Self.hostKey(
-                    hostName: pending.configuration.hostName,
-                    userName: pending.configuration.userName ?? ""
-                )
-                checkedPreflight = verified
-                guard verified.ready,
-                      verified.preparationRequired != true else {
-                    throw RemoteWorkspaceClientError.commandFailed(
-                        verified.limitations.joined(separator: " ")
-                    )
+                progress = "Checking \(pending.hostName)…"
+                let current = try await sshClient.preflight(hostName: pending.hostName, userName: pending.userName)
+                checkedHostKey = Self.hostKey(hostName: pending.hostName, userName: pending.userName ?? "")
+                checkedPreflight = current
+                if current.ready { return }
+                guard current.canPrepare == true,
+                      current.preparationActions == pending.inspection.preparationActions else {
+                    throw RemoteWorkspaceClientError.commandFailed("Host requirements changed. Inspect the host and review its preparation again.")
                 }
-                try Self.requireCapabilities(
-                    verified,
-                    for: pending.configuration
-                )
-                try await provision(pending.configuration)
+                progress = "Preparing \(pending.hostName)…"
+                _ = try await sshClient.prepareHost(hostName: pending.hostName, userName: pending.userName)
+                progress = "Verifying \(pending.hostName)…"
+                let verified = try await sshClient.preflight(hostName: pending.hostName, userName: pending.userName)
+                checkedPreflight = verified
+                guard verified.ready, verified.preparationRequired != true else {
+                    throw RemoteWorkspaceClientError.commandFailed(verified.limitations.joined(separator: " "))
+                }
             } catch {
-                try? await credentials.deleteToken(for: pending.configuration.id, allowInteraction: false)
+                // A partial installation cannot leave a stale readiness result.
+                checkedPreflight = nil
                 errorMessage = error.localizedDescription
             }
         }
@@ -1610,7 +1615,7 @@ final class RemoteWorkspacesModel {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private static func hostKey(hostName: String, userName: String) -> String {
+    private nonisolated static func hostKey(hostName: String, userName: String) -> String {
         "\(userName.trimmingCharacters(in: .whitespacesAndNewlines))@\(hostName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
     }
 

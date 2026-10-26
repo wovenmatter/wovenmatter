@@ -50,7 +50,9 @@ struct SettingsRemoteWorkspacesView: View {
                     }
                 } else {
                     workspacesCard
-                    createCard
+                    hostCard
+                    if currentPreflight?.ready == true { createCard }
+                    if let progress = model.progress { SettingsNote(progress) }
                 }
                 if let error = model.errorMessage {
                     SettingsError(error)
@@ -104,7 +106,7 @@ struct SettingsRemoteWorkspacesView: View {
                     (pending.inspection.preparationActions ?? [])
                         .map { "• \($0)" }
                         .joined(separator: "\n")
-                    + "\n\nThis changes the remote host and may download packages. Woven Matter will verify the result before creating anything. It will not format, repartition, or remount storage."
+                    + "\n\nThis prepares \(pending.hostName) and may download packages. Woven Matter will verify the host, then you can create a workspace."
                 )
             }
         }
@@ -316,8 +318,8 @@ struct SettingsRemoteWorkspacesView: View {
         "\(workspace.workspaceID) · \(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName)"
     }
 
-    private var createCard: some View {
-        SettingsCard(title: "Create workspace") {
+    private var hostCard: some View {
+        SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace.") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.machineCandidates.filter(\.online)
@@ -327,8 +329,18 @@ struct SettingsRemoteWorkspacesView: View {
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     ForEach(onlineMachines.prefix(5)) { machine in
-                        Button(machine.displayName) { hostName = machine.hostName }
-                            .buttonStyle(SettingsQuietButtonStyle())
+                        Button {
+                            hostName = machine.hostName
+                            model.checkHost(hostName: hostName, userName: userName)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(machine.displayName)
+                                if hostName.trimmingCharacters(in: .whitespacesAndNewlines) == machine.hostName {
+                                    Text("Selected").font(.system(size: 11.5, weight: .medium))
+                                }
+                            }
+                        }
+                        .buttonStyle(SettingsQuietButtonStyle())
                     }
                     Button(model.isDiscovering ? "Discovering…" : "Refresh") {
                         model.discoverMachines()
@@ -338,17 +350,10 @@ struct SettingsRemoteWorkspacesView: View {
                 }
             }
 
-            SettingsField("Name") {
-                TextField("Remote workspace name", text: $name)
-                    .settingsInput()
-            }
-            SettingsField("Workspace ID") {
-                TextField("remote-workspace-id", text: $workspaceID)
-                    .settingsInput()
-            }
             SettingsField("SSH hostname") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .settingsInput()
+                    .onSubmit { model.checkHost(hostName: hostName, userName: userName) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
@@ -363,14 +368,17 @@ struct SettingsRemoteWorkspacesView: View {
             }
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(model.isCheckingHost || hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if currentPreflight == nil {
-                Text("Inspecting the host makes no changes.")
+            if currentPreflight == nil, !model.isCheckingHost {
+                Text(hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Select a host to see whether it is ready."
+                    : "Inspect this host to continue. Inspection makes no changes.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
             if let preflight = currentPreflight {
                 SettingsInset {
                     VStack(alignment: .leading, spacing: 8) {
+                        remoteValueRow(label: "Selected host", value: hostName.trimmingCharacters(in: .whitespacesAndNewlines))
                         remoteValueRow(
                             label: "Host status",
                             value: preflight.ready ? "Ready to create a workspace"
@@ -420,8 +428,28 @@ struct SettingsRemoteWorkspacesView: View {
                                     .foregroundStyle(DashboardPalette.mutedForeground)
                             }
                         }
+                        if preflight.canPrepare == true {
+                            Button(model.isCreating ? "Preparing host…" : "Prepare host") {
+                                model.prepareHost(hostName: hostName, userName: userName)
+                            }
+                            .buttonStyle(DashboardPrimaryButtonStyle())
+                        }
                     }
                 }
+            }
+        }
+        .disabled(model.isCreating)
+    }
+
+    private var createCard: some View {
+        SettingsCard(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
+            SettingsField("Name") {
+                TextField("Remote workspace name", text: $name)
+                    .settingsInput()
+            }
+            SettingsField("Workspace ID") {
+                TextField("remote-workspace-id", text: $workspaceID)
+                    .settingsInput()
             }
             SettingsField("Remote loopback port") {
                 TextField("7337", value: $port, format: .number)
@@ -439,8 +467,7 @@ struct SettingsRemoteWorkspacesView: View {
             SettingsNote("Use 0 to disable swap, or leave it blank for the host default.")
             SettingsNote("Files use available disk space on the remote machine.")
 
-            Button(model.isCreating ? "Creating…" : currentPreflight?.canPrepare == true
-                ? "Prepare host and create workspace" : "Create workspace") {
+            Button(model.isCreating ? "Creating…" : "Create workspace") {
                 model.create(
                     name: name,
                     workspaceID: workspaceID,
@@ -452,12 +479,9 @@ struct SettingsRemoteWorkspacesView: View {
                 )
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
-            .disabled(model.isCreating)
-            if let progress = model.progress {
-                Text(progress)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            .disabled(model.isCreating || currentPreflight?.ready != true
+                || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
