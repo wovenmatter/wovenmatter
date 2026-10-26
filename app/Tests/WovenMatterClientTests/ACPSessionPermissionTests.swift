@@ -145,10 +145,10 @@ struct ACPSessionPermissionTests {
     }
 
 
-    @Test(arguments: [false, true]) func codexReceivesSessionBoundAutomationMCP(loading: Bool) async throws {
-        let fixture = try PermissionFixture(kind: .codex, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild], [false, true]) func nativeHarnessReceivesSessionBoundAutomationMCP(kind: AgentRuntimeKind, loading: Bool) async throws {
+        let fixture = try PermissionFixture(kind: kind, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex, executableURL: fixture.executable, arguments: [])
+        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: kind, executableURL: fixture.executable, arguments: kind == .grokBuild ? ["agent", "stdio"] : [])
         launch.cliConnection = .init(executablePath: "/fixture/wovenmatter", socketPath: "/fixture/caller.sock", captureID: "input")
         let client = try LocalACPClient.start(launch: launch, workingDirectory: fixture.root)
         do {
@@ -161,6 +161,11 @@ struct ACPSessionPermissionTests {
             #expect(server["args"] as? [String] == ["mcp"])
             let env = try #require(server["env"] as? [[String: String]])
             #expect(env.contains(["name": "WOVENMATTER_SOCKET", "value": "/fixture/caller.sock"]))
+            #expect(env.contains(["name": "WOVENMATTER_CLI", "value": "/fixture/wovenmatter"]))
+            let meta = try #require(params["_meta"] as? [String: Any])
+            let binding = try #require(meta["wovenToolsConnection"] as? [String: Any])
+            #expect(binding["captureID"] as? String == "input")
+            #expect(binding["socketPath"] as? String == "/fixture/caller.sock")
             await client.shutdown()
         } catch { await client.shutdown(); throw error }
     }

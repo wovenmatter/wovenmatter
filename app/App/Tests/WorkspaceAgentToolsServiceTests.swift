@@ -1,4 +1,5 @@
 import WorkspaceFixtures
+import AppKit
 import Darwin
 import Foundation
 import Observation
@@ -10,6 +11,80 @@ import WovenMatterDashboardStore
 
 @MainActor
 struct WorkspaceAgentToolsServiceTests {
+
+    // Opt-in acceptance with the actual packaged CLI/MCP server and native
+    // adapters. No provider or account is used; the owning app services and
+    // WebKit preview are real. The normal build validation runs this after
+    // producing the app bundle.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_HTML_TEST_BUNDLE"] != nil),
+          .serialized, .timeLimit(.minutes(2)), arguments: AgentRuntimeKind.allCases)
+    func packagedHTMLToolsWorkAcrossHarnesses(runtime: AgentRuntimeKind) async throws {
+        _ = NSApplication.shared
+        let bundle = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["WOVENMATTER_HTML_TEST_BUNDLE"]))
+        let resources = bundle.appending(path: "Contents/Resources")
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "workspace.sqlite")
+        let database = try await WorkspaceDatabase(url: url)
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML acceptance", ownerDeviceID: UUID())
+        var native = OpenCodeSessionSnapshot()
+        let runID: String?
+        if runtime == .opencode {
+            try await database.attachOpenCodeSession(.init(conversationID: caller, connectionID: "acceptance", sessionID: "ses_acceptance"))
+            native.active = true
+            native.messages = [["id": "msg_acceptance", "type": "assistant", "time": ["created": .number(1)], "content": .array([])]]
+            try await database.saveOpenCodeSnapshot(native, conversationID: caller)
+            runID = nil
+        } else { runID = try await database.beginLocalACPRun(conversationID: caller, content: "Provider-free HTML acceptance").runID }
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        service.automationHandler = { identity, command, _ in
+            #expect(identity == caller)
+            let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+            #expect(input.objectValue?["action"]?.stringValue == "preview")
+            return .init(result: try await ConversationHTMLPreview().capture(input))
+        }
+        let endpoint = try await service.endpoint(for: caller)
+        let driver = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appending(path: "default-agent/test/fixtures/html-harness.mjs")
+        let report = try await runBlockingToolFixture {
+            let process = Process(), output = Pipe(), errors = Pipe()
+            process.executableURL = resources.appending(path: "default-agent/bin/node")
+            process.arguments = [driver.path, resources.path, runtime.rawValue, endpoint]
+            process.environment = ProcessInfo.processInfo.environment
+            process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = errors
+            try process.run()
+            let bytes = output.fileHandleForReading.readDataToEndOfFile()
+            let diagnostics = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw NSError(domain: "HTMLHarnessAcceptance", code: Int(process.terminationStatus),
+                    userInfo: [NSLocalizedDescriptionKey: String(decoding: diagnostics, as: UTF8.self)])
+            }
+            return bytes
+        }
+        let value = try #require(JSONSerialization.jsonObject(with: report) as? [String: Any])
+        let published = try #require(value["published"] as? [String])
+        #expect(value["previews"] as? Int == 2)
+        #expect(!FileManager.default.fileExists(atPath: try #require(value["deletedSourceImage"] as? String)))
+        if let runID { try await database.completeLocalACPRun(runID: runID) }
+        else { native.active = false; try await database.saveOpenCodeSnapshot(native, conversationID: caller) }
+        let reopened = try await WorkspaceDatabase(url: url, readOnlyProjection: true)
+        let history = try await reopened.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
+        let pages = history.activities.filter { $0.activity.htmlRender != nil }
+        #expect(Set(pages.compactMap { $0.activity.htmlRender?.id }) == Set(published))
+        #expect(ConversationWorkTimeline(records: history.activities, commentaryIDs: []).foldedEntries.count == published.count)
+        for row in pages {
+            #expect(row.activity.rawOutputJSON == nil)
+            let detail = try #require(try await reopened.conversationActivityDetails(conversationID: caller, runID: row.runID, activityID: row.activity.id))
+            let page = try JSONDecoder().decode(ConversationHTMLPage.self, from: Data(try #require(detail.rawOutputJSON).utf8))
+            #expect(page.html.contains("data:image/svg+xml;base64,"))
+            #expect(!page.html.contains(try #require(value["deletedSourceImage"] as? String)))
+        }
+    }
 
     @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode })
     func htmlPublicationUsesBoundConversationAndPersistsOutsideFoldedWork(runtime: AgentRuntimeKind) async throws {

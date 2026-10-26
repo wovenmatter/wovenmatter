@@ -126,3 +126,34 @@ use Woven Matter's existing confirmation; T3 forwards them to its external
 browser. Woven Matter does not add an app-wide ATS exception for insecure HTTP,
 and does not forward T3's web keyboard shortcuts. MCP Apps are a separate T3
 feature and are outside this HTML-reply implementation.
+
+## Local harness acceptance
+
+`scripts/test-changes.sh` exercises the real packaged tool paths after building
+the native app, without inference or provider credentials. The opt-in Swift
+test `packagedHTMLToolsWorkAcrossHarnesses` runs the Node driver in
+`default-agent/test/fixtures/html-harness.mjs` against a real caller-bound socket,
+the normal publication service and the production WebKit preview implementation.
+
+| Harness | Exercised entry points |
+| --- | --- |
+| Codex | Packaged MCP discovery/preview/render, native shell-hook CLI fallback |
+| Claude Code | Packaged MCP discovery/preview/render, native shell-hook CLI fallback |
+| Grok Build | Packaged MCP discovery/preview/render, native shell-hook CLI fallback |
+| Pi Durable | Packaged native `automationTools` registration and execution |
+| OpenCode | Packaged plugin tool/shell hooks, captured-input binding, CLI preview/render |
+
+Every path previews at 728px/light and 390px/dark, checks PNG output, responsive
+height, JavaScript execution, and embedded-image loading; then publishes, deletes
+the source image, and reopens persisted page detail. It checks missing-image
+diagnostics/rejection, rejects caller-selected conversation IDs, and verifies
+pages remain visible in folded history. OpenCode additionally reconciles its
+native snapshot before the persisted-page check. Separate ACP tests verify the
+MCP configuration and connection metadata for both new and resumed Codex,
+Claude Code, and Grok Build sessions.
+
+These are deterministic integration checks of the harness adapters and tool
+transports. They do not make model calls or certify account authentication or a
+particular model's decision to use the tools. The phone package/journal tests,
+native iOS builds, and remote CLI/MCP/relay fixtures cover their corresponding
+boundaries separately.
