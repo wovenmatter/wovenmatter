@@ -50,14 +50,14 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
 public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public var executorProfiles: Set<String>?
   private var selectedGroups: Set<WorkspaceToolGroup>
-  /// Goals stay available even when older saved selections omitted them.
+  /// Goals and visual replies stay available even in older saved selections.
   public var enabled: Set<WorkspaceToolGroup> {
-    get { selectedGroups.union([.goals]) }
-    set { selectedGroups = newValue.union([.goals]) }
+    get { selectedGroups.union([.goals, .html]) }
+    set { selectedGroups = newValue.union([.goals, .html]) }
   }
   public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }), executorProfiles: Set<String>? = nil) {
     self.executorProfiles = executorProfiles
-    self.selectedGroups = enabled.union([.goals])
+    self.selectedGroups = enabled.union([.goals, .html])
   }
 
   public static func == (lhs: Self, rhs: Self) -> Bool {
@@ -78,7 +78,7 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
     guard groups.count == identifiers.count else {
       throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, goals, timers, usage, calendar, library, executor, browser, or computer.")
     }
-    self.selectedGroups = Set(groups).union([.goals])
+    self.selectedGroups = Set(groups).union([.goals, .html])
   }
 }
 

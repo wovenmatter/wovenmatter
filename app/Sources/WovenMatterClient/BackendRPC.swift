@@ -172,7 +172,9 @@ public final class BackendRPCServer: @unchecked Sendable {
 }
 
 private enum BackendSocket {
-    static let maximumFrame = 8 * 1024 * 1024
+    // HTML activity details and previews include up to 25 MiB of embedded data,
+    // plus JSON/base64 framing. Individual RPC handlers retain their own bounds.
+    static let maximumFrame = 64 * 1024 * 1024
     static func validateDirectory(_ url: URL, create: Bool) throws {
         if create { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         var info = stat()

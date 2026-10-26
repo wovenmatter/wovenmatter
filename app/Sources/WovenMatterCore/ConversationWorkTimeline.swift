@@ -36,7 +36,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       case .commentary:
         return nil
       case .activity(let activity):
-        return activity.workTimelineIsFailure ? entry : nil
+        return activity.htmlRender != nil || activity.workTimelineIsFailure ? entry : nil
       case .group(let group):
         let failed = group.activities.filter(\.workTimelineIsFailure)
         guard !failed.isEmpty else { return nil }
@@ -90,6 +90,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
   static func entries(for activities: [AgentRunActivity], hasChecklist: Bool) -> [ConversationWorkTimelineEntry] {
     var entries: [ConversationWorkTimelineEntry] = []
     var pending: [AgentRunActivity] = []
+    var renderedPages: Set<String> = []
     func flush(endsTimeline: Bool = false) {
       guard let first = pending.first else { return }
       // A group keeps the first member's ID as it grows, so disclosure state
@@ -120,6 +121,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
         // the chronological commentary/command groups.
         continue
       case .plan, .progress, .activity:
+        if let reference = activity.htmlRender, !renderedPages.insert(reference.id).inserted { continue }
         flush()
         entries.append(ConversationWorkTimelineEntry(content: .activity(activity)))
       }

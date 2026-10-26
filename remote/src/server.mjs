@@ -14,7 +14,7 @@ import { createDurableACP } from './durable-acp.mjs'
 import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
-import { loadWorkspaceMCPCatalog, validateInput } from './workspace-mcp.mjs'
+import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -119,7 +119,9 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       const controller=new AbortController(),disconnected=()=>{if(!response.writableEnded)controller.abort()}
       response.once('close',disconnected)
       try {
-        const result=await clientExecution.mcp.handle(principal,await readJSON(request,4*1024*1024),{signal:controller.signal})
+        const message=await readJSON(request,40*1024*1024)
+        if(Buffer.byteLength(JSON.stringify(message))>maximumMCPRequestBytes(message))throw httpError(413,'The MCP request is too large.')
+        const result=await clientExecution.mcp.handle(principal,message,{signal:controller.signal})
         if(result===null){response.writeHead(202,{'cache-control':'no-store'});response.end();return}
         return json(response,200,result)
       } finally {response.removeListener('close',disconnected)}

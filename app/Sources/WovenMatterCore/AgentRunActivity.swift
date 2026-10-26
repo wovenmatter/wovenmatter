@@ -167,6 +167,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public let rawInputJSON: String?
   public let rawOutputJSON: String?
   public let rawPayloadJSON: String?
+  public let htmlRender: ConversationHTMLRenderReference?
   /// Presentation-only metadata. Complete values remain in the current-item
   /// store and are loaded only when a disclosure is opened.
   public let detailsAvailable: Bool?
@@ -199,7 +200,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     detailsAvailable: Bool? = nil,
     detailVersion: Int64? = nil,
     planKind: String? = nil,
-    planOperation: String? = nil
+    planOperation: String? = nil,
+    htmlRender: ConversationHTMLRenderReference? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -219,6 +221,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.rawInputJSON = rawInputJSON
     self.rawOutputJSON = rawOutputJSON
     self.rawPayloadJSON = rawPayloadJSON
+    self.htmlRender = htmlRender
     self.detailsAvailable = detailsAvailable
     self.detailVersion = detailVersion
     self.planKind = planKind
@@ -233,7 +236,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       planEntries: planEntries, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON,
       rawPayloadJSON: rawPayloadJSON, subagents: subagents,
       detailsAvailable: detailsAvailable, detailVersion: detailVersion,
-      planKind: planKind, planOperation: planOperation)
+      planKind: planKind, planOperation: planOperation, htmlRender: htmlRender)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -281,7 +284,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       detailsAvailable: update.detailsAvailable ?? detailsAvailable,
       detailVersion: update.detailVersion ?? detailVersion,
       planKind: update.planKind ?? planKind,
-      planOperation: update.planOperation ?? planOperation
+      planOperation: update.planOperation ?? planOperation,
+      htmlRender: update.htmlRender ?? htmlRender
     )
   }
 
