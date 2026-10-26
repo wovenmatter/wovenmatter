@@ -80,6 +80,10 @@ docker exec "$container_a" node -e 'const {createRequire}=require("node:module")
 printf '%s\n' 'Checking patched system runtimes and excluded vulnerable components.'
 docker exec "$container_a" sh -ec '
   python3 -c "import sqlite3, ssl, sys; assert sys.version_info >= (3, 15, 2)"
+  python -c "import sqlite3, ssl, sys; assert sys.version_info >= (3, 15, 2)"
+  pip --version >/dev/null
+  pydoc --help >/dev/null
+  python-config --prefix >/dev/null
   dpkg --compare-versions "$(dpkg-query -W -f=\${Version} curl)" ge "8.23.0-1+wmsecurity1"
   perl -MArchive::Tar -e '\''exit(Archive::Tar->VERSION ge "3.14" ? 0 : 1)'\''
   dpkg --compare-versions "$(dpkg-query -W -f=\${Version} libxml2)" ge "2.12.7+dfsg+really2.9.14-2.1+deb13u3+wmsecurity1"

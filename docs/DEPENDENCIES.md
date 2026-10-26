@@ -51,11 +51,16 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Debian unstable source against the stable runtime ABI. This replaces the
   older stable and stable-backports builds, including the newly disclosed
   HTTP/2 upload use-after-free affecting curl through 8.22.0.
-  The image uses the current official Python 3.15 slim runtime (3.15.2 at the
-  October 26, 2026 review), with tested
-  minimums of pip 26.2.2 and setuptools 84.2.1, instead of Debian's older
-  interpreter and vulnerable bundled venv wheel. The SQLite, TLS, and isolated
-  execution paths are exercised against that runtime in the container tests.
+  The image builds Python 3.15.2 from the checksum recorded by the current
+  official Python image recipe. The exact source selection is intentional: the
+  public registry tag still carried 3.15.1 during the October 26, 2026 review,
+  while 3.15.2 is an expedited security release. Maintenance compares this
+  record with the current official recipe and returns to its published image
+  once the registry contains the required security floor. Tested minimums are
+  pip 26.2.2 and setuptools 84.2.1, instead of Debian's older interpreter and
+  vulnerable bundled venv wheel. The SQLite, TLS, and isolated execution paths
+  are exercised on native amd64 and arm64 hosts in the container tests. Local
+  checks without Docker validate the recipe but cannot replace those builds.
   Archive::Tar 3.14 replaces Debian's affected module in both remote images
   after its upstream test suite passes. The standalone Executor image applies
   the same curl and base-package refresh before installing its exact resolved
