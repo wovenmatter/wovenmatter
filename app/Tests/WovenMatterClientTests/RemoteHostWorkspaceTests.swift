@@ -11,7 +11,7 @@ struct RemoteHostWorkspaceTests {
               attachmentsDirectory: "/home/alice/woven-attachments")
     }
 
-    @Test func legacyConfigurationKeepsContainerExecution() throws {
+    @Test func legacyConfigurationDecodesButCannotLaunch() throws {
         let existing = RemoteWorkspaceConfiguration(name: "Legacy", workspaceID: "legacy", hostName: "host.invalid")
         var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
         for key in ["kind", "accessMode", "dataRoot", "workspaceRoot", "databasesDirectory", "attachmentsDirectory"] {
@@ -21,8 +21,15 @@ struct RemoteHostWorkspaceTests {
             from: JSONSerialization.data(withJSONObject: object))
         #expect(decoded.kind == .container)
         #expect(decoded.accessMode == .user)
-        #expect(try RemoteWorkspaceExecTarget(configuration: decoded).command(["node", "--version"]) ==
-            ["docker", "exec", "wovenmatter-legacy", "node", "--version"])
+        #expect(!decoded.kind.isSupported)
+        #expect(throws: RemoteWorkspaceClientError.self) {
+            try RemoteWorkspaceExecTarget(configuration: decoded).command(["node", "--version"])
+        }
+        #expect(throws: RemoteWorkspaceClientError.self) {
+            try RemoteHarnessLaunchResolver.resolve(configuration: decoded, runtimeKind: .codex,
+                processWorkingDirectory: URL(fileURLWithPath: "/tmp"),
+                tailnetSSHOptions: { _ in Issue.record("Deprecated workspaces must not contact SSH"); return [] })
+        }
     }
 
     @Test func hostCommandsUseDiscoveredPathsAndQuoteEveryArgument() throws {

@@ -161,7 +161,8 @@ struct ACPSessionPermissionTests {
 
     @Test func remoteGrokPolicyRewritesOnlyStructuredHarnessArguments() throws {
         let resolved = try RemoteHarnessLaunchResolver.resolve(
-            configuration: .init(name: "Fixture", workspaceID: "permission-fixture", hostName: "fixture.invalid"),
+            configuration: .init(name: "Fixture", workspaceID: "permission-fixture", hostName: "fixture.invalid",
+                kind: .host, dataRoot: "/home/woven/.local/share/wovenmatter"),
             runtimeKind: .grokBuild, processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] }
         ).launch
         let wrapped = try #require(resolved.wrappedCommand)
@@ -176,8 +177,8 @@ struct ACPSessionPermissionTests {
         let command = try shellTokens(prepared.arguments[wrapped.argumentIndex])
         #expect(Array(command.prefix(wrapped.harnessArgumentsStartIndex)) == Array(wrapped.command.prefix(wrapped.harnessArgumentsStartIndex)))
         #expect(Array(command.dropFirst(wrapped.harnessArgumentsStartIndex)) == ["--permission-mode", "default", "agent", "--no-leader", "stdio"])
-        #expect(command.contains("HOME=/home"))
-        #expect(command.contains(where: { $0.contains("flock --shared --nonblock 9") }))
+        #expect(command.first == "/home/woven/.local/share/wovenmatter/current/bin/wm-exec")
+        #expect(!command.contains("docker"))
         // A launch without an override remains byte-for-byte identical.
         #expect(try LocalACPSessionPermissions.prepareLaunch(resolved).arguments == resolved.arguments)
     }

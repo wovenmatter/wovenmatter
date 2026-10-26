@@ -18,12 +18,10 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var port = 7337
     @State private var memoryLimit = ""
     @State private var swapLimit = ""
-    @State private var workspaceKind: RemoteWorkspaceKind = .host
+    private let workspaceKind: RemoteWorkspaceKind = .host
     @State private var accessMode: RemoteWorkspaceAccessMode = .fullRoot
     @State private var acknowledgedHostAccess = false
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
-    @State private var managedMemoryLimit = ""
-    @State private var managedSwapLimit = ""
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
 
@@ -55,7 +53,6 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
-                    if selectedWorkspace.kind == .container { resourceCard(selectedWorkspace) }
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
                         deploymentProgress(progress)
@@ -153,20 +150,18 @@ struct SettingsRemoteWorkspacesView: View {
             titleVisibility: .visible
         ) {
             if let pendingDeletion {
-                Button(pendingDeletion.kind == .host ? "Uninstall; keep data" : "Remove container; keep data") {
+                Button("Uninstall; keep data") {
                     model.delete(pendingDeletion, removePersistentData: false)
                     self.pendingDeletion = nil
                 }
-                Button(pendingDeletion.kind == .host ? "Uninstall and remove data" : "Remove container and persistent data", role: .destructive) {
+                Button("Uninstall and remove data", role: .destructive) {
                     model.delete(pendingDeletion, removePersistentData: true)
                     self.pendingDeletion = nil
                 }
             }
             Button("Cancel", role: .cancel) { pendingDeletion = nil }
         } message: {
-            Text(pendingDeletion?.kind == .host
-                ? "Uninstall stops the native service and keeps workspace files and databases. Removing data cannot be undone."
-                : "Keeping data leaves the workspace's dedicated volume on the remote machine. Removing persistent data cannot be undone.")
+            Text("Uninstall stops the native service and keeps workspace files and databases. Removing data cannot be undone.")
         }
         .confirmationDialog(
             "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
@@ -268,8 +263,6 @@ struct SettingsRemoteWorkspacesView: View {
             )
             Button("Manage") {
                 selectedWorkspaceID = workspace.id
-                managedMemoryLimit = resourceInputValue(workspace.memoryLimit)
-                managedSwapLimit = resourceInputValue(workspace.swapLimit)
             }
             .buttonStyle(SettingsQuietButtonStyle())
         }
@@ -301,13 +294,13 @@ struct SettingsRemoteWorkspacesView: View {
                     Button("Restart") { model.lifecycle(.restart, configuration: workspace) }
                         .disabled(!status.running)
                 }
-                Button(workspace.kind == .host ? "Update server" : "Update container") {
+                Button("Update server") {
                     model.updateContainer(workspace)
                 }
                 if workspace.kind == .host {
                     Button("Logs") { model.loadLogs(workspace); logsWorkspace = workspace }
                 }
-                Button(workspace.kind == .host ? "Uninstall…" : "Delete…") { pendingDeletion = workspace }
+                Button("Uninstall…") { pendingDeletion = workspace }
             }
             .fixedSize(horizontal: true, vertical: false)
             .buttonStyle(SettingsQuietButtonStyle())
@@ -346,10 +339,6 @@ struct SettingsRemoteWorkspacesView: View {
             if let status {
                 VStack(alignment: .leading, spacing: 10) {
                     remoteValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
-                    if workspace.kind == .container {
-                        remoteValueRow(label: "Memory", value: resourceLabel(status.memoryBytes))
-                        remoteValueRow(label: "Additional swap", value: swapLabel(status))
-                    }
                     remoteValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
                     remoteValueRow(label: "Host storage", value: hostStorageLabel(status))
                 }
@@ -388,12 +377,7 @@ struct SettingsRemoteWorkspacesView: View {
 
     private var hostCard: some View {
         SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace.") {
-            SettingsField("Workspace type") {
-                Picker("Workspace type", selection: $workspaceKind) {
-                    Text("Native Linux host").tag(RemoteWorkspaceKind.host)
-                    Text("Docker container").tag(RemoteWorkspaceKind.container)
-                }.labelsHidden()
-            }
+            SettingsNote("Remote workspaces run Woven Matter directly on Linux. Native hosts replace the deprecated container workspace option.")
             if workspaceKind == .host {
                 SettingsField("Workspace access") {
                     Picker("Workspace access", selection: $accessMode) {
@@ -472,25 +456,9 @@ struct SettingsRemoteWorkspacesView: View {
                         )
                         remoteValueRow(
                             label: "Runtime",
-                            value: workspaceKind == .host ? "Native Linux service · \(preflight.architecture)" : preflight.version.isEmpty
-                                ? "Docker Engine not ready · \(preflight.architecture)"
-                                : "\(preflight.ready ? "Docker Engine" : "Container runtime") \(preflight.version) · \(preflight.architecture)"
+                            value: "Native Linux service · \(preflight.architecture)"
                         )
                         VStack(alignment: .leading, spacing: 8) {
-                            if workspaceKind == .container { remoteValueRow(
-                                label: "Memory",
-                                value: inspectionCapabilityLabel(
-                                    preflight.capabilities.memory,
-                                    preflight: preflight
-                                )
-                            )
-                            remoteValueRow(
-                                label: "Swap",
-                                value: inspectionCapabilityLabel(
-                                    preflight.capabilities.swap,
-                                    preflight: preflight
-                                )
-                            ) }
                             remoteValueRow(label: "Host storage", value: hostStorageLabel(preflight))
                         }
                         if let warning = preflight.storageWarning, !warning.isEmpty {
@@ -536,20 +504,6 @@ struct SettingsRemoteWorkspacesView: View {
                 TextField("remote-workspace-id", text: $workspaceID)
                     .settingsInput()
             }
-            if workspaceKind == .container { SettingsField("Remote loopback port") {
-                TextField("7337", value: $port, format: .number)
-                    .settingsInput()
-            }
-            SettingsField("Memory limit (GB)") {
-                TextField("8", text: $memoryLimit)
-                    .settingsInput()
-            }
-            SettingsField("Swap limit (additional GB)") {
-                TextField("4", text: $swapLimit)
-                    .settingsInput()
-            }
-
-            SettingsNote("Use 0 to disable swap, or leave it blank for the host default.") }
             SettingsNote("Files use available disk space on the remote machine.")
             if workspaceKind == .host {
                 SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
@@ -578,43 +532,6 @@ struct SettingsRemoteWorkspacesView: View {
 
     private func hostWarning(user: String?, host: String) -> String {
         "Host mode runs agents as \(user ?? "the SSH user")@\(host) with that user's full permissions. There is no container isolation."
-    }
-
-    private func resourceCard(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        SettingsCard(
-            title: "\(workspace.name) resources",
-            detail: "Applying these limits recreates the workspace container. Its files are kept."
-        ) {
-            SettingsField("Memory limit (GB)") {
-                TextField("8", text: $managedMemoryLimit)
-                    .settingsInput()
-            }
-            SettingsField("Swap limit (additional GB)") {
-                TextField("4", text: $managedSwapLimit)
-                    .settingsInput()
-            }
-            if let status = model.statuses[workspace.id] {
-                VStack(alignment: .leading, spacing: 10) {
-                    remoteValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
-                    remoteValueRow(label: "Host storage", value: hostStorageLabel(status))
-                }
-                SettingsNote("Files use available disk space on the remote machine.")
-                if let warning = status.storageWarning, !warning.isEmpty {
-                    storageWarning(warning)
-                }
-            }
-            Button("Apply resources") {
-                model.applyResources(
-                    workspace,
-                    memoryLimit: managedMemoryLimit,
-                    swapLimit: managedSwapLimit
-                )
-            }
-            .buttonStyle(DashboardPrimaryButtonStyle())
-            .disabled(model.busyWorkspaceIDs.contains(workspace.id))
-        }
     }
 
     private func harnessesCard(

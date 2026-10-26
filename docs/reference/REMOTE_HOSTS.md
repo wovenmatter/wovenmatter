@@ -3,14 +3,15 @@
 Host workspaces run Woven Matter directly on a Linux machine in the user's
 Tailnet. The Mac discovers, inspects, installs and manages the service through
 the same verified Tailscale SSH transport used by container workspaces. Docker
-is not required. Existing container workspaces remain supported.
+is not required. Native hosts supersede deprecated remote container workspaces,
+which are no longer offered or reconnected. The separate Docker Executor is unchanged.
 
 ## Execution and permissions
 
 The service, browser and harness CLIs run as the selected non-root SSH account.
 Keeping that account's home preserves its existing CLI installations and sign-ins.
 No account credentials are copied between users. There is one native workspace
-per host and SSH account; container workspaces can coexist with it.
+per host and SSH account. Unrelated containers may continue running on the host.
 
 The access choice applies to the whole workspace and is fixed at creation:
 
@@ -149,9 +150,8 @@ CDP stays on host loopback. Chromium's renderer sandbox does not contain agent
 shell commands or promise protection from every browser vulnerability. Browser
 profiles separate website state, not Linux execution permissions.
 
-The existing hardened container browser keeps its previous launch behavior.
-Enabling its inner Chromium sandbox safely requires separate verified seccomp
-and host AppArmor work. Host mode never falls back to that container or to an
+The deprecated container workspace helpers are no longer accessible through the
+remote workspace UI. Native hosts never fall back to a container or an
 unsandboxed browser.
 
 ## Persistence, updates and removal

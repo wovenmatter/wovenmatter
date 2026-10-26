@@ -172,12 +172,35 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(model.pendingHostPreparation == nil)
     }
 
+    @Test func deprecatedContainersNeverReconnectOrRunLifecycleCommands() async throws {
+        let fixture = HostInspectionFixture()
+        let suite = "deprecated-remote-container-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let legacy = RemoteWorkspaceConfiguration(name: "Legacy", workspaceID: "legacy", hostName: "fixture.invalid")
+        defaults.set(try JSONEncoder().encode([legacy]), forKey: "wovenmatter.remote-workspaces.v1")
+        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
+        #expect(model.workspaces.isEmpty)
+        model.refreshRuntimeMaintenanceAtStartup()
+        model.reconnect(legacy)
+        model.lifecycle(.start, configuration: legacy)
+        model.updateContainer(legacy)
+        model.delete(legacy, removePersistentData: true)
+        model.checkHost(hostName: legacy.hostName, userName: "", kind: .container)
+        model.prepareHost(hostName: legacy.hostName, userName: "", kind: .container)
+        model.create(name: "Legacy", workspaceID: "legacy", hostName: legacy.hostName, userName: "",
+            port: 7337, memoryLimit: "", swapLimit: "", kind: .container)
+        #expect(model.errorMessage?.contains("deprecated") == true)
+        #expect(fixture.calls.isEmpty)
+        #expect(!model.isCreating)
+    }
+
     @Test func startupChecksConnectionWithoutStartingStoppedWorkspace() async throws {
         let fixture = HostInspectionFixture()
         let suite = "remote-startup-test-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
+        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
         defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.refreshRuntimeMaintenanceAtStartup()

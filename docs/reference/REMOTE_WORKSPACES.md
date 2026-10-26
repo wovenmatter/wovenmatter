@@ -3,10 +3,16 @@
 For setup and everyday use, start with [Remote workspaces](../guide/remote-workspaces.md).
 This page describes host preparation, isolation, storage, and lifecycle behavior.
 
-Native **Linux host** workspaces run without Docker and use the SSH account's
-existing tools and sign-ins. See [Native Linux hosts](REMOTE_HOSTS.md) for their
-permissions, installation, browser verification and lifecycle. The Docker
-details below apply to **Container** workspaces.
+Remote workspaces now run only as native **Linux host** services, using the SSH
+account's existing tools and sign-ins. See [Native Linux hosts](REMOTE_HOSTS.md)
+for the supported setup, permissions, browser verification and lifecycle.
+
+## Deprecated container implementation
+
+Remote container workspaces are no longer offered, managed or automatically
+reconnected by the app. The remaining details below document retained internal
+container helpers, not a supported setup option. This deprecation does not alter
+the standalone Docker Executor or delete any host containers or data.
 
 ## Host preparation
 

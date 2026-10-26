@@ -9,7 +9,7 @@ SQLite history store; project files stay in their execution workspace.
 Choose **New folder** in the sidebar, select its workspace, and enter a name.
 The owning workspace must be connected. **Create New** makes a blank directory
 with that name under the managed workspace root: `~/.woven-matter` on your Mac
-or `/home/.woven-matter` in a remote container. A native Linux host uses
+while a native Linux host uses
 `~/.local/share/wovenmatter/workspace` under its SSH account.
 
 **Link Existing** lets you choose an existing project directory on the owning
@@ -65,7 +65,7 @@ cross-device project mounts or bidirectional folder synchronization.
 | --- | --- |
 | Managed root or linked directory | Project files and your project instructions |
 | Woven's Application Support folder on the Mac | Internal conversations, notes, schedules and settings; separate managed dataset files and remote replicas |
-| Remote service storage in the persistent container home | That workspace's managed dataset files |
+| Remote native service data directory | That workspace's managed dataset files |
 | Each harness's home or service | Credentials, configuration, and independently maintained history |
 
 Each named database is a separate SQLite file with one writable owner. Its
@@ -79,17 +79,15 @@ does not overwrite project instruction files or user-global instructions.
 
 ## Remote storage
 
-Choose **Linux host** to run directly under the remote SSH account, reusing its
-installed tools and sign-ins. Choose **Container** for a separate persistent
-container home. Native hosts support Full root or Normal user permissions for
-the whole workspace; folders retain their ordinary Linux permissions. Both
-kinds keep execution and SQLite state on Linux while disconnected and use the
-same reconnect/synchronization behavior. See [Native Linux hosts](../reference/REMOTE_HOSTS.md).
+Remote workspaces run Woven Matter directly on Linux under the selected SSH
+account, reusing its installed tools and sign-ins. Full root or Normal user
+permissions apply to the whole workspace; folders retain their ordinary Linux
+permissions. Execution and SQLite state stay on Linux while disconnected. See
+[Native Linux hosts](../reference/REMOTE_HOSTS.md).
 
-Container updates and
-recreation preserve its named home volume. Removing the container and removing
-its data are separate choices. Remote project files stay on their host;
-centrally saved transcripts do not synchronize them.
+The container workspace option is deprecated. Saved container workspaces do not
+reconnect or launch agents. This does not change the separate Docker Executor.
+No host containers or data are removed by this deprecation.
 
-Back up both your project files and Woven's application/service data. Keeping a
-volume across updates does not protect it from loss of the host or disk.
+Remote project files stay on their host; centrally saved transcripts do not
+synchronize them. Back up project files and Woven's native service data.
