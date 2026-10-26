@@ -902,9 +902,11 @@ public actor LocalACPClient {
         let initializeResult = try await request(
             method: "initialize",
             params: .object([
-                // Claude ACP 0.95 routes version 2 into its experimental wire
-                // protocol. This client implements its stable v1 session API.
-                "protocolVersion": .integer(runtimeKind == .claudeCode ? 1 : Self.latestProtocolVersion),
+                // Codex ACP 2.3 and Claude ACP 0.97 route version 2 into their
+                // draft wire protocol. This client implements their v1 session API.
+                "protocolVersion": .integer(
+                    [.codex, .claudeCode].contains(runtimeKind) ? 1 : Self.latestProtocolVersion
+                ),
                 "clientCapabilities": .object(clientCapabilities),
                 "clientInfo": .object([
                     "name": .string("Woven Matter"),
