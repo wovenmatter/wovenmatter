@@ -393,7 +393,7 @@ struct SettingsRemoteWorkspacesView: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
-                    ForEach(onlineMachines.prefix(5)) { machine in
+                    ForEach(onlineMachines) { machine in
                         Button {
                             hostName = machine.hostName
                             model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)

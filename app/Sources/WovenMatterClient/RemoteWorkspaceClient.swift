@@ -479,7 +479,8 @@ public enum RemoteMachineDiscovery {
         else { throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.") }
         return peers.values.compactMap { value in
             guard let peer = value as? [String: Any], peer["Online"] as? Bool == true,
-                  peer["Expired"] as? Bool != true else { return nil }
+                  peer["Expired"] as? Bool != true,
+                  RemoteWorkspaceTailnet.isLinuxPeer(peer) else { return nil }
             let dnsName = (peer["DNSName"] as? String)?
                 .trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let shortName = (peer["HostName"] as? String)?

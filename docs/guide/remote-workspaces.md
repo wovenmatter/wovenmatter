@@ -18,8 +18,9 @@ is unchanged.
 - Enough host disk space for workspace files, harnesses, and caches.
 
 Tailscale is required for every remote connection. Select an online Tailnet
-machine or enter its Tailscale name, MagicDNS name, or Tailscale IP. SSH uses the
-local Tailscale daemon for the transport and your existing SSH configuration
+Linux machine or enter its Tailscale name, MagicDNS name, or Tailscale IP. The
+picker lists all online, unexpired Linux devices. Connect Macs, iPhones, and
+iPads through **Settings → Apple Devices**. SSH uses the local Tailscale daemon for the transport and your existing SSH configuration
 and agent for authentication. Arbitrary SSH aliases, LAN addresses, and public
 hosts are unsupported. Existing configurations must name an online Tailnet peer;
 there is no fallback connection mode.
