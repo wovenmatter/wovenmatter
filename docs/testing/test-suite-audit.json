@@ -1,5 +1,5 @@
 {
-  "base_commit": "07e7bdaa6cbca9eb9bf4994d3a1fde1bfc28b43f",
+  "base_commit": "75f6903a7aed988dd61d6084d23f51642e678435",
   "counting_unit": "Named Swift test declarations (parameter sets counted once, as in Swift Testing summaries), registered Node tests, and Python unittest methods. Standalone/driver files are listed separately; they are retained and are not added to the named-test total.",
   "baseline": {
     "swift_by_component": {
@@ -12,8 +12,8 @@
     "node_default_agent": 213,
     "node_remote": 170,
     "node_native_mcp": 10,
-    "python_unittest": 24,
-    "total": 1231
+    "python_unittest": 30,
+    "total": 1237
   },
   "candidate": {
     "swift_by_component": {
@@ -26,11 +26,11 @@
     "node_default_agent": 213,
     "node_remote": 170,
     "node_native_mcp": 10,
-    "python_unittest": 24,
-    "total": 979
+    "python_unittest": 30,
+    "total": 985
   },
   "net_removed": 252,
-  "reduction_percent": 20.471161657189278,
+  "reduction_percent": 20.371867421180276,
   "consolidated": {
     "WovenMatterClientTests.AgentInteractionBrokerTests/invalidPermissionCannotConsumeAndFirstValidResponseWins()": "Permission assertions retained in responsesMustValidateBeforeResolvingOnce(), together with question validation."
   },
@@ -1052,6 +1052,7 @@
     "scripts/test-browser-automation.py",
     "scripts/test-browser-passwords.py",
     "scripts/test-changes.sh",
+    "scripts/test-ci.sh",
     "scripts/test-companion-integration.sh",
     "scripts/test-composer-text-editor.sh",
     "scripts/test-container.sh",
@@ -1144,5 +1145,7 @@
     "xcode": "27.0 (27A5194q)",
     "swift": "6.4",
     "architecture": "arm64"
-  }
+  },
+  "coverage_build_commit": "07e7bdaa6cbca9eb9bf4994d3a1fde1bfc28b43f",
+  "coverage_source_equivalence": "The app, shared, ios, integration, default-agent, and remote trees are unchanged between the coverage build commit and inventory base."
 }

@@ -1,8 +1,8 @@
 # Test-suite audit — 2026-10-26
 
-Baseline: `07e7bdaa6cbca9eb9bf4994d3a1fde1bfc28b43f` (main after the HTML reply merge).
+Inventory baseline: `75f6903a7aed988dd61d6084d23f51642e678435` (main after CI consolidation). Coverage was built from `07e7bdaa6cbca9eb9bf4994d3a1fde1bfc28b43f`; `git diff --quiet` confirms that the app, shared, iOS, integration, default-agent, and remote trees are identical between these baselines.
 
-The audit removes 252 named test definitions, from 1,231 to 979 (**20.47%**).
+The audit removes 252 named test definitions, from 1,237 to 985 (**20.37%**).
 Previously covered production Swift lines lose **1.9623%** of their coverage, equivalent to **0.9636 percentage points** with the executable-source denominator held fixed.
 
 ## Inventory
@@ -17,10 +17,10 @@ Previously covered production Swift lines lose **1.9623%** of their coverage, eq
 | Default-agent Node | 213 | 213 | 0 |
 | Remote Node | 170 | 170 | 0 |
 | Native MCP Node | 10 | 10 | 0 |
-| Python unittest methods | 24 | 24 | 0 |
-| **Total** | **1,231** | **979** | **252** |
+| Python unittest methods | 30 | 30 | 0 |
+| **Total** | **1,237** | **985** | **252** |
 
-A Swift parameterized declaration counts once, matching Swift Testing's test summary; its argument combinations are not counted as separate definitions. The 51 standalone/driver files listed in the [machine-readable inventory](testing/test-suite-audit.json) remain intact and are outside this named-test count. Drivers often invoke already counted cases. This is a reduction in test definitions, not a claim that 20% of files, assertions, or execution time disappeared.
+A Swift parameterized declaration counts once, matching Swift Testing's test summary; its argument combinations are not counted as separate definitions. The 52 standalone/driver files listed in the [machine-readable inventory](testing/test-suite-audit.json) remain intact and are outside this named-test count. Drivers often invoke already counted cases. This is a reduction in test definitions, not a claim that 20% of files, assertions, or execution time disappeared.
 
 Of the 252 removed definitions, 251 are deletions and one is a consolidation: the broker's permission assertions now share the surviving response-validation scenario. It additionally verifies that completing a question releases the identifier for a subsequent permission request. Twenty-four empty test files and their private fixtures were removed; persistence fixtures used elsewhere moved into `Support/PersistenceFixtures.swift`.
 
@@ -57,4 +57,4 @@ The removal candidates had low incremental source coverage relative to broader r
 
 The integration flows, credential probes and keychain checks, pairing/authentication boundaries, durable archive/privacy checks, async database tests, optional OpenCode compatibility check, and all newly merged HTML tests remain. JavaScriptCore/WebKit runtime suites were protected because Swift coverage cannot measure their embedded JavaScript. The 62 iOS app/UI tests and 16 named standalone Swift checks were unchanged and are outside the package coverage measurement. Node and Python suites were unchanged. The optional OpenCode executable check and packaged-HTML acceptance case retain their existing environment gates; coverage did not enable them or use provider services.
 
-Fresh baseline and retained coverage runs passed, as did the shared/iOS package and integration runs. Node results were 212 passes plus one platform skip for default-agent, 169 passes plus one platform skip for remote, and ten native MCP passes. The full `scripts/test-changes.sh --all` workflow and the PR's desktop, companion, iPhone, and iPad CI checks are the final release-readiness validation; their final outcomes are recorded in the PR rather than inferred from coverage.
+Fresh baseline and retained coverage runs passed, as did the shared/iOS package and integration runs. Node results were 212 passes plus one platform skip for default-agent, 169 passes plus one platform skip for remote, and ten native MCP passes. The full `scripts/test-changes.sh --all` workflow and the automatic PR CI check plus explicitly dispatched desktop/companion, iPhone, and iPad validation workflows are the final release-readiness validation; their final outcomes are recorded in the PR rather than inferred from coverage.
