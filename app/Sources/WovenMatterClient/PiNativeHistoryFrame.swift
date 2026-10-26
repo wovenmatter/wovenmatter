@@ -1,8 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Pi's public history commands return one unpaged JSONL response. Scan the
-/// spooled frame without constructing that entire array in memory; each native
+/// Scan native history on disk without constructing the entire array in memory; each native
 /// entry is validated and handed off separately with storage backpressure.
 enum PiNativeHistoryFrame {
     static let maximumEntryBytes = 64 * 1_024 * 1_024
@@ -14,12 +13,6 @@ enum PiNativeHistoryFrame {
         let arrayKey: String
         let count: Int
         let sha256: String
-    }
-    struct ObjectMetadata: Sendable {
-        let sha256: String
-        let byteCount: Int
-        let scalars: [String: String]
-        let messageScalars: [String: String]
     }
 
     enum Record: Sendable {
@@ -42,45 +35,6 @@ enum PiNativeHistoryFrame {
 
     static func inspect(_ file: URL, arrayDepth: Int = 2) async throws -> Metadata {
         try await scan(file, arrayDepth: arrayDepth, collectEntries: false, consume: { _, _ in })
-    }
-
-    /// Read bounded event metadata without materializing a large native JSON
-    /// object. Identities following huge strings remain observable.
-    static func inspectObject(_ file: URL) async throws -> ObjectMetadata {
-        let input = try FileHandle(forReadingFrom: file)
-        defer { try? input.close() }
-        var hash = SHA256(), count = 0, depth = 0, inString = false, escaped = false, started = false
-        var root = RootFields(), message = RootFields(), insideMessage = false
-        while let chunk = try input.read(upToCount: 64 * 1_024), !chunk.isEmpty {
-            try Task.checkCancellation(); hash.update(data: chunk)
-            for byte in chunk {
-                count += 1
-                if !started {
-                    if isWhitespace(byte) { continue }
-                    guard byte == 123 else { throw Failure.malformed }; started = true
-                } else if depth == 0 {
-                    guard isWhitespace(byte) else { throw Failure.malformed }; continue
-                }
-                if !inString, byte == 123, depth == 1, root.scalarKey == "message" {
-                    insideMessage = true; message = RootFields()
-                }
-                root.consume(byte, depth: depth, inString: inString, escaped: escaped)
-                if insideMessage { message.consume(byte, depth: depth, inString: inString, escaped: escaped, observedDepth: 2) }
-                if inString {
-                    if escaped { escaped = false }
-                    else if byte == 92 { escaped = true }
-                    else if byte == 34 { inString = false }
-                } else if byte == 34 { inString = true }
-                else if byte == 123 || byte == 91 { depth += 1 }
-                else if byte == 125 || byte == 93 { depth -= 1 }
-                if insideMessage, !inString, depth < 2 { insideMessage = false }
-                guard depth >= 0 else { throw Failure.malformed }
-            }
-            await Task.yield()
-        }
-        guard started, depth == 0, !inString, !escaped else { throw Failure.malformed }
-        return ObjectMetadata(sha256: hash.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: count,
-            scalars: root.values, messageScalars: message.values)
     }
 
     static func records(_ file: URL, expected: Metadata, arrayDepth: Int = 2,
@@ -212,17 +166,14 @@ enum PiNativeHistoryFrame {
     private struct RootFields {
         var id: String?, kind: String?
         private var expectingKey = true, capturing = false
-        var values: [String: String] = [:]
         private var pendingKey: String?, token = Data(), numeric = Data()
-        var scalarKey: String? { expectingKey ? nil : pendingKey }
-        mutating func consume(_ byte: UInt8, depth: Int, inString: Bool, escaped: Bool, observedDepth: Int = 1) {
+        mutating func consume(_ byte: UInt8, depth: Int, inString: Bool, escaped: Bool) {
             if inString {
                 if capturing, token.count < 16 * 1_024 { token.append(byte) }
-                if byte == 34, !escaped, depth == observedDepth {
+                if byte == 34, !escaped, depth == 1 {
                     if capturing, let value = try? JSONSerialization.jsonObject(with: token, options: [.fragmentsAllowed]) as? String {
-                        if expectingKey { pendingKey = ["id", "type", "role", "command", "toolCallId", "toolName", "stopReason", "errorMessage", "isError", "message"].contains(value) ? value : nil }
+                        if expectingKey { pendingKey = ["id", "type"].contains(value) ? value : nil }
                         else if let pendingKey {
-                            values[pendingKey] = value
                             if pendingKey == "id" { id = value }
                             if pendingKey == "type" { kind = value }
                         }
@@ -231,7 +182,7 @@ enum PiNativeHistoryFrame {
                 }
                 return
             }
-            guard depth == observedDepth else { return }
+            guard depth == 1 else { return }
             if byte == 34 {
                 capturing = expectingKey || pendingKey != nil
                 token = capturing ? Data([34]) : Data()
@@ -240,7 +191,6 @@ enum PiNativeHistoryFrame {
                 if pendingKey == "id", !numeric.isEmpty,
                    let text = String(data: numeric, encoding: .utf8), let number = Double(text),
                    number >= 1, number <= 9_007_199_254_740_991, let integer = Int64(exactly: number) { id = String(integer) }
-                if let pendingKey, !numeric.isEmpty { values[pendingKey] = String(decoding: numeric, as: UTF8.self) }
                 numeric.removeAll(keepingCapacity: true); pendingKey = nil; expectingKey = true
             } else if pendingKey != nil, !expectingKey, numeric.count < 128, !isWhitespace(byte) { numeric.append(byte) }
         }

@@ -6,15 +6,11 @@ import WovenMatterCore
 
 struct NativeHarnessArchiveTests {
 
-    @Test func nativeFrameScannerRejectsMalformedInputAndKeepsMessageMetadataScoped() async throws {
+    @Test func nativeFrameScannerRejectsMalformedInput() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }
         try Data("{\"data\":{\"entries\":[{\"id\":\"row\"},]}}".utf8).write(to: file)
         await #expect(throws: (any Error).self) { try await PiNativeHistoryFrame.inspect(file) }
-        try Data("{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"length\"},\"details\":{\"role\":\"user\",\"stopReason\":\"error\"}}".utf8).write(to: file)
-        let metadata = try await PiNativeHistoryFrame.inspectObject(file)
-        #expect(metadata.messageScalars["role"] == "assistant")
-        #expect(metadata.messageScalars["stopReason"] == "length")
     }
 
     @Test(.timeLimit(.minutes(3)))
