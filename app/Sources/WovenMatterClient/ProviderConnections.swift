@@ -67,6 +67,9 @@ extension ProviderAccountCoordinator {
 /// existing shared key. Nothing here writes credentials to preferences or disk.
 public enum ProviderConnectionAccounts {
     public static let limit = 4
+    public static func limit(for provider: String) -> Int {
+        ProviderConnectionID(rawValue: provider)?.isSubscription == true ? 1 : limit
+    }
     public struct Account: Identifiable, Codable, Equatable, Sendable {
         public let id: String
         public var label: String
@@ -81,13 +84,12 @@ public enum ProviderConnectionAccounts {
         var entries: [Entry] = []
         var pendingPreviousEntries: [Entry]?
     }
-    private static func isOAuth(_ provider: String) -> Bool { ["openai-codex", "xai", "claude-subscription", "cursor"].contains(provider) }
     private static func canonical(_ provider: String, scope: String, keychain: KeychainAccess) throws -> DefaultAgentCredential? {
-        if isOAuth(provider) { return try DefaultAgentSupport.oauth(provider, scope: scope, keychain: keychain) }
+        if ProviderConnectionID(rawValue: provider)?.isSubscription == true { return try DefaultAgentSupport.oauth(provider, scope: scope, keychain: keychain) }
         return try DefaultAgentSupport.key(provider, scope: scope, keychain: keychain).map { .init(type: "api_key", key: $0) }
     }
     private static func writeCanonical(_ value: DefaultAgentCredential?, provider: String, scope: String, keychain: KeychainAccess) throws {
-        if isOAuth(provider) {
+        if ProviderConnectionID(rawValue: provider)?.isSubscription == true {
             if let value { try DefaultAgentSupport.saveOAuth(value, provider: provider, scope: scope, notify: false, keychain: keychain) }
             else { try DefaultAgentSupport.saveKey("", provider: "oauth." + provider, scope: scope, notify: false, keychain: keychain) }
         } else { try DefaultAgentSupport.saveKey(value?.key ?? "", provider: provider, scope: scope, notify: false, keychain: keychain) }
@@ -117,6 +119,15 @@ public enum ProviderConnectionAccounts {
             else { store.entries.remove(at: index) }
         } else if let current {
             store.entries.insert(Entry(account: Account(id: UUID().uuidString.lowercased(), label: current.accountLabel ?? "Existing connection", createdAt: nil, isSelected: true), credential: current), at: 0)
+        }
+        // Keep the canonical account; legacy backups must never become eligible
+        // again after sign-out, a failed refresh, or a remote synchronization.
+        if limit(for: provider) == 1 {
+            let retained = current == nil ? [] : store.entries.filter { $0.account.isSelected }
+            if retained.count != store.entries.count {
+                store.entries = retained
+                try persist(store, provider: provider, scope: scope, keychain: keychain)
+            }
         }
         // Save only the account index during migration; never replace the old
         // canonical key, so existing installations keep their working connection.
@@ -170,7 +181,10 @@ public enum ProviderConnectionAccounts {
                 account = store.entries[index].account
                 return
             }
-            guard store.entries.count < limit else { throw DefaultAgentError.message("You can connect up to four accounts of each type.") }
+            guard store.entries.count < limit(for: provider) else {
+                if limit(for: provider) == 1 { throw DefaultAgentError.message("Only one subscription account is supported. Reconnect or remove the current account first.") }
+                throw DefaultAgentError.message("You can connect up to four accounts of each type.")
+            }
             account.isSelected = store.entries.isEmpty
             if label == nil && credential.type == "api_key" { account.label = "API key \(store.entries.count + 1)" }
             store.entries.append(Entry(account: account, credential: credential))
@@ -262,7 +276,7 @@ public actor ProviderConnectionStore {
     }
     nonisolated public static func readStored(_ scope: String) throws -> [String: [ProviderConnectionAccounts.Account]] {
         var values: [String: [ProviderConnectionAccounts.Account]] = [:]
-        for provider in ProviderConnectionID.allCases.map(\.rawValue) + ["cursor"] {
+        for provider in ProviderConnectionID.allCases.map(\.rawValue) {
             values[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: scope)
         }
         return values

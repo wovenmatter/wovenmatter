@@ -120,6 +120,36 @@ struct DefaultAgentCredentialTests {
         #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
     }
 
+    @Test(arguments: ["openai-codex", "claude-subscription", "xai"])
+    func subscriptionsKeepCanonicalAccountAndDiscardLegacyBackups(provider: String) throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        func credential(_ id: String) -> DefaultAgentCredential {
+            var value = DefaultAgentCredential(type: provider == "claude-subscription" ? "native" : "oauth")
+            value.accountId = id; value.access = id; value.expires = 9000000000000
+            return value
+        }
+        let first = credential("first"), selected = credential("selected")
+        try DefaultAgentSupport.saveOAuth(selected, provider: provider, scope: "global", keychain: keychain)
+        let entries: [[String: Any]] = try [("first", first, false), ("selected", selected, true)].map { id, value, chosen in
+            ["account": ["id": id, "label": id, "isSelected": chosen],
+             "credential": try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))]
+        }
+        try DefaultAgentSupport.saveKey(String(decoding: JSONSerialization.data(withJSONObject: ["entries": entries]), as: UTF8.self),
+            provider: "accounts." + provider, keychain: keychain)
+        #expect(try ProviderConnectionAccounts.list(provider: provider, keychain: keychain).map(\.id) == ["selected"])
+        #expect(try DefaultAgentSupport.oauth(provider, keychain: keychain) == selected)
+        let stored = try #require(try DefaultAgentSupport.key("accounts." + provider, keychain: keychain))
+        #expect(!stored.contains("first"))
+        if provider != "claude-subscription" {
+            #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addOAuth(first, provider: provider, keychain: keychain) }
+        } else {
+            #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addNative(profile: "first", provider: provider, keychain: keychain) }
+        }
+        try ProviderConnectionAccounts.remove("selected", provider: provider, keychain: keychain)
+        #expect(try ProviderConnectionAccounts.borrowedAccounts(provider: provider, keychain: keychain).isEmpty)
+        #expect(try DefaultAgentSupport.oauth(provider, keychain: keychain) == nil)
+    }
+
     @Test func accountsEnforceCapAndBorrowWithoutRefreshTokens() throws {
         let keychain = DefaultAgentKeychainFixture().access
         for i in 0..<4 { try ProviderConnectionAccounts.addKey("key-\(i)", provider: "openai", keychain: keychain) }
