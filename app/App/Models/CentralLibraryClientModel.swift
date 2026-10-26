@@ -148,6 +148,7 @@ final class CentralLibraryClientModel {
     var calendarCentralProviders: [CompanionProvider] { centralProviders }
     var calendarLocalProviders: [CompanionProvider] { localExecution.flatMap { directProviders[$0.descriptor.id] } ?? [] }
     var executionWorkspaces: [CompanionExecutionWorkspace] { journal.workspaces.values.filter { !$0.deleted }.sorted { $0.name < $1.name } }
+    func hasDirectAccess(_ workspaceID: String) -> Bool { directClients[workspaceID] != nil }
     @ObservationIgnored lazy var devicePairing = CompanionMacPairingController(identity: { [weak self] in
         guard let self else { return .init(deviceID: "00000000-0000-4000-8000-000000000000", deviceName: "Mac", metadata: .init(kind: .mac)) }
         return .init(deviceID: self.state.deviceID, deviceName: Host.current().localizedName ?? "This Mac",

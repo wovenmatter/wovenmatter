@@ -1545,20 +1545,16 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  private func localAssistantPreviewUnlocked(
-    runID: String,
-    assistantMessageID: String? = nil
-  ) throws -> String {
+  private func localAssistantPreviewUnlocked(runID: String) throws -> String {
     let statement = try prepareUnlocked("""
       SELECT content FROM dashboard_messages
-      WHERE id = COALESCE(?, (
+      WHERE id = (
         SELECT assistant_message_id FROM dashboard_runs WHERE id = ?
-      )) AND run_id = ? AND role = 'assistant'
+      ) AND run_id = ? AND role = 'assistant'
       """)
     defer { sqlite3_finalize(statement) }
-    try bindNullable(assistantMessageID, at: 1, to: statement)
+    try bind(runID, at: 1, to: statement)
     try bind(runID, at: 2, to: statement)
-    try bind(runID, at: 3, to: statement)
     guard sqlite3_step(statement) == SQLITE_ROW else {
       throw LocalACPSessionDatabaseError.runNotFound
     }
