@@ -10,7 +10,8 @@ final class TranscriptDetailTests: XCTestCase {
     var prepared = request; prepared["html"] = html
     let json = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
     let reference: [String: Any] = ["id": UUID().uuidString.lowercased(), "title": "Calculator", "height": 160]
-    let response = String(decoding: try JSONSerialization.data(withJSONObject: legacy ? ["success": true, "result": ["htmlRender": reference]] : ["htmlRender": reference]), as: UTF8.self)
+    let responseValue: [String: Any] = legacy ? ["success": true, "result": ["htmlRender": reference]] : ["htmlRender": reference]
+    let response = String(decoding: try JSONSerialization.data(withJSONObject: responseValue), as: UTF8.self)
     var focused = request; focused.removeValue(forKey: "action")
     let snapshot: [String: Any] = ["entries": [
       ["id": 1, "model": [["role": "user", "content": "Calculate"]]],
