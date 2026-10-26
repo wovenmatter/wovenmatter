@@ -214,7 +214,12 @@ public actor DashboardStore {
       }
       return
     }
-    self.executionWorkspaceDeviceID = executionWorkspaceDeviceID
+    if let executionWorkspaceDeviceID {
+      guard self.executionWorkspaceDeviceID == nil || self.executionWorkspaceDeviceID == executionWorkspaceDeviceID else {
+        throw WorkspaceToolError.invalid("This instance's execution workspace is already fixed.")
+      }
+      self.executionWorkspaceDeviceID = executionWorkspaceDeviceID
+    }
     let deviceID = try await deviceIdentity.id()
     try await database.bindDeviceOwnership(ownerDeviceID: deviceID)
     try await database.reconcileLocalCLIAgentCatalog(ownerDeviceID: deviceID)
