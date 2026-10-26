@@ -56,7 +56,7 @@ final class WovenAutomationHost {
         do {
             guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Invalid automation request ID.") }
             let command = try WovenMatterToolCommand(invocation.request.arguments)
-            guard let group = command.group, [.browser, .computer].contains(group) else { throw WorkspaceToolError.invalid("Invalid automation group.") }
+            guard let group = command.group, group.isAutomation else { throw WorkspaceToolError.invalid("Invalid automation group.") }
             if command.action == "cancel" {
                 let target = try command.required("id")
                 if target == "all" { await cancel(callerID: invocation.callerID) }
@@ -78,7 +78,8 @@ final class WovenAutomationHost {
             guard invocation.admitted else { throw WorkspaceToolError.invalid("This request was already admitted by an earlier host. Inspect the current state; input was not replayed.") }
             guard running.isEmpty else { throw WorkspaceToolError.invalid("Another agent is using the browser or computer. Wait for it to finish, then inspect fresh state.") }
             let json = try command.required("json")
-            guard json.utf8.count <= 3 * 1024 * 1024 else { throw WorkspaceToolError.invalid("Automation input exceeds 3 MiB.") }
+            let limit = group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : 3 * 1024 * 1024
+            guard json.utf8.count <= limit else { throw WorkspaceToolError.invalid("Automation input exceeds its size limit.") }
             let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(json.utf8))
             let task = Task { @MainActor [self] () -> WovenMatterToolResponse in
                 do {
@@ -90,7 +91,10 @@ final class WovenAutomationHost {
                     }
                     try await admit()
                     let result: GatewayJSONValue
-                    if group == .browser, let remote = try await remoteBrowser(invocation.callerID) {
+                    if group == .html {
+                        guard allowsLocalSurfaces else { throw WorkspaceToolError.invalid("Open Woven Matter to preview HTML.") }
+                        result = try await ConversationHTMLPreview().capture(input)
+                    } else if group == .browser, let remote = try await remoteBrowser(invocation.callerID) {
                         try await admit()
                         do {
                             let response = try await remote.perform(input, id)

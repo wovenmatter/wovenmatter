@@ -21,6 +21,8 @@ targets:
       - path: ../app/App/Views/DashboardColors.swift
       - path: ../app/App/Models/ConversationMarkdownDocument.swift
       - path: ../app/App/Views/ConversationResponse.swift
+      - path: ../app/App/Views/ConversationHTMLRenderView.swift
+      - path: ../app/Sources/WovenMatterCore/ConversationHTMLRender.swift
       - path: ../app/Sources/WovenMatterCore/AgentRunActivity.swift
       - path: ../app/Sources/WovenMatterCore/AssistantTranscriptProjection.swift
       - path: ../app/Sources/WovenMatterCore/ConversationWorkTimeline.swift

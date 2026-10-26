@@ -106,6 +106,21 @@ to enabled. General settings defines defaults for new conversations. Session
 controls change only that conversation. Calendar defaults to Full access, with
 Read only configurable in General. Usage is always read-only.
 
+## Visual replies
+
+Use `woven_html_preview` to inspect a screenshot, content height and console output,
+then `woven_html_render` to publish an interactive page directly in the thread.
+All supported harnesses discover the same focused Woven MCP tools.
+Pages persist with the chat, stay visible when work history folds, and support
+automatic sizing, themes, zoom and expansion. The tools are always available.
+
+Pages support inline and external CSS/JavaScript, images, media, and data fetches
+in an isolated sandbox. Absolute image paths are embedded on the invoking machine
+(up to 10 MiB/image and 25 MiB/prepared page); external resources follow platform
+transport policy. The page has no app/session or direct local-file access. Preview needs the Woven Matter app open;
+publishing does not. See [the implementation and T3 analysis](architecture/CHAT_HTML_RENDERING.md)
+for the complete contract and differences from upstream.
+
 ## Browser and computer automation
 
 `woven_browser` and `woven_computer` accept structured action fields directly.

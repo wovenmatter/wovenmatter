@@ -10,6 +10,8 @@ IOS_DESKTOP_SOURCES = frozenset({
     'app/App/Views/DashboardColors.swift',
     'app/App/Models/ConversationMarkdownDocument.swift',
     'app/App/Views/ConversationResponse.swift',
+    'app/App/Views/ConversationHTMLRenderView.swift',
+    'app/Sources/WovenMatterCore/ConversationHTMLRender.swift',
     'app/Sources/WovenMatterCore/AgentRunActivity.swift',
     'app/Sources/WovenMatterCore/AssistantTranscriptProjection.swift',
     'app/Sources/WovenMatterCore/ConversationWorkTimeline.swift',

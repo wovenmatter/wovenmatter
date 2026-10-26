@@ -157,6 +157,8 @@
 		908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */; };
 		B9FFAB8DAB6312F403B44CAC /* SettingsRemoteHarnessAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */; };
 		D2446456FA6CA90EADAABF29 /* RemoteHarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */; };
+		789F195BE9DA5D9B227FB05D /* ConversationHTMLRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2832E2AA4732BB7B4D7018C /* ConversationHTMLRenderView.swift */; };
+		82C03DE4D2C877BB2514890A /* ConversationHTMLPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */; };
 		F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */; };
 		CD6C65D104529DB4126B59E2 /* NoteToolEdits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */; };
 		2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */; };
@@ -316,6 +318,8 @@
 		D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHarnessAccounts.swift; sourceTree = "<group>"; };
 		56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteHarnessAccountView.swift; sourceTree = "<group>"; };
 		A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHarnessSetupView.swift; sourceTree = "<group>"; };
+		C2832E2AA4732BB7B4D7018C /* ConversationHTMLRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationHTMLRenderView.swift"; sourceTree = SOURCE_ROOT; };
+		1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/ConversationHTMLPreview.swift"; sourceTree = SOURCE_ROOT; };
 		AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMCPHost.swift"; sourceTree = "<group>"; };
 		798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NoteToolEdits.swift"; sourceTree = "<group>"; };
 		392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MCPAccess.swift"; sourceTree = "<group>"; };
@@ -482,6 +486,7 @@
 				E10000000000000000000002 /* NoteEditor.swift */,
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
 				D49400000000000000000003 /* ConversationResponse.swift */,
+				C2832E2AA4732BB7B4D7018C /* ConversationHTMLRenderView.swift */,
 				AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				A10500000000000000000003 /* ConversationSubagentRow.swift */,
@@ -549,6 +554,7 @@
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
 				259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */,
+				1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */,
 				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
@@ -789,6 +795,8 @@
 				BB19447D10499B1B7094401B /* ProductAnalyticsModel.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,
 				D49400000000000000000001 /* ConversationResponse.swift in Sources */,
+				82C03DE4D2C877BB2514890A /* ConversationHTMLPreview.swift in Sources */,
+				789F195BE9DA5D9B227FB05D /* ConversationHTMLRenderView.swift in Sources */,
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
 				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
 				8CF0AF093FDD4417AE3CE998 /* ConversationTasksBadge.swift in Sources */,

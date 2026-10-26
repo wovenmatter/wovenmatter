@@ -25,6 +25,12 @@ test('remote HTTP relay authenticates requests, preserves MCP results, and propa
   const result={jsonrpc:'2.0',id:7,result:{content:[{type:'image',mimeType:'image/png',data:'cGl4ZWxz'}],structuredContent:{success:true}}}
   input.write(JSON.stringify({type:'response',id:packet.id,status:200,body:result})+'\n')
   assert.deepEqual(await (await response).json(),result)
+  const html={jsonrpc:'2.0',id:'large-html',method:'tools/call',params:{name:'woven_html_render',arguments:{html:'<img src="data:image/png;base64,'+'A'.repeat(5*1024*1024)+'">',title:'Embedded image',height:160}}}
+  const largeResponse=fetch(ready.endpointURL,{method:'POST',headers,body:JSON.stringify(html)})
+  const largePacket=await next();assert.deepEqual(largePacket.body,html)
+  input.write(JSON.stringify({type:'response',id:largePacket.id,status:200,body:{jsonrpc:'2.0',id:html.id,result:{content:[]}}})+'\n')
+  assert.equal((await largeResponse).status,200)
+  assert.equal((await fetch(ready.endpointURL,{method:'POST',headers,body:JSON.stringify({...html,params:{...html.params,name:'woven_notes_read'}})})).status,413)
   const controller=new AbortController()
   const pending=fetch(ready.endpointURL,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({...message,id:8})})
   const active=await next();assert.equal(active.type,'request');controller.abort()

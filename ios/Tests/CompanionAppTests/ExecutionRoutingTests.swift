@@ -48,6 +48,24 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
+  @MainActor func testHTMLImagesResolveVirtualWorkspacePathsWithoutEscapingTheConversation() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let id = UUID().uuidString.lowercased()
+    let image = try model.deviceWorkspaceURL(conversationID: id, path: "image.png")
+    try Data([137,80,78,71,13,10,26,10]).write(to: image)
+    let prepared = try ConversationHTMLResources.prepare("<img src='/workspace/image.png'>") {
+      try model.deviceHTMLImageURL(conversationID: id, path: $0)
+    }
+    XCTAssertTrue(prepared.html.contains("data:image/png;base64,"))
+    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/private/app-data.png"))
+    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/../other/image.png"))
+    try FileManager.default.createSymbolicLink(at: image.deletingLastPathComponent().appendingPathComponent("outside.png"), withDestinationURL: root.appendingPathComponent("private.png"))
+    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/outside.png"))
+  }
+
   @MainActor func testDeviceGoalsPersistAndRouteWithoutStartingInference() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -338,7 +356,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertFalse(names.contains("read_note"))
     XCTAssertFalse(names.contains("woven_notes_read"))
     let context = try model.deviceToolContext(conversationID: record.id)
-    XCTAssertEqual(context.enabled, [.goals])
+    XCTAssertEqual(context.enabled, [.goals, .html])
     for name in ["woven_calendar_list", "woven_notes_read"] {
       do {
         _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
@@ -351,7 +369,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_computer", selection: ["wovenmatter_computer"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_notes_create", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.filter { $0 != .goals }.map { "woven_" + $0.rawValue }))
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.configurableCases.map { "woven_" + $0.rawValue }))
     XCTAssertTrue(CompanionModel.deviceMCPTools.contains { $0["name"] as? String == "woven_goals_get" })
     for tool in CompanionModel.deviceMCPTools {
       let schema = try XCTUnwrap(tool["parameters"] as? [String: Any])

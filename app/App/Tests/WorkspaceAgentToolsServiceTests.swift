@@ -1,4 +1,6 @@
 import WorkspaceFixtures
+import AppKit
+import Darwin
 import Foundation
 import Observation
 import Testing
@@ -7,8 +9,134 @@ import WovenMatterClient
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
+// Process pipes must not occupy the cooperative workers serving MCP requests.
+private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        Thread.detachNewThread { continuation.resume(with: Result { try body() }) }
+    }
+}
+
 @MainActor
 struct WorkspaceAgentToolsServiceTests {
+
+    // Opt-in acceptance with the actual packaged MCP clients and native
+    // adapters. No provider or account is used; the owning app services and
+    // WebKit preview are real. The normal build validation runs this after
+    // producing the app bundle.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_HTML_TEST_BUNDLE"] != nil),
+          .serialized, .timeLimit(.minutes(2)), arguments: AgentRuntimeKind.allCases)
+    func packagedHTMLToolsWorkAcrossHarnesses(runtime: AgentRuntimeKind) async throws {
+        _ = NSApplication.shared
+        let bundle = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["WOVENMATTER_HTML_TEST_BUNDLE"]))
+        let resources = bundle.appending(path: "Contents/Resources")
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "workspace.sqlite")
+        let database = try await WorkspaceDatabase(url: url)
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML acceptance", ownerDeviceID: UUID())
+        var native = OpenCodeSessionSnapshot()
+        let runID: String?
+        if runtime == .opencode {
+            try await database.attachOpenCodeSession(.init(conversationID: caller, connectionID: "acceptance", sessionID: "ses_acceptance"))
+            native.active = true
+            native.messages = [["id": "msg_acceptance", "type": "assistant", "time": ["created": .number(1)], "content": .array([])]]
+            try await database.saveOpenCodeSnapshot(native, conversationID: caller)
+            runID = nil
+        } else { runID = try await database.beginLocalACPRun(conversationID: caller, content: "Provider-free HTML acceptance").runID }
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        service.automationHandler = { identity, command, _ in
+            #expect(identity == caller)
+            let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+            #expect(input.objectValue?["action"]?.stringValue == "preview")
+            return .init(result: try await ConversationHTMLPreview().capture(input))
+        }
+        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
+        let driver = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appending(path: "default-agent/test/fixtures/html-harness.mjs")
+        let report = try await runBlockingToolFixture {
+            let process = Process(), output = Pipe(), errors = Pipe()
+            process.executableURL = resources.appending(path: "default-agent/bin/node")
+            process.arguments = [driver.path, resources.path, runtime.rawValue, connection.endpointURL]
+            var environment = ProcessInfo.processInfo.environment
+            environment["WOVEN_HTML_TEST_TOKEN"] = connection.bearerToken
+            process.environment = environment
+            process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = errors
+            try process.run()
+            let bytes = output.fileHandleForReading.readDataToEndOfFile()
+            let diagnostics = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw NSError(domain: "HTMLHarnessAcceptance", code: Int(process.terminationStatus),
+                    userInfo: [NSLocalizedDescriptionKey: String(decoding: diagnostics, as: UTF8.self)])
+            }
+            return bytes
+        }
+        let value = try #require(JSONSerialization.jsonObject(with: report) as? [String: Any])
+        let published = try #require(value["published"] as? [String])
+        #expect(value["previews"] as? Int == 2)
+        #expect(!FileManager.default.fileExists(atPath: try #require(value["deletedSourceImage"] as? String)))
+        if let runID { try await database.completeLocalACPRun(runID: runID) }
+        else { native.active = false; try await database.saveOpenCodeSnapshot(native, conversationID: caller) }
+        let reopened = try await WorkspaceDatabase(url: url, readOnlyProjection: true)
+        let history = try await reopened.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
+        let pages = history.activities.filter { $0.activity.htmlRender != nil }
+        #expect(Set(pages.compactMap { $0.activity.htmlRender?.id }) == Set(published))
+        #expect(ConversationWorkTimeline(records: history.activities, commentaryIDs: []).foldedEntries.count == published.count)
+        for row in pages {
+            #expect(row.activity.rawOutputJSON == nil)
+            let detail = try #require(try await reopened.conversationActivityDetails(conversationID: caller, runID: row.runID, activityID: row.activity.id))
+            let page = try JSONDecoder().decode(ConversationHTMLPage.self, from: Data(try #require(detail.rawOutputJSON).utf8))
+            #expect(page.html.contains("data:image/svg+xml;base64,"))
+            #expect(!page.html.contains(try #require(value["deletedSourceImage"] as? String)))
+        }
+    }
+
+    @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode })
+    func htmlPublicationUsesBoundConversationAndPersistsOutsideFoldedWork(runtime: AgentRuntimeKind) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML", ownerDeviceID: UUID())
+        let run = try await database.beginLocalACPRun(conversationID: caller, content: "Visual reply")
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
+        let html = "<button onclick='this.textContent=42'>Calculate</button>" + (runtime == .codex
+            ? "<img src='data:image/png;base64," + String(repeating: "A", count: 5 * 1024 * 1024) + "'>" : "")
+        let payload: GatewayJSONValue = .object(["action": .string("render"), "html": .string(html), "title": .string("Calculator"), "height": .number(160)])
+        let json = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
+        let data = try JSONEncoder().encode(GatewayJSONValue.object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+          "params": .object(["name": .string("woven_html_render"), "arguments": .object(["html": .string(html), "title": .string("Calculator"), "height": .number(160)])])]))
+        var request = URLRequest(url: try #require(URL(string: connection.endpointURL)))
+        request.httpMethod = "POST"; request.httpBody = data
+        request.setValue("Bearer " + connection.bearerToken, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (response, _) = try await URLSession.shared.data(for: request)
+        let envelope = try JSONDecoder().decode(GatewayJSONValue.self, from: response)
+        let structured = try #require(envelope.objectValue?["result"]?.objectValue?["structuredContent"])
+        let result = try JSONDecoder().decode(WovenMatterToolResponse.self, from: JSONEncoder().encode(structured))
+        #expect(result.success)
+        #expect(result.result?.objectValue?["htmlRender"]?.objectValue?["title"]?.stringValue == "Calculator")
+        let history = try await database.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
+        let timeline = ConversationWorkTimeline(records: history.activities, commentaryIDs: [])
+        #expect(timeline.foldedEntries.count == 1)
+        #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Calculator" })
+        if runtime == .codex {
+            #expect(data.count > 4 * 1024 * 1024)
+            let activity = try #require(history.activities.first { $0.activity.htmlRender != nil })
+            let detail = try #require(try await database.conversationActivityDetails(conversationID: caller, runID: run.runID, activityID: activity.activity.id))
+            #expect(try JSONDecoder().decode(ConversationHTMLPage.self, from: Data(try #require(detail.rawOutputJSON).utf8)).html == html)
+        }
+        let forged = await service.handle(.init(arguments: ["html", "call", "--json", json, "--session", "someone-else"]), callerID: caller)
+        #expect(!forged.success)
+    }
 
     @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
         let runtime = ExecutorRuntime()
@@ -302,7 +430,7 @@ extension WorkspaceAgentToolsServiceTests {
         let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
-        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals])
+        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals, .html])
         #expect(try await !request("remove", ["id": .string(detachedID), "occurrence": .number(1),
             "revision": .number(Double(independent.calendar.revision))]).success)
         #expect(try await request("read", ["id": .string(detachedID)]).success)

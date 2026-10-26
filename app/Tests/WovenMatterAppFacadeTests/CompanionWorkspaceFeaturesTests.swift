@@ -99,13 +99,13 @@ struct CompanionWorkspaceFeaturesTests {
         guard case .session(let settings) = try await service.readWorkspace(.session(id: id)) else { Issue.record("Missing settings"); return }
         #expect(settings.availableTools.map(\.id).contains("calendar"))
         try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["notes", "library"], confirmPausingTimers: true))
-        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals, .html])
         // Enabling Executor must go through the desktop broker. An unconfigured
         // broker cannot grant mobile authority by merely changing database flags.
         await #expect(throws: (any Error).self) {
             try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["notes", "library", "executor"], confirmPausingTimers: true))
         }
-        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals])
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals, .html])
         await #expect(throws: (any Error).self) { try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["unknown"], confirmPausingTimers: false)) }
         #expect(await fixture.recorder.deliveries.isEmpty)
         #expect(await fixture.recorder.configurations.isEmpty)

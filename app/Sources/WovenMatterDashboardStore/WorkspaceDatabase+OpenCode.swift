@@ -190,7 +190,9 @@ extension WorkspaceDatabaseConnection {
           let activities = OpenCodeSessionSnapshot.activities(message, assistantMessageID: id)
           let activityIDs = activities.map { "\(runID):activity:\($0.id)" }
           let placeholders = Array(repeating: "?", count: activityIDs.count).joined(separator: ",")
-          let obsolete = try prepareUnlocked("DELETE FROM dashboard_run_events WHERE run_id = ?"
+          // Published HTML belongs to the thread, independently of OpenCode's
+          // current native part list. Reconciliation must keep those pages.
+          let obsolete = try prepareUnlocked("DELETE FROM dashboard_run_events WHERE run_id = ? AND id NOT LIKE '%:activity:html-render:%'"
             + (activityIDs.isEmpty ? "" : " AND id NOT IN (\(placeholders))"))
           defer { sqlite3_finalize(obsolete) }
           try bind(runID, at: 1, to: obsolete)

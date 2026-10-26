@@ -7,6 +7,10 @@ private func + (lhs: Set<String>, rhs: [String]) -> Set<String> { lhs.union(rhs)
 /// Wire requests carry no caller/session authority. The owning app binds that to
 /// the private endpoint when it is created and checks current settings per call.
 public struct WovenMatterToolRequest: Codable, Sendable {
+  public static let maximumHTMLRequestBytes = 40 * 1_024 * 1_024
+  public var maximumEncodedBytes: Int {
+    (try? WovenMatterToolCommand(arguments).group) == .html ? Self.maximumHTMLRequestBytes : 4 * 1_024 * 1_024
+  }
   public var schemaVersion: Int
   public var requestID: String
   public var arguments: [String]
@@ -89,7 +93,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
     case .goals: return action != "get"
-    case .browser, .computer: return action == "call"
+    case .browser, .computer, .html: return action == "call"
     case .timers: return action != "list"
     case .calendar: return !["list", "read", "occurrences"].contains(action)
     case nil: return false
@@ -123,7 +127,7 @@ public struct WovenMatterToolCommand: Sendable {
       .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
       .executor: ["execute", "search", "skills", "status", "cancel"],
-      .browser: ["call", "cancel"], .computer: ["call", "cancel"],
+      .browser: ["call", "cancel"], .computer: ["call", "cancel"], .html: ["call", "cancel"],
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
@@ -140,7 +144,7 @@ public struct WovenMatterToolCommand: Sendable {
         throw WorkspaceToolError.invalid("Unknown or repeated option '\(item)'.")
       }
       indices[key] = arguments.count - args.count - 1
-      if booleanFlags.contains(key) && !([.notes, .browser, .computer].contains(group) && key == "json") {
+      if booleanFlags.contains(key) && !([.notes, .browser, .computer, .html].contains(group) && key == "json") {
         options[key] = "true"; operationArguments.append(item)
       } else {
         guard !args.isEmpty else { throw WorkspaceToolError.invalid("\(item) requires a value.") }
@@ -166,8 +170,8 @@ public struct WovenMatterToolCommand: Sendable {
     let allowed: Set<String>
     let maximumPositionals: Int
     switch (group, action) {
-    case (.browser, "call"), (.computer, "call"): allowed = ["json"] + request; maximumPositionals = 0
-    case (.browser, "cancel"), (.computer, "cancel"): allowed = ["id"] + request; maximumPositionals = 0
+    case (.browser, "call"), (.computer, "call"), (.html, "call"): allowed = ["json"] + request; maximumPositionals = 0
+    case (.browser, "cancel"), (.computer, "cancel"), (.html, "cancel"): allowed = ["id"] + request; maximumPositionals = 0
     case (.executor, "execute"): allowed = ["code"] + request; maximumPositionals = 0
     case (.executor, "search"): allowed = ["query", "limit"] + request; maximumPositionals = 0
     case (.executor, "skills"): allowed = request; maximumPositionals = 0

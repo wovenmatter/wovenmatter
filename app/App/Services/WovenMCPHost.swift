@@ -155,13 +155,19 @@ final class WovenMCPHost {
         if let version = request.headers["mcp-protocol-version"], !WovenMCPServer.supportedProtocolVersions.contains(version) {
             return .error("protocol_version", "Unsupported MCP protocol version.", status: 400)
         }
-        guard request.headers["origin"] == nil, request.body.count <= 4 * 1_024 * 1_024 else {
+        guard request.headers["origin"] == nil, request.body.count <= WovenMatterToolRequest.maximumHTMLRequestBytes else {
             return .error("invalid_request", "Invalid or oversized MCP request.", status: 400)
         }
         var rpcID: GatewayJSONValue = .null
         var decodedMessage = false
         do {
             let message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body)
+            if request.body.count > 4 * 1_024 * 1_024 {
+                guard message.objectValue?["method"] == .string("tools/call"),
+                      ["woven_html_preview", "woven_html_render"].contains(message.objectValue?["params"]?.objectValue?["name"]?.stringValue ?? "") else {
+                    throw WorkspaceToolError.invalid("The MCP request exceeds its size limit.")
+                }
+            }
             rpcID = message.objectValue?["id"] ?? .null
             decodedMessage = true
             let authorizedCredential = credential

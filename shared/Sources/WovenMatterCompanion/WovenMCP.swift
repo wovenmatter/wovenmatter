@@ -31,6 +31,11 @@ public struct WovenMCPToolDefinition: Codable, Equatable, Sendable {
 public enum WovenMCPServer {
   public static let protocolVersion = "2025-11-25"
   public static let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
+  public static func maximumRequestBytes(for message: GatewayJSONValue) -> Int {
+    let name = message.objectValue?["params"]?.objectValue?["name"]?.stringValue ?? ""
+    return message.objectValue?["method"] == .string("tools/call") && ["woven_html_preview", "woven_html_render"].contains(name)
+      ? WovenMatterToolRequest.maximumHTMLRequestBytes : 4 * 1_024 * 1_024
+  }
 
   public static func handle(_ message: GatewayJSONValue, contextID: String? = nil,
                            allowedTools: Set<String>? = nil,
@@ -73,7 +78,7 @@ public enum WovenMCPServer {
         return error(id: id, code: -32602, message: "This tool is unavailable for this connection.")
       }
       do {
-        let request = try WovenMCPCatalog.request(name: name, arguments: params["arguments"] ?? .object([:]), contextID: contextID)
+        let request = try WovenMCPCatalog.request(name: name, arguments: params["arguments"] ?? .object([:]), contextID: contextID, metadata: params["_meta"])
         let response = await perform(request)
         result = WovenMCPCatalog.result(.init(success: response.success, result: response.result,
           error: response.error, code: response.code, silent: response.silent, requestID: response.requestID ?? request.requestID))

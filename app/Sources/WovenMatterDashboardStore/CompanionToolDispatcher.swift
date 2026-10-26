@@ -29,8 +29,11 @@ public final class CompanionToolDispatcher {
       let response = await perform(request, value.conversationID).bounded()
       // Desktop/page captures and text belong to the model's tool response, not
       // the durable transport ledger. Record completion without those payloads.
+      // A published page's small reference retains the ordinary retry receipt.
       let command = try? WovenMatterToolCommand(request.arguments)
-      let automation = command?.group?.isAutomation == true && command?.action == "call"
+      let htmlPublication = command?.group == .html
+        && (try? JSONDecoder().decode(GatewayJSONValue.self, from: Data((command?.options["json"] ?? "").utf8)))?.objectValue?["action"]?.stringValue == "render"
+      let automation = command?.group?.isAutomation == true && command?.action == "call" && !htmlPublication
       let receipt = automation ? WovenMatterToolResponse(success: false,
         error: "This automation call finished. Its output is not retained in the transport receipt. Inspect fresh state before further input; this request will not run again.",
         code: "automation_outcome_recorded", requestID: id) : response

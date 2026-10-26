@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
+import { maximumMCPRequestBytes } from '../src/workspace-mcp.mjs'
 
 async function fixture(t,{fetchImpl,workspaceBrowser}={}) {
   const directory=mkdtempSync(join(tmpdir(),'woven-workspace-mcp-'))
@@ -84,6 +85,25 @@ test('library MCP grant uses separate encrypted authority and cannot be forged f
   assert.equal(requests[0].options.headers['x-woven-workspace'],own.libraryID)
   f.service.mcp.clearLibrary()
   assert.equal((await f.call('woven_notes_read',{noteID:randomUUID()})).error.code,-32602)
+})
+
+test('remote harnesses delegate prepared HTML with their authenticated caller and retain ordinary request limits',async t=>{
+  const requests=[],f=await fixture(t,{fetchImpl:async(url,options)=>{requests.push({url,options});return {ok:true,status:200,text:async()=>JSON.stringify({jsonrpc:'2.0',id:'html',result:{content:[],structuredContent:{success:true}}})}}})
+  const own=f.service.descriptor()
+  f.service.mcp.configureLibrary({grantID:randomUUID(),libraryID:own.libraryID,workspaceID:own.id,executionDeviceID:own.executionDeviceID,endpointURL:'https://central.example.ts.net/wovenmatter/mcp/workspace',bearerToken:'t'.repeat(43)})
+  // Visual replies remain available even on an older persisted optional-tool selection.
+  await f.command('workspace',{conversationID:f.id,workspaceAction:{sessionTools:{id:f.id,enabled:['goals']}}})
+  const html='<img src="data:image/png;base64,'+'A'.repeat(5*1024*1024)+'">',requestID=randomUUID()
+  assert.equal((await f.call('woven_html_render',{html,title:'Chart',height:240,requestID})).result.structuredContent.success,true)
+  const forwarded=requests.find(item=>JSON.parse(item.options.body).params?.name==='woven_html_render')
+  assert.equal(forwarded.options.headers['x-woven-conversation-id'],f.id)
+  assert.ok(forwarded.options.headers['x-woven-enabled-groups'].split(',').includes('html'))
+  assert.equal(JSON.parse(forwarded.options.body).params.arguments.html,html)
+  assert.equal(JSON.parse(forwarded.options.body).params.arguments.requestID,requestID)
+  assert.equal((await f.call('woven_html_render',{html,title:'Chart',height:240,conversationID:randomUUID()})).error.code,-32602)
+  assert.equal(maximumMCPRequestBytes({method:'tools/call',params:{name:'woven_html_render'}}),40*1024*1024)
+  assert.equal(maximumMCPRequestBytes({method:'tools/call',params:{name:'woven_notes_read'}}),4*1024*1024)
+  assert.equal(maximumMCPRequestBytes({method:'tools/list',params:{name:'woven_html_render'}}),4*1024*1024)
 })
 
 test('owner-local database MCP tools work without a Mac grant and roll back failed SQL atomically',async t=>{

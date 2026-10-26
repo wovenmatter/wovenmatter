@@ -4,6 +4,15 @@ import Testing
 @testable import WovenMatterClient
 
 struct BackendRPCTests {
+    @Test func embeddedHTMLPageCanCrossTheBackendBoundary() async throws {
+        let url = endpoint()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let server = BackendRPCServer(socketURL: url)
+        try server.start { BackendRPCResponse(id: $0.id, result: $0.payload) }
+        defer { server.stop() }
+        let payload = Data(repeating: 65, count: 25 * 1024 * 1024)
+        #expect(try await BackendRPCClient(socketURL: url).call(method: "html-fixture", payload: payload) == payload)
+    }
 
     private func endpoint() -> URL {
         URL(fileURLWithPath: "/private/tmp/wm-rpc-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
@@ -56,12 +65,15 @@ struct BackendRPCTests {
         let url = endpoint()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let server = BackendRPCServer(socketURL: url)
-        try server.start { BackendRPCResponse(id: $0.id, error: "Unavailable command") }
+        try server.start { request in
+            request.method == "unknown" ? BackendRPCResponse(id: request.id, error: "Unavailable command")
+                : BackendRPCResponse(id: request.id, result: request.payload)
+        }
         defer { server.stop() }
         let client = BackendRPCClient(socketURL: url)
         await #expect(throws: BackendRPCError.self) { try await client.call(method: "unknown") }
         await #expect(throws: BackendRPCError.self) {
-            try await client.call(method: "oversized", payload: Data(repeating: 0, count: 8 * 1024 * 1024))
+            try await client.call(method: "oversized", payload: Data(repeating: 0, count: 49 * 1024 * 1024))
         }
     }
 }
