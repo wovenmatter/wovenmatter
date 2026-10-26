@@ -59,7 +59,8 @@ struct CompanionTranscriptMigrationTests {
       workspaceID = UUID().uuidString.lowercased()
       conversationID = UUID().uuidString.lowercased()
       _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-        id: workspaceID, libraryID: libraryID, ownerDeviceID: deviceID, kind: .ios, name: "Fixture iPhone")), deviceID: deviceID)
+        id: workspaceID, libraryID: libraryID, ownerDeviceID: deviceID, kind: .ios, name: "Fixture iPhone",
+        executionDeviceID: deviceID)), deviceID: deviceID)
       _ = try await database.ingestCompanionJournal(.init(libraryID: libraryID, entries: [
         .init(workspaceID: workspaceID, originSequence: 1, conversationID: conversationID, kind: .conversation,
           conversation: .init(id: conversationID, title: "Hey", runtimeKind: "piDurable"))

@@ -42,12 +42,24 @@ final class WovenMCPRemoteBridge: @unchecked Sendable {
                        "node", "--input-type=module", "-e", bootstrap].map(Self.quote).joined(separator: " ")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", destination, command]
+        process.arguments = try Self.sshArguments(destination: destination, command: command)
         let stdin = Pipe(), stdout = Pipe()
         process.standardInput = stdin; process.standardOutput = stdout
         process.standardError = FileHandle.standardError
         self.process = process; self.localConnection = localConnection
         input = stdin.fileHandleForWriting; output = stdout.fileHandleForReading
+    }
+
+    static func sshArguments(
+        destination: String,
+        command: String,
+        tailnetOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
+    ) throws -> [String] {
+        try tailnetOptions(destination) + [
+            "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
+            destination, command,
+        ]
     }
 
     static func start(configuration: RemoteWorkspaceConfiguration, localConnection: WovenMCPConnection) async throws -> WovenMCPRemoteBridge {

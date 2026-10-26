@@ -1151,12 +1151,8 @@ struct WorkspaceView: View {
             $0.governingPlane != .remoteWorkspace && $0.runtimeKind == runtimeKind
         }?.id)
         Task {
-            let owner = try? await model.executionWorkspaceIdentity(workspaceID: nil)
-            let folderID = model.workspaceOverview?.folders.first(where: {
-                $0.id == requestedFolderID && ($0.executionWorkspaceID == nil || $0.executionWorkspaceID == owner)
-            })?.id
             guard let conversationID = await model.createLocalACPSession(
-                runtimeKind: runtimeKind, requestedConversationID: selection.id, folderID: folderID
+                runtimeKind: runtimeKind, requestedConversationID: selection.id, folderID: requestedFolderID
             ) else {
                 finishChatCreation(selection, conversationID: nil)
                 showNotice(
@@ -1176,12 +1172,8 @@ struct WorkspaceView: View {
             $0.governingPlane == .remoteWorkspace && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
         }?.id)
         Task {
-            let owner = "remote:" + target.configuration.id.uuidString.lowercased()
-            let folderID = model.workspaceOverview?.folders.first(where: {
-                $0.id == requestedFolderID && ($0.executionWorkspaceID == nil || $0.executionWorkspaceID == owner)
-            })?.id
             guard let conversationID = await model.createRemoteACPSession(
-                target: target, requestedConversationID: selection.id, folderID: folderID
+                target: target, requestedConversationID: selection.id, folderID: requestedFolderID
             ) else {
                 finishChatCreation(selection, conversationID: nil)
                 showNotice(

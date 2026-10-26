@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -15,7 +16,7 @@ struct AsyncDatabaseWorkerTests {
     let task = Task { try await database.write { connection in
       entered.continuation.yield(())
       #expect(release.wait(timeout: .now() + 60) == .success)
-      return try connection.createFolder(name: "Committed")
+      return try connection.createFolder(name: "Committed", location: .init(workspaceID: "device:test", rootPath: "/tmp", managed: false))
     } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
@@ -28,7 +29,7 @@ struct AsyncDatabaseWorkerTests {
   @Test func streamFlushDoesNotLoseChunksAcrossDatabaseSuspension() async throws {
     let (database, root, owner) = try await fixture()
     defer { try? FileManager.default.removeItem(at: root) }
-    let id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Stream", ownerDeviceID: owner)
+    let id = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Stream", ownerDeviceID: owner)
     let run = try await database.beginLocalACPRun(conversationID: id, content: "Start")
     let stream = LocalACPAssistantStreamWriter(database: database, runID: run.runID,
       assistantMessageID: run.assistantMessageID, conversationID: id, onChange: nil)

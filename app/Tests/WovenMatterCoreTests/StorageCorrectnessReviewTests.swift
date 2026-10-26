@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -26,7 +27,7 @@ struct StorageCorrectnessReviewTests {
     let archived = HermesSessionImport(identity: HermesSessionArchive.identity(home: "/tmp/fixture", storedID: "parent", imported: true),
       title: "History", createdAt: Date(), messages: rows)
     // Seed the rows an older build already saved; no retired runtime is created or resumed.
-    let conversation = try await db.createLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
+    let conversation = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
     let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Retained history")
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: plan)
     try await db.completeLocalACPRun(runID: run.runID)

@@ -11,9 +11,17 @@ function fixture(t,configuration={}) {
   const executable=(name,body)=>writeFileSync(join(bin,name),'#!/bin/sh\n'+body,{mode:0o700})
   executable('docker',`case "$1" in
 info) exit 0;;
-version) case "$3" in *Platform.Name*) echo 'Docker Engine - Community';;*) echo '1.55';;esac;;
+version) case "$3" in *Platform.Name*) echo 'Docker Engine - Community';;*Server.Version*) echo '29.9.2';;*) echo '1.55';;esac;;
 context) case "$2" in show) echo default;;*) echo unix:///var/run/docker.sock;;esac;;
-container) echo '127.0.0.1:7337';;
+container) case "$4" in
+*Config.Labels*) echo test;;
+*NetworkMode*) echo wovenmatter-test;;
+*'range $port'*) echo '7337/tcp=127.0.0.1:7337';;
+*) echo '127.0.0.1:7337';; esac;;
+network) case "$4" in
+*Labels*) echo test;;
+*Driver*) echo 'bridge|false|nat|127.0.0.1|';;
+*) exit 0;; esac;;
 *) exit 1;; esac\n`)
   executable('tailscale',`case "$1 $2" in
 'status --json') echo '{"BackendState":"Running","Self":{"DNSName":"host.example.ts.net."}}';;

@@ -90,8 +90,8 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
       try validateFolderUnlocked(id: folderID, operatorID: operatorID)
-      guard let root = try sessionExecutionRoot(id: id),
-            let row = try historyRowsUnlocked("SELECT folder_locked FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
+      let root = try availableSessionExecutionRoot(id: id)
+      guard             let row = try historyRowsUnlocked("SELECT folder_locked FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
             row["folder_locked"]?.intValue == 0,
             try historyRowsUnlocked("SELECT 1 FROM dashboard_messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty else {
         throw WorkspaceToolError.invalid("A chat's folder is fixed after its first message.")
@@ -169,8 +169,8 @@ extension WorkspaceDatabaseConnection {
         AND conversation.id = ?
         AND conversation.deleted_at IS NULL
         AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-          AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-            WHERE conversation_id = conversation.id)))
+          AND EXISTS (SELECT 1 FROM retained_execution_history
+            WHERE conversation_id=conversation.id)))
         AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY message.created_at, message.id
@@ -198,8 +198,8 @@ extension WorkspaceDatabaseConnection {
         AND conversation.id = ?
         AND conversation.deleted_at IS NULL
         AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-          AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-            WHERE conversation_id = conversation.id)))
+          AND EXISTS (SELECT 1 FROM retained_execution_history
+            WHERE conversation_id=conversation.id)))
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY run.created_at, run.id
       """,
@@ -259,8 +259,8 @@ extension WorkspaceDatabaseConnection {
             AND (conversation.user_id=? OR conversation.desktop_owned=1)
             AND conversation.deleted_at IS NULL
             AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-              AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-                WHERE conversation_id = conversation.id)))
+              AND EXISTS (SELECT 1 FROM retained_execution_history
+                WHERE conversation_id=conversation.id)))
             AND conversation.governing_plane='wovenmatter_macos'
             AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           """)
@@ -317,8 +317,8 @@ extension WorkspaceDatabaseConnection {
           AND conversation.id = ?
           AND conversation.deleted_at IS NULL
           AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-            AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-              WHERE conversation_id = conversation.id)))
+            AND EXISTS (SELECT 1 FROM retained_execution_history
+              WHERE conversation_id=conversation.id)))
           AND conversation.governing_plane='wovenmatter_macos'
           AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           \(cursorPredicate)
@@ -375,8 +375,8 @@ extension WorkspaceDatabaseConnection {
             AND conversation.id = ?
             AND conversation.deleted_at IS NULL
             AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-              AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-                WHERE conversation_id = conversation.id)))
+              AND EXISTS (SELECT 1 FROM retained_execution_history
+                WHERE conversation_id=conversation.id)))
             AND (
               run.user_message_id IN (\(placeholders))
               OR run.assistant_message_id IN (\(placeholders))

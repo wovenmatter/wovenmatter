@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WorkspaceFixtures
 import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
@@ -143,8 +144,8 @@ private struct MCPHostFixture {
         directory = FileManager.default.temporaryDirectory.appending(path: "woven-mcp-host-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "MCP caller", ownerDeviceID: UUID())
-        otherCaller = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Other caller", ownerDeviceID: UUID())
+        caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "MCP caller", ownerDeviceID: UUID())
+        otherCaller = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other caller", ownerDeviceID: UUID())
         try await database.setSessionTools(.init(enabled: [.notes, .sessions, .browser]), sessionID: caller)
         let calls = MCPHostCalls()
         self.calls = calls

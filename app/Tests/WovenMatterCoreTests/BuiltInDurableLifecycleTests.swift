@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -17,7 +18,7 @@ struct BuiltInDurableLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .defaultAgent,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent,
       title: "Background fixture", ownerDeviceID: UUID())
     let lease = ConfigurationTestProcessLease(), client = BackgroundDriverFixture()
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease,
@@ -65,7 +66,7 @@ struct BuiltInDurableLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .defaultAgent,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent,
       title: "Dispatch fixture", ownerDeviceID: UUID())
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in

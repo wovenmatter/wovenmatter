@@ -4,11 +4,13 @@ import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { readFile, mkdir, chmod } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { readFile, mkdir, chmod, access } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { writePrivateJSON } from '../config.mjs';
 
 // The broker implements Executor's V2 managed app API; V1 lacks it and a later
@@ -19,7 +21,44 @@ export const supportsExecutorVersion = version => releaseVersion(version) && Num
 export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {
   major: EXECUTOR_API_MAJOR, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const execFileAsync = promisify(execFile);
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+const tailnetAddress = value => {
+  const lower = value.toLowerCase();
+  if (lower.startsWith('fd7a:115c:a1e0:') && /^[0-9a-f:]+$/.test(lower)) return true;
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+    && Number(parts[0]) === 100 && Number(parts[1]) >= 64 && Number(parts[1]) <= 127;
+};
+export function tailnetSSHOptions(destination, executable, status) {
+  const host = destination.split('@').at(-1).toLowerCase().replace(/\.$/, '');
+  const root = typeof status === 'string' ? JSON.parse(status) : status;
+  if (root?.BackendState !== 'Running' || !root.Peer) throw new Error('Connect Tailscale before deploying Executor.');
+  const matches = Object.values(root.Peer).filter(peer => {
+    const names = [peer.HostName, peer.DNSName].filter(Boolean).map(name => name.toLowerCase().replace(/\.$/, ''));
+    return names.includes(host) || (tailnetAddress(host) && (peer.TailscaleIPs ?? []).includes(host));
+  });
+  const peer = matches.length === 1 ? matches[0] : null;
+  const address = peer?.Online && !peer?.Expired && peer.TailscaleIPs?.find(tailnetAddress);
+  if (!address) throw new Error('Select one online Tailscale machine before deploying Executor.');
+  const quotedExecutable = executable.replaceAll("'", "'\\''");
+  return ['-o', `ProxyCommand=exec '${quotedExecutable}' nc ${address} %p`, '-o', 'ProxyJump=none', '-o', `Hostname=${address}`,
+    '-o', 'CanonicalizeHostname=no', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'ControlPersist=no',
+    '-o', 'Compression=no', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'PermitLocalCommand=no',
+    '-o', 'StrictHostKeyChecking=yes'];
+}
+async function resolveTailnetSSHOptions(destination) {
+  const candidates = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/usr/local/bin/tailscale', '/opt/homebrew/bin/tailscale'];
+  let executable;
+  for (const candidate of candidates) {
+    try { await access(candidate, fsConstants.X_OK); executable = candidate; break; } catch { }
+  }
+  if (!executable) throw new Error('Install and connect Tailscale before deploying Executor.');
+  let stdout;
+  try { ({ stdout } = await execFileAsync(executable, ['status', '--json'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 })); }
+  catch { throw new Error('Tailscale status is unavailable. Connect Tailscale before deploying Executor.'); }
+  return tailnetSSHOptions(destination, executable, stdout);
+}
 export function validateConfiguration(config) {
   if (!uuid(config?.id) || !['local', 'remote'].includes(config.location)) throw new Error('Invalid Executor connection.');
   if (config.location === 'remote') {
@@ -30,10 +69,10 @@ export function validateConfiguration(config) {
   return config;
 }
 export class ExecutorBroker {
-  constructor(directory, { fetcher = fetch, connect, spawnProcess = spawn } = {}) {
+  constructor(directory, { fetcher = fetch, connect, spawnProcess = spawn, tailnetOptions = resolveTailnetSSHOptions } = {}) {
     this.directory = directory; this.fetch = fetcher; this.connectOverride = connect; this.spawnProcess = spawnProcess;
     this.jobs = new Map(); this.clients = new Map(); this.connectingClients = new Map(); this.clientGeneration = 0;
-    this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve();
+    this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve(); this.tailnetOptions = tailnetOptions;
   }
   async load() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -172,14 +211,31 @@ export class ExecutorBroker {
     this.child = null;
   }
   async deployRemote() {
-    const script = await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/executor-deploy.sh'), 'utf8');
+    const remoteRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote');
+    const script = await readFile(resolve(remoteRoot, 'executor-deploy.sh'), 'utf8');
     // Payload goes over SSH stdin, not shell arguments, logs, or agent-visible metadata.
     const version = await latestExecutorVersion(this.fetch);
-    const dockerfile = (await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/Executor.Dockerfile'), 'utf8'))
+    const dockerfile = (await readFile(resolve(remoteRoot, 'Executor.Dockerfile'), 'utf8'))
       .replace('ARG EXECUTOR_VERSION', `ARG EXECUTOR_VERSION=${version}`);
-    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, version, dockerfile, generation: randomUUID() });
+    const [npmRuntimePackage, npmRuntimeLock, executorRuntimePackage, executorRuntimeLock] = await Promise.all([
+      readFile(resolve(remoteRoot, 'npm-runtime/package.json'), 'utf8'),
+      readFile(resolve(remoteRoot, 'npm-runtime/package-lock.json'), 'utf8'),
+      readFile(resolve(remoteRoot, 'executor-runtime/package.json'), 'utf8'),
+      readFile(resolve(remoteRoot, 'executor-runtime/package-lock.json'), 'utf8'),
+    ]);
+    const securityManifest = JSON.parse(await readFile(resolve(remoteRoot, 'security/backports.json'), 'utf8'));
+    const executorSecuritySources = new Set(['ncurses', 'acl', 'util-linux', 'curl']);
+    const securityPaths = ['backports.json', 'build-backports.py', ...securityManifest
+      .filter(record => executorSecuritySources.has(record.source))
+      .flatMap(record => record.patches.map(patch => patch.file))];
+    const securityFiles = Object.fromEntries(await Promise.all(securityPaths.map(async path => [
+      path, (await readFile(resolve(remoteRoot, 'security', path))).toString('base64'),
+    ])));
+    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, version, dockerfile,
+      npmRuntimePackage, npmRuntimeLock, executorRuntimePackage, executorRuntimeLock, securityFiles, generation: randomUUID() });
     const command = `set -eu\numask 077\nwm_payload=$(mktemp)\ntrap 'rm -f "$wm_payload"' EXIT\ncat > "$wm_payload" <<'WOVEN_EXECUTOR_SETUP_JSON'\n${payload}\nWOVEN_EXECUTOR_SETUP_JSON\n${script}\n`;
-    await this.run('/usr/bin/ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
+    const transport = await this.tailnetOptions(this.config.host);
+    await this.run('/usr/bin/ssh', ['-T', ...transport, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
     this.runtimeVersion = version;
   }
   async pair(context = this) {

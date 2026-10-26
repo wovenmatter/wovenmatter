@@ -124,7 +124,7 @@ struct ACPSessionPermissionTests {
     @Test func remoteGrokPolicyRewritesOnlyStructuredHarnessArguments() throws {
         let resolved = try RemoteHarnessLaunchResolver.resolve(
             configuration: .init(name: "Fixture", workspaceID: "permission-fixture", hostName: "fixture.invalid"),
-            runtimeKind: .grokBuild, processWorkingDirectory: URL(filePath: "/private/tmp")
+            runtimeKind: .grokBuild, processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] }
         ).launch
         let wrapped = try #require(resolved.wrappedCommand)
         let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: resolved.runtimeKind,

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -39,10 +40,9 @@ struct CompanionRunControlTests {
         let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let requestedConversationID = UUID()
         let id = requestedConversationID.uuidString.lowercased()
-        let conversationID = try await database.createLocalACPSession(runtimeKind: runtime, title: "Companion fixture", ownerDeviceID: UUID(), requestedConversationID: requestedConversationID)
+        let conversationID = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Companion fixture", ownerDeviceID: UUID(), requestedConversationID: requestedConversationID,
+            fixtureLocation: .init(workspaceID: "device:fixture", rootPath: directory.path, managed: false))
         #expect(conversationID == id)
-        try await database.saveSessionExecutionRoot(id: id, folderID: nil,
-            location: .init(workspaceID: "device:fixture", rootPath: directory.path, managed: false), defaultPath: directory.path)
         let gate = CompanionPromptGate()
         let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
             LocalACPSessionDriver(initializeSession: { _, _, _, _ in

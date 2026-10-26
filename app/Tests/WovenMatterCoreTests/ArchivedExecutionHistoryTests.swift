@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -11,13 +12,10 @@ struct ArchivedExecutionHistoryTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let db = try await WorkspaceDatabase(url: root.appending(path: "history.sqlite"))
     let owner = UUID()
-    let old = try await db.createLocalACPSession(runtimeKind: .codex, title: "Retained old chat", ownerDeviceID: owner)
-    let hidden = try await db.createLocalACPSession(runtimeKind: .codex, title: "Archived current chat", ownerDeviceID: owner)
-    let foreign = try await db.createLocalACPSession(runtimeKind: .codex, title: "Someone else's chat", ownerDeviceID: owner)
     let location = WorkspaceFolderLocation(workspaceID: "device:test", rootPath: root.appending(path: "project").path, managed: false)
-    for id in [old, hidden] {
-      try await db.saveSessionExecutionRoot(id: id, folderID: nil, location: location, defaultPath: location.rootPath)
-    }
+    let old = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Retained old chat", ownerDeviceID: owner, fixtureLocation: location)
+    let hidden = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Archived current chat", ownerDeviceID: owner, fixtureLocation: location)
+    let foreign = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Someone else's chat", ownerDeviceID: owner)
     let run = try await db.beginLocalACPRun(conversationID: old, content: "Preserve this conversation")
     try await db.completeLocalACPRun(runID: run.runID)
     try await db.recordHistory(.init(id: "retained-native", conversationID: old, harness: "pi", kind: "native.message", payload: "Retained native bytes"))
@@ -40,7 +38,7 @@ struct ArchivedExecutionHistoryTests {
     #expect(try await reopened.conversationContent(id: foreign).messages.isEmpty)
     for retired in [AgentRuntimeKind.pi, .hermes, .cursor, .openclaw] {
       await #expect(throws: LocalACPSessionDatabaseError.runtimeUnavailable) {
-        try await reopened.createLocalACPSession(runtimeKind: retired, title: "Unavailable", ownerDeviceID: owner)
+        try await reopened.createFixtureLocalACPSession(runtimeKind: retired, title: "Unavailable", ownerDeviceID: owner)
       }
     }
   }

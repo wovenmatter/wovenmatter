@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion } from '../src/executor/broker.mjs';
+import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion, tailnetSSHOptions } from '../src/executor/broker.mjs';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
@@ -78,6 +78,39 @@ test('cloud/public/insecure origins and shell injection are rejected', () => {
   assert.equal(validateConfiguration(config), config);
   for (const origin of ['http://machine.tailnet.ts.net', 'https://executor.sh', 'https://user:secret@machine.tailnet.ts.net', 'https://machine.tailnet.ts.net/mcp']) assert.throws(() => validateConfiguration({ ...config, origin }));
   assert.throws(() => validateConfiguration({ ...config, host: 'host; printf secret' }));
+});
+
+test('remote Executor SSH is pinned to one online Tailscale peer', () => {
+  const status = { BackendState: 'Running', Peer: {
+    first: { HostName: 'workstation', DNSName: 'workstation.example.ts.net.', Online: true, Expired: false, TailscaleIPs: ['fd7a:115c:a1e0::2'] },
+  } };
+  const options = tailnetSSHOptions('workstation.example.ts.net', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', status);
+  assert.ok(options.includes("ProxyCommand=exec '/Applications/Tailscale.app/Contents/MacOS/Tailscale' nc fd7a:115c:a1e0::2 %p"));
+  assert.ok(options.includes('ProxyJump=none'));
+  assert.ok(options.includes('Hostname=fd7a:115c:a1e0::2'));
+  assert.ok(options.includes('ControlMaster=no'));
+  assert.throws(() => tailnetSSHOptions('lan.invalid', '/usr/bin/tailscale', status), /online Tailscale machine/);
+  assert.throws(() => tailnetSSHOptions('workstation', '/usr/bin/tailscale', { ...status, BackendState: 'Stopped' }), /Connect Tailscale/);
+  assert.throws(() => tailnetSSHOptions('workstation', '/usr/bin/tailscale', { ...status, Peer: { ...status.Peer, duplicate: status.Peer.first } }), /online Tailscale machine/);
+});
+
+test('remote Executor deployment passes only the resolved Tailscale transport to ssh', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'woven-executor-deploy-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const version = '2.0.0-beta.29'; let resolvedHost, invocation;
+  const broker = await new ExecutorBroker(directory, {
+    fetcher: async () => new Response(JSON.stringify({ versions: { [version]: { version, bin: { executor: 'bin.mjs' } } } })),
+    tailnetOptions: async host => { resolvedHost = host; return ['-o', 'ProxyCommand=exec tailscale nc fd7a:115c:a1e0::2 %p', '-o', 'Hostname=fd7a:115c:a1e0::2']; },
+  }).load();
+  broker.config = { id: randomUUID(), location: 'remote', origin: 'https://workstation.example.ts.net:8443', host: 'workstation', user: 'trey' };
+  broker.server = { apiKey: 'a'.repeat(64), encryptionKey: 'b'.repeat(64), port: 4312 };
+  broker.run = async (...args) => { invocation = args; };
+  await broker.deployRemote();
+  assert.equal(resolvedHost, 'workstation');
+  assert.equal(invocation[0], '/usr/bin/ssh');
+  assert.ok(invocation[1].includes('ProxyCommand=exec tailscale nc fd7a:115c:a1e0::2 %p'));
+  assert.ok(invocation[1].includes('Hostname=fd7a:115c:a1e0::2'));
+  assert.equal(invocation[1].at(-2), 'trey@workstation');
 });
 
 test('invalid typed input remains pending and a valid response resumes once', async t => {

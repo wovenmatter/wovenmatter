@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -13,7 +14,7 @@ struct WorkspaceHistoryTextWindowTests {
     let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
     let owner = UUID()
     try await database.bindDeviceOwnership(ownerDeviceID: owner)
-    let session = try await database.createLocalACPSession(runtimeKind: .codex, title: "Windows", ownerDeviceID: owner)
+    let session = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Windows", ownerDeviceID: owner)
     for value in ["\0é🪡z", "é\0🪡z", "é🪡z\0", "e\u{0301}\0🪡z"] {
       let run = try await database.beginLocalACPRun(conversationID: session, content: value)
       try await database.completeLocalACPRun(runID: run.runID)

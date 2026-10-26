@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -20,7 +21,7 @@ struct CompanionToolFacadeTests {
                 kind: kind, name: "Execution policy fixture", executionDeviceID: kind == .mac ? identity.hostDeviceID : nil)),
                 deviceID: identity.hostDeviceID)
         }
-        let localChat = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Central", ownerDeviceID: UUID())
+        let localChat = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Central", ownerDeviceID: UUID())
         let remoteChat = try await fixture.createConversation()
         let deniedChat = remoteDenied ? remoteChat : localChat
         let allowedChat = remoteDenied ? localChat : remoteChat
@@ -142,7 +143,7 @@ struct CompanionToolFacadeTests {
         #expect(accepted.status == 200)
         let result = try JSONDecoder().decode(GatewayJSONValue.self, from: accepted.body)
         #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
-        headers["x-woven-conversation-id"] = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
+        headers["x-woven-conversation-id"] = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
         #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
             body: try JSONEncoder().encode(call))).status == 403)
         headers["x-woven-conversation-id"] = caller
@@ -155,7 +156,7 @@ struct CompanionToolFacadeTests {
     @Test func companionToolRevocationFencesAutomationEvenAfterReenable() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         fixture.model.clientExecutionDirectory = fixture.directory
-        let caller = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Mac caller", ownerDeviceID: UUID())
+        let caller = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Mac caller", ownerDeviceID: UUID())
         try await fixture.database.setSessionTools(.init(enabled: [.browser, .computer]), sessionID: caller)
         let call = WovenMatterToolRequest(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"])
         let tools = try #require(fixture.model.agentTools)

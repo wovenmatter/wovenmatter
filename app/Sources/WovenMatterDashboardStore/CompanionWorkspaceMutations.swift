@@ -54,7 +54,16 @@ extension WorkspaceDatabaseConnection {
       if try companionVersionUnlocked(kind: "folder", id: request.resourceID) != nil {
         return try result(.conflict, "This folder ID already exists or was deleted.", folder: companionFolderUnlocked(id: request.resourceID))
       }
+      guard let binding = request.folderExecution else {
+        return result(.invalid, "Create the folder in an execution workspace with a bound directory. Update older clients before creating folders.")
+      }
+      let location = WorkspaceFolderLocation(workspaceID: binding.workspaceID, rootPath: binding.rootPath, managed: false)
+      guard (try? validateExecutionLocation(location)) != nil else {
+        return result(.invalid, "A folder needs a valid execution workspace and absolute directory.")
+      }
       try companionExecuteUnlocked("INSERT INTO folders(id, user_id, name, position, created_at, updated_at) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM folders), ?, ?)", values: [request.resourceID, operatorID, title, now, now])
+      try companionExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,0)",
+        values: [request.resourceID, binding.workspaceID, binding.rootPath])
       return try result(.accepted, folder: companionFolderUnlocked(id: request.resourceID))
     case .renameFolder, .deleteFolder:
       guard let folder = try companionFolderUnlocked(id: request.resourceID) else { return result(.notFound, "The folder was deleted. Your writing is retained on this device.") }

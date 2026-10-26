@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -37,7 +38,7 @@ struct ACPStopFailureTests {
             directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-            id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Stop fixture", ownerDeviceID: UUID())
+            id = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Stop fixture", ownerDeviceID: UUID())
             let state = State()
             self.state = state
             coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in

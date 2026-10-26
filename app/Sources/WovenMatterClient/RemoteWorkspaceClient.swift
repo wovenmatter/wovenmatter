@@ -26,7 +26,7 @@ public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable
     public let hostName: String
     public let displayName: String
     public let online: Bool
-    /// Preserve the SSH alias separately from the DNS name required for HTTPS.
+    /// Keep the Tailnet short name and the DNS name required for private HTTPS.
     public let dnsName: String?
 
     public var id: String { hostName }
@@ -115,7 +115,8 @@ public enum RemoteHarnessLaunchResolver {
         processWorkingDirectory: URL,
         workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
         workingDirectory: URL? = nil,
-        durableChannelID: String? = nil
+        durableChannelID: String? = nil,
+        tailnetSSHOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
     ) throws -> RemoteHarnessLaunchContext {
         let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
@@ -173,7 +174,7 @@ public enum RemoteHarnessLaunchResolver {
             command.append(contentsOf: harness.arguments)
         }
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
-        let sshArguments = [
+        let sshArguments = try tailnetSSHOptions(destination) + [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
         ]
         var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
@@ -392,13 +393,7 @@ public enum RemoteWorkspaceLifecycleAction: String, Sendable {
 
 public enum RemoteMachineDiscovery {
     public static func tailnetMachines() throws -> [RemoteMachineCandidate] {
-        guard let executable = [
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-            "/usr/local/bin/tailscale",
-            "/opt/homebrew/bin/tailscale",
-        ].first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            return []
-        }
+        let executable = try RemoteWorkspaceTailnet.executable()
         let result = try RemoteWorkspaceProcess.run(
             executable: executable,
             arguments: ["status", "--json"]
@@ -411,18 +406,19 @@ public enum RemoteMachineDiscovery {
 
     static func decodeTailnetMachines(from data: Data) throws -> [RemoteMachineCandidate] {
         let document = try JSONSerialization.jsonObject(with: data)
-        guard let root = document as? [String: Any],
+        guard let root = document as? [String: Any], root["BackendState"] as? String == "Running",
               let peers = root["Peer"] as? [String: Any]
-        else { return [] }
+        else { throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.") }
         return peers.values.compactMap { value in
-            guard let peer = value as? [String: Any] else { return nil }
+            guard let peer = value as? [String: Any], peer["Online"] as? Bool == true,
+                  peer["Expired"] as? Bool != true else { return nil }
             let dnsName = (peer["DNSName"] as? String)?
                 .trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let shortName = (peer["HostName"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let preferredName = shortName.flatMap { $0.isEmpty ? nil : $0 }
-            // Prefer the name shown by Tailscale. It can match an existing SSH
-            // Host entry, preserving its username, identity, and trust settings.
+            // SSH config still selects the user and identity. The transport is
+            // always pinned to this peer through the local Tailscale daemon.
             let hostName = preferredName ?? dnsName
             guard let hostName, !hostName.isEmpty else { return nil }
             return RemoteMachineCandidate(
@@ -567,7 +563,10 @@ public actor RemoteWorkspaceSSHClient {
         let result = try decode(Result.self, from: runScript(
             hostName: configuration.hostName, userName: configuration.userName,
             arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
-        guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true else {
+        guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true,
+              result.endpoint.port == httpsPort, result.endpoint.user == nil, result.endpoint.password == nil,
+              result.endpoint.query == nil, result.endpoint.fragment == nil,
+              result.endpoint.path == "/wovenmatter-execution/\(configuration.workspaceID)" else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace did not return a private Tailscale endpoint.")
         }
         return result.endpoint
@@ -794,7 +793,7 @@ public actor RemoteWorkspaceSSHClient {
     ) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/ssh",
-            arguments: [
+            arguments: try RemoteWorkspaceTailnet.sshOptions(destination: destination) + [
                 "-T",
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
@@ -859,6 +858,9 @@ public actor RemoteWorkspaceSSHClient {
             arguments: [
                 "--no-mac-metadata", "-czf", "-",
                 "--exclude=.DS_Store",
+                "--exclude=*/node_modules",
+                "--exclude=*/.env",
+                "--exclude=*/.env.*",
                 "--exclude=remote/test",
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
@@ -880,7 +882,8 @@ public actor RemoteWorkspaceSSHClient {
 
 public actor RemoteWorkspaceTunnel {
     private var process: Process?
-    private var configurationID: UUID?
+    private var activeConfiguration: RemoteWorkspaceConfiguration?
+    private var activeSSHOptions: [String]?
     public private(set) var localPort: Int?
 
     public init() {}
@@ -890,8 +893,19 @@ public actor RemoteWorkspaceTunnel {
         localPort: Int,
         readinessProbe: @escaping @Sendable (Int) async -> Bool
     ) async throws {
+        // Revalidate the peer even when reusing a healthy tunnel.
+        let destination: String
+        let tailnetOptions: [String]
+        do {
+            destination = try RemoteWorkspaceSSHClient.validatedDestination(
+                hostName: configuration.hostName, userName: configuration.userName)
+            tailnetOptions = try RemoteWorkspaceTailnet.sshOptions(destination: destination)
+        } catch {
+            stop()
+            throw error
+        }
         if process?.isRunning == true,
-           configurationID == configuration.id,
+           activeConfiguration == configuration, activeSSHOptions == tailnetOptions,
            let activePort = self.localPort {
             if await readinessProbe(activePort) { return }
         }
@@ -902,17 +916,13 @@ public actor RemoteWorkspaceTunnel {
         guard (1024...65535).contains(configuration.remotePort) else {
             throw RemoteWorkspaceClientError.invalidPort
         }
-        let destination = try RemoteWorkspaceSSHClient.validatedDestination(
-            hostName: configuration.hostName,
-            userName: configuration.userName
-        )
         var lastFailure = "The SSH loopback tunnel could not be opened."
         for offset in 0..<20 {
             let candidate = 40_000 + ((localPort - 40_000 + offset) % 20_000)
             let candidateProcess = Process()
             let errors = Pipe()
             candidateProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            candidateProcess.arguments = [
+            candidateProcess.arguments = tailnetOptions + [
                 "-N", "-T",
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
@@ -933,7 +943,8 @@ public actor RemoteWorkspaceTunnel {
                 }
                 if await readinessProbe(candidate) {
                     process = candidateProcess
-                    configurationID = configuration.id
+                    activeConfiguration = configuration
+                    activeSSHOptions = tailnetOptions
                     self.localPort = candidate
                     return
                 }
@@ -964,7 +975,8 @@ public actor RemoteWorkspaceTunnel {
     public func stop() {
         process?.terminate()
         process = nil
-        configurationID = nil
+        activeConfiguration = nil
+        activeSSHOptions = nil
         localPort = nil
     }
 }
@@ -1050,10 +1062,18 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     private let token: String
     private let session: URLSession
 
-    public init(baseURL: URL, token: String, session: URLSession = .shared) {
+    private static let loopbackSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+
+    public init(baseURL: URL, token: String, session: URLSession? = nil) {
         self.baseURL = baseURL
         self.token = token
-        self.session = session
+        self.session = session ?? Self.loopbackSession
     }
 
     public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
@@ -1295,6 +1315,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         body: Data?,
         queryItems: [URLQueryItem]? = nil
     ) async throws -> Value {
+        guard baseURL.scheme == "http", baseURL.host == "127.0.0.1",
+              baseURL.user == nil, baseURL.password == nil, baseURL.query == nil, baseURL.fragment == nil else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace API must use its local Tailscale SSH tunnel.")
+        }
         let endpoint = baseURL.appending(path: path)
         guard var components = URLComponents(
             url: endpoint,
@@ -1315,7 +1339,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: RemoteWorkspaceRedirectPolicy.shared)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
@@ -1461,7 +1485,7 @@ public enum RemoteWorkspaceClientError: LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidHost: "Enter a valid SSH hostname, IP address, or SSH config alias."
+        case .invalidHost: "Enter a Tailscale machine name, MagicDNS name, or Tailscale IP address."
         case .invalidUser: "Enter a valid remote username (letters, digits, dot, underscore, or hyphen) or leave it blank for SSH configuration."
         case .invalidPort: "The remote loopback port must be between 1024 and 65535."
         case .invalidWorkspaceID: "Use 1-48 lowercase letters, digits, or hyphens for the workspace ID, beginning with a letter or digit."
@@ -1612,5 +1636,16 @@ extension RemoteWorkspaceServiceClient {
 extension RemoteWorkspaceServiceClient {
     public func deleteProject(path: String) async throws -> RemoteProjectDirectory {
         try await request(path: "v1/projects/delete", method: "POST", body: JSONEncoder().encode(["path": path]))
+    }
+}
+
+// A compromised service must not redirect administrative credentials or request
+// bodies from the loopback tunnel to another origin or another local service.
+private final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    static let shared = RemoteWorkspaceRedirectPolicy()
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

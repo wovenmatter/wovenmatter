@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -11,7 +12,7 @@ struct PersistenceBehaviorTests {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversationID = try await database.createLocalACPSession(
+    let conversationID = try await database.createFixtureLocalACPSession(
       runtimeKind: .codex, title: "History", ownerDeviceID: UUID()
     )
     let run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Hello")

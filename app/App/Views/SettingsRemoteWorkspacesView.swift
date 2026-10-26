@@ -338,7 +338,7 @@ struct SettingsRemoteWorkspacesView: View {
                 TextField("remote-workspace-id", text: $workspaceID)
                     .settingsInput()
             }
-            SettingsField("SSH hostname") {
+            SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .settingsInput()
             }
@@ -346,7 +346,7 @@ struct SettingsRemoteWorkspacesView: View {
                 TextField("Resolved by SSH config", text: $userName)
                     .settingsInput()
             }
-            SettingsNote("Uses your SSH agent. Woven Matter does not store SSH keys.")
+            SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Observation
 import Testing
@@ -26,7 +27,7 @@ struct WorkspaceAgentToolsServiceTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
         var seen: [String] = []
         let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
@@ -111,8 +112,8 @@ extension WorkspaceAgentToolsServiceTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
-        let historian = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Historian", ownerDeviceID: UUID())
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+        let historian = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Historian", ownerDeviceID: UUID())
         try await database.setSessionTools(.init(enabled: [.history]), sessionID: historian)
         let model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
@@ -222,8 +223,8 @@ private struct ToolSnapshotFixture {
         root = FileManager.default.temporaryDirectory.appending(path: "wm-tool-snapshot-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        target = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Target", ownerDeviceID: UUID())
+        caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
+        target = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Target", ownerDeviceID: UUID())
         model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },
@@ -243,7 +244,7 @@ extension WorkspaceAgentToolsServiceTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
         @MainActor final class ResolutionState {
             var count = 0
             var editsEvent = false
@@ -430,7 +431,7 @@ extension WorkspaceAgentToolsServiceTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let caller = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Goals", ownerDeviceID: UUID())
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Goals", ownerDeviceID: UUID())
         let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})

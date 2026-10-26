@@ -32,6 +32,9 @@ struct CompanionToolBridgeTests {
       eventRevision: event.calendar.revision, nativeSessionID: nil), principal: principal)
     #expect(Set(scope) == savedTask.configuration.tools.enabled)
     #expect(try await fixture.database.companionExecutionOwner(conversationID: run.sessionID) == nil)
+    let capturedRoot = try await fixture.database.availableSessionExecutionRoot(id: run.sessionID)
+    #expect(capturedRoot.workspaceID == "remote:" + workspace.id)
+    #expect(capturedRoot.rootPath == savedTask.configuration.nativeWorkingDirectory)
     var call = fixture.request(["notes", "create", "--title", "Prepared"]); call.conversationID = run.sessionID
     await #expect(throws: (any Error).self) {
       try await fixture.database.authorizeCompanionTool(call, deviceID: executor)
