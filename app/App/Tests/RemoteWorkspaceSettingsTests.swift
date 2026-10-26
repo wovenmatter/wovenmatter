@@ -9,7 +9,7 @@ struct RemoteWorkspaceSettingsTests {
     @Test func remoteToolBridgeUsesTheTailnetTransport() throws {
         let arguments = try WovenMCPRemoteBridge.sshArguments(
             destination: "woven@worker",
-            command: "docker exec fixture",
+            command: "wm-exec fixture",
             tailnetOptions: { destination in
                 #expect(destination == "woven@worker")
                 return ["-o", "ProxyCommand=fixture-tailnet-transport"]
@@ -18,7 +18,7 @@ struct RemoteWorkspaceSettingsTests {
         #expect(arguments.starts(with: ["-o", "ProxyCommand=fixture-tailnet-transport", "-T"]))
         #expect(arguments.contains("BatchMode=yes"))
         #expect(arguments.contains("ServerAliveInterval=15"))
-        #expect(arguments.suffix(2) == ["woven@worker", "docker exec fixture"])
+        #expect(arguments.suffix(2) == ["woven@worker", "wm-exec fixture"])
     }
 
     @Test func legacyDisabledPreferenceDoesNotGateWorkspaceManagement() throws {
@@ -26,7 +26,7 @@ struct RemoteWorkspaceSettingsTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(false, forKey: "wovenmatter.remote-workspaces.credential-access-enabled")
-        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
+        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
         defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         #expect(model.workspaces == [workspace])
@@ -48,7 +48,7 @@ struct RemoteWorkspaceSettingsTests {
         let suite = "remote-setup-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
+        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
         defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         #expect(model.pendingHarnessSetupIDs.isEmpty)

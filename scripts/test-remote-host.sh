@@ -103,6 +103,12 @@ const journal=execFileSync('journalctl',['--user','-u','wovenmatter.service','-n
 assert.ok(!processes.includes(settings.WOVENMATTER_API_TOKEN),'A process argument exposed the service credential.');
 assert.ok(!journal.includes(settings.WOVENMATTER_API_TOKEN),'The journal exposed the service credential.');
 checks.push('private directories/environment + no credential in process arguments or journal');
+const competingOwner=spawnSync(join(root,'current/bin/wm-exec'),[
+ 'exec',join(root,'node/current/bin/node'),join(root,'current/src/server.mjs'),
+],{encoding:'utf8',timeout:15000});
+assert.notEqual(competingOwner.status,0,'A second service acquired the active workspace owner lock.');
+assert.match(competingOwner.stderr,/runtime_active_or_operation_in_progress|runtime.*lock|owner/i,'Competing startup failed for a reason other than ownership.');
+checks.push('second service cannot acquire the durable execution owner lock');
 if(process.argv[3]==='--offline-sync') {
  const {createClientExecution}=await import(pathToFileURL(join(root,'current/src/client-execution.mjs')).href);
  const directory=mkdtempSync(join(tmpdir(),'wovenmatter-host-offline-'));

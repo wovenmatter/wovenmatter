@@ -39,7 +39,20 @@ struct RemoteHostLiveValidationTests {
                 hostName: host, userName: user, kind: .host, accessMode: .fullRoot),
                 token: UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
         }
-        let client = RemoteWorkspaceSSHClient()
+        let client: RemoteWorkspaceSSHClient
+        if let bundlePath = environment["WOVENMATTER_LIVE_HOST_BUNDLE_ROOT"] {
+            let bundleRoot = URL(fileURLWithPath: bundlePath, isDirectory: true)
+            client = RemoteWorkspaceSSHClient(runner: RemoteWorkspaceSSHClient.runSSH,
+                scriptLoader: { try Data(contentsOf: bundleRoot.appending(path: "remote-workspace.sh")) },
+                deploymentRoot: bundleRoot,
+                streamingRunner: { destination, command, input, progress in
+                    try RemoteWorkspaceSSHClient.runSSH(destination: destination, command: command, input: input,
+                        timeLimit: nil, onStandardError: progress)
+                },
+                hostScriptLoader: { try Data(contentsOf: bundleRoot.appending(path: "scripts/remote-host.sh")) })
+        } else {
+            client = RemoteWorkspaceSSHClient()
+        }
         var inspection = try await client.preflight(hostName: host, userName: user, kind: .host, accessMode: .fullRoot)
         if !inspection.ready {
             print("Host preparation actions: " + (inspection.requiredPrivilegedActions ?? inspection.preparationActions ?? []).joined(separator: "\n"))

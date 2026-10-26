@@ -60,7 +60,10 @@ sudo policy or the AppArmor user-namespace sysctl.
 The package records are in `remote/host/deps/`. Preparation runs only commands
 reported by inspection: `loginctl enable-linger USER`, the appropriate APT or
 pacman commands for missing packages, and, when necessary, installation and
-`apparmor_parser -r` of `/etc/apparmor.d/wovenmatter-chromium-UID`.
+`apparmor_parser -r` of `/etc/apparmor.d/wovenmatter-chromium-UID`. When private
+Serve needs it, preparation also runs `tailscale set --operator=USER` through
+sudo. Inspection checks the actual operator identity rather than assuming
+readable Serve status permits configuration changes.
 The AppArmor template covers versioned managed browser paths, so ordinary
 browser updates do not require a new privileged allowance.
 
@@ -73,6 +76,12 @@ the committed SHA-256 values. The locked npm graph is installed with
 `npm ci --omit=dev --ignore-scripts` **on Linux**, so optional native SDKs match
 the target architecture instead of the Mac. Playwright's version must match
 `default-agent/package-lock.json`.
+
+Each candidate release also has private npm tooling with the same security
+floor and frozen vendor replacements used by the image build. Host maintenance
+invokes that npm with the pinned Node explicitly, and SDK updates bind to the
+same tooling. System npm and the shared verified Node archive are untouched;
+rolling back `current` restores the prior release's private tooling.
 
 All paths below belong to the SSH account. Managed private directories use
 0700; `service.env` uses 0600.
@@ -155,6 +164,9 @@ remote workspace UI. Native hosts never fall back to a container or an
 unsandboxed browser.
 
 ## Persistence, updates and removal
+
+See [validation and manual review](REMOTE_HOST_VALIDATION.md) for reproducible
+provider-free tests, actual workstation evidence and untested configurations.
 
 The existing SQLite execution owner, durable relays, publisher and outbox
 continue to own work on Linux. Dropping the Mac connection does not move
