@@ -103,10 +103,10 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
             # with a new owner and blank directory inside this disposable instance.
             owner = "device:" + device_id
             for (folder_id,) in db.execute("SELECT folder_id FROM folder_execution_roots WHERE workspace_id=?", ("device:" + source_device[0],)).fetchall():
-                directory = execution_root / "projects" / str(uuid.UUID(folder_id))
+                directory = execution_root / str(uuid.UUID(folder_id))
                 directory.mkdir(parents=True)
                 db.execute("UPDATE folder_execution_roots SET workspace_id=?,root_path=?,managed=1,reference_paths='[]' WHERE folder_id=?",
-                           (owner, str(published_root / "projects" / str(uuid.UUID(folder_id))), folder_id))
+                           (owner, str(published_root / str(uuid.UUID(folder_id))), folder_id))
         transient = {"desktop_local_identity", "desktop_local_acp_sessions", "desktop_local_acp_durable_runs",
                      "desktop_opencode_sessions", "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
                      "desktop_openclaw_gateway_sessions", "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs",
