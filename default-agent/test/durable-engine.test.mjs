@@ -45,6 +45,35 @@ async function fixture(t, options = {}) {
   return { root, open, engine: await open() };
 }
 
+test('an existing Durable conversation uses the current search provider and rotated key between turns', async t => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url, ...options });
+    const source = { title: 'Fixture source', url: 'https://example.com/source' };
+    return { ok: true, json: async () => ({ results: [{ ...source, text: 'Exa fixture' }],
+      grounding: { generic: [{ ...source, snippets: ['Brave fixture'] }] },
+      success: true, data: { web: [{ ...source, markdown: 'Firecrawl fixture' }] } }) };
+  });
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  for (const [index, provider] of ['exa', 'brave', 'firecrawl', 'brave'].entries()) {
+    await engine.apply({ config: { ...engine.config, searchProvider: provider },
+      credentials: { [provider]: { type: 'api_key', key: `${provider}-fixture-${index}` } } });
+    let calls = 0;
+    record.streamFunction = model => stream(model, ++calls === 1
+      ? [{ type: 'toolCall', id: `search-${index}`, name: 'web_search', arguments: { query: 'Fixture question' } }]
+      : [{ type: 'text', text: 'Searched' }]);
+    assert.equal((await engine.prompt(record, 'Search the fixture', () => {})).stopReason, 'end_turn');
+    const result = record.session.messages.find(message => message.role === 'toolResult' && message.toolCallId === `search-${index}`);
+    assert.equal(result?.isError, false);
+    assert.equal(JSON.parse(result.content[0].text).results[0].url, 'https://example.com/source');
+    const request = requests.at(-1);
+    assert.equal(request.headers[provider === 'exa' ? 'x-api-key' : provider === 'brave' ? 'X-Subscription-Token' : 'Authorization'],
+      `${provider === 'firecrawl' ? 'Bearer ' : ''}${provider}-fixture-${index}`);
+  }
+  assert.equal(requests.length, 4);
+});
+
 test('native owner lock excludes a second runtime and released identities can reopen', async t => {
   const { engine, open } = await fixture(t);
   const record = await engine.create(), other = await open();

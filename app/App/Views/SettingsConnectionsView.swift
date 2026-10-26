@@ -16,7 +16,7 @@ enum ConnectionSettingsFocus {
     var detail: String {
         switch self {
         case .providers: "Sign in or add API keys for one or more providers."
-        case .webSearch: "Add an Exa API key so Pi Durable can search the web."
+        case .webSearch: "Add an Exa, Brave, or Firecrawl API key so Pi Durable can search the web."
         }
     }
 }
@@ -63,11 +63,14 @@ struct SettingsConnectionsView: View {
                     .background(theme.palette.themeWhisper)
                     .clipShape(DashboardShapes.card)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Exa API key").font(.system(size: 13, weight: .medium))
-                    connectionContent("exa")
+                VStack(spacing: 0) {
+                    ForEach(ProviderConnectionID.searchProviders) { provider in
+                        if provider != .exa { providerDivider }
+                        providerRow(provider.name, detail: "API keys") {
+                            connectionContent(provider.id).padding(.leading, 12)
+                        }
+                    }
                 }
-                .padding(16)
                 .background(theme.palette.themeWhisper)
                 .clipShape(DashboardShapes.card)
             }
@@ -129,6 +132,9 @@ struct SettingsConnectionsView: View {
         case "Anthropic": ids = ["claude-subscription", "anthropic"]
         case "Grok · xAI": ids = ["xai", "xai-api"]
         case "OpenRouter": ids = ["openrouter"]
+        case "Exa search": ids = ["exa"]
+        case "Brave Search": ids = ["brave"]
+        case "Firecrawl": ids = ["firecrawl"]
         default: ids = ["opencode-go"]
         }
         let accounts = ids.flatMap { agent.effectiveAccounts[$0] ?? [] }
@@ -211,14 +217,14 @@ struct SettingsConnectionsView: View {
             if focus != .webSearch {
                 TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).settingsInput().frame(maxWidth: 180)
             }
-            SecureField(id == "exa" ? "Enter Exa API key" : "Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
+            SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .settingsInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in
                     guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
                     keyDrafts[id] = nil
                     keyLabels[id] = nil
-                    if let onConnected, id != "exa" { onConnected(id) }
+                    if let onConnected, ProviderConnectionID(rawValue: id)?.isSearchProvider != true { onConnected(id) }
                     else { agent.refresh(remote: remote) }
                 }
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
