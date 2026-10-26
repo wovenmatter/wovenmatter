@@ -1,16 +1,23 @@
 # Remote workspace image findings — 2026-10-26
 
-Both Linux images were rebuilt from scratch with current package indexes and
-scanned from Docker image exports with the checksum-verified official Trivy
+The last completed image-audit baseline rebuilt both Linux images from scratch
+and scanned Docker image exports with the checksum-verified official Trivy
 0.76.1 release. OS and language vulnerability scanners were enabled. No
-advisory, severity, or unfixed record was suppressed.
+advisory, severity, or unfixed record was suppressed. The current source adds
+the later curl 8.23.0 repair and exact Python 3.15.2 security build; CI retains a
+new unsuppressed JSON inventory for every amd64 image build.
 
-## Results
+## Last completed raw baseline
 
 | Image | Raw critical | Raw high | Medium | Low | Unknown |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Workspace | 1 | 81 | 201 | 312 | 10 |
 | Executor | 0 | 54 | 114 | 209 | 5 |
+
+These numbers are the preserved pre-final baseline, not an assertion that a
+future rebuild will have identical raw totals. Scanner databases, Debian package
+indexes, and the final source-built Python inventory can change the record count.
+The disposition below is the security review of the current runtime contents.
 
 These are scanner records, not the count of exploitable vulnerabilities left in
 the running images. Trivy compares Debian package version strings and embedded
