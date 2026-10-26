@@ -26,6 +26,12 @@ final class CompanionUITests: XCTestCase {
           previousGeometry = nil
           return false
         }
+        // Rotation can temporarily detach the accessibility subtree. Avoid
+        // frame lookups that retry internally while those rows are absent.
+        guard sidebar.allSatisfy(\.exists) else {
+          previousGeometry = nil
+          return false
+        }
         let bounds = window.frame
         let rows = sidebar.map(\.frame)
         guard sidebar.allSatisfy(\.isHittable), rows.allSatisfy({
