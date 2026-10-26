@@ -17,10 +17,9 @@ remote/npm-runtime/**
 harnesses/**
 !harnesses/catalog.json
 !harnesses/initialize-workspace.sh
-!harnesses/cli/
-!harnesses/cli/**
-!harnesses/hermes-delivery/
-!harnesses/hermes-delivery/**
+!harnesses/mcp/
+!harnesses/mcp/**
+!harnesses/woven-instructions.txt
 !default-agent/
 default-agent/**
 !default-agent/package.json
