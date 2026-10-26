@@ -13,6 +13,7 @@ import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 
 const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
+const npmInvocation = (command, action) => command.startsWith('npm ' + action) || command.includes("/npm-cli.js' " + action)
 
 const opencode = {id:'opencode',displayName:'OpenCode',command:'opencode',cliCommand:'opencode',install:{kind:'npm-global',package:'@opencode/cli@2'}}
 async function fixture(t, overrides = {}) {
@@ -26,7 +27,7 @@ async function fixture(t, overrides = {}) {
       if(command==='ps -eo pid=,args=') return {code:0,output:''}
       if(command.startsWith('command -v')) return {code:installed?0:1,output:root+'/opencode'}
       if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
-      if(command.startsWith('npm install')) { executions++; installed=true; return {code:0,output:'installed'} }
+      if(npmInvocation(command,'install')) { executions++; installed=true; return {code:0,output:'installed'} }
       throw Error('Unexpected command: '+command)
     },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>registryMetadata('2.1.1')}},...overrides}
   return {root,service:createRuntimeMaintenance(options),options,calls,install:()=>{installed=true},get executions(){return executions},get requests(){return requests}}
@@ -286,8 +287,8 @@ test('host installs a missing adapter alongside an active system CLI and blocks 
       if (command === 'ps -eo pid=,args=') return { code: 0, output: '5471 /usr/bin/codex resume\n' + (activeAdapter ? '6001 node ' + resolve(adapter, 'bin/cli.js') : '') }
       if (command.startsWith('command -v')) return command.includes("'codex-acp'") ? { code: installed ? 0 : 1, output: installed ? bin : '' } : { code: 0, output: '/usr/bin/codex' }
       if (command.endsWith('--version')) return { code: 0, output: command.includes('codex-acp') ? '2.3.1' : '0.154.0' }
-      if (command.startsWith('npm install')) {
-        assert.equal(command, 'npm install --global --prefix "$HOME/.local" \'@agentclientprotocol/codex-acp@2.3.1\'')
+      if (npmInvocation(command, 'install')) {
+        assert.equal(command, `'${process.execPath}' '${configuration.serviceRoot}/tooling/lib/node_modules/npm/bin/npm-cli.js' install --global --prefix "$HOME/.local" '@agentclientprotocol/codex-acp@2.3.1'`)
         await mkdir(resolve(adapter, 'bin'), { recursive: true }); await mkdir(resolve(dependency, 'bin'), { recursive: true }); await mkdir(resolve(root, '.local/bin'), { recursive: true })
         await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: h.adapterPackage, version: '2.3.1' }))
         await writeFile(resolve(adapter, 'bin/cli.js'), '')
@@ -308,12 +309,12 @@ test('host installs a missing adapter alongside an active system CLI and blocks 
   assert.equal(result.components.find(c => c.id === 'runtime').source, 'managed')
   assert.equal(result.components.find(c => c.id === 'signin').source, 'system')
   assert.equal(scripts, 0)
-  assert.equal(calls.filter(command => command.startsWith('npm install')).length, 1)
+  assert.equal(calls.filter(command => npmInvocation(command, 'install')).length, 1)
   activeAdapter = true
   await service.start(h, 'update', { confirmed: true, packageSpec: preview.packageSpec })
   const blocked = await finished(service)
   assert.equal(blocked.operation.error, 'runtime_active_stop_conversations_or_server_first')
-  assert.equal(calls.filter(command => command.startsWith('npm install')).length, 1)
+  assert.equal(calls.filter(command => npmInvocation(command, 'install')).length, 1)
 })
 
 test('host keeps service-owned active sessions fenced and refuses unmanaged adapter updates', async t => {
@@ -347,7 +348,7 @@ test('host installer rc writes fail the operation and restore the original shell
     configuration: loadRuntimeConfiguration({ HOME: f.root, WOVENMATTER_RUNTIME_KIND: 'host' }),
     execute: async (...arguments_) => {
       const result = await execute(...arguments_)
-      if (arguments_[0].startsWith('npm install')) await writeFile(resolve(f.root, '.bashrc'), 'unwanted installer changes\n')
+      if (npmInvocation(arguments_[0], 'install')) await writeFile(resolve(f.root, '.bashrc'), 'unwanted installer changes\n')
       return result
     },
   })

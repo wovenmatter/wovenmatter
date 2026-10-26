@@ -28,7 +28,7 @@ class HostFixtures(unittest.TestCase):
         self.m.HOME=self.home; self.m.ROOT=self.home/'.local/share/wovenmatter'
         self.m.CONFIG=self.home/'.config/wovenmatter'; self.m.ENV_FILE=self.m.CONFIG/'service.env'
         self.m.UNIT=self.home/'.config/systemd/user/wovenmatter.service'; self.m.RECORD=self.m.ROOT/'installation.json'
-        self.calls=[]; self.active=True; self.enabled=True; self.fail_selftest=False
+        self.calls=[]; self.active=True; self.enabled=True; self.fail_selftest=False; self.bad_npm_vendor=False; self.tail_operator=self.m.pwd.getpwuid(self.actual_uid).pw_name
         self.patchers=[mock.patch.object(self.m,'run',side_effect=self.command),
             mock.patch.object(self.m.platform,'system',return_value='Linux'),mock.patch.object(self.m.platform,'machine',return_value='x86_64'),
             mock.patch.object(self.m.os,'getuid',return_value=self.actual_uid),mock.patch.object(self.m,'inventory',return_value=[])]
@@ -39,7 +39,10 @@ class HostFixtures(unittest.TestCase):
         self.temp.cleanup()
     def command(self,args,**kwargs):
         args=[str(a) for a in args]; self.calls.append(args); output=b''; code=0
-        if args[0]=='sudo': output=b'0\n'
+        if args[0]=='sudo':
+            if args[2:4]==['tailscale','set']:
+                self.tail_operator=args[4].removeprefix('--operator=')
+            else: output=b'0\n'
         elif args[0]=='loginctl': output=b'yes\n'
         elif args[0]=='dpkg-query': output=b'installed'
         elif args[0]=='systemctl':
@@ -53,7 +56,18 @@ class HostFixtures(unittest.TestCase):
         elif args[0]=='tailscale':
             if args[1]=='status': output=json.dumps({'BackendState':'Running','Self':{'DNSName':'fixture.test.ts.net.'}}).encode()
             elif args[1:3]==['serve','status']: output=b'{}'
+            elif args[1:3]==['debug','prefs']: output=json.dumps({'OperatorUser':self.tail_operator}).encode()
         elif args[0]=='journalctl': output=('one '+TOKEN+' line').encode()
+        elif 'install' in args and '--global' in args and 'npm@>=12.2.1' in args:
+            prefix=Path(args[args.index('--prefix')+1]); npm=prefix/'lib/node_modules/npm'
+            (npm/'bin').mkdir(parents=True); (npm/'node_modules/undici').mkdir(parents=True)
+            (npm/'package.json').write_text(json.dumps({'version':'12.2.1'})); (npm/'bin/npm-cli.js').write_text('fixture')
+            (npm/'node_modules/undici/package.json').write_text(json.dumps({'version':'6.29.0'}))
+        elif 'ci' in args and '--prefix' in args and args[args.index('--prefix')+1].endswith('/npm-runtime'):
+            prefix=Path(args[args.index('--prefix')+1]); graph=json.loads((prefix/'package-lock.json').read_text())['packages']
+            for name in ('undici','ip-address'):
+                target=prefix/'node_modules'/name; target.mkdir(parents=True)
+                (target/'package.json').write_text(json.dumps({'version':'0.0.0' if self.bad_npm_vendor else graph['node_modules/'+name]['version']}))
         elif args[-1]=='--version': output=b'v26.12.1\n'
         elif args[-1]=='--json': output=json.dumps({'ok':not self.fail_selftest,'reason':'sandbox_blocked' if self.fail_selftest else None,'missingLibraries':[],'hint':'Fixture sandbox blocked.' if self.fail_selftest else ''}).encode(); code=int(self.fail_selftest)
         return subprocess.CompletedProcess(args,code,output,b'')
@@ -136,7 +150,9 @@ class HostFixtures(unittest.TestCase):
         versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
             'default-agent/package-lock.json':json.dumps({'packages':{'node_modules/playwright-core':{'version':'1.64.1'}}}).encode(),
-            'src/server.mjs':b'fixture'}
+            'src/server.mjs':b'fixture',
+            'npm-runtime/package.json':(ROOT/'remote/npm-runtime/package.json').read_bytes(),
+            'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
         digest=hashlib.sha256(); records={}
         for name,data in sorted(files.items()):
             source=name if name.startswith('default-agent/') else 'remote/'+name
@@ -158,15 +174,27 @@ class HostFixtures(unittest.TestCase):
             os.dup2(source.fileno(),3)
             result=self.m.install('fixture','7337','fullRoot',fp)
             self.assertEqual(result['fingerprint'],fp); self.assertEqual(result['state'],'running')
-            before={p:p.read_bytes() for p in (self.m.ENV_FILE,self.m.UNIT,self.m.RECORD)}
+            before={p:p.read_bytes() for p in (self.m.ENV_FILE,self.m.UNIT,self.m.RECORD,self.m.ROOT/'run/browser-selftest.json')}
             links={p:os.readlink(p) for p in (self.m.ROOT/'current',self.m.ROOT/'node/current',self.m.ROOT/'browsers/current')}
             self.assertIn(b'NoNewPrivileges=no',before[self.m.UNIT])
+            tooling=self.m.ROOT/'current/tooling/lib/node_modules/npm'
+            graph=json.loads((ROOT/'remote/npm-runtime/package-lock.json').read_text())['packages']
+            for name in ('undici','ip-address'):
+                self.assertEqual(json.loads((tooling/'node_modules'/name/'package.json').read_text())['version'],graph['node_modules/'+name]['version'])
+            self.assertEqual((self.m.ROOT/'current/default-agent/lib/npm').resolve(),tooling.resolve())
+            node_file=self.m.ROOT/'node/26.12.1/bin/node'; before_node=node_file.read_bytes()
+            before_tooling=(self.m.ROOT/'current/tooling/security.json').read_bytes()
+            for call in self.calls:
+                if 'npm@>=12.2.1' in call: self.assertNotIn(str(self.m.ROOT/'node/26.12.1'),call[call.index('--prefix')+1])
             # Update may reuse the existing credential with an empty first line.
             stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''; self.fail_selftest=True
             with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
             self.assertEqual(error.exception.code,'browser_selftest_failed')
             self.assertEqual(before,{p:p.read_bytes() for p in before}); self.assertEqual(links,{p:os.readlink(p) for p in links})
             self.assertTrue(self.active); self.assertTrue(self.enabled)
+            self.assertTrue(self.m.status('fixture')['browserSelfTest']['ok'])
+            self.assertEqual(node_file.read_bytes(),before_node)
+            self.assertEqual((self.m.ROOT/'current/tooling/security.json').read_bytes(),before_tooling)
             self.fail_selftest=False; (self.m.ROOT/'current/src/server.mjs').write_text('corrupted')
             source.seek(0); self.m.TOKEN=''
             with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
@@ -175,6 +203,25 @@ class HostFixtures(unittest.TestCase):
         finally:
             if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
             source.close()
+    def test_incorrect_npm_vendor_is_rejected_before_activation(self):
+        release=self.home/'candidate'; release.mkdir()
+        prefix=release/'npm-runtime'; prefix.mkdir()
+        (prefix/'package-lock.json').write_bytes((ROOT/'remote/npm-runtime/package-lock.json').read_bytes())
+        self.bad_npm_vendor=True
+        with self.assertRaises(self.m.Failure) as error:
+            self.m.prepare_npm_tooling(self.home/'immutable-node',release,{})
+        self.assertEqual(error.exception.code,'npm_security_verification_failed')
+    def test_readable_serve_status_does_not_hide_missing_operator_and_prepare_is_idempotent(self):
+        self.tail_operator=''; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
+        with mock.patch.object(self.m.shutil,'which',return_value='/usr/bin/tailscale'):
+            actions=self.m.privileged_actions(self.m.os_release())
+            expected=['tailscale','set','--operator='+self.m.pwd.getpwuid(self.actual_uid).pw_name]
+            self.assertEqual(actions,[expected])
+            self.assertTrue(self.m.inspect()['preparationRequired'])
+            result=self.m.prepare('AUTHORIZED','user')
+            self.assertTrue(result['prepared']); self.assertTrue(result['tailscaleOperatorReady'])
+            self.assertEqual(self.m.privileged_actions(self.m.os_release()),[])
+            self.assertTrue(any(call==['sudo','-n',*expected] for call in self.calls))
     def test_ubuntu_restriction_prepares_missing_apparmor_parser(self):
         with mock.patch.object(self.m,'apparmor_restriction',return_value=1), mock.patch.object(self.m.shutil,'which',return_value=None):
             packages=self.m.dependency_packages({'ID':'ubuntu','VERSION_ID':'24.04'})

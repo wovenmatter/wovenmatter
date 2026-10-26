@@ -576,14 +576,14 @@ function installerResponse(chunks, { status = 200, url = '', headers = {} } = {}
 
 function fakeACPExecutable() {
   return `#!/usr/bin/env node
-let input = ''
-process.stdin.on('data', (data) => { input += data.toString('utf8') })
-process.stdin.on('end', () => {
-  const request = JSON.parse(input.trim())
+const { createInterface } = require('node:readline')
+if (process.argv.includes('--version')) { console.log('2.3.0'); process.exit(0) }
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line)
   process.stdout.write(JSON.stringify({
     jsonrpc: '2.0',
     id: request.id,
-    result: { protocolVersion: 2, agentInfo: { name: 'fixture' } },
+    result: { protocolVersion: 1, agentInfo: { name: 'fixture' } },
   }) + '\\n')
 })
 `
@@ -874,8 +874,8 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
-test('Claude readiness offers its stable session protocol rather than opting into draft v2', async () => {
-  for (const [id, version] of [['claude_code', 1], ['codex', 2]]) {
+test('Codex and Claude readiness offer their implemented stable session protocol', async () => {
+  for (const [id, version] of [['claude_code', 1], ['codex', 1]]) {
     const child = new EventEmitter()
     child.exitCode = null
     child.killed = false
@@ -896,6 +896,26 @@ test('Claude readiness offers its stable session protocol rather than opting int
     assert.deepEqual(result, { ready: true, error: null })
     assert.equal(initialize.params.protocolVersion, version)
   }
+})
+
+test('readiness keeps ACP input open until asynchronous initialize is acknowledged', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null; child.killed = false; child.kill = () => { child.killed = true }
+  child.stdout = new PassThrough(); child.stderr = new PassThrough()
+  child.stdin = new Writable({ write(bytes, _encoding, callback) {
+    const request = JSON.parse(bytes)
+    callback()
+    setImmediate(() => {
+      if (child.stdin.writableEnded) child.emit('close', 0)
+      else child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1 } }) + '\n')
+    })
+  } })
+  const result = await probeHarnessTransport({ id: 'codex', command: 'fixture' }, 1000, () => {
+    queueMicrotask(() => child.emit('spawn')); return child
+  })
+  assert.deepEqual(result, { ready: true, error: null })
+  assert.equal(child.stdin.destroyed, true)
+  assert.equal(child.killed, true)
 })
 
 test('readiness returns unavailable when the initialize pipe closes before its write', async () => {

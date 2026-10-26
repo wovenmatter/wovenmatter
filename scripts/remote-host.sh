@@ -182,6 +182,17 @@ def inventory(paths):
         result.append({'id':identity,'cli':components[0],'adapter':components[1],'status':status})
     return result
 
+def tailscale_operator_ready():
+    # Serve status is readable even when the account cannot change Serve. Query
+    # only the existing operator preference; never return raw preferences or
+    # credentials to the Mac, logs, or lifecycle JSON.
+    checked=run(['tailscale','debug','prefs'],timeout=10)
+    if checked.returncode: return None
+    try:
+        preferences=json.loads(checked.stdout)
+        return preferences.get('OperatorUser','')==pwd.getpwuid(os.getuid()).pw_name
+    except (ValueError,AttributeError): return None
+
 def dependency_packages(distro):
     # Kept in sync with remote/host/deps/apt-{ubuntu,debian}.txt. Bootstrap
     # inspect/prepare are self-contained and cannot trust an installed release.
@@ -215,7 +226,7 @@ def privileged_actions(distro):
         # Fixed profile content below; a stable version glob avoids sudo on updates.
         if not Path(target).exists():
             actions += [['install','-m','0644','<generated-user-Chromium-profile>',target],['apparmor_parser','-r',target]]
-    if shutil.which('tailscale') and run(['tailscale','serve','status','--json']).returncode:
+    if shutil.which('tailscale') and tailscale_operator_ready() is not True:
         actions.append(['tailscale','set','--operator='+pwd.getpwuid(os.getuid()).pw_name])
     return actions
 
@@ -242,6 +253,7 @@ def inspect(mode='user'):
         'architecture':architecture,'capabilities':{'memory':False,'swap':False},'limitations':[] if supported else ['This Linux distribution is best-effort; browser self-test verifies its libraries and sandbox.'],
         'os':{'id':distro.get('ID','unknown'),'version':distro.get('VERSION_ID','unknown')},'systemdUser':manager,'linger':linger(),
         'sudoAvailable':elevated,'apparmorRestrictUnprivilegedUserns':apparmor_restriction(),'tailscaleInstalled':bool(shutil.which('tailscale')),
+        'tailscaleOperatorReady':tailscale_operator_ready() if shutil.which('tailscale') else None,
         'scriptInstalled':bool(shutil.which('script')),'installation':installed,
         'workspaceID':installed['id'] if installed else None,'port':installed['port'] if installed else None,
         'fingerprint':installed['fingerprint'] if installed else None,'dataRoot':str(ROOT),'workspaceRoot':str(ROOT/'workspace'),
@@ -332,7 +344,8 @@ def safe_extract(archive_path,target,expected=None):
                     source=entry['sourcePath']; source_mode=entry['sourceMode']
                     if source in source_records or not isinstance(source_mode,int) or source_mode&~0o111: raise ValueError()
                     if PurePosixPath(source).is_absolute() or '..' in PurePosixPath(source).parts: raise ValueError()
-                    if source=='remote/package.json': canonical='package.json'
+                    if source in ('remote/npm-runtime/package.json','remote/npm-runtime/package-lock.json'): canonical=source[len('remote/'):]
+                    elif source=='remote/package.json': canonical='package.json'
                     elif source.startswith('remote/src/'): canonical=source[len('remote/'):]
                     elif source=='remote/host/bin/wm-exec': canonical='bin/wm-exec'
                     elif source.startswith('remote/host/'): canonical=source[len('remote/'):]
@@ -413,6 +426,52 @@ def choose_port(requested):
             except OSError: continue
     fail('loopback_port_unavailable','No free loopback port was found.',73)
 
+def prepare_npm_tooling(node_root,release,environment):
+    # The downloaded Node runtime is immutable and may be used by the active
+    # service. Build npm and its audited vendor replacements only in the new
+    # release; activation/rollback then changes npm with the existing current
+    # symlink transaction, without modifying system npm or a live Node tree.
+    tooling=release/'tooling'
+    npm_root=tooling/'lib/node_modules/npm'
+    npm_cli=npm_root/'bin/npm-cli.js'
+    node=node_root/'bin/node'
+    run([node,node_root/'lib/node_modules/npm/bin/npm-cli.js','install','--global','--prefix',tooling,
+         '--ignore-scripts','--no-audit','--no-fund','npm@>=12.2.1'],check=True,timeout=600,env=environment)
+    try:
+        npm_version=json.loads((npm_root/'package.json').read_text())['version']
+        parts=re.fullmatch(r'(\d+)\.(\d+)\.(\d+)',npm_version)
+        if not parts or tuple(map(int,parts.groups()))<(12,2,1): raise ValueError()
+    except (OSError,ValueError,KeyError,TypeError):
+        fail('npm_security_verification_failed','The private npm installer does not meet its security floor.',78)
+    run([node,npm_cli,'ci','--prefix',release/'npm-runtime','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
+    try:
+        graph=json.loads((release/'npm-runtime/package-lock.json').read_text())['packages']
+        installed={'npmVersion':npm_version}
+        for name in ('undici','ip-address'):
+            source=release/'npm-runtime/node_modules'/name
+            expected=graph['node_modules/'+name]['version']
+            if source.is_symlink() or not source.is_dir() or json.loads((source/'package.json').read_text())['version']!=expected: raise ValueError()
+            destination=npm_root/'node_modules'/name
+            if destination.is_symlink(): destination.unlink()
+            elif destination.exists(): shutil.rmtree(destination)
+            shutil.copytree(source,destination)
+            if json.loads((destination/'package.json').read_text())['version']!=expected: raise ValueError()
+            installed[name]=expected
+    except (OSError,ValueError,KeyError,TypeError):
+        fail('npm_security_verification_failed','The private npm vendor packages differ from the committed security graph.',78)
+    # Exercise the replaced modules under the actual pinned Node executable.
+    # Keep credentials out of arguments and verification output.
+    probe="import {createRequire} from 'node:module'; const require=createRequire(process.argv[1]); const undici=require('undici'); const ip=require('ip-address'); if(typeof undici.request!=='function'||typeof ip.Address6!=='function') process.exit(1)"
+    checked=run([node,'--input-type=module','-e',probe,npm_cli],timeout=30,env=environment)
+    if checked.returncode: fail('npm_security_verification_failed','The private npm security packages failed their runtime API check.',78)
+    # SDK maintenance already prefers this bundled location over Node's stock
+    # npm. The relative link remains correct when the release is activated.
+    sdk_npm=release/'default-agent/lib/npm'
+    sdk_npm.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    sdk_npm.symlink_to('../../tooling/lib/node_modules/npm')
+    private_file(tooling/'security.json',json.dumps(installed,sort_keys=True).encode()+b'\n')
+    return npm_cli
+
 def install(workspace_id,requested_port,mode,fingerprint,updating=False):
     global TOKEN
     valid_id(workspace_id); requested_port=valid_port(requested_port); valid_mode(mode)
@@ -435,7 +494,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
     for directory in [ROOT,ROOT/'releases',ROOT/'node',ROOT/'browsers',ROOT/'workspace',ROOT/'databases',ROOT/'browser-profiles',ROOT/'run',CONFIG,UNIT.parent]: owned_directory(directory)
     port=old['port'] if old else choose_port(requested_port)
     stage=Path(tempfile.mkdtemp(prefix='.install-',dir=ROOT/'releases'))
-    snapshot=snapshot_user_files(); saved_files={p:p.read_bytes() if p.exists() else None for p in [ENV_FILE,UNIT,RECORD]}
+    snapshot=snapshot_user_files(); saved_files={p:p.read_bytes() if p.exists() else None for p in [ENV_FILE,UNIT,RECORD,ROOT/'run/browser-selftest.json']}
     links=[ROOT/'current',ROOT/'node/current',ROOT/'browsers/current']
     saved_links={p:os.readlink(p) if p.is_symlink() else None for p in links}
     old_active=run(['systemctl','--user','is-active','--quiet',UNIT_NAME]).returncode==0
@@ -478,7 +537,9 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
         environment={**os.environ,'PATH':str(node_root/'bin')+':'+':'.join(harness_path()),'npm_config_cache':str(ROOT/'workspace/.wovenmatter/npm-cache')}
         environment.pop('WOVENMATTER_API_TOKEN',None)
         progress('dependencies')
-        run([node_root/'bin/npm','ci','--prefix',release/'default-agent','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
+        npm_cli=prepare_npm_tooling(node_root,release,environment)
+        environment['PATH']=str(release/'tooling/bin')+':'+environment['PATH']
+        run([node_root/'bin/node',npm_cli,'ci','--prefix',release/'default-agent','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
         playwright_version=versions['playwrightVersion']
         if not re.fullmatch(r'\d+\.\d+\.\d+',playwright_version): fail('invalid_runtime_record','Invalid pinned Playwright version.',78)
         browser_root=ROOT/'browsers'/('playwright-'+playwright_version)
@@ -510,9 +571,9 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
             'WOVENMATTER_DATA_DIRECTORY':str(ROOT/'databases'),'WOVENMATTER_STATE_DIRECTORY':str(ROOT/'run'),
             'WOVENMATTER_BROWSER_PROFILES':str(ROOT/'browser-profiles'),'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'browsers/current'),
             'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,
-            'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'node/current/bin'),*harness_path()]),
+            'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()]),
             'WOVEN_DEFAULT_AGENT_DIRECTORY':str(ROOT/'workspace/.wovenmatter/default-agent'),
-            'PATH':':'.join([str(HOME/'.local/bin'),str(HOME/'.npm-global/bin'),str(ROOT/'node/current/bin'),*harness_path()])}
+            'PATH':':'.join([str(HOME/'.local/bin'),str(HOME/'.npm-global/bin'),str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()])}
         if any(any(c in value for c in ('\0','\n','\r')) for value in settings.values()): fail('unsupported_home_path','Host configuration contains an unsupported path.',78)
         unit='[Unit]\nDescription=Woven Matter native workspace\nAfter=network-online.target\n\n[Service]\nEnvironmentFile=%h/.config/wovenmatter/service.env\nWorkingDirectory=%h/.local/share/wovenmatter/workspace\nExecStart=%h/.local/share/wovenmatter/node/current/bin/node %h/.local/share/wovenmatter/current/src/server.mjs\nRestart=always\nRestartSec=3\nUMask=0077\nNoNewPrivileges='+('no' if mode=='fullRoot' else 'yes')+'\nLimitCORE=0\n\n[Install]\nWantedBy=default.target\n'
         progress('activating')
@@ -570,6 +631,8 @@ def expose(workspace_id,port,https_port='8443'):
     settings=parse_env()
     if settings.get('WOVENMATTER_LISTEN_HOST')!='127.0.0.1' or not health(port,settings.get('WOVENMATTER_API_TOKEN','')):
         fail('workspace_binding_changed','The native service must be healthy on its expected loopback address.',78)
+    if tailscale_operator_ready() is False:
+        fail('tailscale_operator_required','Review and run host preparation to let this SSH account manage private Tailscale Serve.',77)
     state=run(['tailscale','status','--json'],check=True)
     try:
         state=json.loads(state.stdout); dns=state['Self']['DNSName'].rstrip('.').lower()

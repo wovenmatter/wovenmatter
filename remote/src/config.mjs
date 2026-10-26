@@ -38,6 +38,15 @@ export function runtimeHarnessEnvironment(environment = process.env, configurati
   return { ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }
 }
 
+export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExecutable = process.execPath) {
+  if (configuration.runtimeKind !== 'host') return 'npm'
+  const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
+  // This is the release's patched npm, not Node's stock bundled npm or a user
+  // shim. Explicit Node also prevents npm's /usr/bin/env shebang selecting an
+  // unrelated runtime earlier in the user's harness PATH.
+  return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')].map(quote).join(' ')
+}
+
 export function workspacePermission(runtimeKind, requested, configuration = runtimeConfiguration) {
   if (configuration.runtimeKind !== 'host' || configuration.accessMode !== 'fullRoot') return requested
   return { codex: 'agent-full-access', claude_code: 'bypassPermissions', grok_build: 'bypassPermissions', default_agent: 'full', opencode: 'allow' }[runtimeKind] ?? requested

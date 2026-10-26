@@ -10,7 +10,7 @@ struct RemoteWorkspaceDeployment {
     init(root: URL, kind: RemoteWorkspaceKind = .container) throws {
         let manager = FileManager.default
         let inputs = kind == .host
-            ? ["remote/package.json", "remote/src", "remote/host", "harnesses", "default-agent/package.json",
+            ? ["remote/package.json", "remote/src", "remote/host", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses", "default-agent/package.json",
                "default-agent/package-lock.json", "default-agent/src", "default-agent/.node-version", "scripts/remote-host.sh"]
             : ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json",
                       "remote/src", "remote/security", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src"]

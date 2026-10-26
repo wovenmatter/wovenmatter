@@ -15,12 +15,13 @@ workspace_id="${2:-}"
 node="$HOME/.local/share/wovenmatter/node/current/bin/node"
 exec "$node" --input-type=module - "$workspace_id" "${3:-}" <<'JS'
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, statSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 const root=join(homedir(),'.local/share/wovenmatter');
 const installation=JSON.parse(readFileSync(join(root,'installation.json'),'utf8'));
 assert.equal(installation.id,process.argv[2],'Refuse to test an unrelated workspace.');
@@ -35,6 +36,16 @@ const initial=await call('/v1/health');
 assert.equal(initial.runtimeKind,'host'); assert.equal(initial.serviceFingerprint,installation.fingerprint);
 assert.equal(initial.workspaceRoot,join(root,'workspace')); assert.equal(initial.accessMode,installation.accessMode);
 const selftest=await call('/v1/browser/selftest'); assert.equal(selftest.ok,true,JSON.stringify(selftest));
+const npmRoot=realpathSync(join(root,'current/tooling/lib/node_modules/npm'));
+assert.equal(realpathSync(join(root,'current/default-agent/lib/npm')),npmRoot,'SDK updates must use the private patched npm.');
+const npmVersion=JSON.parse(readFileSync(join(npmRoot,'package.json'),'utf8')).version;
+const npmNumbers=npmVersion.split('.').map(Number);
+assert.ok(npmNumbers[0]>12||(npmNumbers[0]===12&&(npmNumbers[1]>2||(npmNumbers[1]===2&&npmNumbers[2]>=1))),'Private npm is below its security floor.');
+const npmGraph=JSON.parse(readFileSync(join(root,'current/npm-runtime/package-lock.json'),'utf8')).packages;
+for(const name of ['undici','ip-address']) assert.equal(JSON.parse(readFileSync(join(npmRoot,'node_modules',name,'package.json'),'utf8')).version,npmGraph['node_modules/'+name].version);
+const require=createRequire(join(npmRoot,'bin/npm-cli.js'));
+assert.equal(typeof require('undici').request,'function'); assert.equal(typeof require('ip-address').Address6,'function');
+assert.equal(execFileSync(process.execPath,[join(npmRoot,'bin/npm-cli.js'),'--version'],{encoding:'utf8'}).trim(),npmVersion);
 const { chromium }=await import(pathToFileURL(join(root,'current/default-agent/node_modules/playwright-core/index.mjs')).href);
 const connections=[];
 try {
@@ -68,7 +79,30 @@ for(let retry=0;retry<100;retry++) {
 }
 assert.equal(recovered?.serviceFingerprint,initial.serviceFingerprint);
 assert.equal(execFileSync('loginctl',['show-user',String(process.getuid()),'--property=Linger','--value'],{encoding:'utf8'}).trim(),'yes');
-const checks=['health','verified native Chromium sandbox','separate persistent browser profiles',installation.accessMode+' execution','service restart','linger'];
+const checks=['health','verified native Chromium sandbox','separate persistent browser profiles',installation.accessMode+' execution','service restart','linger','private patched npm vendor graph + SDK installer binding'];
+// Exercise Normal user through the production wrapper with an isolated HOME;
+// never change the installed workspace's immutable Full root access choice.
+const ordinaryHome=mkdtempSync(join(tmpdir(),'wovenmatter-normal-user-'));
+try {
+ for(const path of ['.config/wovenmatter','run','workspace']) mkdirSync(join(ordinaryHome,path),{recursive:true,mode:0o700});
+ const ordinary={WOVENMATTER_RUNTIME_KIND:'host',WOVENMATTER_ACCESS_MODE:'user',
+  WOVENMATTER_WORKSPACE:join(ordinaryHome,'workspace'),WOVENMATTER_STATE_DIRECTORY:join(ordinaryHome,'run')};
+ writeFileSync(join(ordinaryHome,'.config/wovenmatter/service.env'),Object.entries(ordinary).map(([key,value])=>key+'='+JSON.stringify(value)+'\n').join(''),{mode:0o600});
+ const options={env:{...process.env,HOME:ordinaryHome},encoding:'utf8'};
+ const wrapper=join(root,'current/bin/wm-exec');
+ assert.equal(execFileSync(wrapper,['exec','/usr/bin/id','-u'],options).trim(),String(process.getuid()));
+ assert.match(execFileSync(wrapper,['exec','/bin/sh','-c','grep "^NoNewPrivs:" /proc/self/status'],options),/NoNewPrivs:\s+1/);
+ const elevation=spawnSync(wrapper,['exec','sudo','-n','/usr/bin/id','-u'],options);
+ assert.notEqual(elevation.status,0,'Normal user must reject direct sudo elevation.');
+ checks.push('normal-user UID + inherited no-new-privileges + direct sudo refusal');
+} finally {rmSync(ordinaryHome,{recursive:true,force:true});}
+for(const path of ['workspace','databases','run','browser-profiles']) assert.equal(statSync(join(root,path)).mode&0o077,0,'Managed data directory is not private: '+path);
+assert.equal(statSync(join(homedir(),'.config/wovenmatter/service.env')).mode&0o777,0o600);
+const processes=execFileSync('ps',['-u',String(process.getuid()),'-o','args='],{encoding:'utf8'});
+const journal=execFileSync('journalctl',['--user','-u','wovenmatter.service','-n','200','--no-pager','-o','cat'],{encoding:'utf8'});
+assert.ok(!processes.includes(settings.WOVENMATTER_API_TOKEN),'A process argument exposed the service credential.');
+assert.ok(!journal.includes(settings.WOVENMATTER_API_TOKEN),'The journal exposed the service credential.');
+checks.push('private directories/environment + no credential in process arguments or journal');
 if(process.argv[3]==='--offline-sync') {
  const {createClientExecution}=await import(pathToFileURL(join(root,'current/src/client-execution.mjs')).href);
  const directory=mkdtempSync(join(tmpdir(),'wovenmatter-host-offline-'));

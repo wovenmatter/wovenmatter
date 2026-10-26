@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[2]
-INPUTS=['remote/package.json','remote/src','remote/host','harnesses','default-agent/package.json',
+INPUTS=['remote/package.json','remote/src','remote/host','remote/npm-runtime/package.json','remote/npm-runtime/package-lock.json','harnesses','default-agent/package.json',
         'default-agent/package-lock.json','default-agent/src','default-agent/.node-version','scripts/remote-host.sh']
 
 def fingerprint(root):
@@ -31,9 +31,9 @@ def fingerprint(root):
 class BundleTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
-        for target in ('remote/src','remote/host/bin','remote/host/deps','remote/host/apparmor','harnesses/mcp','default-agent/src','scripts'):
+        for target in ('remote/src','remote/npm-runtime','remote/host/bin','remote/host/deps','remote/host/apparmor','harnesses/mcp','default-agent/src','scripts'):
             (self.root/target).mkdir(parents=True,exist_ok=True)
-        for path in ('remote/host/build-bundle.sh','remote/host/bin/wm-exec','remote/host/runtime-versions.json','scripts/remote-host.sh'):
+        for path in ('remote/host/build-bundle.sh','remote/host/bin/wm-exec','remote/host/runtime-versions.json','scripts/remote-host.sh','remote/npm-runtime/package.json','remote/npm-runtime/package-lock.json'):
             shutil.copy2(ROOT/path,self.root/path)
         (self.root/'remote/package.json').write_text('{}\n')
         (self.root/'remote/src/server.mjs').write_text('export const fixture=true\n')
@@ -54,6 +54,7 @@ class BundleTests(unittest.TestCase):
             manifest=json.load(archive.extractfile('manifest.json'))
             self.assertEqual(manifest['fingerprint'],fingerprint(self.root))
             self.assertEqual(manifest['dependencyInstallation'],'target-npm-ci')
+            self.assertIn('npm-runtime/package-lock.json',manifest['files']); self.assertIn('npm-runtime/package.json',manifest['files'])
             self.assertIn('bin/wm-exec',manifest['files']); self.assertIn('harnesses/mcp/adapter.mjs',manifest['files'])
             self.assertIn('default-agent/.node-version',manifest['files']); self.assertIn('host/remote-host.sh',manifest['files'])
             self.assertFalse(any('node_modules/' in name for name in archive.getnames()))

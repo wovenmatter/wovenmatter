@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { loadRuntimeConfiguration, runtimeHarnessEnvironment, workspacePermission, workspaceExecutionConfiguration } from '../src/config.mjs'
+import { loadRuntimeConfiguration, runtimeHarnessEnvironment, runtimeNPMCommand, workspacePermission, workspaceExecutionConfiguration } from '../src/config.mjs'
 
 test('configuration defaults reproduce existing container paths and listener', () => {
   const value = loadRuntimeConfiguration({ HOME: '/home', PATH: '/usr/bin:/bin' }, { serviceRoot: '/opt/wovenmatter' })
@@ -58,4 +58,13 @@ test('full-root workspace policy selects native nonprompting modes and overrides
   for (const environment of [{}, { WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'user' }]) {
     assert.equal(workspacePermission('codex', 'saved', loadRuntimeConfiguration(environment)), 'saved')
   }
+})
+
+test('host npm uses the pinned Node and patched private release CLI without changing harness PATH precedence', () => {
+  const environment = { HOME: '/home/alex', PATH: '/usr/local/bin:/usr/bin', WOVENMATTER_RUNTIME_KIND: 'host' }
+  const configuration = loadRuntimeConfiguration(environment, { serviceRoot: '/home/alex/.local/share/wovenmatter/releases/abc' })
+  assert.equal(runtimeNPMCommand(configuration, '/home/alex/.local/share/wovenmatter/node/26.12.1/bin/node'),
+    "'/home/alex/.local/share/wovenmatter/node/26.12.1/bin/node' '/home/alex/.local/share/wovenmatter/releases/abc/tooling/lib/node_modules/npm/bin/npm-cli.js'")
+  assert.equal(runtimeHarnessEnvironment(environment, configuration).PATH, '/home/alex/.local/bin:/home/alex/.npm-global/bin:/usr/local/bin:/usr/bin')
+  assert.equal(runtimeNPMCommand(loadRuntimeConfiguration({ HOME: '/home' })), 'npm')
 })

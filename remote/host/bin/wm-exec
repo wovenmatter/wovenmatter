@@ -50,7 +50,7 @@ if not args: fail('A host execution subcommand is required.')
 if not cwd.startswith('/') or '\0' in cwd: fail('The remote working directory must be an absolute path.')
 root=Path(settings['WOVENMATTER_STATE_DIRECTORY']).parent
 node=str(root/'node/current/bin/node')
-paths=[str(home/'.local/bin'),str(home/'.npm-global/bin'),str(root/'node/current/bin')]
+paths=[str(home/'.local/bin'),str(home/'.npm-global/bin'),str(root/'current/tooling/bin'),str(root/'node/current/bin')]
 paths.extend(settings.get('WOVENMATTER_HARNESS_PATH','').split(':'))
 paths.extend(os.environ.get('PATH','/usr/local/bin:/usr/bin:/bin').split(':'))
 env['PATH']=':'.join(dict.fromkeys(p for p in paths if p))

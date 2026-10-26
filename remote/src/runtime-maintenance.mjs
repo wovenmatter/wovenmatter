@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir, rename, realpath, lstat, readlink } from 'n
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
-import { loadRuntimeConfiguration } from './config.mjs'
+import { loadRuntimeConfiguration, runtimeNPMCommand } from './config.mjs'
 import { withInstallerGuard } from './installer-guard.mjs'
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
@@ -87,6 +87,7 @@ async function packageRoot(path, name, dependency = false) {
 
 export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, verifiedInstaller, hasActiveRuntime = async () => false, execute = runHost, fetchImplementation = fetch, acquireLock = acquireHostLock, configuration = loadRuntimeConfiguration(environment()) }) {
   const states = new Map(), operations = new Map()
+  const npm = runtimeNPMCommand(configuration)
   const statePath = resolve(workspaceRoot, '.wovenmatter/runtime-preferences.json')
   let saveQueue = Promise.resolve(), checks = null
   const loaded = readFile(statePath, 'utf8').then(text => {
@@ -190,7 +191,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         // npm performs the semver selection using the adapter's declared dependency
         // range. Never override a pinned/ranged adapter dependency with @latest.
         if (adapterRoot && typeof dependencyRange === 'string' && /^[0-9v^~<>=|*xX. +\-]+$/.test(dependencyRange)) {
-          const result = await run(`npm view ${quote(dependencyName + '@' + dependencyRange)} version --json --registry=https://registry.npmjs.org`, 15000)
+          const result = await run(`${npm} view ${quote(dependencyName + '@' + dependencyRange)} version --json --registry=https://registry.npmjs.org`, 15000)
           try { const versions = JSON.parse(result.output); if (result.code === 0) bundled.updateTargetVersion = normalizedVersion(Array.isArray(versions) ? versions.at(-1) : versions) } catch {}
         }
       }
@@ -257,7 +258,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       await protectInstallDestination(h.cliCommand ?? h.command, cli)
       if (h.install?.kind === 'npm-global') {
         const pkg = validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec)
-        commands.push(`npm install --global --prefix "$HOME/.local" ${quote(pkg)}`)
+        commands.push(`${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}`)
       } else {
         if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
         const installer = await verifiedInstaller(h, body.sourceSHA256)
@@ -269,7 +270,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (needsAdapter) {
       await protectInstallDestination(h.command, main)
       const spec = await adapterPackageSpec(h, body.adapterPackageSpec ?? (body.packageSpec?.startsWith(h.adapterPackage + '@') ? body.packageSpec : undefined))
-      commands.push(`npm install --global --prefix "$HOME/.local" ${quote(spec)}`)
+      commands.push(`${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`)
       installedCommands.push(['runtime', h.command])
     }
     if (!commands.length && action === 'update') throw failure('system_install_update_forbidden')
@@ -283,7 +284,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     try { root = await packageRoot(dirname(await realpath(path)), h.adapterPackage) } catch {}
     const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
     if (root && (await packageAt(root))?.dependencies?.[dependency]) {
-      const refreshed = await run(`npm update --prefix ${quote(root)} --omit=dev --no-save --package-lock=false --registry=https://registry.npmjs.org ${quote(dependency)}`, 300000)
+      const refreshed = await run(`${npm} update --prefix ${quote(root)} --omit=dev --no-save --package-lock=false --registry=https://registry.npmjs.org ${quote(dependency)}`, 300000)
       if (refreshed.code !== 0) throw failure('bundled_dependency_refresh_failed')
     }
   }
@@ -307,8 +308,8 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
           ({ command, installedCommands } = await hostInstallation(h, action, body, before))
         } else {
           const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec) : null
-          const adapter = h.adapterPackage ? ` && npm install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
-          if (pkg) command = `npm install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
+          const adapter = h.adapterPackage ? ` && ${npm} install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
+          if (pkg) command = `${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
           else {
             if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
             const installer = await verifiedInstaller(h, body.sourceSHA256)
@@ -355,7 +356,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     }
     packageSpec = validatedPackageSpec(h, packageSpec)
     return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,
-      packageSpec, command: `npm install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
+      packageSpec, command: `${npm} install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
       verification: 'npm-registry-integrity' }
   }
   return {
@@ -374,7 +375,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const spec = await adapterPackageSpec(h)
       return { harnessID: h.id, source: 'https://registry.npmjs.org/' + h.adapterPackage,
         sha256: null, bytes: null, packageSpec: spec,
-        command: `npm install --global --prefix "$HOME/.local" ${quote(spec)}`, verification: 'npm-registry-integrity' }
+        command: `${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`, verification: 'npm-registry-integrity' }
     },
     async recordFailure(h, action, error) {
       const s = await state(h.id)

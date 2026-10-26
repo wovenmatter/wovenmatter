@@ -80,6 +80,9 @@ enum RemoteHostBundle {
         if source == "scripts/remote-host.sh" { return "host/remote-host.sh" }
         if source.hasPrefix("remote/src/") { return String(source.dropFirst("remote/".count)) }
         if source.hasPrefix("remote/host/") { return String(source.dropFirst("remote/".count)) }
+        if source == "remote/npm-runtime/package.json" || source == "remote/npm-runtime/package-lock.json" {
+            return String(source.dropFirst("remote/".count))
+        }
         if source.hasPrefix("default-agent/") || source.hasPrefix("harnesses/") { return source }
         throw RemoteWorkspaceClientError.deploymentBundleUnavailable
     }

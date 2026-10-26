@@ -558,9 +558,9 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
           id: probeID,
           method: 'initialize',
           params: {
-            // Match the stable session API used by local and remote clients;
-            // Claude ACP 0.95 routes a version 2 offer to its draft v2 API.
-            protocolVersion: harness.id === 'claude_code' ? 1 : 2,
+            // Codex ACP 2.x is the adapter release, not ACP wire protocol v2.
+            // Both adapters use the stable session API implemented by clients.
+            protocolVersion: ['codex', 'claude_code'].includes(harness.id) ? 1 : 2,
             clientCapabilities: {},
             clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
           },
@@ -605,7 +605,10 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
     // A CLI can exit before the initialize write reaches its pipe. Stream errors
     // are separate from ChildProcess errors and must not terminate the service.
     child.stdin.on('error', () => finish(false, 'The transport input failed before readiness.'))
-    child.once('spawn', () => child.stdin.end(`${JSON.stringify(request)}\n`))
+    // ACP is a bidirectional session transport. Codex closes its pending
+    // initialization when the client sends EOF, so hold stdin until readiness
+    // settles; finish() closes it and bounds the process lifetime above.
+    child.once('spawn', () => child.stdin.write(`${JSON.stringify(request)}\n`))
     child.once('error', () => finish(false, 'The transport process could not start.'))
     child.once('close', (code) => {
       if (output.trim()) inspectLine(output.trim())

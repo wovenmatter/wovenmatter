@@ -17,6 +17,7 @@ if versions['playwrightVersion'] != lock['packages']['node_modules/playwright-co
     raise SystemExit('Host Playwright selection differs from the lockfile.')
 files = {}
 for source, target in [('remote/src','src'), ('remote/package.json','package.json'),
+    ('remote/npm-runtime/package.json','npm-runtime/package.json'), ('remote/npm-runtime/package-lock.json','npm-runtime/package-lock.json'),
     ('default-agent/src','default-agent/src'), ('default-agent/package.json','default-agent/package.json'),
     ('default-agent/package-lock.json','default-agent/package-lock.json'), ('harnesses','harnesses'),
     ('remote/host','host'), ('default-agent/.node-version','default-agent/.node-version'),

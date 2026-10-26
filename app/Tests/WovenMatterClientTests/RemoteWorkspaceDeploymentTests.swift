@@ -110,6 +110,29 @@ struct RemoteWorkspaceDeploymentTests {
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: mismatched) }
     }
 
+    @Test func hostNpmSecurityGraphIsBundledAndBoundToTheSourceIdentity() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let archive = try RemoteHostBundle.archive(root: root, deployment: deployment)
+        let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar",
+            arguments: ["-xzOf", "-", "manifest.json"], input: archive)
+        #expect(extracted.status == 0)
+        let manifest = try #require(JSONSerialization.jsonObject(with: extracted.data) as? [String: Any])
+        let files = try #require(manifest["files"] as? [String: [String: Any]])
+        for name in ["package.json", "package-lock.json"] {
+            let canonical = "remote/npm-runtime/" + name
+            #expect(files["npm-runtime/" + name]?["sourcePath"] as? String == canonical)
+            #expect(deployment.sourceFiles.contains(canonical))
+            let contents = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar",
+                arguments: ["-xzOf", "-", "npm-runtime/" + name], input: archive)
+            #expect(contents.status == 0)
+            #expect(contents.data == Data(canonical.utf8))
+        }
+        try Data("changed pinned npm security graph".utf8).write(to: root.appending(path: "remote/npm-runtime/package-lock.json"))
+        #expect(try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint != deployment.fingerprint)
+        #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: deployment) }
+    }
+
     @Test func reuseDoesNotUploadOrBuildAndUsesImmutableIdentity() async throws {
         let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let image = "sha256:" + String(repeating: "a", count: 64)
