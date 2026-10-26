@@ -10,7 +10,7 @@ struct ACPHarnessStreamingReviewTests {
     let gate = FileManager.default.temporaryDirectory.appending(path: "acp-stream-release-\(UUID())")
     defer { try? FileManager.default.removeItem(at: gate) }
     let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
-      session: #"{"sessionId":"streaming"}"#, extras: [:], promptOverride: """
+      session: #"{"sessionId":"streaming"}"#, extras: ["woven/configure": "{}"], promptOverride: """
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"shell","kind":"execute","title":"Shell"}}}'
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"progress one 🧵"}}]}}}'
         printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"in_progress","content":[]}}}'
