@@ -19,7 +19,7 @@ private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () 
 @MainActor
 struct WorkspaceAgentToolsServiceTests {
 
-    // Opt-in acceptance with the actual packaged CLI/MCP server and native
+    // Opt-in acceptance with the actual packaged MCP clients and native
     // adapters. No provider or account is used; the owning app services and
     // WebKit preview are real. The normal build validation runs this after
     // producing the app bundle.
@@ -430,7 +430,7 @@ extension WorkspaceAgentToolsServiceTests {
         let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
-        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals])
+        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals, .html])
         #expect(try await !request("remove", ["id": .string(detachedID), "occurrence": .number(1),
             "revision": .number(Double(independent.calendar.revision))]).success)
         #expect(try await request("read", ["id": .string(detachedID)]).success)

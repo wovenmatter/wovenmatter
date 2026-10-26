@@ -1,4 +1,4 @@
-// Provider-free acceptance driver. The server, CLI, Pi adapter and native hooks
+// Provider-free acceptance driver. The MCP clients, Pi adapter and native hooks
 // come from the built app, rather than replacements in this fixture.
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
