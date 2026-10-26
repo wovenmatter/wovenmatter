@@ -696,7 +696,7 @@ public actor MobileStore {
     var next = state
     try operation(&next)
     guard next != state else { return }
-    try MobileStorePersistence.persist(next, at: file)
+    _ = try MobileStorePersistence.persist(next, at: file)
     state = next
   }
 }
