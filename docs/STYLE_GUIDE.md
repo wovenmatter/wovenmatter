@@ -63,6 +63,9 @@ when an intentional design change is accepted.
   Installed harnesses are available automatically in local and remote workspaces.
   Do not add harness enable/disable, Use harness, or per-harness sidebar visibility
   controls. Installation, sign-in, and connection status communicate readiness.
+  Save remote agents in the workspace database when installed and show them on
+  launch, including while disconnected or awaiting sign-in. Background readiness
+  checks gate execution, never sidebar membership.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
   Local agent workspace or a named remote workspace. Workspace inventory shows status and links
   to that scoped page. Never label credentials present as verified sign-in.

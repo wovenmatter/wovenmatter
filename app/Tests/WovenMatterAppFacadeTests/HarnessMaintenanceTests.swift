@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
+import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -36,6 +37,48 @@ struct HarnessMaintenanceTests {
             #expect(model.isRuntimeInstalled(.codex, in: workspace) == installed)
             #expect(model.readyChatTargets.contains { $0.harness.id == .codex } == installed)
         }
+    }
+
+    @Test func remoteCatalogSurvivesRestartWithoutReadinessAndDoesNotRewriteKnownAgents() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let remote = fixture.model.remoteWorkspaces
+        let status = try #require(remote.statuses[fixture.remote.id])
+        let rows = try #require(remote.runtimeMaintenance[fixture.remote.id])
+            .filter { $0.id == .codex || $0.id == .defaultAgent }
+        // Installation is enough for navigation; no sign-in/readiness is available.
+        remote.configureCompanionFixture(fixture.remote, status: status, harnesses: [], maintenance: rows)
+        await fixture.model.synchronizeRemoteAgentCatalog()
+        let saved = fixture.model.remoteWorkspaceAgents
+        #expect(Set(saved.map(\.runtimeKind)) == [.defaultAgent, .codex])
+        #expect(saved.allSatisfy { $0.runtimeStatus == .offline })
+        #expect(remote.readyChatTargets.isEmpty)
+        await fixture.model.synchronizeRemoteAgentCatalog()
+        #expect(fixture.model.remoteWorkspaceAgents == saved)
+
+        // A new database/model instance has no SSH results, tokens or network calls.
+        fixture.defaults.set(try JSONEncoder().encode([fixture.remote]), forKey: "wovenmatter.remote-workspaces.v1")
+        let reopenedStore = try await DashboardStore(supportDirectory: fixture.directory)
+        let reopened = ApplicationModel(applicationDefaults: fixture.defaults, dashboardStore: reopenedStore,
+                                        startsAutomatically: false, localUsageService: fixture.usageService)
+        await reopened.refreshWorkspace()
+        #expect(reopened.remoteWorkspaces.statuses.isEmpty)
+        #expect(reopened.remoteWorkspaces.runtimeMaintenance.isEmpty)
+        #expect(reopened.remoteWorkspaces.readyChatTargets.isEmpty)
+        #expect(DashboardRemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: fixture.remote.id) == saved)
+        #expect(DashboardRemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: UUID()).isEmpty)
+        // A failed refresh (no inventory) must not remove or rewrite known agents.
+        await reopened.synchronizeRemoteAgentCatalog()
+        #expect(reopened.remoteWorkspaceAgents == saved)
+    }
+
+    @Test func configuredWorkspaceRegistersBundledAgentBeforeFirstConnection() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let remote = fixture.model.remoteWorkspaces
+        remote.configureCompanionFixture(fixture.remote, status: try #require(remote.statuses[fixture.remote.id]),
+                                         harnesses: [], maintenance: [])
+        await fixture.model.synchronizeRemoteAgentCatalog()
+        #expect(fixture.model.remoteWorkspaceAgents.map(\.runtimeKind) == [.defaultAgent])
+        #expect(remote.readyChatTargets.isEmpty)
     }
 
     @Test func updatesOverlapAndKeepProgressAndFailuresIndependent() async throws {

@@ -19,6 +19,9 @@ private final class HostInspectionFixture: @unchecked Sendable {
         try lock.withLock {
             commands.append(command)
             if fail { throw URLError(.cannotConnectToHost) }
+            if command.contains("'status'") {
+                return Data(#"{"id":"fixture","name":"Fixture","state":"exited","running":false,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#.utf8)
+            }
             if command.contains("'prepare'") { ready = true }
             let value: [String: Any] = [
                 "ready": ready, "runtime": "docker", "version": ready ? "29.9.2" : "",
@@ -97,6 +100,26 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(!fixture.calls.contains { $0.contains("'create'") })
         #expect(model.workspaces == originalWorkspaces)
         #expect(model.pendingHostPreparation == nil)
+    }
+
+    @Test func startupChecksConnectionWithoutStartingStoppedWorkspace() async throws {
+        let fixture = HostInspectionFixture()
+        let suite = "remote-startup-test-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
+        defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
+        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
+        model.refreshRuntimeMaintenanceAtStartup()
+        for _ in 0..<300 {
+            if !model.busyWorkspaceIDs.contains(workspace.id) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.statuses[workspace.id]?.running == false)
+        #expect(model.errorMessage == nil)
+        #expect(fixture.calls.count == 1)
+        #expect(fixture.calls.first?.contains("'status'") == true)
+        #expect(model.harnesses.isEmpty)
     }
 
     @Test func changedPreparationPlanRequiresFreshReview() async throws {

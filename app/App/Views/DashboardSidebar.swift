@@ -598,12 +598,7 @@ struct DashboardSidebarNavigationPage: View {
         if agentSectionExpanded(key) {
             workspaceContents(
                 key: key, title: workspace.configuration.name,
-                workspaceAgents: agents.filter { agent in
-                    agent.governingPlane == .remoteWorkspace && agent.runtimeDeviceID == workspace.id
-                        && (pinnedAgentIDs.contains(agent.id) || workspace.readyTargets.contains { target in
-                            target.harness.id == agent.runtimeKind
-                        })
-                },
+                workspaceAgents: DashboardRemoteWorkspaceSidebarModel.agents(agents, in: workspace.id),
                 workspaceFolders: folders.filter { $0.executionWorkspaceID == ownerID },
                 remoteWorkspace: workspace
             )

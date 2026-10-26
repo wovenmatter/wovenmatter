@@ -145,6 +145,11 @@ struct DashboardRemoteWorkspaceSidebarLink: Equatable, Identifiable {
 }
 
 enum DashboardRemoteWorkspaceSidebarModel {
+    /// Membership is persisted separately from transient connection/readiness checks.
+    static func agents(_ saved: [WorkspaceAgent], in workspaceID: UUID) -> [WorkspaceAgent] {
+        saved.filter { $0.governingPlane == .remoteWorkspace && $0.runtimeDeviceID == workspaceID }
+    }
+
     static func links(
         workspaces: [RemoteWorkspaceConfiguration],
         readyTargets: [RemoteHarnessChatTarget]

@@ -730,7 +730,7 @@ final class OpenCodeModel {
         guard isEnabled else { throw OpenCodeError.message("Connect OpenCode in this workspace before sending.") }
         if let configuration = remoteConfiguration,
            remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) != true {
-            throw OpenCodeError.message("OpenCode is disabled for this remote workspace.")
+            throw OpenCodeError.message("OpenCode is not installed in this remote workspace.")
         }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before sending.") }
         if !isReady { try await connectLocal() }

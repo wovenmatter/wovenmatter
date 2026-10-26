@@ -135,6 +135,36 @@ final class ApplicationModel {
         }
     }
 
+    /// The database owns sidebar membership; live inventory only discovers additions.
+    /// Saved agents remain browsable while a workspace is stopped or unreachable.
+    func synchronizeRemoteAgentCatalog() async {
+        guard !isBackendFrontend, let dashboardStore else { return }
+        do {
+            let ownerID = try await dashboardStore.dashboardDeviceID()
+            var saved = try await dashboardStore.database.dashboardAgents()
+            for configuration in remoteWorkspaces.workspaces {
+                // Pi Durable ships with every managed workspace. Other harnesses
+                // enter the catalog after a verified installation, before sign-in.
+                let installed = Set((remoteWorkspaces.runtimeMaintenance[configuration.id] ?? [])
+                    .filter(\.installed).map(\.id)).union([.defaultAgent])
+                for kind in installed.sorted(by: { $0.presentationRank < $1.presentationRank }) {
+                    guard remoteWorkspaces.configuration(id: configuration.id) == configuration else { break }
+                    guard !saved.contains(where: {
+                        $0.governingPlane == .remoteWorkspace && $0.authorityDeviceID == ownerID
+                            && $0.runtimeDeviceID == configuration.id && $0.runtimeKind == kind
+                    }) else { continue }
+                    _ = try await dashboardStore.database.ensureRemoteHarnessAgent(
+                        runtimeKind: kind, remoteWorkspaceID: configuration.id,
+                        remoteWorkspaceName: configuration.name, ownerDeviceID: ownerID, status: .offline)
+                    saved = try await dashboardStore.database.dashboardAgents()
+                }
+            }
+            await refreshWorkspaceIfChanged()
+        } catch {
+            NSLog("Could not save remote workspace agents: %@", error.localizedDescription)
+        }
+    }
+
     func prepareOpenCodeInstancesToQuit() async throws {
         for instance in openCodeInstances { try await instance.prepareToQuit() }
     }
@@ -655,9 +685,11 @@ final class ApplicationModel {
                 return try await self.changeRemoteCalendarGateway(configuration, enabled: enabled)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
+                await self?.synchronizeRemoteAgentCatalog()
                 await self?.synchronizeRemoteOpenCodeInstances()
                 await self?.refreshDatabases()
             }
+            await synchronizeRemoteAgentCatalog()
             remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
             await synchronizeRemoteOpenCodeInstances()
             localACPDatabaseReadyRuntimeKinds = Set(

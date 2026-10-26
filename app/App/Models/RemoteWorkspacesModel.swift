@@ -322,7 +322,11 @@ final class RemoteWorkspacesModel {
         guard !isBackendProjection else { return }
         for workspace in workspaces {
             performBusy(workspace) {
-                await self.refreshRuntimeMaintenance(workspace, checkLatest: true)
+                let identity = try self.requestIdentity(workspace)
+                let status = try await self.sshClient.status(configuration: workspace)
+                try self.requireCurrent(identity)
+                self.statuses[workspace.id] = status
+                if status.running { await self.refreshService(workspace, checkLatest: true) }
             }
         }
     }
@@ -1333,7 +1337,7 @@ final class RemoteWorkspacesModel {
     }
 
     private func refreshService(
-        _ configuration: RemoteWorkspaceConfiguration
+        _ configuration: RemoteWorkspaceConfiguration, checkLatest: Bool = false
     ) async {
         guard let identity = try? requestIdentity(configuration) else { return }
         // A lifecycle snapshot from before this refresh must not override newer
@@ -1350,8 +1354,8 @@ final class RemoteWorkspacesModel {
             try requireCurrent(identity)
             workspaceRoots[configuration.id] = health.workspaceRoot
             harnesses[configuration.id] = inventory
+            await refreshRuntimeMaintenance(configuration, checkLatest: checkLatest)
             if inventory.contains(where: { $0.id == .defaultAgent }) { try await synchronizeDefaultAgent(configuration) }
-            await refreshRuntimeMaintenance(configuration)
             await refreshTaskGateway(configuration)
         } catch {
             guard (try? requireCurrent(identity)) != nil else { return }
@@ -1390,6 +1394,7 @@ final class RemoteWorkspacesModel {
         statuses[configuration.id] = status
         save()
         requestHarnessSetup(configuration.id)
+        await onRuntimeMaintenanceChanged?()
         await refreshService(configuration)
     }
 
