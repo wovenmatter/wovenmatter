@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-/// Reads only an explicitly shared regular file from this workspace's container.
+/// Reads only an explicitly shared regular file from this workspace.
 /// Uses existing noninteractive SSH; no remote service upgrade or credential prompt.
 public struct RemoteLibraryFiles: Sendable {
   private let runner: RemoteWorkspaceSSHClient.Runner
@@ -14,12 +14,13 @@ public struct RemoteLibraryFiles: Sendable {
     guard configuration.workspaceID.wholeMatch(of: /[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}/) != nil else {
       throw RemoteWorkspaceClientError.invalidResponse("The remote workspace identity is invalid.")
     }
-    let path = try Self.path(source: source, root: root)
+    let path = try Self.path(source: source, root: root,
+      homeDirectory: configuration.kind == .container ? "/home" : nil)
     let args = [
-      "docker", "exec", "wovenmatter-" + configuration.workspaceID, "node", "-e", Self.readScript,
+      "node", "-e", Self.readScript,
       "--", path, root, String(AgentMessageAttachmentLimits.maximumFileBytes),
     ]
-    let command = args.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
+    let command = try RemoteWorkspaceExecTarget(configuration: configuration).shellCommand(args)
     let runner = runner
     let transfer = Task.detached(priority: .utility) { try runner(destination, command, nil) }
     let data = try await withTaskCancellationHandler {
@@ -34,11 +35,14 @@ public struct RemoteLibraryFiles: Sendable {
     return data
   }
 
-  public static func path(source: String, root: String) throws -> String {
+  public static func path(source: String, root: String, homeDirectory: String? = "/home") throws -> String {
     guard var path = LibraryFileReference.path(source) else {
       throw RemoteWorkspaceClientError.invalidResponse("The file link does not name a file in this workspace.")
     }
-    if path.hasPrefix("~/") { path = "/home/" + path.dropFirst(2) }
+    if path.hasPrefix("~/") {
+      if let homeDirectory { path = homeDirectory + "/" + path.dropFirst(2) }
+      else { return path } // Expanded by Node on the SSH user's host, never on this Mac.
+    }
     guard !path.contains("\u{0}"), path.utf8.count <= 8192 else {
       throw RemoteWorkspaceClientError.invalidResponse("The file path is invalid.")
     }
@@ -51,7 +55,7 @@ public struct RemoteLibraryFiles: Sendable {
     const fs = require('node:fs'), path = require('node:path');
     const [name, root, maxString] = process.argv.slice(1), max = Number(maxString);
     try {
-      const requested = path.resolve(name), actual = fs.realpathSync(requested);
+      const requested = path.resolve(name.startsWith('~/') ? path.join(require('node:os').homedir(), name.slice(2)) : name), actual = fs.realpathSync(requested);
       const roots = [root, '/tmp', '/mnt/data'].filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p));
       if (!roots.some(r => actual.startsWith(r + '/')) || fs.lstatSync(requested).isSymbolicLink())
         throw Error('The shared file is outside the workspace or is a symbolic link.');

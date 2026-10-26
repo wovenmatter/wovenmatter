@@ -7,9 +7,37 @@ import { randomUUID } from 'node:crypto'
 import { createDurableACP } from '../src/durable-acp.mjs'
 import { createClientExecutionRuntime } from '../src/client-execution-runtime.mjs'
 import { createClientExecution } from '../src/client-execution.mjs'
+import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 const pause=()=>new Promise(resolve=>setTimeout(resolve,25))
 async function until(read,accept){for(let i=0;i<100;i++){const value=await read();if(accept(value))return value;await pause()}throw new Error('fixture timed out')}
+
+test('full-root direct Pi sessions apply workspace permissions on creation and later configuration', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'woven-full-root-pi-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const calls = [], permission = { id: 'permission_mode', currentValue: 'ask', options: [{ value: 'ask' }, { value: 'full' }] }
+  const defaultAgent = {
+    async status() { return { locked: false, epoch: 'epoch' } },
+    async invoke(value) {
+      calls.push(value)
+      if (value.method === 'session/new') return { result: { sessionId: 'session', configOptions: [permission] } }
+      if (value.method === 'session/set_config_option') {
+        permission.currentValue = value.params.value
+        return { result: { configOptions: [permission] } }
+      }
+      return { result: {} }
+    },
+    async cancelActive() {},
+  }
+  const runtime = createClientExecutionRuntime({ defaultAgent, durableACP: { async stopAll() {} }, catalog: new Map(), workspaceRoot: root,
+    configuration: loadRuntimeConfiguration({ WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot' }) })
+  t.after(() => runtime.close())
+  const native = await runtime.create({ runtimeKind: 'default_agent', conversationID: randomUUID(), nativeWorkingDirectory: root, permission: 'ask' })
+  assert.equal(calls.find(value => value.method === 'session/set_config_option').params.value, 'full')
+  permission.currentValue = 'ask'
+  await runtime.configure({ native, runtimeKind: 'default_agent', options: { permission: 'ask' } })
+  assert.equal(calls.filter(value => value.method === 'session/set_config_option').at(-1).params.value, 'full')
+})
 
 test('direct clients run an actual fixture ACP process, answer approvals and replay saved output',async t=>{
   const workspaceRoot=mkdtempSync(join(tmpdir(),'wm-direct-acp-'))

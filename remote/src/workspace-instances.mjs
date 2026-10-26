@@ -6,6 +6,7 @@ import { request as httpRequest } from 'node:http'
 import { resolve } from 'node:path'
 import { acquireHostLock } from './runtime-maintenance.mjs'
 import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
+import { loadRuntimeConfiguration } from './config.mjs'
 
 const { installOpenCode } = await import(harnessResource('mcp/install.mjs'))
 const prefix = '/v1/workspace-instances/opencode'
@@ -91,7 +92,7 @@ export function createWorkspaceInstances(options) {
     if (launched && launched.exitCode === null) throw fail(409, 'opencode_start_pending_refresh_before_retry')
     const hostEnvironment = environment()
     if (!hostEnvironment.HOME) throw fail(503, 'opencode_host_home_unavailable')
-    const releaseLock = await (options.acquireLock ?? acquireHostLock)(resolve(hostEnvironment.HOME, '.wovenmatter/runtime-operation.lock'), hostEnvironment, workspaceRoot, true)
+    const releaseLock = await (options.acquireLock ?? acquireHostLock)(resolve((options.configuration ?? loadRuntimeConfiguration(hostEnvironment)).stateDirectory, 'runtime-operation.lock'), hostEnvironment, workspaceRoot, true)
     let ownedChild = null
     let released = false
     const unlock = () => { if (!released) { released = true; releaseLock() } }

@@ -24,6 +24,22 @@ import { authenticationInput, authenticationDeadline, downloadInstallerSource, p
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
 
+test('browser routes discover profiles without launching and reject unsafe profile names', async context => {
+  const root = await temporaryFixture(context, 'woven-browser-profile-routes-')
+  const token = 'browser-profiles-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace: root, home: root, catalog: catalogPath, token })
+  context.after(() => stopService(service.child))
+  const headers = { authorization: 'Bearer ' + token }
+  const tabs = await fetch(service.url + '/v1/browser/tabs?profile=project', { headers })
+  assert.equal(tabs.status, 200)
+  assert.deepEqual(await tabs.json(), { running: false, tabs: [], profiles: ['default', 'project'], profile: 'project' })
+  for (const path of ['tabs', 'connect', 'stream']) {
+    const response = await fetch(service.url + '/v1/browser/' + path + '?profile=..%2Fescape', { headers, method: path === 'connect' ? 'POST' : 'GET' })
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error, 'invalid_browser_profile')
+  }
+})
+
 test('internal remote browser MCP permits only administrator forwarding and validates the native caller envelope', async context => {
   const root = await temporaryFixture(context, 'woven-browser-mcp-route-')
   const token = 'browser-mcp-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -426,10 +442,10 @@ async function stopService(child) {
   }
 }
 
-async function startService({ workspace, home, catalog, token }) {
+async function startService({ workspace, home, catalog, token, environmentOverrides = {}, entrypoint = resolve(repositoryRoot, 'remote/src/server.mjs') }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)
-  const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
+  const child = spawn(process.execPath, [entrypoint], {
     cwd: repositoryRoot,
     env: {
       ...environment,
@@ -438,6 +454,7 @@ async function startService({ workspace, home, catalog, token }) {
       WOVENMATTER_LISTEN_PORT: String(port),
       WOVENMATTER_WORKSPACE: workspace,
       WOVENMATTER_HARNESS_CATALOG: catalog,
+      ...environmentOverrides,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -588,12 +605,12 @@ test('direct client grants expose only execution routes and enforce revocation',
   assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
   assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
   assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
-  for (const [path, method] of [['tabs', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
+  for (const [path, method] of [['tabs', 'GET'], ['selftest', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
   }
   const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
-  assert.deepEqual(await tabs.json(), {running:false,tabs:[]})
+  assert.deepEqual(await tabs.json(), {running:false,tabs:[],profiles:['default'],profile:'default'})
   assert.equal(tabs.headers.get('cache-control'), 'no-store')
   assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
   const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
@@ -763,6 +780,50 @@ test('service authentication exposes the reviewed harness catalog', async (conte
     !['adapterInstalled', 'cliInstalled', 'installCommand', 'installSource', 'operation']
       .some((field) => Object.hasOwn(value, field))
   ))
+})
+
+test('host health reports native paths and source inventory without exposing its token', async context => {
+  const home = await temporaryFixture(context, 'woven-host-health-')
+  const workspace = resolve(home, 'workspace'), databases = resolve(home, 'data/databases')
+  await mkdir(workspace)
+  const token = 'native-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
+    WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
+    WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
+    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64),
+  } })
+  context.after(() => stopService(service.child))
+  const headers = { Authorization: 'Bearer ' + token }
+  const health = await (await fetch(service.url + '/v1/health', { headers })).json()
+  assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
+    runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
+    attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot' })
+  const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
+  assert.ok(body.harnesses.every(row => ['system', 'managed', 'missing'].includes(row.source)))
+  assert.equal(body.harnesses.find(row => row.id === 'default_agent').source, 'managed')
+  assert.ok(!JSON.stringify({ health, body }).includes(token))
+  const external = await temporaryFixture(context, 'woven-link-existing-')
+  const linked = await fetch(service.url + '/v1/projects/link', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: external }) })
+  assert.equal(linked.status, 200)
+  assert.equal((await linked.json()).path, await (await import('node:fs/promises')).realpath(external))
+  const listed = await fetch(service.url + '/v1/directories?' + new URLSearchParams({ path: home }), { headers })
+  assert.equal(listed.status, 200)
+  assert.ok((await listed.json()).directories.some(item => item.name === 'workspace'))
+})
+
+test('native service starts through the atomic current release symlink used by systemd', async context => {
+  const home = await temporaryFixture(context, 'woven-host-current-link-')
+  const current = resolve(home, 'current')
+  await symlink(resolve(repositoryRoot, 'remote'), current, 'dir')
+  const token = 'symlink-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace: home, home, catalog: catalogPath, token,
+    entrypoint: resolve(current, 'src/server.mjs'),
+    environmentOverrides: { WOVENMATTER_RUNTIME_KIND: 'host' } })
+  context.after(() => stopService(service.child))
+  const response = await fetch(service.url + '/v1/health', { headers: { Authorization: 'Bearer ' + token } })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).runtimeKind, 'host')
+  assert.equal(service.child.exitCode, null)
 })
 
 test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {

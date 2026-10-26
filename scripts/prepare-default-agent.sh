@@ -44,6 +44,11 @@ if [ "$output" != "$agent_root" ]; then
   # The remote bootstrap serves authenticated HTTP MCP inside the workspace.
   # Copy the canonical relay source beside the bundled agent; no CLI is shipped.
   cp "$repo_root/remote/src/mcp-relay.mjs" "$(dirname "$output")/mcp-relay.mjs"
+  # Native-host source fingerprints use the same canonical paths in a checkout
+  # and in the signed app's resources. These records are not runtime caches.
+  cp "$agent_root/.node-version" "$output/.node-version"
+  mkdir -p "$(dirname "$output")/scripts"
+  cp -p "$repo_root/scripts/remote-host.sh" "$(dirname "$output")/scripts/remote-host.sh"
   rm -f "$(dirname "$output")/wovenmatter" "$(dirname "$output")/wovenmatter-remote.py"
 fi
 mkdir -p "$output/node_modules"

@@ -1,15 +1,18 @@
 # Remote workspaces
 
-Run agents on a Linux machine while using WovenMatter on your Mac. Each
-workspace gets a container with its own persistent home, files, installed
-harnesses, and credentials. You can create several workspaces on one host.
+Run agents on a Linux machine while using Woven Matter on your Mac. Choose
+**Linux host** to run directly on the machine with its existing tools and
+sign-ins, or **Container** for a separate persistent container home. Both keep
+execution and SQLite state on Linux while the Mac is disconnected.
 
 ## What you need
 
 - An online amd64 or arm64 Linux host in your Tailnet.
 - Connected Tailscale on both machines, plus working OpenSSH authentication and trusted host keys.
-- Docker Engine 28 or newer, or a supported Ubuntu/Debian host that the app can prepare
-  with root access or existing passwordless sudo.
+- For Linux host: a regular SSH account, Python 3 and a working systemd user
+  manager. Full root access uses that account's existing passwordless sudo.
+- For Container: Docker Engine 28 or newer, or a supported Ubuntu/Debian host
+  that the app can prepare using existing administrative access.
 - Enough host disk space for workspace files, harnesses, and caches.
 
 Tailscale is required for every remote connection. Select an online Tailnet
@@ -21,21 +24,30 @@ there is no fallback connection mode.
 
 ## Create a workspace
 
-1. Open **Settings → Remote Agent Workspaces** and select or enter a host.
+1. Open **Settings → Remote Agent Workspaces**, choose Linux host or Container,
+   and select or enter a host. For Linux host, choose Full root or Normal user
+   permissions for the whole workspace.
 2. Selecting a discovered machine checks it automatically. For a hostname entered
    manually, choose **Inspect host**. Inspection does not install software.
 3. If the host needs setup, choose **Prepare host** and authorize the listed
-   changes. The app installs Docker on supported Ubuntu/Debian hosts or starts
-   an existing Docker service, then verifies the result. Preparation does not
-   create a workspace.
+   changes. Native setup installs missing browser dependencies and enables
+   background service startup. Container setup installs or starts Docker.
+   Preparation does not create a workspace.
 4. Once that host is ready, the workspace form appears. Give the workspace a name
-   and ID, create it, then install and authenticate the harnesses you want inside
-   it. Changing the hostname or SSH username requires a matching host check.
+   and ID, acknowledge the host permission notice where shown, and create it.
+   Native hosts reuse existing signed-in tools; install any missing adapters or
+   harnesses from setup or Settings. Changing the host, SSH user, kind or access
+   choice requires a matching host check.
 5. Choose its agent in **New chat**. Installed harnesses appear automatically;
    there is no separate enable or sidebar visibility setting. Complete sign-in
    when required before starting a chat.
 
-The first workspace on a host builds its image and shows each build phase.
+Native installation stages a verified service bundle, pinned Node runtime and
+Chromium, then proves the browser sandbox works. Failed activation restores the
+previous service. Native host workspaces do not require Docker. See
+[Native Linux hosts](../reference/REMOTE_HOSTS.md) for permissions and details.
+
+The first container workspace on a host builds its image and shows each build phase.
 Later creations reuse a matching image built within the last 24 hours, skipping
 that download and build. Changed or older images rebuild automatically. The
 workspace's **Update** action always builds a fresh image.
@@ -50,7 +62,12 @@ endpoint, or an unsupported runtime gets its own explanation.
 
 ## Browse inside a workspace
 
-Every workspace image includes Chromium, the Playwright CLI, and the Playwright
+Native hosts install matching Chromium and Playwright with a verified browser
+sandbox. Separate browser profiles keep website logins and storage apart; choose
+a profile in the viewer when more than one exists. Agents can pass `profile`
+to `woven_browser`. Host browsing is headless and runs directly on Linux.
+
+Every container workspace image includes Chromium, the Playwright CLI, and the Playwright
 JavaScript library. Agents can run headless browsing from their shell without
 installing packages or downloading a browser.
 
@@ -100,7 +117,7 @@ open. See [performance validation](../reference/REMOTE_BROWSER_PERFORMANCE.md)
 for measurements and limits.
 
 Each workspace has its own browser; viewing uses the existing authenticated SSH
-connection. The browser-control endpoint is container-loopback-only and is never
+connection. The browser-control endpoint is execution-host-loopback-only and is never
 forwarded to the Mac or published on the host.
 
 CommonJS scripts can use `require("playwright")` from any workspace directory.

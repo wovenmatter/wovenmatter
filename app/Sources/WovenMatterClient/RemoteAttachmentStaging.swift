@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import WovenMatterCore
 
-/// Copies message attachments into a remote workspace container for harnesses
+/// Copies message attachments into a remote workspace for harnesses
 /// with a file attachment contract. Files are content-addressed under `directory`;
 /// unchanged bytes are reused and modified copies are repaired.
 public struct RemoteAttachmentStager: Sendable {
@@ -23,6 +23,10 @@ public struct RemoteAttachmentStager: Sendable {
 
     /// The container path `draft` will occupy once staged.
     public static func containerPath(for draft: AgentFileAttachmentDraft) throws -> String {
+        try path(for: draft, directory: directory)
+    }
+
+    public static func path(for draft: AgentFileAttachmentDraft, directory: String) throws -> String {
         guard draft.contentHash.wholeMatch(of: /[0-9a-f]{64}/) != nil else {
             throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
         }
@@ -40,7 +44,8 @@ public struct RemoteAttachmentStager: Sendable {
             hostName: configuration.hostName,
             userName: configuration.userName
         )
-        let path = try Self.containerPath(for: draft)
+        let target = RemoteWorkspaceExecTarget(configuration: configuration)
+        let path = try Self.path(for: draft, directory: target.attachmentsDirectory)
         let runner = runner
         let transfer = Task.detached(priority: .userInitiated) {
             // Bound the read even if the local blob changed since it was imported.
@@ -61,11 +66,7 @@ public struct RemoteAttachmentStager: Sendable {
                 throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
             }
             let script = Self.stagingScript(path: path, byteCount: data.count, hash: hash)
-            let command = [
-                "docker", "exec", "--interactive",
-                "wovenmatter-\(configuration.workspaceID)",
-                "bash", "-c", script,
-            ].map(Self.quoted).joined(separator: " ")
+            let command = try target.shellCommand(["bash", "-c", script], interactive: true)
             return try runner(destination, command, data)
         }
         let output = try await withTaskCancellationHandler {

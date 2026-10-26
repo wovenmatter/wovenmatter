@@ -5,6 +5,7 @@ import { mkdir, open, readFile, realpath } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
+import { runtimeConfiguration, workspacePermission } from './config.mjs'
 
 export function redactMCPTransport(value) {
   if(Array.isArray(value))return value.map(redactMCPTransport)
@@ -143,7 +144,7 @@ function updateSnapshot(state, item) {
 // ACP processes belong to the service, never to the transient SSH attachment.
 // Journaling acceptance before writing prevents a retry from submitting a prompt twice.
 export function createDurableACP({ catalog, workspaceRoot, environment, isEnabled = async () => true, isHarnessEnabled = async () => true,
-  directory = resolve(workspaceRoot, '.wovenmatter/durable-acp'), spawnProcess = spawn, openJournal = open, journalFlushInterval = 75 }) {
+  runtimeKind = runtimeConfiguration.runtimeKind, configuration = runtimeConfiguration, directory = resolve(workspaceRoot, '.wovenmatter/durable-acp'), spawnProcess = spawn, openJournal = open, journalFlushInterval = 75 }) {
   const channels = new Map()
   let queue = Promise.resolve()
   const serialize = action => {
@@ -191,6 +192,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     }
   }
   async function channelFor(id, harnessID, cwd, permission, nativeSessionID, recovering = false) {
+    permission = workspacePermission(harnessID, permission, configuration)
     identifier(id)
     if (channels.has(id)) {
       const existing = channels.get(id)
@@ -219,7 +221,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     if (recovering && channel.state !== 'stopped') throw new Error('Unknown execution state; explicit recovery is required')
     const base = await realpath(workspaceRoot)
     const workingDirectory = await realpath(cwd ?? metadata?.cwd ?? workspaceRoot)
-    if (workingDirectory !== base && !workingDirectory.startsWith(base + sep)) throw new Error('Working directory is outside this workspace')
+    if (runtimeKind !== 'host' && workingDirectory !== base && !workingDirectory.startsWith(base + sep)) throw new Error('Working directory is outside this workspace')
     let args = [...(harness.arguments ?? [])]
     if (selected === 'grok_build' && permission) {
       if (!['default', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk'].includes(permission)) throw new Error('Invalid Grok permission')
@@ -334,9 +336,14 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         }
         if (channel.snapshot.busy && !sameRunSteering && ['session/prompt', 'session/load', 'session/new', 'session/set_model', 'session/set_mode', 'session/set_config_option'].includes(body.message.method)) throw new Error('Remote task is still running; reconnect after it finishes')
         const outgoing = { ...body.message }
+        const effective = workspacePermission(channel.harnessID, undefined, configuration)
+        if (effective) {
+          if (outgoing.method === 'session/set_mode') outgoing.params = { ...outgoing.params, modeId: effective }
+          if (outgoing.method === 'session/set_config_option' && ['permission_mode', 'approval_mode', 'mode'].includes(outgoing.params?.configId)) outgoing.params = { ...outgoing.params, value: effective }
+        }
         const line = JSON.stringify(outgoing) + '\n'
         if (Buffer.byteLength(line) > 8 * 1024 * 1024) throw new Error('ACP message is too large')
-        const accepted = { type: 'accepted', deliveryID: body.deliveryID, message: redactMCPTransport(body.message) }
+        const accepted = { type: 'accepted', deliveryID: body.deliveryID, message: redactMCPTransport(outgoing) }
         await record(channel, accepted)
         updateSnapshot(channel.snapshot, accepted)
         channel.accepted.add(body.deliveryID)

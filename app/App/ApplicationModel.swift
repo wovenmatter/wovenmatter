@@ -1594,11 +1594,19 @@ final class ApplicationModel {
             let path: String
             let managed: Bool
             if let workspaceID {
-                guard externalRoot == nil, let configuration = remoteWorkspaces.configuration(id: workspaceID) else {
+                guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else {
                     throw WorkspaceToolError.invalid("Remote folders must be created in their owning workspace.")
                 }
-                path = try await remoteWorkspaces.createProject(name: name, in: configuration).path
-                managed = true
+                if let externalRoot {
+                    guard configuration.kind == .host, externalRoot.isFileURL else {
+                        throw WorkspaceToolError.invalid("Link existing directories in a native host workspace.")
+                    }
+                    path = try await remoteWorkspaces.linkHostProject(path: externalRoot.path, in: configuration).path
+                    managed = false
+                } else {
+                    path = try await remoteWorkspaces.createProject(name: name, in: configuration).path
+                    managed = true
+                }
             } else {
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
                 if let externalRoot {
@@ -2997,7 +3005,8 @@ final class ApplicationModel {
 
         guard let runtimeKind = conversation.localRuntimeKind,
               model != nil || thinking != nil || permission != nil else { return }
-        let permission = runtimeKind == .pi ? nil : permission
+        let permission = runtimeKind == .pi ? nil
+            : conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: runtimeKind) } ?? permission
         if retryPendingSessionSelections(conversationID: conversation.id,
             selections: SessionSelections(model: model, thinking: thinking, permission: permission)) { return }
         guard !localRunningConversationIDs.contains(conversation.id),
@@ -3110,7 +3119,11 @@ final class ApplicationModel {
     func defaultToolWorkingDirectory(workspaceID: UUID?) throws -> String {
         if let workspaceID {
             guard let workspace = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
-            return remoteWorkspaces.remoteWorkspaceRoot(for: workspace)
+            let root = remoteWorkspaces.remoteWorkspaceRoot(for: workspace)
+            guard root.hasPrefix("/"), !root.contains("\0") else {
+                throw WorkspaceToolError.invalid("Reconnect this host workspace to discover its execution directory.")
+            }
+            return root
         }
         guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
         return workspace.rootURL.path

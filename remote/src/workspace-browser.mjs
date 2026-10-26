@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm, readdir, lstat, realpath, chmod } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createWorkspaceBrowserMCP } from './workspace-browser-mcp.mjs'
 
 const failure = (statusCode, message) => Object.assign(new Error(message), { statusCode })
@@ -14,28 +14,44 @@ async function deadline(operation, milliseconds = 5000) {
   } finally { clearTimeout(timer) }
 }
 
-async function launchBrowser(profile) {
+export function browserLaunchOptions({ runtimeKind = 'host' } = {}) {
+  return {
+    headless: true, viewport: { width: 1280, height: 800 }, timeout: 15000,
+    // Native hosts always use Chromium's namespace/seccomp sandbox. Existing
+    // containers keep their established launch contract until their additional
+    // seccomp/AppArmor policy can be validated without weakening containment.
+    ...(runtimeKind === 'host' ? { chromiumSandbox: true } : {}),
+    args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'],
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      !/TOKEN|SECRET|PASSWORD|API_KEY/i.test(key))),
+  }
+}
+
+async function browserRuntime() {
   const bundled = new URL('../default-agent/node_modules/playwright-core/index.mjs', import.meta.url)
-  const { chromium } = await import(existsSync(bundled) ? bundled.href
+  return await import(existsSync(bundled) ? bundled.href
     : new URL('../../default-agent/node_modules/playwright-core/index.mjs', import.meta.url).href)
+}
+
+export async function browserExecutablePath() { return (await browserRuntime()).chromium.executablePath() }
+
+export async function launchBrowser(profile, options = {}) {
+  const { chromium } = await browserRuntime()
   await mkdir(profile, { recursive: true, mode: 0o700 })
   await rm(join(profile, 'DevToolsActivePort'), { force: true })
-  const context = await chromium.launchPersistentContext(profile, {
-    headless: true, viewport: { width: 1280, height: 800 }, timeout: 15000,
-    args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'],
-  })
+  const context = await chromium.launchPersistentContext(profile, browserLaunchOptions(options))
   try {
     const [port, path] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).trim().split('\n')
     if (!/^\d+$/.test(port) || +port < 1 || +port > 65535 || !/^\/devtools\/browser\/[a-zA-Z0-9-]+$/.test(path)) {
       throw failure(503, 'browser_endpoint_unavailable')
     }
-    return { context, endpoint: `ws://127.0.0.1:${port}${path}` }
+    return { context, endpoint: `ws://127.0.0.1:${port}${path}`, executablePath: chromium.executablePath() }
   } catch (error) { await context.close(); throw error }
 }
 
 // One workspace-owned browser: agents and people operate the same pages.
 // Opening the app viewer is passive; only explicit input changes a page. CDP stays on loopback.
-export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
+function createProfileBrowser({ profile, launch }) {
   let active, starting, closed = false
   const capturing = new Set()
   const pages = new Map(), ids = new WeakMap(), documents = new WeakMap(), frames = new Map(), receipts = new Map()
@@ -435,6 +451,70 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
   api.executeMCP = automation.execute
   api.cancelMCP = automation.cancel
   return api
+}
+
+const validProfile = id => typeof id === 'string' && /^[a-z0-9-]{1,32}$/.test(id)
+
+// Each identity owns its browser, tabs, action receipts and cookies. Choosing a
+// profile never changes another identity's page or shares its browser context.
+export function createWorkspaceBrowser({ profile, profilesRoot, runtimeKind = 'host', launch = launchBrowser }) {
+  const profiles = new Map()
+  let closed = false
+  async function directory(id) {
+    if (!profilesRoot) {
+      if (id !== 'default') throw failure(400, 'browser_profiles_unavailable')
+      return profile
+    }
+    const root = resolve(profilesRoot)
+    await mkdir(root, { recursive: true, mode: 0o700 })
+    const rootStat = await lstat(root)
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw failure(409, 'unsafe_browser_profiles_directory')
+    await chmod(root, 0o700)
+    // Keeping the old directory as default preserves all cookies and login
+    // state without a potentially destructive cross-filesystem migration.
+    const legacy = id === 'default' && profile && existsSync(profile)
+    const path = legacy ? resolve(profile) : join(root, id)
+    await mkdir(path, { recursive: true, mode: 0o700 })
+    const info = await lstat(path)
+    if (info.isSymbolicLink() || !info.isDirectory()) throw failure(409, 'unsafe_browser_profile_directory')
+    if (!legacy && await realpath(path) !== join(await realpath(root), id)) throw failure(409, 'unsafe_browser_profile_directory')
+    await chmod(path, 0o700)
+    return path
+  }
+  function forProfile(id = 'default') {
+    if (!validProfile(id)) throw failure(400, 'invalid_browser_profile')
+    if (closed) throw failure(503, 'browser_unavailable')
+    if (!profiles.has(id)) {
+      if (profiles.size >= 32) throw failure(409, 'browser_profile_limit')
+      profiles.set(id, createProfileBrowser({ profile: id, launch: async () => launch(await directory(id), { runtimeKind }) }))
+    }
+    return profiles.get(id)
+  }
+  return {
+    forProfile,
+    async profiles() {
+      const ids = new Set(['default', ...profiles.keys()])
+      if (profilesRoot) {
+        for (const item of await readdir(profilesRoot, { withFileTypes: true }).catch(error => {
+          if (error.code === 'ENOENT') return []
+          throw error
+        })) if (item.isDirectory() && validProfile(item.name)) ids.add(item.name)
+      }
+      return { profiles: [...ids].sort((a, b) => a === 'default' ? -1 : b === 'default' ? 1 : a.localeCompare(b)) }
+    },
+    connect: async () => forProfile().connect(),
+    tabs: async () => forProfile().tabs(),
+    watch: async (...args) => forProfile().watch(...args),
+    frame: async (...args) => forProfile().frame(...args),
+    action: async (...args) => forProfile().action(...args),
+    actions: async (...args) => forProfile().actions(...args),
+    executeMCP: async (scope, input, options) => forProfile(input.profile).executeMCP(scope, input, options),
+    cancelMCP: async (scope, id) => {
+      const results = await Promise.all([...profiles.values()].map(browser => browser.cancelMCP(scope, id)))
+      return { cancelled: results.reduce((sum, result) => sum + result.cancelled, 0) }
+    },
+    async close() { closed = true; await Promise.all([...profiles.values()].map(browser => browser.close())); profiles.clear() },
+  }
 }
 
 function keyInfo(key) {

@@ -10,22 +10,24 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case checkRuntimeUpdates(UUID, AgentRuntimeKind)
     case workspaceInstance(UUID, AgentRuntimeKind, action: String?)
     case backgroundExecution(UUID, Bool)
-    case checkHost(hostName: String, userName: String)
-    case prepareHost(hostName: String, userName: String)
-    case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String)
+    case checkHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user)
+    case prepareHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user)
+    case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String, kind: RemoteWorkspaceKind = .container, accessMode: RemoteWorkspaceAccessMode = .user)
     case authorizeHostPreparation, cancelHostPreparation
     case dismissHarnessSetup(UUID)
     case lifecycle(UUID, String), updateContainer(UUID)
     case resources(UUID, memoryLimit: String, swapLimit: String)
     case delete(UUID, removePersistentData: Bool)
+    case logs(UUID), browserSelfTest(UUID)
     case performHarness(UUID, AgentRuntimeKind, String), prepareHarness(UUID, AgentRuntimeKind, String)
     case confirmHarness(UUID?, AgentRuntimeKind?, String?), cancelHarness(UUID?, AgentRuntimeKind?, String?)
     case signIn(UUID, AgentRuntimeKind, String), authorizationCode(UUID, String), cancelSignIn(UUID)
     case databases(UUID), createDatabase(UUID, name: String, preference: AgentDatabasePreference)
+    case hostDirectories(UUID, path: String?)
     case databaseData(UUID, DatabaseArtifactLink)
-    case browserTabs(UUID), browserFrame(UUID, tabID: String, previousFrameID: String? = nil), browserAction(UUID, RemoteBrowserAction)
+    case browserTabs(UUID, profile: String? = nil), browserFrame(UUID, tabID: String, previousFrameID: String? = nil, profile: String? = nil), browserAction(UUID, RemoteBrowserAction, profile: String? = nil)
 
-    case browserActions(UUID, [RemoteBrowserAction])
+    case browserActions(UUID, [RemoteBrowserAction], profile: String? = nil)
 
     var isBrowserOperation: Bool {
         switch self {
@@ -40,6 +42,7 @@ struct BackendRemoteWorkspaceResponse: Codable {
     var databases: [RemoteAgentDatabase]?
     var database: RemoteAgentDatabase?
     var databaseData: RemoteDatabaseData?
+    var hostDirectories: RemoteHostDirectoryListing?
     var browserTabs: RemoteBrowserTabs?
     var browserFrame: RemoteBrowserFrame?
     var browserAction: RemoteBrowserActionResult?
@@ -59,6 +62,7 @@ struct BackendRemoteWorkspaceService {
         var frame: RemoteBrowserFrame?
         var actionResult: RemoteBrowserActionResult?
         var actionResults: RemoteBrowserActionBatchResult?
+        var directories: RemoteHostDirectoryListing?
         switch command {
         case .synchronizeDefaultAgent(let id): try await model.synchronizeDefaultAgent(workspace(id))
         case .refreshAll: model.refreshAll()
@@ -70,10 +74,10 @@ struct BackendRemoteWorkspaceService {
         case .checkRuntimeUpdates(let id, let kind): model.checkRuntimeUpdates(kind, configuration: try workspace(id))
         case .workspaceInstance(let id, let kind, let action): model.refreshWorkspaceInstance(kind, configuration: try workspace(id), action: action)
         case .backgroundExecution(let id, let enabled): model.setBackgroundExecution(enabled, for: try workspace(id))
-        case .checkHost(let host, let user): model.checkHost(hostName: host, userName: user)
-        case .prepareHost(let host, let user): model.prepareHost(hostName: host, userName: user)
-        case .create(let name, let id, let host, let user, let port, let memory, let swap):
-            model.create(name: name, workspaceID: id, hostName: host, userName: user, port: port, memoryLimit: memory, swapLimit: swap)
+        case .checkHost(let host, let user, let kind, let access): model.checkHost(hostName: host, userName: user, kind: kind, accessMode: access)
+        case .prepareHost(let host, let user, let kind, let access): model.prepareHost(hostName: host, userName: user, kind: kind, accessMode: access)
+        case .create(let name, let id, let host, let user, let port, let memory, let swap, let kind, let access):
+            model.create(name: name, workspaceID: id, hostName: host, userName: user, port: port, memoryLimit: memory, swapLimit: swap, kind: kind, accessMode: access)
         case .dismissHarnessSetup(let id): model.dismissHarnessSetup(id)
         case .authorizeHostPreparation: model.authorizeHostPreparation()
         case .cancelHostPreparation: model.cancelHostPreparation()
@@ -83,6 +87,8 @@ struct BackendRemoteWorkspaceService {
         case .updateContainer(let id): model.updateContainer(try workspace(id))
         case .resources(let id, let memory, let swap): model.applyResources(try workspace(id), memoryLimit: memory, swapLimit: swap)
         case .delete(let id, let removeData): model.delete(try workspace(id), removePersistentData: removeData)
+        case .logs(let id): model.loadLogs(try workspace(id))
+        case .browserSelfTest(let id): model.checkBrowserSandbox(try workspace(id))
         case .performHarness(let id, let kind, let action):
             model.performHarnessAction(action, harness: try harness(kind, workspaceID: id), configuration: try workspace(id))
         case .prepareHarness(let id, let kind, let action):
@@ -97,13 +103,14 @@ struct BackendRemoteWorkspaceService {
         case .cancelSignIn(let id): model.cancelHarnessSignIn(configuration: try workspace(id))
         case .databases(let id): databases = try await model.databases(for: workspace(id))
         case .createDatabase(let id, let name, let preference): database = try await model.createDatabase(name: name, preference: preference, in: workspace(id))
-        case .browserTabs(let id): tabs = try await model.browserTabs(for: workspace(id))
-        case .browserAction(let id, let action): actionResult = try await model.browserAction(action, for: workspace(id))
-        case .browserFrame(let id, let tabID, let previous): frame = try await model.browserFrame(tabID: tabID, previousFrameID: previous, for: workspace(id))
-        case .browserActions(let id, let actions): actionResults = try await model.browserActions(actions, for: workspace(id))
+        case .hostDirectories(let id, let path): directories = try await model.hostDirectories(path: path, in: workspace(id))
+        case .browserTabs(let id, let profile): tabs = try await model.browserTabs(for: workspace(id), profile: profile)
+        case .browserAction(let id, let action, let profile): actionResult = try await model.browserAction(action, for: workspace(id), profile: profile)
+        case .browserFrame(let id, let tabID, let previous, let profile): frame = try await model.browserFrame(tabID: tabID, previousFrameID: previous, for: workspace(id), profile: profile)
+        case .browserActions(let id, let actions, let profile): actionResults = try await model.browserActions(actions, for: workspace(id), profile: profile)
         case .databaseData(let id, let link): data = try await model.databaseData(for: link, in: workspace(id))
         }
-        return .init(snapshot: command.isBrowserOperation ? nil : model.backendSnapshot(), databases: databases, database: database, databaseData: data, browserTabs: tabs, browserFrame: frame, browserAction: actionResult, browserActions: actionResults)
+        return .init(snapshot: command.isBrowserOperation ? nil : model.backendSnapshot(), databases: databases, database: database, databaseData: data, hostDirectories: directories, browserTabs: tabs, browserFrame: frame, browserAction: actionResult, browserActions: actionResults)
     }
 
     private func workspace(_ id: UUID) throws -> RemoteWorkspaceConfiguration {

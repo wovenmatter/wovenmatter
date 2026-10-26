@@ -9,9 +9,11 @@ SQLite history store; project files stay in their execution workspace.
 Choose **New folder** in the sidebar, select its workspace, and enter a name.
 The owning workspace must be connected. **Create New** makes a blank directory
 with that name under the managed workspace root: `~/.woven-matter` on your Mac
-or `/home/.woven-matter` in a remote container.
+or `/home/.woven-matter` in a remote container. A native Linux host uses
+`~/.local/share/wovenmatter/workspace` under its SSH account.
 
-For **This Mac**, **Link Existing** lets you choose an existing project directory.
+**Link Existing** lets you choose an existing project directory on the owning
+execution machine, including an accessible directory on a native Linux host.
 Woven preserves its files and project instructions. New projects receive no
 preset directories, `AGENTS.md`, or `CLAUDE.md`.
 
@@ -77,7 +79,14 @@ does not overwrite project instruction files or user-global instructions.
 
 ## Remote storage
 
-Each remote workspace is a Linux container with a persistent home. Updates and
+Choose **Linux host** to run directly under the remote SSH account, reusing its
+installed tools and sign-ins. Choose **Container** for a separate persistent
+container home. Native hosts support Full root or Normal user permissions for
+the whole workspace; folders retain their ordinary Linux permissions. Both
+kinds keep execution and SQLite state on Linux while disconnected and use the
+same reconnect/synchronization behavior. See [Native Linux hosts](../reference/REMOTE_HOSTS.md).
+
+Container updates and
 recreation preserve its named home volume. Removing the container and removing
 its data are separate choices. Remote project files stay on their host;
 centrally saved transcripts do not synchronize them.

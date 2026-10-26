@@ -644,6 +644,8 @@ final class OpenCodeModel {
     }
 
     private func performSessionSelections(_ id: String, selections: SessionSelections) async throws {
+        var selections = selections
+        if let permission = remoteConfiguration?.fullRootPermission(for: .opencode) { selections.permission = permission }
         if selections.tools != nil, applyInitialSessionTools == nil {
             throw OpenCodeError.message("Session tool settings are unavailable in this build.")
         }

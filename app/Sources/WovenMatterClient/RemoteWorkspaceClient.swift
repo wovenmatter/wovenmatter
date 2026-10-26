@@ -50,6 +50,12 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     public var swapLimit: String?
     public var createdAt: Date
     public var backgroundExecutionEnabled: Bool
+    public var kind: RemoteWorkspaceKind
+    public var accessMode: RemoteWorkspaceAccessMode
+    public var dataRoot: String?
+    public var workspaceRoot: String?
+    public var databasesDirectory: String?
+    public var attachmentsDirectory: String?
 
     public init(
         id: UUID = UUID(),
@@ -61,7 +67,13 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         memoryLimit: String? = nil,
         swapLimit: String? = nil,
         createdAt: Date = Date(),
-        backgroundExecutionEnabled: Bool = true
+        backgroundExecutionEnabled: Bool = true,
+        kind: RemoteWorkspaceKind = .container,
+        accessMode: RemoteWorkspaceAccessMode = .user,
+        dataRoot: String? = nil,
+        workspaceRoot: String? = nil,
+        databasesDirectory: String? = nil,
+        attachmentsDirectory: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -73,10 +85,17 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         self.swapLimit = swapLimit
         self.createdAt = createdAt
         self.backgroundExecutionEnabled = backgroundExecutionEnabled
+        self.kind = kind
+        self.accessMode = accessMode
+        self.dataRoot = dataRoot
+        self.workspaceRoot = workspaceRoot
+        self.databasesDirectory = databasesDirectory
+        self.attachmentsDirectory = attachmentsDirectory
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, workspaceID, hostName, userName, remotePort, memoryLimit, swapLimit, createdAt, backgroundExecutionEnabled
+        case kind, accessMode, dataRoot, workspaceRoot, databasesDirectory, attachmentsDirectory
     }
 
     public init(from decoder: any Decoder) throws {
@@ -91,6 +110,12 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         swapLimit = try values.decodeIfPresent(String.self, forKey: .swapLimit)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         backgroundExecutionEnabled = try values.decodeIfPresent(Bool.self, forKey: .backgroundExecutionEnabled) ?? true
+        kind = try values.decodeIfPresent(RemoteWorkspaceKind.self, forKey: .kind) ?? .container
+        accessMode = try values.decodeIfPresent(RemoteWorkspaceAccessMode.self, forKey: .accessMode) ?? .user
+        dataRoot = try values.decodeIfPresent(String.self, forKey: .dataRoot)
+        workspaceRoot = try values.decodeIfPresent(String.self, forKey: .workspaceRoot)
+        databasesDirectory = try values.decodeIfPresent(String.self, forKey: .databasesDirectory)
+        attachmentsDirectory = try values.decodeIfPresent(String.self, forKey: .attachmentsDirectory)
     }
 
 }
@@ -130,45 +155,52 @@ public enum RemoteHarnessLaunchResolver {
             hostName: configuration.hostName,
             userName: configuration.userName
         )
-        let remoteRoot = workingDirectory ?? workspaceRoot
+        let target = RemoteWorkspaceExecTarget(configuration: configuration)
+        let remoteRoot = try workingDirectory ?? (configuration.kind == .host
+            ? URL(fileURLWithPath: target.workspaceRoot) : workspaceRoot)
         guard remoteRoot.isFileURL, remoteRoot.path.hasPrefix("/"), !remoteRoot.path.contains("\0") else {
             throw WorkspaceToolError.invalid("The remote working directory must be an absolute path.")
         }
-        var command = [
-            "docker", "exec", "--interactive",
-            "--workdir", remoteRoot.path,
-            "wovenmatter-\(configuration.workspaceID)",
-            "env",
-            "HOME=/home",
-            "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
-            "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        ]
-        for (key, value) in LocalACPRuntimeCatalog
-            .definition(for: runtimeKind)?.environment.sorted(by: { $0.key < $1.key }) ?? [] {
-            command.append("\(key)=\(value)")
-        }
-        var harnessArgumentsStartIndex = command.count
         let supportsDurableRelay = harness.map {
             ["acp", "agent-stdio", "acp-and-gateway"].contains($0.transport)
         } ?? false
         let usesDurableRelay = configuration.backgroundExecutionEnabled
             && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
+        let environment = LocalACPRuntimeCatalog.definition(for: runtimeKind)?.environment ?? [:]
+        let workspacePermission = configuration.fullRootPermission(for: runtimeKind)
+        let hostSubcommand = usesDurableRelay ? "durable-acp" : runtimeKind == .defaultAgent ? "default-agent" : "harness"
+        var command = try target.prefix(workingDirectory: remoteRoot.path, interactive: true,
+            environment: configuration.kind == .host ? environment : [:], hostSubcommand: hostSubcommand)
+        if configuration.kind == .container {
+            command += ["env", "HOME=/home",
+                "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
+                "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
+            command += environment.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }
+        }
+        var harnessArgumentsStartIndex = command.count
         if usesDurableRelay, let durableChannelID {
             guard UUID(uuidString: durableChannelID) != nil else {
                 throw WorkspaceToolError.invalid("The background session identifier is invalid.")
             }
-            harnessArgumentsStartIndex = command.count + 2
-            command.append(contentsOf: ["node", "/opt/wovenmatter/src/durable-acp-stdio.mjs",
-                                       "--channel-id", durableChannelID, "--harness-id", runtimeKind.rawValue,
-                                       "--cwd", remoteRoot.path])
+            if configuration.kind == .container {
+                command += ["node", "/opt/wovenmatter/src/durable-acp-stdio.mjs"]
+            }
+            // Invocation wrapping inserts harness defaults immediately before
+            // these relay arguments, independently of the transport prefix.
+            harnessArgumentsStartIndex = command.count
+            command += ["--channel-id", durableChannelID, "--harness-id", runtimeKind.rawValue,
+                        "--cwd", remoteRoot.path]
+            if let workspacePermission { command += ["--permission-mode", workspacePermission] }
         } else if runtimeKind == .defaultAgent {
-            command.append(contentsOf: ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
+            if configuration.kind == .container {
+                command += ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"]
+            }
         } else if let harness {
-            command.append(contentsOf: [
+            if configuration.kind == .container { command.append(contentsOf: [
                 "bash", "-c",
                 #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
                 "woven-runtime",
-            ])
+            ]) }
             command.append(harness.command)
             harnessArgumentsStartIndex = command.count
             command.append(contentsOf: harness.arguments)
@@ -178,6 +210,7 @@ public enum RemoteHarnessLaunchResolver {
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
         ]
         var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
+        if configuration.kind == .host { launchEnvironment["WOVENMATTER_HOST_ACCESS_MODE"] = configuration.accessMode.rawValue }
         if runtimeKind == .defaultAgent {
             launchEnvironment["WOVEN_DEFAULT_AGENT_SCOPE"] = configuration.id.uuidString.lowercased()
         } else if usesDurableRelay {
@@ -190,6 +223,7 @@ public enum RemoteHarnessLaunchResolver {
                 arguments: sshArguments,
                 environment: launchEnvironment,
                 processWorkingDirectoryURL: processWorkingDirectory,
+                requestedPermission: workspacePermission,
                 wrappedCommand: LocalACPRuntimeWrappedCommand(
                     argumentIndex: sshArguments.count - 1,
                     command: command,
@@ -198,7 +232,7 @@ public enum RemoteHarnessLaunchResolver {
             ),
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
-                databasesURL: URL(fileURLWithPath: "/home/.local/share/wovenmatter/databases", isDirectory: true)
+                databasesURL: URL(fileURLWithPath: try target.databasesDirectory, isDirectory: true)
             )
         )
     }
@@ -228,6 +262,16 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
     public let preparationRequired: Bool?
     public let preparationActions: [String]?
     public let blockingIssues: [String]?
+    public var kind: RemoteWorkspaceKind? = nil
+    public var dataRoot: String? = nil
+    public var workspaceRoot: String? = nil
+    public var databasesDirectory: String? = nil
+    public var attachmentsDirectory: String? = nil
+    public var workspaceID: String? = nil
+    public var port: Int? = nil
+    public var fingerprint: String? = nil
+    public var linger: Bool? = nil
+    public var requiredPrivilegedActions: [String]? = nil
 }
 
 public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
@@ -256,6 +300,16 @@ public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
     public let hostStorageLow: Bool
     public let storageWarning: String?
     public let legacyStorage: Bool
+    public var kind: RemoteWorkspaceKind? = nil
+    public var accessMode: RemoteWorkspaceAccessMode? = nil
+    public var runtimeKind: RemoteWorkspaceKind? = nil
+    public var serviceFingerprint: String? = nil
+    public var fingerprint: String? = nil
+    public var linger: Bool? = nil
+    public var dataRoot: String? = nil
+    public var workspaceRoot: String? = nil
+    public var databasesDirectory: String? = nil
+    public var attachmentsDirectory: String? = nil
 }
 
 public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
@@ -270,6 +324,8 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public let transportError: String?
     public let setupMethods: [RemoteHarnessSetupMethod]
     public let detectedProviders: [String]
+    public var source: String? = nil
+    public var path: String? = nil
 
     /// Older workspace services may still report the previous agent name.
     public var presentationName: String { id == .defaultAgent ? id.displayName : displayName }
@@ -287,7 +343,8 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
             authenticationStatus: authenticationStatus,
             transportStatus: running ? "ready" : "unavailable",
             transportError: running ? nil : (instance.lastError ?? "Start this workspace’s OpenCode v2 server in More settings."),
-            setupMethods: setupMethods, detectedProviders: detectedProviders
+            setupMethods: setupMethods, detectedProviders: detectedProviders,
+            source: source, path: path
         )
     }
 }
@@ -308,11 +365,12 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
     public let installedVersion: String?
     public let latestVersion: String?
     public let updateTargetVersion: String?
+    public var source: String? = nil
 
     /// Bundled dependencies can only advance within the adapter's declared range.
     public var availableUpdateVersion: String? {
         let target = id == "bundled" ? updateTargetVersion : latestVersion
-        guard installed, let installedVersion, let target,
+        guard source != "system", installed, let installedVersion, let target,
               RuntimeMaintenance.version(installedVersion, precedes: target) else { return nil }
         return target
     }
@@ -335,6 +393,8 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
     public let notice: String?
     public let updateAvailable: Bool
     public let versionCheckAvailable: Bool?
+    public var source: String? = nil
+    public var path: String? = nil
 }
 
 public struct RemoteHarnessSetupMethod: Codable, Equatable, Identifiable, Sendable {
@@ -373,6 +433,12 @@ public struct RemoteWorkspaceHealth: Codable, Equatable, Sendable {
     public let version: String
     public let workspaceRoot: String
     public let harnessCount: Int
+    public var runtimeKind: RemoteWorkspaceKind? = nil
+    public var serviceFingerprint: String? = nil
+    public var databasesDirectory: String? = nil
+    public var attachmentsDirectory: String? = nil
+    public var dataRoot: String? = nil
+    public var accessMode: RemoteWorkspaceAccessMode? = nil
 }
 
 public struct RemoteHarnessOperation: Codable, Equatable, Identifiable, Sendable {
@@ -528,10 +594,11 @@ public actor RemoteWorkspaceSSHClient {
     ) throws -> Data
 
     public typealias StreamingRunner = @Sendable (String, String, Data?, @escaping @Sendable (Data) -> Void) throws -> Data
-    private let runner: Runner
-    private let streamingRunner: StreamingRunner
-    private let deploymentRoot: URL?
+    let runner: Runner
+    let streamingRunner: StreamingRunner
+    let deploymentRoot: URL?
     private let scriptLoader: @Sendable () throws -> Data
+    let hostScriptLoader: @Sendable () throws -> Data
 
     public init() {
         self.runner = RemoteWorkspaceSSHClient.runSSH
@@ -540,31 +607,37 @@ public actor RemoteWorkspaceSSHClient {
                                                timeLimit: nil, onStandardError: progress)
         }
         self.deploymentRoot = nil
-        self.scriptLoader = RemoteWorkspaceSSHClient.loadLifecycleScript
+        self.scriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript() }
+        self.hostScriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript(named: "remote-host") }
     }
 
     public init(
         runner: @escaping Runner,
         scriptLoader: @escaping @Sendable () throws -> Data,
         deploymentRoot: URL? = nil,
-        streamingRunner: StreamingRunner? = nil
+        streamingRunner: StreamingRunner? = nil,
+        hostScriptLoader: (@Sendable () throws -> Data)? = nil
     ) {
         self.runner = runner
         self.streamingRunner = streamingRunner ?? { destination, command, input, _ in try runner(destination, command, input) }
         self.deploymentRoot = deploymentRoot
         self.scriptLoader = scriptLoader
+        self.hostScriptLoader = hostScriptLoader ?? scriptLoader
     }
 
     public func preflight(
         hostName: String,
-        userName: String?
+        userName: String?,
+        kind: RemoteWorkspaceKind = .container,
+        accessMode: RemoteWorkspaceAccessMode = .user
     ) throws -> RemoteWorkspacePreflight {
         try decode(
             RemoteWorkspacePreflight.self,
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: ["inspect"]
+                arguments: kind == .host ? ["inspect", accessMode.rawValue] : ["inspect"],
+                kind: kind
             )
         )
     }
@@ -575,7 +648,8 @@ public actor RemoteWorkspaceSSHClient {
         struct Result: Decodable { let endpoint: URL }
         let result = try decode(Result.self, from: runScript(
             hostName: configuration.hostName, userName: configuration.userName,
-            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
+            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)],
+            kind: configuration.kind))
         guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true,
               result.endpoint.port == httpsPort, result.endpoint.user == nil, result.endpoint.password == nil,
               result.endpoint.query == nil, result.endpoint.fragment == nil,
@@ -587,17 +661,17 @@ public actor RemoteWorkspaceSSHClient {
 
     public func prepareHost(
         hostName: String,
-        userName: String?
+        userName: String?,
+        kind: RemoteWorkspaceKind = .container,
+        accessMode: RemoteWorkspaceAccessMode = .user
     ) throws -> RemoteWorkspacePreflight {
         try decode(
             RemoteWorkspacePreflight.self,
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: [
-                    "prepare",
-                    "AUTHORIZED",
-                ]
+                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] : []),
+                kind: kind
             )
         )
     }
@@ -607,6 +681,7 @@ public actor RemoteWorkspaceSSHClient {
         token: String,
         imageID: String? = nil
     ) throws -> RemoteWorkspaceStatus {
+        if configuration.kind == .host { return try deployHost(configuration: configuration, token: token) }
         let resources = try RemoteWorkspaceResourceLimits.commandValues(
             for: configuration
         )
@@ -671,7 +746,8 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: configuration.hostName,
                 userName: configuration.userName,
-                arguments: ["status", configuration.workspaceID]
+                arguments: ["status", configuration.workspaceID],
+                kind: configuration.kind
             )
         )
     }
@@ -685,7 +761,8 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: configuration.hostName,
                 userName: configuration.userName,
-                arguments: [action.rawValue, configuration.workspaceID]
+                arguments: [action.rawValue, configuration.workspaceID],
+                kind: configuration.kind
             )
         )
     }
@@ -694,6 +771,7 @@ public actor RemoteWorkspaceSSHClient {
         configuration: RemoteWorkspaceConfiguration,
         imageID: String? = nil
     ) throws -> RemoteWorkspaceStatus {
+        if configuration.kind == .host { return try deployHost(configuration: configuration, update: true) }
         let resources = try RemoteWorkspaceResourceLimits.commandValues(
             for: configuration
         )
@@ -717,6 +795,7 @@ public actor RemoteWorkspaceSSHClient {
     public nonisolated static func validateResources(
         configuration: RemoteWorkspaceConfiguration
     ) throws {
+        if configuration.kind == .host { return }
         _ = try RemoteWorkspaceResourceLimits.commandValues(for: configuration)
     }
 
@@ -741,12 +820,13 @@ public actor RemoteWorkspaceSSHClient {
         configuration: RemoteWorkspaceConfiguration,
         removePersistentData: Bool
     ) throws {
-        var arguments = ["delete", configuration.workspaceID]
+        var arguments = [configuration.kind == .host ? "uninstall" : "delete", configuration.workspaceID]
         if removePersistentData { arguments.append("--data") }
         _ = try runScript(
             hostName: configuration.hostName,
             userName: configuration.userName,
-            arguments: arguments
+            arguments: arguments,
+            kind: configuration.kind
         )
     }
 
@@ -754,13 +834,14 @@ public actor RemoteWorkspaceSSHClient {
         hostName: String,
         userName: String?,
         arguments: [String],
-        secret: String? = nil
+        secret: String? = nil,
+        kind: RemoteWorkspaceKind = .container
     ) throws -> Data {
         let destination = try Self.validatedDestination(
             hostName: hostName,
             userName: userName
         )
-        let script = try scriptLoader()
+        let script = try kind == .host ? hostScriptLoader() : scriptLoader()
         if let secret {
             guard !secret.contains("\n"), !secret.contains("\r") else {
                 throw RemoteWorkspaceClientError.invalidResponse(
@@ -778,7 +859,7 @@ public actor RemoteWorkspaceSSHClient {
         return try runner(destination, command, script)
     }
 
-    private func decode<Value: Decodable>(
+    func decode<Value: Decodable>(
         _ type: Value.Type,
         from data: Data
     ) throws -> Value {
@@ -847,15 +928,15 @@ public actor RemoteWorkspaceSSHClient {
         return result.data
     }
 
-    private static func loadLifecycleScript() throws -> Data {
+    private static func loadLifecycleScript(named name: String = "remote-workspace") throws -> Data {
         let currentDirectory = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
         )
         let candidates = [
-            Bundle.main.url(forResource: "remote-workspace", withExtension: "sh"),
-            currentDirectory.appending(path: "scripts/remote-workspace.sh"),
-            currentDirectory.appending(path: "../scripts/remote-workspace.sh"),
+            Bundle.main.url(forResource: name, withExtension: "sh"),
+            currentDirectory.appending(path: "scripts/\(name).sh"),
+            currentDirectory.appending(path: "../scripts/\(name).sh"),
         ].compactMap { $0 }
         guard let url = candidates.first(where: {
             FileManager.default.isReadableFile(atPath: $0.path)
@@ -865,7 +946,7 @@ public actor RemoteWorkspaceSSHClient {
         return try Data(contentsOf: url)
     }
 
-    private static func loadDeploymentRoot() throws -> URL {
+    static func loadDeploymentRoot() throws -> URL {
         let fileManager = FileManager.default
         let currentDirectory = URL(
             fileURLWithPath: fileManager.currentDirectoryPath,
@@ -1198,11 +1279,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
     }
 
-    public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
-        do { try validateOrigin() }
+    public func browserFrames(tabID: String, profile: String? = nil) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
+        do { try validateOrigin(); _ = try browserProfileQuery(profile) }
         catch { return AsyncThrowingStream { $0.finish(throwing: error) } }
         var components = URLComponents(url: baseURL.appending(path: "v1/browser/stream"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "tabID", value: tabID)]
+        components.queryItems = [URLQueryItem(name: "tabID", value: tabID)] + ((try? browserProfileQuery(profile)) ?? [])
         var request = URLRequest(url: components.url!)
         request.timeoutInterval = 10
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -1220,8 +1301,20 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         }
     }
 
-    public func browserTabs() async throws -> RemoteBrowserTabs {
-        try await request(path: "v1/browser/tabs", method: "GET", body: nil)
+    public func browserTabs(profile: String? = nil) async throws -> RemoteBrowserTabs {
+        try await request(path: "v1/browser/tabs", method: "GET", body: nil, queryItems: browserProfileQuery(profile))
+    }
+
+    public func browserSelfTest() async throws -> RemoteBrowserSelfTest {
+        try await request(path: "v1/browser/selftest", method: "GET", body: nil)
+    }
+
+    private func browserProfileQuery(_ profile: String?) throws -> [URLQueryItem] {
+        guard let profile else { return [] }
+        guard profile.wholeMatch(of: /^[a-z0-9-]{1,32}$/) != nil else {
+            throw RemoteWorkspaceClientError.invalidResponse("The browser profile identifier is invalid.")
+        }
+        return [URLQueryItem(name: "profile", value: profile)]
     }
 
     /// The native execution owner chooses the caller and the authenticated
@@ -1252,18 +1345,18 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return .init(success: value.success, result: value.result, error: value.error, code: value.code, requestID: requestID)
     }
 
-    public func browserAction(_ action: RemoteBrowserAction) async throws -> RemoteBrowserActionResult {
-        try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action))
+    public func browserAction(_ action: RemoteBrowserAction, profile: String? = nil) async throws -> RemoteBrowserActionResult {
+        try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action), queryItems: browserProfileQuery(profile))
     }
 
-    public func browserActions(_ actions: [RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult {
+    public func browserActions(_ actions: [RemoteBrowserAction], profile: String? = nil) async throws -> RemoteBrowserActionBatchResult {
         struct Payload: Encodable { let actions: [RemoteBrowserAction] }
-        return try await request(path: "v1/browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)))
+        return try await request(path: "v1/browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)), queryItems: browserProfileQuery(profile))
     }
 
-    public func browserFrame(tabID: String, previousFrameID: String? = nil) async throws -> RemoteBrowserFrame {
+    public func browserFrame(tabID: String, previousFrameID: String? = nil, profile: String? = nil) async throws -> RemoteBrowserFrame {
         struct Payload: Encodable { let tabID: String; let previousFrameID: String? }
-        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)))
+        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)), queryItems: browserProfileQuery(profile))
     }
 
     public func health() async throws -> RemoteWorkspaceHealth {
@@ -1443,7 +1536,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         ) else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace URL is invalid.")
         }
-        components.queryItems = queryItems
+        components.queryItems = queryItems?.isEmpty == true ? nil : queryItems
         guard let url = components.url else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace URL is invalid.")
         }
@@ -1452,6 +1545,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.httpBody = body
         if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
         if path.hasPrefix("v1/browser/") { request.timeoutInterval = 10 }
+        if path == "v1/browser/selftest" { request.timeoutInterval = 45 }
         if path == "v1/browser/mcp" { request.timeoutInterval = 30 }
         if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -1465,7 +1559,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             if path.hasPrefix("v1/browser/") {
                 let message: String
                 switch (response as? HTTPURLResponse)?.statusCode {
-                case 404: message = "Update this workspace container in Settings to view its browser."
+                case 404: message = "Update this workspace service in Settings to view its browser."
                 case 410: message = "This tab has closed. Waiting for the workspace’s current tabs."
                 case 409: message = "The page changed or another input is finishing. Check the refreshed page and try again."
                 default: message = "The remote browser is unavailable. Reconnect to the workspace and try again."
@@ -1751,7 +1845,32 @@ enum RemoteWorkspaceProcess {
 
 public struct RemoteProjectDirectory: Codable, Sendable { public let path: String }
 
+public struct RemoteHostDirectoryListing: Codable, Sendable {
+    public struct Directory: Codable, Sendable, Identifiable {
+        public let name: String
+        public let path: String
+        public var id: String { path }
+    }
+    public let path: String
+    public let parent: String?
+    public let directories: [Directory]
+    public let truncated: Bool
+}
+
 extension RemoteWorkspaceServiceClient {
+    public func hostDirectories(path: String? = nil) async throws -> RemoteHostDirectoryListing {
+        if let path, !path.hasPrefix("/") || path.contains("\0") {
+            throw RemoteWorkspaceClientError.invalidResponse("Choose an absolute directory on the Linux host.")
+        }
+        return try await request(path: "v1/directories", method: "GET", body: nil,
+            queryItems: path.map { [URLQueryItem(name: "path", value: $0)] })
+    }
+    public func linkHostProject(path: String) async throws -> RemoteProjectDirectory {
+        guard path.hasPrefix("/"), !path.contains("\0") else {
+            throw RemoteWorkspaceClientError.invalidResponse("Choose an absolute directory on the Linux host.")
+        }
+        return try await request(path: "v1/projects/link", method: "POST", body: JSONEncoder().encode(["path": path]))
+    }
     public func ensureScratchDirectory(path: String) async throws -> RemoteProjectDirectory {
         try await request(path: "v1/scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
     }

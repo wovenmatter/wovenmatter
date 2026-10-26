@@ -121,6 +121,44 @@ struct ACPSessionPermissionTests {
         }
     }
 
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], [false, true])
+    func fullRootWorkspaceConfirmsNativePermissionBeforePrompt(kind: AgentRuntimeKind, loading: Bool) async throws {
+        let target = kind == .codex ? "agent-full-access" : "bypassPermissions"
+        func mode(_ selected: String) -> [String: Any] {
+            ["configOptions": [["id": "mode", "category": "mode", "currentValue": selected,
+                "options": [["value": "default"], ["value": target]]]]]
+        }
+        try await withClient(kind: kind, state: mode("default"), handlers: [
+            "session/set_config_option": respond(mode(target)),
+            "session/prompt": respond(["stopReason": "end_turn"]),
+        ], existingID: loading ? "existing" : nil, requestedPermission: target,
+        environment: ["WOVENMATTER_HOST_ACCESS_MODE": "fullRoot"]) { client, fixture, initialized in
+            #expect(initialized.configuration.permission == target)
+            let setting = try #require(fixture.requests(method: "session/set_config_option").first)
+            #expect((setting["params"] as? [String: Any])?["value"] as? String == target)
+            #expect(try fixture.requests(method: "session/prompt").isEmpty)
+            #expect(try await client.setSessionPermission("default").permission == target)
+            #expect(try fixture.requests(method: "session/set_config_option").count == 1)
+            _ = try await client.prompt("provider-free fixture")
+            #expect(try fixture.requests(method: "session/prompt").count == 1)
+        }
+    }
+
+    @Test func fullRootWorkspaceCannotSilentlyAcceptClampedPermission() async throws {
+        let state = configuration(permission: "default")
+        let fixture = try PermissionFixture(kind: .codex, state: state,
+            handlers: ["session/set_config_option": respond(state)], sessionPrelude: "")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let client = try fixture.client(requestedPermission: "full", environment: ["WOVENMATTER_HOST_ACCESS_MODE": "fullRoot"])
+        do {
+            await #expect(throws: LocalACPClientError.self) {
+                try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+            }
+            #expect(try fixture.requests(method: "session/prompt").isEmpty)
+            await client.shutdown()
+        } catch { await client.shutdown(); throw error }
+    }
+
     @Test func remoteGrokPolicyRewritesOnlyStructuredHarnessArguments() throws {
         let resolved = try RemoteHarnessLaunchResolver.resolve(
             configuration: .init(name: "Fixture", workspaceID: "permission-fixture", hostName: "fixture.invalid"),
@@ -322,12 +360,13 @@ struct ACPSessionPermissionTests {
         handlers: [String: String] = [:],
         existingID: String? = nil,
         requestedPermission: String? = nil,
+        environment: [String: String] = [:],
         sessionPrelude: String = "",
         body: (LocalACPClient, PermissionFixture, LocalACPInitializedSession) async throws -> Void
     ) async throws {
         let fixture = try PermissionFixture(kind: kind, state: state, handlers: handlers, sessionPrelude: sessionPrelude)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let client = try fixture.client(requestedPermission: requestedPermission)
+        let client = try fixture.client(requestedPermission: requestedPermission, environment: environment)
         // The suite owns the test deadline. A separate wall-clock lifetime can
         // kill a healthy fake peer while its client waits for executor time or
         // an interactive answer, then misreport that as a transport failure.
@@ -447,9 +486,10 @@ private struct PermissionFixture {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
     }
 
-    func client(requestedPermission: String?) throws -> LocalACPClient {
+    func client(requestedPermission: String?, environment: [String: String] = [:]) throws -> LocalACPClient {
         try LocalACPClient.start(launch: .init(runtimeKind: kind, executableURL: executable,
-            arguments: kind == .grokBuild ? ["agent", "stdio"] : [], requestedPermission: requestedPermission), workingDirectory: root)
+            arguments: kind == .grokBuild ? ["agent", "stdio"] : [], environment: environment,
+            requestedPermission: requestedPermission), workingDirectory: root)
     }
 
     func requests(method: String) throws -> [[String: Any]] {

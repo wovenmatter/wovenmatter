@@ -34,7 +34,9 @@ async function engine() {
     requestCredentials: !remote && !control ? requestCredentials : undefined }).initialize();
 }
 async function remoteRequest(path, body, canUnlock = true) {
-  const response = await fetch(`http://127.0.0.1:7337/v1/default-agent/${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${process.env.WOVENMATTER_API_TOKEN}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(path === 'rpc' ? 24 * 60 * 60 * 1000 : 30000) });
+  const port = process.env.WOVENMATTER_LISTEN_PORT ?? '7337';
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new DefaultAgentError('The remote workspace service port is invalid.');
+  const response = await fetch(`http://127.0.0.1:${port}/v1/default-agent/${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${process.env.WOVENMATTER_API_TOKEN}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(path === 'rpc' ? 24 * 60 * 60 * 1000 : 30000) });
   if (response.status === 423 && canUnlock && path !== 'configuration') {
     await remoteRequest('configuration', await requestCredentials(), false);
     return remoteRequest(path, body, false);

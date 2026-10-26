@@ -3,6 +3,11 @@
 For setup and everyday use, start with [Remote workspaces](../guide/remote-workspaces.md).
 This page describes host preparation, isolation, storage, and lifecycle behavior.
 
+Native **Linux host** workspaces run without Docker and use the SSH account's
+existing tools and sign-ins. See [Native Linux hosts](REMOTE_HOSTS.md) for their
+permissions, installation, browser verification and lifecycle. The Docker
+details below apply to **Container** workspaces.
+
 ## Host preparation
 
 Automatic preparation uses Docker's official apt repository on Ubuntu and

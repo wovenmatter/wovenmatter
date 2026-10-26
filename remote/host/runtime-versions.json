@@ -1,0 +1,8 @@
+{
+  "nodeVersion": "26.12.1",
+  "playwrightVersion": "1.64.1",
+  "nodeSHA256": {
+    "linux-x64": "0fd1eb7770598f52a21995edf6ed35fc690400fa437c2386af329519e9143132",
+    "linux-arm64": "a6c01af459dd8972ab3fb08ee5da81244d26ba8c4944a62d5bbba8c597ae154f"
+  }
+}

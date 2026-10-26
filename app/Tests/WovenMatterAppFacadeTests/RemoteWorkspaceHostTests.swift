@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterClient
+import WovenMatterCore
 @testable import WovenMatterAppFacade
 
 private final class HostInspectionFixture: @unchecked Sendable {
@@ -42,6 +43,46 @@ private final class HostInspectionFixture: @unchecked Sendable {
 }
 
 @MainActor struct RemoteWorkspaceHostTests {
+    @Test func fullRootWorkspaceOverridesOldChatDefaultsAndCalendarPermissionsForEveryFolder() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        var host = fixture.remote
+        host.kind = .host; host.accessMode = .fullRoot
+        host.dataRoot = "/home/trey/.local/share/wovenmatter"
+        host.workspaceRoot = "/home/trey/.local/share/wovenmatter/workspace"
+        let status = try #require(fixture.model.remoteWorkspaces.statuses[host.id])
+        let harnesses = try #require(fixture.model.remoteWorkspaces.harnesses[host.id])
+        let maintenance = try #require(fixture.model.remoteWorkspaces.runtimeMaintenance[host.id])
+        fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        let scope = "remote:" + host.id.uuidString.lowercased()
+        fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "read-only"), harness: "codex", workspace: scope)
+        let target = RemoteHarnessChatTarget(configuration: host, harness: try #require(harnesses.first { $0.id == .codex }))
+        let folderless = try #require(await fixture.model.createRemoteACPSession(target: target))
+        #expect(try await fixture.database.localACPSession(conversationID: folderless).permission == "agent-full-access")
+        #expect(await fixture.recorder.configurations.last?.selections.permission == "agent-full-access")
+        #expect(try fixture.model.defaultToolWorkingDirectory(workspaceID: host.id) == host.workspaceRoot)
+        let calendar = fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id)
+        #expect(calendar.configuration.permission == "agent-full-access")
+        #expect(calendar.configuration.usesProductPermissionDefault == false)
+
+        // A previously captured restrictive selection also yields to the
+        // workspace policy when an existing chat is recovered.
+        fixture.model.sessionSelectionPreferences.stageCalendarSelections(id: folderless, harness: "codex", workspace: scope,
+            selections: .init(permission: "read-only"), usesProductPermissionDefault: true)
+        try await fixture.model.applyPendingSessionSelections(conversationID: folderless)
+        #expect(await fixture.recorder.configurations.last?.selections.permission == "agent-full-access")
+
+        let external = "/home/trey/projects/existing-repository"
+        let folderID = try await fixture.store.createFolder(name: "Linked repository", location: .init(workspaceID: scope, rootPath: external, managed: false))
+        let linked = try #require(await fixture.model.createRemoteACPSession(target: target, folderID: folderID))
+        #expect(try await fixture.database.localACPSession(conversationID: linked).permission == "agent-full-access")
+        #expect(await fixture.recorder.configurations.last?.directory == external)
+        #expect(try await fixture.model.folderWorkingDirectory(folderID: folderID, workspaceID: host.id).path == external)
+
+        host.accessMode = .user
+        fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        #expect(fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id).configuration.permission == "read-only")
+    }
+
     private func makeModel(_ fixture: HostInspectionFixture) -> RemoteWorkspacesModel {
         let defaults = UserDefaults(suiteName: "host-setup-test-" + UUID().uuidString)!
         return RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
@@ -72,6 +113,35 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(model.preflight(hostName: "second.invalid", userName: "trey") == nil)
         try await settled(model)
         #expect(model.preflight(hostName: "second.invalid", userName: "trey") == nil)
+    }
+
+    @Test func nativeReadinessIsBoundToWorkspaceKindAndAccessLevel() async throws {
+        let fixture = HostInspectionFixture(); fixture.setReady(true)
+        let model = makeModel(fixture)
+        model.checkHost(hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)
+        try await settled(model)
+        #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)?.ready == true)
+        #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .user) == nil)
+        #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .container, accessMode: .fullRoot) == nil)
+        #expect(fixture.calls.count == 1)
+        #expect(fixture.calls.first?.contains("'fullRoot'") == true)
+    }
+
+    @Test func nativeWorkspaceCannotBeConfiguredTwiceForTheSameHostAndUser() async throws {
+        let fixture = HostInspectionFixture(); fixture.setReady(true)
+        let suite = "native-host-duplicate-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let existing = RemoteWorkspaceConfiguration(name: "Native", workspaceID: "native", hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)
+        defaults.set(try JSONEncoder().encode([existing]), forKey: "wovenmatter.remote-workspaces.v1")
+        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
+        model.checkHost(hostName: existing.hostName, userName: "trey", kind: .host, accessMode: .fullRoot)
+        try await settled(model)
+        model.create(name: "Another", workspaceID: "another", hostName: existing.hostName, userName: "trey",
+            port: 7448, memoryLimit: "", swapLimit: "", kind: .host, accessMode: .fullRoot)
+        #expect(model.errorMessage?.contains("already configured for this host and user") == true)
+        #expect(!model.isCreating && model.workspaces == [existing])
+        #expect(fixture.calls.count == 1)
     }
 
     @Test func hostPreparationRequiresReviewAndNeverCreatesAWorkspace() async throws {

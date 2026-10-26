@@ -80,11 +80,16 @@ struct SettingsRemoteHarnessSoftware: View {
                 if let runtime {
                     ForEach(runtime.components) { component in
                         SettingsValueRow(label: component.displayName, value: component.installedVersion ?? "Not installed")
+                        if workspace.kind == .host, component.source == "system", let path = component.path {
+                            SettingsNote("Using \(path) (installed on host)")
+                        }
                     }
                 }
                 HStack {
-                    if runtime?.installed == true {
+                    if runtime?.installed == true, runtime?.source != "system" {
                         SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
+                    } else if runtime?.installed == true {
+                        Text("Managed on host").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                     } else {
                         Button(busy ? "Working…" : "Install") {
                             model.prepareHarnessAction("install", harness: harness, configuration: workspace)

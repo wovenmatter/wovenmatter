@@ -8,6 +8,8 @@ import WovenMatterClient
 final class RemoteBrowserViewerModel {
     private(set) var tabs: [RemoteBrowserTab] = []
     private(set) var selectedID: String?
+    private(set) var profiles: [String] = ["default"]
+    private(set) var selectedProfile = "default"
     private(set) var image: NSImage?
     private(set) var error: String?
     private(set) var hasLoaded = false
@@ -25,6 +27,10 @@ final class RemoteBrowserViewerModel {
     private let sendBatch: (([RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult)?
     private let copyText: (String) -> Void
     private let sendAction: (RemoteBrowserAction) async throws -> RemoteBrowserActionResult
+    private let loadProfileTabs: ((String) async throws -> RemoteBrowserTabs)?
+    private let loadProfileFrame: ((String, String?, String) async throws -> RemoteBrowserFrame)?
+    private let sendProfileBatch: (([RemoteBrowserAction], String) async throws -> RemoteBrowserActionBatchResult)?
+    private let sendProfileAction: ((RemoteBrowserAction, String) async throws -> RemoteBrowserActionResult)?
 
     init(loadTabs: @escaping () async throws -> RemoteBrowserTabs,
          loadFrame: @escaping (String, String?) async throws -> RemoteBrowserFrame,
@@ -34,12 +40,24 @@ final class RemoteBrowserViewerModel {
          }, copyText: @escaping (String) -> Void = { text in
              NSPasteboard.general.clearContents()
              NSPasteboard.general.setString(text, forType: .string)
-         }) {
+         }, loadProfileTabs: ((String) async throws -> RemoteBrowserTabs)? = nil,
+         loadProfileFrame: ((String, String?, String) async throws -> RemoteBrowserFrame)? = nil,
+         sendProfileBatch: (([RemoteBrowserAction], String) async throws -> RemoteBrowserActionBatchResult)? = nil,
+         sendProfileAction: ((RemoteBrowserAction, String) async throws -> RemoteBrowserActionResult)? = nil) {
         self.sendBatch = sendBatch
         self.loadTabs = loadTabs; self.loadFrame = loadFrame; self.sendAction = sendAction; self.copyText = copyText
+        self.loadProfileTabs = loadProfileTabs; self.loadProfileFrame = loadProfileFrame
+        self.sendProfileBatch = sendProfileBatch; self.sendProfileAction = sendProfileAction
     }
 
     var selectedTab: RemoteBrowserTab? { tabs.first { $0.id == selectedID } }
+
+    func selectProfile(_ profile: String) {
+        guard profiles.contains(profile), selectedProfile != profile else { return }
+        clear()
+        selectedProfile = profile
+        Task { await refresh() }
+    }
 
     func select(_ id: String) {
         guard id != selectedID else { return }
@@ -67,13 +85,17 @@ final class RemoteBrowserViewerModel {
             action.kind = "pointerCancel"; action.actionID = UUID().uuidString.lowercased()
             // Cancellation can overtake a press; the service rejects late input
             // for this gesture. Keep completed clicks until their release is acknowledged.
-            Task { [sendAction, action] in _ = try? await sendAction(action) }
+            let profile = selectedProfile
+            Task { [sendAction, sendProfileAction, action] in
+                if let sendProfileAction { _ = try? await sendProfileAction(action, profile) }
+                else { _ = try? await sendAction(action) }
+            }
         }
     }
 
     func enqueue(_ gesture: RemoteBrowserAction) {
         guard image != nil, let selectedID, let frameID else {
-            inputError = "Wait for a current browser image. If needed, update the workspace container in Settings."
+            inputError = "Wait for a current browser image. If needed, update the workspace service in Settings."
             return
         }
         guard gesture.text?.utf8.count ?? 0 <= 16384 else {
@@ -115,7 +137,7 @@ final class RemoteBrowserViewerModel {
             let action = pendingInput.removeFirst(), requestRevision = revision
             guard selectedID == action.tabID else { continue }
             var batch = [action], bytes = action.text?.utf8.count ?? 0
-            if sendBatch != nil {
+            if sendBatch != nil || sendProfileBatch != nil {
                 // No batching timer: send the first gesture immediately, then
                 // amortize the next network round trip over input already queued.
                 while batch.count < 32, let next = pendingInput.first, next.tabID == action.tabID,
@@ -125,7 +147,9 @@ final class RemoteBrowserViewerModel {
             }
             do {
                 let results: [RemoteBrowserActionResult]
-                if let sendBatch { results = try await sendBatch(batch).results }
+                if let sendProfileBatch { results = try await sendProfileBatch(batch, selectedProfile).results }
+                else if let sendBatch { results = try await sendBatch(batch).results }
+                else if let sendProfileAction { results = [try await sendProfileAction(action, selectedProfile)] }
                 else { results = [try await sendAction(action)] }
                 guard requestRevision == revision, selectedID == action.tabID else { continue }
                 guard results.count == batch.count, results.allSatisfy({ $0.accepted && $0.tabID == action.tabID }) else {
@@ -159,8 +183,14 @@ final class RemoteBrowserViewerModel {
         defer { refreshingTabs = false }
         let requestRevision = revision
         do {
-            let result = try await loadTabs()
+            let result: RemoteBrowserTabs
+            if let loadProfileTabs { result = try await loadProfileTabs(selectedProfile) }
+            else { result = try await loadTabs() }
             guard !Task.isCancelled, requestRevision == revision else { return }
+            if let available = result.profiles {
+                profiles = Array(Set(available.filter { $0.wholeMatch(of: /^[a-z0-9-]{1,32}$/) != nil } + ["default"]))
+                    .sorted().prefix(64).map { $0 }
+            }
             let current = result.running ? Array(result.tabs.prefix(64)) : []
             if tabs != current { tabs = current }
             hasLoaded = true
@@ -184,7 +214,9 @@ final class RemoteBrowserViewerModel {
         guard let id = selectedID else { return }
         let requestRevision = revision, previousFrameID = frameID
         do {
-            let frame = try await loadFrame(id, previousFrameID)
+            let frame: RemoteBrowserFrame
+            if let loadProfileFrame { frame = try await loadProfileFrame(id, previousFrameID, selectedProfile) }
+            else { frame = try await loadFrame(id, previousFrameID) }
             guard !Task.isCancelled, requestRevision == revision, selectedID == id else { return }
             guard frame.tabID == id, frame.imageBase64.utf8.count <= 2 * 1024 * 1024 else { throw BackendRPCError.invalidFrame }
             if frame.imageBase64.isEmpty {

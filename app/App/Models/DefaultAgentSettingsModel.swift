@@ -919,8 +919,18 @@ final class DefaultAgentSettingsModel {
                         processWorkingDirectory: FileManager.default.homeDirectoryForCurrentUser
                     ).launch
                     child.executableURL = launch.executableURL
-                    child.arguments = launch.arguments.map {
-                        $0.replacingOccurrences(of: "'--remote'", with: "'--control'")
+                    if remote.kind == .host {
+                        // wm-exec owns the remote flag for native launches; the
+                        // control operation must be requested explicitly.
+                        var arguments = launch.arguments
+                        guard let command = arguments.popLast() else {
+                            throw DefaultAgentError.message("The remote helper command is unavailable.")
+                        }
+                        child.arguments = arguments + [command + " '--control'"]
+                    } else {
+                        child.arguments = launch.arguments.map {
+                            $0.replacingOccurrences(of: "'--remote'", with: "'--control'")
+                        }
                     }
                 } else {
                     guard let launch = DefaultAgentSupport.resolution().launchConfiguration else {

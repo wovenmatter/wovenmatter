@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-/// The workspace exposes authenticated HTTP MCP inside its own container. The
+/// The workspace exposes authenticated HTTP MCP on its execution host. The
 /// existing SSH connection carries complete requests to the owning Mac; neither
 /// a shell CLI nor a workspace filesystem socket grants tool authority.
 final class WovenMCPRemoteBridge: @unchecked Sendable {
@@ -38,8 +38,8 @@ final class WovenMCPRemoteBridge: @unchecked Sendable {
         let destination = try RemoteWorkspaceSSHClient.validatedDestination(hostName: configuration.hostName, userName: configuration.userName)
         let encoded = Data(source.utf8).base64EncodedString()
         let bootstrap = "const m=await import('data:text/javascript;base64,\(encoded)');await m.runMCPRelay();"
-        let command = ["docker", "exec", "--interactive", "wovenmatter-\(configuration.workspaceID)",
-                       "node", "--input-type=module", "-e", bootstrap].map(Self.quote).joined(separator: " ")
+        let command = try RemoteWorkspaceExecTarget(configuration: configuration).shellCommand(
+            ["node", "--input-type=module", "-e", bootstrap], interactive: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = try Self.sshArguments(destination: destination, command: command)

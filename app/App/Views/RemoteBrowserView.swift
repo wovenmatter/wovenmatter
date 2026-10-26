@@ -15,7 +15,11 @@ struct RemoteBrowserView: View {
             loadTabs: { try await workspaces.browserTabs(for: configuration) },
             loadFrame: { try await workspaces.browserFrame(tabID: $0, previousFrameID: $1, for: configuration) },
             sendBatch: { try await workspaces.browserActions($0, for: configuration) },
-            sendAction: { try await workspaces.browserAction($0, for: configuration) }))
+            sendAction: { try await workspaces.browserAction($0, for: configuration) },
+            loadProfileTabs: { try await workspaces.browserTabs(for: configuration, profile: $0) },
+            loadProfileFrame: { try await workspaces.browserFrame(tabID: $0, previousFrameID: $1, for: configuration, profile: $2) },
+            sendProfileBatch: { try await workspaces.browserActions($0, for: configuration, profile: $1) },
+            sendProfileAction: { try await workspaces.browserAction($0, for: configuration, profile: $1) }))
     }
 
     var body: some View {
@@ -57,6 +61,13 @@ struct RemoteBrowserContent: View {
                     Text(workspaceName).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 Spacer()
+                if viewer.profiles.count > 1 {
+                    Picker("Browser profile", selection: Binding(get: { viewer.selectedProfile }, set: { viewer.selectProfile($0) })) {
+                        ForEach(viewer.profiles, id: \.self) { Text($0).tag($0) }
+                    }
+                    .fixedSize()
+                    .accessibilityLabel("Browser profile")
+                }
                 Button("Done", action: onClose).buttonStyle(SettingsQuietButtonStyle())
             }
             .padding(16)

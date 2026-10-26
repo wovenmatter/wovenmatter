@@ -18,10 +18,14 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var port = 7337
     @State private var memoryLimit = ""
     @State private var swapLimit = ""
+    @State private var workspaceKind: RemoteWorkspaceKind = .host
+    @State private var accessMode: RemoteWorkspaceAccessMode = .fullRoot
+    @State private var acknowledgedHostAccess = false
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
     @State private var managedMemoryLimit = ""
     @State private var managedSwapLimit = ""
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
+    @State private var logsWorkspace: RemoteWorkspaceConfiguration?
 
     private func deploymentProgress(_ message: String) -> some View {
         HStack(spacing: 8) {
@@ -51,7 +55,7 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
-                    resourceCard(selectedWorkspace)
+                    if selectedWorkspace.kind == .container { resourceCard(selectedWorkspace) }
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
                         deploymentProgress(progress)
@@ -79,6 +83,28 @@ struct SettingsRemoteWorkspacesView: View {
         }
         .sheet(item: $browserWorkspace) { workspace in
             RemoteBrowserView(workspaces: model, configuration: workspace)
+        }
+        .sheet(item: $logsWorkspace) { workspace in
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("\(workspace.name) logs").font(.headline)
+                    Spacer()
+                    Button("Refresh") { model.loadLogs(workspace) }
+                    Button("Done") { logsWorkspace = nil }
+                }.buttonStyle(SettingsQuietButtonStyle())
+                if let error = model.errorMessage { SettingsError(error) }
+                ScrollView {
+                    Text(model.workspaceLogs[workspace.id] ?? "Loading logs…")
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.scrollIndicators(.never)
+            }
+            .padding(24).frame(width: 760, height: 520)
+            .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
+        }
+        .onChange(of: hostName + userName + workspaceKind.rawValue + accessMode.rawValue) { _, _ in
+            acknowledgedHostAccess = false
         }
         .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
             if let selectedWorkspaceID,
@@ -127,18 +153,20 @@ struct SettingsRemoteWorkspacesView: View {
             titleVisibility: .visible
         ) {
             if let pendingDeletion {
-                Button("Remove container; keep data") {
+                Button(pendingDeletion.kind == .host ? "Uninstall; keep data" : "Remove container; keep data") {
                     model.delete(pendingDeletion, removePersistentData: false)
                     self.pendingDeletion = nil
                 }
-                Button("Remove container and persistent data", role: .destructive) {
+                Button(pendingDeletion.kind == .host ? "Uninstall and remove data" : "Remove container and persistent data", role: .destructive) {
                     model.delete(pendingDeletion, removePersistentData: true)
                     self.pendingDeletion = nil
                 }
             }
             Button("Cancel", role: .cancel) { pendingDeletion = nil }
         } message: {
-            Text("Keeping data leaves the workspace's dedicated volume on the remote machine. Removing persistent data cannot be undone.")
+            Text(pendingDeletion?.kind == .host
+                ? "Uninstall stops the native service and keeps workspace files and databases. Removing data cannot be undone."
+                : "Keeping data leaves the workspace's dedicated volume on the remote machine. Removing persistent data cannot be undone.")
         }
         .confirmationDialog(
             "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
@@ -201,7 +229,7 @@ struct SettingsRemoteWorkspacesView: View {
     private var currentPreflight: RemoteWorkspacePreflight? {
         model.preflight(
             hostName: hostName,
-            userName: userName
+            userName: userName, kind: workspaceKind, accessMode: accessMode
         )
     }
 
@@ -261,6 +289,10 @@ struct SettingsRemoteWorkspacesView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 Button("Reconnect") { model.reconnect(workspace) }
                     .help("Allow access to this workspace's saved Keychain token and reconnect.")
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(busy)
+            HStack(spacing: 8) {
                 if let status {
                     Button("Start") { model.lifecycle(.start, configuration: workspace) }
                         .disabled(status.running)
@@ -269,14 +301,22 @@ struct SettingsRemoteWorkspacesView: View {
                     Button("Restart") { model.lifecycle(.restart, configuration: workspace) }
                         .disabled(!status.running)
                 }
-                Button("Update container") {
+                Button(workspace.kind == .host ? "Update server" : "Update container") {
                     model.updateContainer(workspace)
                 }
-                Button("Delete…") { pendingDeletion = workspace }
+                if workspace.kind == .host {
+                    Button("Logs") { model.loadLogs(workspace); logsWorkspace = workspace }
+                }
+                Button(workspace.kind == .host ? "Uninstall…" : "Delete…") { pendingDeletion = workspace }
             }
             .fixedSize(horizontal: true, vertical: false)
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(busy)
+
+            if workspace.kind == .host {
+                SettingsNote(hostWarning(user: workspace.userName, host: workspace.hostName))
+                remoteValueRow(label: "Access", value: workspace.accessMode == .fullRoot ? "Full root access" : "Normal user permissions")
+            }
 
             Button("View browser") { browserWorkspace = workspace }
                 .buttonStyle(SettingsQuietButtonStyle())
@@ -306,8 +346,10 @@ struct SettingsRemoteWorkspacesView: View {
             if let status {
                 VStack(alignment: .leading, spacing: 10) {
                     remoteValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
-                    remoteValueRow(label: "Memory", value: resourceLabel(status.memoryBytes))
-                    remoteValueRow(label: "Additional swap", value: swapLabel(status))
+                    if workspace.kind == .container {
+                        remoteValueRow(label: "Memory", value: resourceLabel(status.memoryBytes))
+                        remoteValueRow(label: "Additional swap", value: swapLabel(status))
+                    }
                     remoteValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
                     remoteValueRow(label: "Host storage", value: hostStorageLabel(status))
                 }
@@ -316,6 +358,24 @@ struct SettingsRemoteWorkspacesView: View {
                 }
             } else {
                 SettingsEmpty("Reconnect to load this workspace's current status.")
+            }
+            if workspace.kind == .host {
+                HStack {
+                    Text("Browser sandbox").font(.system(size: 12.5, weight: .medium))
+                    Spacer()
+                    Button("Verify browser") { model.checkBrowserSandbox(workspace) }
+                        .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || status?.running != true)
+                }
+                if let result = model.browserSelfTests[workspace.id] {
+                    SettingsPill(result.ok ? "Verified" : "Needs attention", tone: result.ok ? .neutral : .warning)
+                    if !result.ok {
+                        if let reason = result.reason { SettingsNote(reason.replacingOccurrences(of: "_", with: " ")) }
+                        if let missing = result.missingLibraries, !missing.isEmpty {
+                            SettingsNote("Missing libraries: " + missing.joined(separator: ", "))
+                        }
+                        if let hint = result.hint { SettingsNote(hint) }
+                    }
+                } else { SettingsNote("Connect and verify the host browser to check its sandbox.") }
             }
         }
     }
@@ -328,6 +388,23 @@ struct SettingsRemoteWorkspacesView: View {
 
     private var hostCard: some View {
         SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace.") {
+            SettingsField("Workspace type") {
+                Picker("Workspace type", selection: $workspaceKind) {
+                    Text("Native Linux host").tag(RemoteWorkspaceKind.host)
+                    Text("Docker container").tag(RemoteWorkspaceKind.container)
+                }.labelsHidden()
+            }
+            if workspaceKind == .host {
+                SettingsField("Workspace access") {
+                    Picker("Workspace access", selection: $accessMode) {
+                        Text("Full root access").tag(RemoteWorkspaceAccessMode.fullRoot)
+                        Text("Normal user permissions").tag(RemoteWorkspaceAccessMode.user)
+                    }.labelsHidden()
+                }
+                SettingsNote(accessMode == .fullRoot
+                    ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
+                    : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
+            }
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.machineCandidates.filter(\.online)
@@ -339,7 +416,7 @@ struct SettingsRemoteWorkspacesView: View {
                     ForEach(onlineMachines.prefix(5)) { machine in
                         Button {
                             hostName = machine.hostName
-                            model.checkHost(hostName: hostName, userName: userName)
+                            model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)
                         } label: {
                             HStack(spacing: 8) {
                                 Text(machine.displayName)
@@ -361,7 +438,7 @@ struct SettingsRemoteWorkspacesView: View {
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .settingsInput()
-                    .onSubmit { model.checkHost(hostName: hostName, userName: userName) }
+                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
@@ -371,7 +448,7 @@ struct SettingsRemoteWorkspacesView: View {
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,
-                    userName: userName
+                    userName: userName, kind: workspaceKind, accessMode: accessMode
                 )
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -395,12 +472,12 @@ struct SettingsRemoteWorkspacesView: View {
                         )
                         remoteValueRow(
                             label: "Runtime",
-                            value: preflight.version.isEmpty
+                            value: workspaceKind == .host ? "Native Linux service · \(preflight.architecture)" : preflight.version.isEmpty
                                 ? "Docker Engine not ready · \(preflight.architecture)"
                                 : "\(preflight.ready ? "Docker Engine" : "Container runtime") \(preflight.version) · \(preflight.architecture)"
                         )
                         VStack(alignment: .leading, spacing: 8) {
-                            remoteValueRow(
+                            if workspaceKind == .container { remoteValueRow(
                                 label: "Memory",
                                 value: inspectionCapabilityLabel(
                                     preflight.capabilities.memory,
@@ -413,7 +490,7 @@ struct SettingsRemoteWorkspacesView: View {
                                     preflight.capabilities.swap,
                                     preflight: preflight
                                 )
-                            )
+                            ) }
                             remoteValueRow(label: "Host storage", value: hostStorageLabel(preflight))
                         }
                         if let warning = preflight.storageWarning, !warning.isEmpty {
@@ -438,7 +515,7 @@ struct SettingsRemoteWorkspacesView: View {
                         }
                         if preflight.canPrepare == true {
                             Button(model.isCreating ? "Preparing host…" : "Prepare host") {
-                                model.prepareHost(hostName: hostName, userName: userName)
+                                model.prepareHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)
                             }
                             .buttonStyle(DashboardPrimaryButtonStyle())
                         }
@@ -459,7 +536,7 @@ struct SettingsRemoteWorkspacesView: View {
                 TextField("remote-workspace-id", text: $workspaceID)
                     .settingsInput()
             }
-            SettingsField("Remote loopback port") {
+            if workspaceKind == .container { SettingsField("Remote loopback port") {
                 TextField("7337", value: $port, format: .number)
                     .settingsInput()
             }
@@ -472,8 +549,13 @@ struct SettingsRemoteWorkspacesView: View {
                     .settingsInput()
             }
 
-            SettingsNote("Use 0 to disable swap, or leave it blank for the host default.")
+            SettingsNote("Use 0 to disable swap, or leave it blank for the host default.") }
             SettingsNote("Files use available disk space on the remote machine.")
+            if workspaceKind == .host {
+                SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
+                Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
+                    .toggleStyle(DashboardSwitchToggleStyle())
+            }
 
             Button(model.isCreating ? "Creating…" : "Create workspace") {
                 model.create(
@@ -483,14 +565,19 @@ struct SettingsRemoteWorkspacesView: View {
                     userName: userName,
                     port: port,
                     memoryLimit: memoryLimit,
-                    swapLimit: swapLimit
+                    swapLimit: swapLimit, kind: workspaceKind, accessMode: accessMode
                 )
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
             .disabled(model.isCreating || currentPreflight?.ready != true
+                || (workspaceKind == .host && !acknowledgedHostAccess)
                 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+    }
+
+    private func hostWarning(user: String?, host: String) -> String {
+        "Host mode runs agents as \(user ?? "the SSH user")@\(host) with that user's full permissions. There is no container isolation."
     }
 
     private func resourceCard(
@@ -584,8 +671,10 @@ struct SettingsRemoteWorkspacesView: View {
                 Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry install" : "Install")) {
                     model.prepareHarnessAction("install", harness: harness, configuration: workspace)
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
-            } else {
+            } else if runtime?.source != "system" {
                 SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
+            } else {
+                Text("Managed on host").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
         }
         if let runtime {
@@ -603,6 +692,10 @@ struct SettingsRemoteWorkspacesView: View {
     private func runtimeInventory(_ runtime: RemoteRuntimeMaintenance, workspace: RemoteWorkspaceConfiguration) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(runtime.components) { component in
+                if workspace.kind == .host, component.source == "system", let path = component.path {
+                    Text("Using \(path) (installed on host)")
+                        .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
                 Text(componentVersion(component))
                     .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
                     .help(component.path ?? "No installed path")

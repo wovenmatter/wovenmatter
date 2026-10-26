@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { isAbsolute, dirname, join } from 'node:path'
 import { ensureScratchDirectory } from './projects.mjs'
+import { runtimeConfiguration, workspaceExecutionConfiguration } from './config.mjs'
 
 const before = message => Object.assign(new Error(message), { beforePrompt:true })
 const values = options => (options ?? []).flatMap(o => o.value == null ? values(o.options) : [o.value])
@@ -38,9 +39,10 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
   }
 }
 
-export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,instances,launch = spawn,isEnabled = async()=>true,prepareMCP=async()=>null }) {
+export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,instances,launch = spawn,isEnabled = async()=>true,prepareMCP=async()=>null,configuration = runtimeConfiguration }) {
   const native = createNativeTaskExecutor({workspaceRoot,instances})
   return async ({run,eventRevision,nativeSessionID,signal,publish,bindSession}) => {
+    run = { ...run, task: { ...run.task, configuration: workspaceExecutionConfiguration(run.task.configuration, configuration) } }
     if(signal.aborted)throw before('Background execution was turned off.')
     let mcpConnection
     try {mcpConnection=await prepareMCP({run,eventRevision,nativeSessionID})} catch(error){error.beforePrompt=true;throw error}

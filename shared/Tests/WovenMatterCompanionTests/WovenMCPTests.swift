@@ -138,4 +138,14 @@ struct WovenMCPTests {
     let bundled = try JSONDecoder().decode([WovenMCPToolDefinition].self, from: Data(contentsOf: url))
     #expect(bundled == WovenMCPCatalog.tools)
   }
+
+  @Test func browserProfileIsValidatedAndForwarded() throws {
+    let request = try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("tabs"), "profile": .string("work-2")])
+    #expect(request.arguments.contains(where: { $0.contains("work-2") }))
+    for profile in ["../escape", "", "MixedCase", String(repeating: "a", count: 33)] {
+      #expect(throws: (any Error).self) {
+        try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("tabs"), "profile": .string(profile)])
+      }
+    }
+  }
 }

@@ -1,5 +1,39 @@
-import { mkdir, realpath, lstat, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, realpath, lstat, rm, access, opendir, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { join, isAbsolute, dirname } from 'node:path';
+
+// Native host folders follow the owning Linux account's permissions. Linking a
+// directory records its canonical path; it never copies, moves or deletes it.
+export async function linkHostProject(path) {
+  if (typeof path !== 'string' || !isAbsolute(path) || /[\x00-\x1f\x7f]/.test(path)) {
+    throw Object.assign(new Error('Choose an absolute directory on this host.'), { statusCode: 400 });
+  }
+  try {
+    const canonical = await realpath(path);
+    if (!(await stat(canonical)).isDirectory()) throw new Error('not_directory');
+    await access(canonical, constants.R_OK | constants.X_OK);
+    return { path: canonical };
+  } catch {
+    throw Object.assign(new Error('This directory is unavailable to the workspace user.'), { statusCode: 400 });
+  }
+}
+
+export async function listHostDirectories(path, { limit = 200, scanLimit = 4096 } = {}) {
+  const { path: canonical } = await linkHostProject(path);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(scanLimit) || scanLimit < limit || scanLimit > 4096) throw new TypeError('Invalid directory listing limit');
+  const directories = [];
+  let scanned = 0, truncated = false;
+  const directory = await opendir(canonical);
+  for await (const entry of directory) {
+    if (++scanned > scanLimit) { truncated = true; break; }
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    if (/[\x00-\x1f\x7f]/.test(entry.name)) continue;
+    try { directories.push({ name: entry.name, ...(await linkHostProject(join(canonical, entry.name))) }); }
+    catch { /* Inaccessible or stale links are not selectable. */ }
+  }
+  directories.sort((a, b) => a.name.localeCompare(b.name, 'en'));
+  return { path: canonical, parent: dirname(canonical) === canonical ? null : dirname(canonical), directories: directories.slice(0, limit), truncated: truncated || directories.length > limit };
+}
 
 export async function createProject(root, name, { reuseExisting = false } = {}) {
   const cleanName = typeof name === 'string' ? name.trim() : '';

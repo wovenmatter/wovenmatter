@@ -1,14 +1,18 @@
 import CryptoKit
 import Foundation
 
-/// Identity of the files Docker consumes, independent of archive timestamps.
+/// Identity of deployment inputs, independent of archive timestamps.
 struct RemoteWorkspaceDeployment {
     let fingerprint: String
     let script: String
+    let sourceFiles: [String]
 
-    init(root: URL) throws {
+    init(root: URL, kind: RemoteWorkspaceKind = .container) throws {
         let manager = FileManager.default
-        let inputs = ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json",
+        let inputs = kind == .host
+            ? ["remote/package.json", "remote/src", "remote/host", "harnesses", "default-agent/package.json",
+               "default-agent/package-lock.json", "default-agent/src", "default-agent/.node-version", "scripts/remote-host.sh"]
+            : ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json",
                       "remote/src", "remote/security", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src"]
         var files: [String] = []
         for input in inputs {
@@ -32,6 +36,7 @@ struct RemoteWorkspaceDeployment {
                 }
             } else { files.append(input) }
         }
+        sourceFiles = files.sorted()
         var hash = SHA256()
         for path in files.sorted() {
             let url = root.appending(path: path)
@@ -43,7 +48,7 @@ struct RemoteWorkspaceDeployment {
             hash.update(data: Data(SHA256.hash(data: bytes)))
         }
         fingerprint = hash.finalize().map { String(format: "%02x", $0) }.joined()
-        script = try String(contentsOf: root.appending(path: "remote/build-image.sh"), encoding: .utf8)
+        script = try String(contentsOf: root.appending(path: kind == .host ? "scripts/remote-host.sh" : "remote/build-image.sh"), encoding: .utf8)
     }
 
     static func imageID(_ output: Data) -> String? {
@@ -58,7 +63,10 @@ final class RemoteWorkspaceBuildProgress: @unchecked Sendable {
     private var pending = Data()
     private var previous: String?
     private let report: @Sendable (String) -> Void
-    init(report: @escaping @Sendable (String) -> Void) { self.report = report }
+    private let kind: RemoteWorkspaceKind
+    init(kind: RemoteWorkspaceKind = .container, report: @escaping @Sendable (String) -> Void) {
+        self.kind = kind; self.report = report
+    }
 
     func receive(_ data: Data) {
         lock.withLock {
@@ -66,7 +74,7 @@ final class RemoteWorkspaceBuildProgress: @unchecked Sendable {
             while let newline = pending.firstIndex(of: 10) {
                 let line = String(decoding: pending[..<newline], as: UTF8.self)
                 pending.removeSubrange(...newline)
-                if let message = Self.message(line), message != previous {
+                if let message = Self.message(line, kind: kind), message != previous {
                     previous = message; report(message)
                 }
             }
@@ -74,7 +82,22 @@ final class RemoteWorkspaceBuildProgress: @unchecked Sendable {
         }
     }
 
-    static func message(_ line: String) -> String? {
+    static func message(_ line: String, kind: RemoteWorkspaceKind = .container) -> String? {
+        if kind == .host {
+            switch line {
+            case "WM_PROGRESS waiting": return "Waiting for the host’s installer…"
+            case "WM_PROGRESS verifying": return "Verifying the host service bundle…"
+            case "WM_PROGRESS uploading": return "Uploading the host service…"
+            case "WM_PROGRESS node": return "Installing the verified Node runtime…"
+            case "WM_PROGRESS dependencies": return "Installing agent dependencies…"
+            case "WM_PROGRESS browser": return "Installing Chromium…"
+            case "WM_PROGRESS activating": return "Starting the host service…"
+            case "WM_PROGRESS selftest": return "Verifying the Chromium sandbox…"
+            case "WM_PROGRESS rollback": return "Restoring the previous host service…"
+            case "WM_PROGRESS ready": return "Host service ready."
+            default: return nil
+            }
+        }
         if line == "WM_PROGRESS waiting" { return "Waiting for the host’s image builder…" }
         if line == "WM_PROGRESS reused" { return "Reusing the up-to-date workspace image…" }
         if line == "WM_PROGRESS building" { return "Building the workspace image…" }

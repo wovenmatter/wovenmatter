@@ -1037,6 +1037,12 @@ struct DashboardNewFolderPopover: View {
     @State private var name = ""
     @State private var linksExistingDirectory = false
     @State private var externalRoot: URL?
+    @State private var hostDirectoryPath = ""
+    @State private var hostDirectoryFilter = ""
+    @State private var hostDirectoryListing: RemoteHostDirectoryListing?
+    @State private var loadingHostDirectories = false
+    @State private var hostDirectoryError: String?
+    @State private var hostDirectoryRequest = UUID()
     @FocusState private var nameFocused: Bool
 
     private var ownerIsAvailable: Bool {
@@ -1051,13 +1057,18 @@ struct DashboardNewFolderPopover: View {
             && (linksExistingDirectory ? externalRoot != nil : !trimmed.contains("/") && trimmed != "." && trimmed != "..")
     }
 
+    private var nativeHost: RemoteWorkspaceConfiguration? {
+        guard let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID), configuration.kind == .host else { return nil }
+        return configuration
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New Folder").font(.system(size: 14, weight: .semibold))
             Text(workspaceTitle)
                 .font(.system(size: 11.5))
                 .foregroundStyle(DashboardPalette.mutedForeground)
-            if workspaceID == nil {
+            if workspaceID == nil || nativeHost != nil {
                 Picker("Directory", selection: $linksExistingDirectory) {
                     Text("Create New").tag(false)
                     Text("Link Existing").tag(true)
@@ -1069,10 +1080,13 @@ struct DashboardNewFolderPopover: View {
                 .dashboardQuietTextInput()
                 .onSubmit { if canCreate { create() } }
             if linksExistingDirectory {
-                Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if nativeHost != nil { hostDirectoryBrowser }
+                else {
+                    Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Text("Woven uses this directory as the project root. Existing files are preserved.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
@@ -1100,6 +1114,73 @@ struct DashboardNewFolderPopover: View {
         .frame(width: 340)
         .dashboardFormFocusDismissal { nameFocused = false }
         .task { nameFocused = true }
+        .task(id: linksExistingDirectory) {
+            if linksExistingDirectory, nativeHost != nil, hostDirectoryListing == nil {
+                await browseHostDirectory(nil)
+            }
+        }
+    }
+
+    private var hostDirectoryBrowser: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Absolute directory on host", text: $hostDirectoryPath)
+                .dashboardQuietTextInput()
+                .onSubmit { Task { await browseHostDirectory(hostDirectoryPath) } }
+            HStack {
+                Button("Up") { Task { await browseHostDirectory(hostDirectoryListing?.parent) } }
+                    .disabled(hostDirectoryListing?.parent == nil || loadingHostDirectories)
+                Button("Browse") { Task { await browseHostDirectory(hostDirectoryPath) } }
+                    .disabled(loadingHostDirectories || !hostDirectoryPath.hasPrefix("/"))
+                Spacer()
+                if loadingHostDirectories { ProgressView().controlSize(.small) }
+            }
+            if let listing = hostDirectoryListing {
+                TextField("Find a directory here", text: $hostDirectoryFilter).dashboardQuietTextInput()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(listing.directories.filter { hostDirectoryFilter.isEmpty || $0.name.localizedCaseInsensitiveContains(hostDirectoryFilter) }) { directory in
+                            Button(directory.name) { Task { await browseHostDirectory(directory.path) } }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }.scrollIndicators(.never).frame(maxHeight: 150)
+                if listing.truncated {
+                    Text("More directories are available. Enter a more specific path to browse them.")
+                        .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
+                Button("Use this directory") {
+                    externalRoot = URL(fileURLWithPath: listing.path)
+                    if name.isEmpty { name = externalRoot?.lastPathComponent ?? "" }
+                }.disabled(loadingHostDirectories)
+            }
+            if let externalRoot {
+                Text("Selected: \(externalRoot.path)").font(.system(size: 11.5)).textSelection(.enabled)
+            }
+            if let hostDirectoryError {
+                Text(hostDirectoryError).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.danger)
+            }
+        }
+        .buttonStyle(SettingsQuietButtonStyle())
+    }
+
+    @MainActor
+    private func browseHostDirectory(_ path: String?) async {
+        guard let nativeHost else { return }
+        let request = UUID()
+        hostDirectoryRequest = request
+        loadingHostDirectories = true
+        hostDirectoryError = nil
+        defer { if hostDirectoryRequest == request { loadingHostDirectories = false } }
+        do {
+            let listing = try await remoteWorkspaces.hostDirectories(path: path, in: nativeHost)
+            guard hostDirectoryRequest == request, !Task.isCancelled else { return }
+            hostDirectoryListing = listing
+            hostDirectoryPath = listing.path
+            hostDirectoryFilter = ""
+        } catch {
+            guard hostDirectoryRequest == request, !Task.isCancelled else { return }
+            hostDirectoryError = error.localizedDescription
+        }
     }
 
     private func create() {

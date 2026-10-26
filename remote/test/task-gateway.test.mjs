@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createTaskGateway,occurrenceDate,latestOccurrence } from '../src/task-gateway.mjs'
 import { applyTaskConfiguration } from '../src/task-gateway-runner.mjs'
+import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 
 
@@ -257,4 +258,37 @@ test('applies only advertised selections and rejects unconfirmed permission befo
  await assert.rejects(()=>applyTaskConfiguration(async(method,params)=>{calls.push(params);return {configOptions:initial.configOptions}},'native',initial,{runtimeKind:'codex',permission:'safe'}),/did not confirm/)
  assert.equal(calls[0].value,'safe')
  await assert.rejects(()=>applyTaskConfiguration(async()=>assert.fail(),'native',initial,{runtimeKind:'codex',model:'unknown'}),/no longer available/)
+})
+
+test('scheduled full-root Pi runs replace saved approval modes before dispatch and fail if unavailable', async () => {
+  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
+  for (const supported of [true, false]) {
+    const calls = [], permission = { id: 'permission_mode', currentValue: 'ask', options: [{ value: 'ask' }, ...(supported ? [{ value: 'full' }] : [])] }
+    const defaultAgent = {
+      async status() { return { locked: false } },
+      async invoke(value) {
+        calls.push(value)
+        if (value.method === 'session/new') return { result: { sessionId: 'session', configOptions: [permission] } }
+        if (value.method === 'session/set_config_option') {
+          permission.currentValue = value.params.value
+          return { result: { configOptions: [permission] } }
+        }
+        if (value.method === 'session/prompt') return { operationID: 'run' }
+        return { result: {} }
+      },
+      async poll() { return { done: true, result: { stopReason: 'end_turn' }, updates: [], cursor: 0 } },
+    }
+    const executor = createTaskExecutor({ catalog: new Map(), workspaceRoot: '/tmp', environment: () => ({}), defaultAgent,
+      configuration: loadRuntimeConfiguration({ WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot' }) })
+    const running = executor({ run: { id: 'run', task: { prompt: 'fixture', configuration: { runtimeKind: 'default_agent', permission: 'ask', usesProductPermissionDefault: true } } },
+      signal: new AbortController().signal, publish() {}, bindSession() {} })
+    if (supported) {
+      await running
+      assert.equal(calls.find(value => value.method === 'session/set_config_option').params.value, 'full')
+      assert.equal(calls.at(-1).method, 'session/prompt')
+    } else {
+      await assert.rejects(running, error => error.beforePrompt === true && /permission/.test(error.message))
+      assert.ok(!calls.some(value => value.method === 'session/prompt'))
+    }
+  }
 })
