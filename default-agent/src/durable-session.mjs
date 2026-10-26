@@ -143,7 +143,7 @@ export async function openDurableSession(engine, id, requested) {
         model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         try {
-          const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }), scope));
+          const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }), scope), scope.httpFailure);
           if (message.usage) scope.reportUsage?.(message.usage);
           return message;
         }
@@ -154,7 +154,7 @@ export async function openDurableSession(engine, id, requested) {
         model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         const result = createAssistantMessageEventStream(), prepared = scope.nativePrepared;
-        const tag = message => ({ ...safeAssistantDiagnostic(message), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}) });
+        const tag = message => ({ ...safeAssistantDiagnostic(message, scope.httpFailure), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}) });
         void (async () => {
           try {
             const account = await currentAccount(model, scope);

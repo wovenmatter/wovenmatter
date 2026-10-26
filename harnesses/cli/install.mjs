@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -14,4 +15,4 @@ export function installOpenCode(env = process.env) {
     writeFileSync(path, content, { mode: 0o600 });
   }
 }
-if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === 'opencode') installOpenCode();
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === 'opencode') installOpenCode();

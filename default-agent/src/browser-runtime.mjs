@@ -1,8 +1,9 @@
+import { realpathSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { WebSocketServer } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 // One authorized CEF page, one invocation, one private connection. CEF never
 // opens a debugging port. Native CDP traffic stays on the app-owned stdio pipe.
@@ -183,4 +184,4 @@ async function main() {
     await bridge.close(); lines.close();
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => { process.exitCode = 1; });
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(() => { process.exitCode = 1; });

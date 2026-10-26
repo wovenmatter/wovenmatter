@@ -37,6 +37,26 @@ is fenced before shutdown. Notes flush before the frontend exits or switches
 library roles. Failed transitions restore the previous role and restart its owner.
 Quitting the frontend does not shut down backend-owned sessions.
 
+## Harness entry points and failures
+
+Local Pi Durable, Codex, Claude Code, Grok, and OpenCode transports belong to the
+execution owner. The frontend requests metadata, configuration, sends, and stops
+through the private backend protocol. Remote native transports remain owned by
+the workspace service; reconnecting its relay does not replay accepted input.
+
+Node canonicalizes a module's file URL, while its command-line path can retain
+symlinks such as macOS `/tmp` → `/private/tmp`. Executable module guards must
+compare the real command-line path to the module URL. This applies to native
+harness wrappers and hooks, the OpenCode installer, Pi browser/Executor helpers,
+and the remote stdio relay. Subprocess regressions exercise application aliases
+containing spaces rather than importing these modules alone.
+
+Pi provider failures retain fixed HTTP classifications across native storage and
+IPC. Response bodies, headers, request URLs, and arbitrary SDK exception text are
+not diagnostics. A new transport attempt clears the previous HTTP classification
+before awaiting the request, so a network failure cannot reuse a stale account or
+quota failure and select another connection.
+
 ## Active work and display sleep
 
 General settings offers two levels of work sleep protection. **Keep working when

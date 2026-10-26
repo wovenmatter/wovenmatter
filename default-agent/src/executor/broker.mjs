@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
 // cross the session CLI. Executor is used unchanged through its public local API.
@@ -411,7 +412,7 @@ export class ExecutorBroker {
     }
   }
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const broker = await new ExecutorBroker(process.argv[2]).load();
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   let chain = Promise.resolve();

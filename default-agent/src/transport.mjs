@@ -1,13 +1,15 @@
-import { accessFailure } from './config.mjs';
+import { accessFailure, providerFailure } from './config.mjs';
 
 // Codex SDK friendly messages collapse subscription exhaustion and transient 429s.
 // Classify the original HTTP failure while leaving the body intact for the SDK.
 // Keep only the safe reason, never a response body, header, or credential.
 export function providerFetch(record, fetchRequest = fetch) {
   return async (...args) => {
-    const response = await fetchRequest(...args);
     record.httpAccessFailure = undefined;
+    record.httpFailure = undefined;
+    const response = await fetchRequest(...args);
     if (!response.ok) {
+      record.httpFailure = providerFailure(response.status);
       let detail = '';
       const reader = response.clone().body?.getReader();
       try {

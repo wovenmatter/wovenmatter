@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { binding, consume, shellInput } from './binding.mjs';
@@ -22,7 +23,7 @@ export function handleHook(runtime, directory, event) {
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: updated } };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const result = handleHook(process.argv[2], process.env.WOVENMATTER_BINDING_DIRECTORY,
       JSON.parse(readFileSync(0, 'utf8')));
