@@ -693,6 +693,8 @@ def expose(workspace_id,port,https_port='8443'):
     def verified_configuration():
         try: config=json.loads(run(['tailscale','serve','status','--json'],check=True).stdout)
         except ValueError: fail('tailscale_serve_unavailable','Private Tailscale Serve status is unavailable.',69)
+        if config is None: config={} # Tailscale serializes an empty Serve config as null.
+        if not isinstance(config,dict): fail('tailscale_serve_unavailable','Private Tailscale Serve status is invalid.',69)
         if config.get('AllowFunnel',{}).get(endpoint): fail('tailscale_route_conflict','Public Funnel owns this port. Existing routes were preserved.',78)
         tcp=config.get('TCP',{}).get(str(https_port),{})
         if tcp and tcp.get('HTTPS') is not True: fail('tailscale_route_conflict','Another TCP route owns this port.',78)
@@ -715,6 +717,7 @@ def cleanup_private_routes(workspace_id,port):
             fail('tailscale_cleanup_unavailable','Private Tailscale routes could not be checked. Restore Tailscale access and retry uninstall; the workspace was preserved.',69)
         try:
             value=json.loads(response.stdout)
+            if value is None: return {} # A connected daemon can have no Serve config.
             if not isinstance(value,dict): raise ValueError()
             return value
         except ValueError: fail('tailscale_cleanup_unavailable','Private Tailscale routes returned invalid status. The workspace was preserved.',69)

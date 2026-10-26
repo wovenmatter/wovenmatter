@@ -312,22 +312,39 @@ class HostFixtures(unittest.TestCase):
             configuration.pop('AllowFunnel'); configuration['Web'][endpoint]['Handlers'][route]['Proxy']='http://127.0.0.1:9001'
             with self.assertRaises(self.m.Failure): self.m.expose('fixture','7337','8443')
         self.assertFalse(any(call[:2]==['tailscale','serve'] for call in self.calls))
+    def test_valid_empty_null_serve_status_allows_cleanup_and_first_expose(self):
+        self.save_install(); self.m.health=lambda *a:{'status':'ok'}
+        configuration=None; endpoint='fixture.test.ts.net:8443'; route='/wovenmatter-execution/fixture'
+        def fake(args,**kwargs):
+            nonlocal configuration
+            if list(args[:3])==['tailscale','serve','status']: return subprocess.CompletedProcess(args,0,json.dumps(configuration).encode(),b'')
+            if args[0:2]==['tailscale','serve']:
+                configuration={'TCP':{'8443':{'HTTPS':True}},'Web':{endpoint:{'Handlers':{route:{'Proxy':'http://127.0.0.1:7337'}}}}}
+                return subprocess.CompletedProcess(args,0,b'',b'')
+            return self.command(args,**kwargs)
+        with mock.patch.object(self.m,'run',side_effect=fake):
+            self.assertEqual(self.m.cleanup_private_routes('fixture',7337),0)
+            result=self.m.expose('fixture','7337','8443')
+        self.assertEqual(result['endpoint'],'https://'+endpoint+route)
     def test_uninstall_removes_only_owned_private_routes_and_preserves_foreign_and_funnel(self):
         self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
-        endpoint='fixture.test.ts.net:8443'; other='fixture.test.ts.net:9443'; public='fixture.test.ts.net:443'; route='/wovenmatter-execution/fixture'
-        configuration={'TCP':{'8443':{'HTTPS':True},'9443':{'HTTPS':True},'443':{'HTTPS':True}},
+        endpoint='fixture.test.ts.net:8443'; second='fixture.test.ts.net:8444'; other='fixture.test.ts.net:9443'; public='fixture.test.ts.net:443'; route='/wovenmatter-execution/fixture'
+        configuration={'TCP':{'8443':{'HTTPS':True},'8444':{'HTTPS':True},'9443':{'HTTPS':True},'443':{'HTTPS':True}},
             'Web':{endpoint:{'Handlers':{route:{'Proxy':'http://127.0.0.1:7337'},'/other':{'Proxy':'http://127.0.0.1:9000'}}},
-                other:{'Handlers':{route:{'Proxy':'http://127.0.0.1:9555'}}},public:{'Handlers':{'/public':{'Proxy':'http://127.0.0.1:8000'}}}},'AllowFunnel':{public:True}}
+                second:{'Handlers':{route:{'Proxy':'http://127.0.0.1:7337'}}},other:{'Handlers':{route:{'Proxy':'http://127.0.0.1:9555'}}},public:{'Handlers':{'/public':{'Proxy':'http://127.0.0.1:8000'}}}},'AllowFunnel':{public:True}}
         removals=[]
         def fake(args,**kwargs):
             if list(args[:3])==['tailscale','serve','status']: return subprocess.CompletedProcess(args,0,json.dumps(configuration).encode(),b'')
             if args[0:2]==['tailscale','serve']:
-                removals.append(args); del configuration['Web'][endpoint]['Handlers'][route]
+                removals.append(args); port=args[2].split('=',1)[1]; owned_endpoint='fixture.test.ts.net:'+port
+                del configuration['Web'][owned_endpoint]['Handlers'][route]
+                if not configuration['Web'][owned_endpoint]['Handlers']:
+                    del configuration['Web'][owned_endpoint]; del configuration['TCP'][port]
                 return subprocess.CompletedProcess(args,0,b'',b'')
             return self.command(args,**kwargs)
         with mock.patch.object(self.m,'run',side_effect=fake): result=self.m.uninstall('fixture')
-        self.assertEqual(result['privateRoutesRemoved'],1); self.assertTrue(result['privateRoutesCleanupVerified'])
-        self.assertEqual(removals,[['tailscale','serve','--https=8443','--set-path='+route,'off']])
+        self.assertEqual(result['privateRoutesRemoved'],2); self.assertTrue(result['privateRoutesCleanupVerified'])
+        self.assertEqual(removals,[['tailscale','serve','--https=8443','--set-path='+route,'off'],['tailscale','serve','--https=8444','--set-path='+route,'off']])
         self.assertIn('/other',configuration['Web'][endpoint]['Handlers']); self.assertIn(route,configuration['Web'][other]['Handlers'])
         self.assertEqual(configuration['AllowFunnel'],{public:True})
     def test_failed_route_cleanup_preserves_installed_service_and_data(self):
