@@ -492,16 +492,6 @@ extension WorkspaceDatabaseConnection {
     try withLock { try calendarItemsUnlocked() }
   }
 
-  @discardableResult
-  public func createCalendarItem(
-    id: UUID = UUID(), title: String, details: String? = nil, startsAt: Date,
-    endsAt: Date?, allDay: Bool, createdAt: Date = Date()
-  ) throws -> String {
-    try saveCalendarEvent(id: id.uuidString.lowercased(),
-      draft: .init(title: title, details: details ?? "", startsAt: startsAt, endsAt: endsAt, allDay: allDay),
-      creating: true, now: createdAt)
-  }
-
   public func workspaceOverview() throws -> WorkspaceSnapshot {
     try withLock {
       var folders: [WorkspaceFolderRecord] = []
@@ -752,14 +742,6 @@ extension WorkspaceDatabase {
 
   public func calendarItems() async throws -> [WorkspaceCalendarItemRecord] {
     try await read { try $0.calendarItems() }
-  }
-
-  @discardableResult
-  public func createCalendarItem(
-    id: UUID = UUID(), title: String, details: String? = nil, startsAt: Date,
-    endsAt: Date?, allDay: Bool, createdAt: Date = Date()
-  ) async throws -> String {
-    try await write { try $0.createCalendarItem(id: id, title: title, details: details, startsAt: startsAt, endsAt: endsAt, allDay: allDay, createdAt: createdAt) }
   }
 
   public func workspaceOverview() async throws -> WorkspaceSnapshot {

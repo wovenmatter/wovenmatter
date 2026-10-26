@@ -87,7 +87,9 @@ for (const provider of ['anthropic', 'claude-subscription']) test(`${provider} n
       content: [{ type: 'thinking', thinking: 'Exposed original thought', thinkingSignature: 'ORIGINAL_ACCOUNT_SIGNATURE' }, { type: 'text', text: `Prior conclusion ${index}. ` + 'Conclusion '.repeat(100) }] });
   const endpoint = letter => '/private/tmp/wmtools-' + letter.repeat(32) + '/' + letter.repeat(32) + '.sock';
   const canonical = normalizeContext({ systemPrompt: 'Fixture instructions. Current tool endpoint: ' + endpoint('a'), tools: [tool], messages });
-  f.setResponse([{ type: 'text', text: 'NATIVE_OPAQUE_SUMMARY_FACT: iridescent octopus.' }]);
+  // Native compaction expects a tagged summary; a plain reply makes SDK 0.3.311
+  // issue a corrective model request. Keep the single-request/usage assertions.
+  f.setResponse([{ type: 'text', text: '<analysis>Retain the original facts.</analysis>\n<summary>NATIVE_OPAQUE_SUMMARY_FACT: iridescent octopus.</summary>' }]);
   const compacted = await compactClaudeContext(f.native, f.credentials, selected, canonical.messages, { wovenNativeContext: scope(10) }, f.dependencies);
   assert.equal(compacted.continuation.kind, 'claude-sdk'); assert.equal(compacted.usage.totalTokens, 25); assert.equal(f.requests.length, 1);
   assert.ok(f.records.some(record => record.kind === 'claude.sdk.event.compact_boundary'));

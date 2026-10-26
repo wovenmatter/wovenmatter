@@ -1,49 +1,46 @@
+"""Portable CI selection never starts native, simulator or image validation."""
 import importlib.util
-import re
 from pathlib import Path
-spec = importlib.util.spec_from_file_location('scopes', Path(__file__).resolve().parents[1] / 'ci-scopes.py')
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('scopes', ROOT / 'scripts/ci-scopes.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-updater = module.scopes(['app/App/Services/DesktopUpdater.swift', 'app/App/Views/SettingsGeneralView.swift',
-                        'scripts/stage-update.py', '.github/workflows/release.yml',
-                        '.github/release-refresh.json'])
-assert updater == dict(macos=True, companion=False, ios=False, remote=False, updates=True), updater
-# The security-critical updater record changes both the framework and tools;
-# metadata-only refreshes must run signed delta validation too.
-sparkle_record = module.scopes(['app/Updater/sparkle-version.json'])
-assert sparkle_record == dict(macos=True, companion=False, ios=False, remote=False, updates=True), sparkle_record
-# The updater's downloader and dependency lockfile are package changes, and
-# therefore require integration coverage even though the UI itself is desktop.
-updater_package = module.scopes(['app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift',
-                                'app/Package.resolved', 'app/App/Services/DesktopUpdater.swift'])
-assert updater_package == dict(macos=True, companion=True, ios=False, remote=False, updates=True), updater_package
-for path in ['app/Sources/WovenMatterDashboardStore/CompanionService.swift',
-             'app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift',
-             'app/Sources/WovenMatterCore/Workspace.swift',
-             'app/Sources/WovenMatterAutomation/Automation.swift',
-             'app/Package.swift', 'app/Package.resolved']:
-    assert module.scopes([path])['companion'], path
-for path in ['ios/App/Views/ConversationView.swift', 'shared/Sources/Protocol.swift', 'integration/Sources/Client.swift', 'default-agent/src/runtime.mjs', 'harnesses/catalog.json']:
-    value = module.scopes([path])
-    assert value['macos'] and value['companion'] and value['ios'], (path, value)
-assert module.scopes(['app/App/Services/CompanionCommandService.swift'])['companion']
-assert module.scopes(['remote/Dockerfile'])['remote']
-assert not module.scopes(['README.md'])['macos']
-# Keep the explicit classifier contract synchronized with XcodeGen's shared
-# desktop inputs, including directories whose children are changed by git.
-project = (Path(__file__).resolve().parents[2] / 'ios/project.yml').read_text()
-desktop_sources = set(re.findall(r'^\s*-\s*path:\s*[\"\']?\.\./(app/[^\s\"\'#]+)', project, re.MULTILINE))
-assert desktop_sources == module.IOS_DESKTOP_SOURCES, (desktop_sources, module.IOS_DESKTOP_SOURCES)
-for path in desktop_sources:
-    assert module.scopes([path])['ios'], path
-    assert module.scopes([path])['companion'], path
-asset = 'app/App/SharedAssets.xcassets/AccentColor.colorset/Contents.json'
-assert module.scopes([asset])['ios'], asset
-assert not module.scopes(['app/App/Views/DashboardStyle.swift.backup'])['ios']
 
-for path in ['.github/workflows/ci.yml', 'scripts/test-changes.sh', 'scripts/ci-scopes.py',
-             'scripts/test-support/test_ci_scopes.py', 'scripts/test-support/test_ios_runner.py']:
-    assert module.scopes([path]) == dict(macos=True, companion=True, ios=True, remote=True, updates=False), path
+def active(*paths):
+    return {name for name, enabled in module.scopes(paths).items() if enabled}
 
-print('CI scopes passed: desktop UI stays scoped; orchestrator changes exercise every lane.')
+
+for path in ['README.md', 'docs/guide/notes-and-data.md', 'app/App/Views/SettingsGeneralView.swift',
+             'app/Sources/WovenMatterCore/Workspace.swift', 'app/Package.resolved',
+             'shared/Sources/Protocol.swift', 'integration/Tests/ClientTests.swift',
+             'ios/App/Views/ConversationView.swift', 'ios/Sources/CompanionClient/Client.swift']:
+    assert active(path) == set(), (path, active(path))
+for path in ['default-agent/src/runtime.mjs', 'default-agent/package-lock.json', 'harnesses/catalog.json']:
+    assert active(path) == {'agent', 'service', 'pi'}, (path, active(path))
+for path in ['remote/src/server.mjs', 'remote/Dockerfile', 'remote/Executor.Dockerfile',
+             'remote/entrypoint.sh', 'remote/security/build-backports.py',
+             'remote/npm-runtime/package-lock.json', 'remote/executor-runtime/package-lock.json']:
+    assert active(path) == {'service', 'scripts'}, (path, active(path))
+assert active('.dockerignore') == {'service'}
+assert active('app/Updater/sparkle-version.json') == {'scripts'}
+assert active('scripts/test-support/test_ios_runner.py') == {'scripts'}
+assert active('.github/workflows/release-cache.yml') == {'scripts'}
+assert active('scripts/build-ios-pi-runtime.mjs') == {'pi', 'scripts'}
+assert active('scripts/build-ios-embedded-runtime.mjs') == {'embedded', 'scripts'}
+assert active('ios/Sources/EmbeddedExecution/Resources/provenance.json') == {'embedded'}
+assert active('ios/Sources/PiDurableRuntime/Resources/provenance.json') == {'pi'}
+assert active('ios/Sources/CompanionInference/PiSDKVersion.swift') == {'pi'}
+assert active('scripts/test-support/native-mcp.test.mjs') == {'agent', 'scripts'}
+assert active('README.md', 'remote/src/server.mjs', 'app/App/Views/SettingsGeneralView.swift') == {'service', 'scripts'}
+assert module.scopes(iter(['remote/src/server.mjs'])) == module.scopes(['remote/src/server.mjs'])
+
+portable = {'agent', 'service', 'pi', 'embedded', 'scripts'}
+assert set(module.scopes([])) == portable
+for path in ['.github/workflows/ci.yml', '.github/workflows/validation.yml',
+             'scripts/test-changes.sh', 'scripts/test-ci.sh', 'scripts/ci-scopes.py',
+             'scripts/test-support/test_ci_scopes.py', 'scripts/test-support/test_ci_runner.py']:
+    assert active(path) == portable, path
+
+print('CI scopes passed: one portable PR check; platform validation is manual.')

@@ -26,6 +26,12 @@ final class CompanionUITests: XCTestCase {
           previousGeometry = nil
           return false
         }
+        // Rotation can temporarily detach the accessibility subtree. Avoid
+        // frame lookups that retry internally while those rows are absent.
+        guard sidebar.allSatisfy(\.exists) else {
+          previousGeometry = nil
+          return false
+        }
         let bounds = window.frame
         let rows = sidebar.map(\.frame)
         guard sidebar.allSatisfy(\.isHittable), rows.allSatisfy({
@@ -283,7 +289,23 @@ final class CompanionUITests: XCTestCase {
     let app = launch(tab: "Home")
     for (name, title) in [("library", "Library"), ("calendar", "Calendar"), ("scheduled-tasks", "Scheduled tasks"), ("databases", "Databases"), ("usage", "Usage")] {
       app.buttons["tab-home"].tap()
-      app.buttons["open-" + name].tap()
+      let heading = app.staticTexts["pane-heading-woven matter"]
+      let destination = app.buttons["open-" + name]
+      // Reselecting Home replaces its NavigationStack. Wait for the new root
+      // and link to settle before sending the single navigation tap.
+      var previousGeometry: [CGRect]?
+      let homeReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+        guard heading.exists, destination.exists, heading.isHittable, destination.isHittable else {
+          previousGeometry = nil
+          return false
+        }
+        let geometry = [heading.frame, destination.frame]
+        defer { previousGeometry = geometry }
+        return previousGeometry == geometry
+      }, object: app)
+      XCTAssertEqual(XCTWaiter.wait(for: [homeReady], timeout: 5), .completed,
+        "Home must settle before opening " + title)
+      destination.tap()
       XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
       XCTAssertFalse(app.buttons["Done"].exists)
       XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Connect to your Mac'")).firstMatch.exists)

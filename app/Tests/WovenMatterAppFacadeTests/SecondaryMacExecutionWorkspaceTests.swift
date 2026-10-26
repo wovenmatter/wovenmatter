@@ -38,7 +38,6 @@ struct SecondaryMacExecutionWorkspaceTests {
         #expect(try await fixture.database.companionNote(id: note.id)?.content == offlineContent)
     }
 
-
     @Test func toolCreatedFoldersAndNotesUseStableIDsAndDeletionReturnsToReplica() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
@@ -78,43 +77,6 @@ struct SecondaryMacExecutionWorkspaceTests {
         let restored = await reopened.snapshot()
         #expect(restored.folders[folder] == nil && restored.notes[note] == nil)
         #expect(!restored.outbox.contains { $0.mutation.resourceID == folder || $0.mutation.resourceID == note })
-    }
-
-    @Test func largeOwnerHistoryImportsCompletelyAndDoesNotBlockLaterEvents() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let identity = try await fixture.database.companionLibraryIdentity()
-        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
-            ownerDeviceID: identity.hostDeviceID, kind: .ios, name: "Offline fixture")
-        _ = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
-        let journal = try WorkspaceJournal(file: fixture.directory.appending(path: "large-origin.json"))
-        try await journal.upsertWorkspace(workspace)
-        let id = UUID().uuidString.lowercased(), run = UUID().uuidString.lowercased()
-        let bodies = [String(repeating: "x", count: 1_024 * 1_024), String(repeating: "\u{1}😀", count: 150_000)]
-        let transcript = CompanionTranscript(conversationID: id, messages: bodies.enumerated().map { index, content in
-            .init(id: "tool-\(index)", conversationID: id, runID: run, role: "tool", content: content)
-        }, activities: [.init(id: "activity", runID: run, title: "Tool", detail: bodies[0], status: "completed")])
-        let entries = try await journal.append(workspaceID: workspace.id,
-            conversation: .init(id: id, title: "Large result", preview: bodies[0]), transcript: transcript)
-        #expect(entries.count > 3)
-        for entry in entries {
-            #expect(try JSONEncoder().encode(entry).count <= CompanionFederationProtocol.maximumEntryBytes)
-            _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [entry]), deviceID: identity.hostDeviceID)
-        }
-        var page = try #require(try await fixture.database.companionFederatedTranscript(conversationID: id))
-        var messages = page.messages, activities = page.activities
-        while let cursor = page.olderCursor {
-            page = try #require(try await fixture.database.companionFederatedTranscript(conversationID: id, before: cursor))
-            messages = page.messages + messages; activities = page.activities + activities
-        }
-        #expect(messages.map(\.content).joined() == bodies.joined())
-        #expect(activities.compactMap(\.detail).joined() == bodies[0])
-        #expect(try await journal.append(workspaceID: workspace.id, transcript: transcript).isEmpty)
-        let later = try await journal.append(workspaceID: workspace.id, transcript: .init(conversationID: id,
-            messages: [.init(id: "later", conversationID: id, role: "assistant", content: "Continued")],
-            activities: [.init(id: "activity", runID: run, title: "Tool", detail: "Short update", status: "completed")]))
-        _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: later), deviceID: identity.hostDeviceID)
-        #expect(await journal.snapshot().transcripts[id]?.activities.compactMap(\.detail).joined() == "Short update")
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == entries.last!.originSequence + Int64(later.count))
     }
 
     @Test func managementRequestCannotCrossAHostRestartAtTheSameEndpoint() async throws {

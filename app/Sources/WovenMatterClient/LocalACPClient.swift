@@ -356,21 +356,12 @@ private struct ACPEnvelope: Codable, Sendable {
     }
 }
 
-enum ACPInputFrame: Equatable, Sendable {
-    case inline(Data)
-    /// The receiving client must remove this transient file after ingestion.
-    case spooled(URL, byteCount: Int)
-}
-
 public final class ACPLineCursor: @unchecked Sendable {
     public static let maximumLineBytes = 10_000_000
     // A 64 MiB native record plus its small protocol envelope.
     static let maximumArchiveLineBytes = 65 * 1_024 * 1_024
-    static let maximumSpooledFrameBytes = 1_024 * 1_024 * 1_024
-    static let spoolThresholdBytes = 1_024 * 1_024
     private let handle: FileHandle
     private let lineByteLimit: Int?
-    private let spoolDirectory: URL
     // FileHandle.AsyncBytes shares a blocking I/O actor across handles on macOS.
     // An idle session must not prevent another session from reading its response.
     // All mutable framing state is confined to this cursor's queue.
@@ -380,21 +371,11 @@ public final class ACPLineCursor: @unchecked Sendable {
     private var chunkOffset = 0
     private var buffer = Data()
     private var frameBytes = 0
-    private var spool: (url: URL, handle: FileHandle)?
     private var terminalError: (any Error)?
 
-    public init(handle: FileHandle, maximumLineBytes: Int? = ACPLineCursor.maximumLineBytes,
-         spoolDirectory: URL = FileManager.default.temporaryDirectory) {
+    public init(handle: FileHandle, maximumLineBytes: Int? = ACPLineCursor.maximumLineBytes) {
         self.handle = handle
         self.lineByteLimit = maximumLineBytes
-        self.spoolDirectory = spoolDirectory
-    }
-
-    deinit {
-        if let spool {
-            try? spool.handle.close()
-            try? FileManager.default.removeItem(at: spool.url)
-        }
     }
 
     public func next() async throws -> Data? {
@@ -403,14 +384,7 @@ public final class ACPLineCursor: @unchecked Sendable {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
                     do {
-                        let frame = try self.readFrame(cancellation: cancellation, maximumBytes: self.lineByteLimit, spoolThreshold: nil)
-                        switch frame {
-                        case .inline(let data)?: continuation.resume(returning: data)
-                        case nil: continuation.resume(returning: nil)
-                        case .spooled(let url, _)?:
-                            try? FileManager.default.removeItem(at: url)
-                            continuation.resume(throwing: LocalACPClientError.invalidResponse("Unexpected spooled control frame"))
-                        }
+                        continuation.resume(returning: try self.readFrame(cancellation: cancellation))
                     }
                     catch { self.discardPartialFrame(error: error); continuation.resume(throwing: error) }
                 }
@@ -420,29 +394,7 @@ public final class ACPLineCursor: @unchecked Sendable {
         }
     }
 
-    /// Large native snapshots are framed on a dispatch worker and spooled to
-    /// disk. Memory is bounded by the threshold plus one 64 KiB read chunk.
-    func nextFrame(maximumBytes: Int = ACPLineCursor.maximumSpooledFrameBytes) async throws -> ACPInputFrame? {
-        guard maximumBytes > 0 else { throw LocalACPClientError.invalidResponse("Invalid native frame limit") }
-        let cancellation = ReadCancellation()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                queue.async {
-                    do {
-                        continuation.resume(returning: try self.readFrame(cancellation: cancellation,
-                            maximumBytes: maximumBytes, spoolThreshold: Self.spoolThresholdBytes))
-                    } catch { self.discardPartialFrame(error: error); continuation.resume(throwing: error) }
-                }
-            }
-        } onCancel: { cancellation.cancel() }
-    }
-
     private func discardPartialFrame(error: any Error) {
-        if let spool {
-            try? spool.handle.close()
-            try? FileManager.default.removeItem(at: spool.url)
-            self.spool = nil
-        }
         buffer.removeAll(keepingCapacity: false)
         frameBytes = 0
         // Dropping a partial frame loses its delimiter position. Retire this
@@ -450,49 +402,33 @@ public final class ACPLineCursor: @unchecked Sendable {
         terminalError = terminalError ?? error
     }
 
-    private func appendFrameBytes(_ bytes: ArraySlice<UInt8>, maximumBytes: Int?, spoolThreshold: Int?) throws {
-        if let maximumBytes, bytes.count > maximumBytes - frameBytes {
+    private func appendFrameBytes(_ bytes: ArraySlice<UInt8>) throws {
+        if let lineByteLimit, bytes.count > lineByteLimit - frameBytes {
             throw LocalACPClientError.lineTooLarge
         }
         frameBytes += bytes.count
-        if spool == nil, let spoolThreshold, frameBytes > spoolThreshold {
-            let url = spoolDirectory.appending(path: "woven-native-frame-" + UUID().uuidString)
-            let descriptor = url.path.withCString { Darwin.open($0, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, S_IRUSR | S_IWUSR) }
-            guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            let writer = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-            spool = (url, writer)
-            try writer.write(contentsOf: buffer)
-            buffer.removeAll(keepingCapacity: false)
-        }
-        if let spool { try spool.handle.write(contentsOf: Data(bytes)) }
-        else { buffer.append(contentsOf: bytes) }
+        buffer.append(contentsOf: bytes)
     }
 
-    private func finishFrame() throws -> ACPInputFrame? {
+    private func finishFrame() -> Data? {
         guard frameBytes > 0 else { return nil }
-        let count = frameBytes
         frameBytes = 0
-        if let saved = spool {
-            try saved.handle.close()
-            spool = nil
-            return .spooled(saved.url, byteCount: count)
-        }
         let data = buffer
         buffer.removeAll(keepingCapacity: false)
-        return .inline(data)
+        return data
     }
 
-    private func readFrame(cancellation: ReadCancellation, maximumBytes: Int?, spoolThreshold: Int?) throws -> ACPInputFrame? {
+    private func readFrame(cancellation: ReadCancellation) throws -> Data? {
         if let terminalError { throw terminalError }
         while true {
             try cancellation.check()
             while chunkOffset < chunkCount {
                 let start = chunkOffset
                 while chunkOffset < chunkCount && chunk[chunkOffset] != 0x0A { chunkOffset += 1 }
-                try appendFrameBytes(chunk[start..<chunkOffset], maximumBytes: maximumBytes, spoolThreshold: spoolThreshold)
+                try appendFrameBytes(chunk[start..<chunkOffset])
                 if chunkOffset < chunkCount {
                     chunkOffset += 1
-                    if let frame = try finishFrame() { return frame }
+                    if let frame = finishFrame() { return frame }
                 }
             }
 
@@ -516,7 +452,7 @@ public final class ACPLineCursor: @unchecked Sendable {
             chunkCount = count
             chunkOffset = 0
             if count == 0 {
-                return try finishFrame()
+                return finishFrame()
             }
         }
     }

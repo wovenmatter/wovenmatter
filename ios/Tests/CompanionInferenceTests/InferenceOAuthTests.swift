@@ -326,9 +326,12 @@ final class InferenceOAuthTests: XCTestCase {
 
   func testWrongCredentialsAndForeignCatalogNeverReachAProvider() async throws {
     let clock = OAuthClock(), auth = OAuthFixture([]), resolver = InferenceOAuthCredentialResolver(transport: auth, now: { clock.now() })
-    for raw in ["plain-api-key", try credential("xai").serialized(), try credential().serialized()] {
+    let cases = [("plain-api-key", "fixture-account"),
+                 (try credential("xai").serialized(), "fixture-account"),
+                 (try credential().serialized(), "another-account")]
+    for (raw, accountID) in cases {
       let store = OAuthMemoryStore(["fixture-key": raw]), transport = OAuthModelTransport([])
-      var connection = connection(); if raw == (try credential().serialized()) { connection.accountID = "another-account" }
+      var connection = connection(); connection.accountID = accountID
       let service = CompanionInferenceService(connection: connection, credentials: store, transport: transport, model: model("openai-codex"), oauthResolver: resolver)
       do { try await service.stream(requestJSON: "{\"model\":{\"id\":\"fixture-model\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]}}", emit: { _ in }); XCTFail("Wrong credential accepted") } catch {}
       let requests = await transport.requests; XCTAssertTrue(requests.isEmpty)

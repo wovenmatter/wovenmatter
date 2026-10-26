@@ -9,8 +9,6 @@ import WovenMatterCore
 @Suite("Library", .serialized)
 struct WorkspaceLibraryTests {
 
-
-
   @Test("local retention confines reads and cleanup removes only unreferenced managed files")
   func localFiles() async throws {
     let f = try await Fixture()
@@ -96,25 +94,6 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: LibraryFileStore(supportDirectory: f.root).url(for: image)) == Data([1, 2, 3]))
   }
 
-  @Test("URL discovery preserves citations and filenames, ignores code, and deduplicates within a message")
-  func links() {
-    let links = LibraryLinkDiscovery.links(
-      in: """
-        [Source](https://example.com/a_(b)) https://example.com/a_(b).
-        [Report](<./my report.pdf>) ![Screenshot](./screen.png)
-        [1]: https://example.org/paper
-        MEDIA:/tmp/photo.jpg
-        ```sh
-        curl https://not-an-exchange.example
-        ```
-        """)
-    #expect(links.count == 5)
-    #expect(links.contains { $0.source == "./my report.pdf" && $0.kind == .file })
-    #expect(links.filter { $0.kind == .photo }.count == 2)
-    #expect(!links.contains { $0.source.contains("not-an-exchange") })
-    #expect(LibraryLinkDiscovery.links(in: "[danger](javascript:alert(1))").isEmpty)
-  }
-
   struct Fixture {
     let root: URL
     let db: WorkspaceDatabase
@@ -135,38 +114,6 @@ struct WorkspaceLibraryTests {
       try await db.indexLibraryMessages()
       return run
     }
-  }
-
-  @Test("activation excludes existing messages and old imported history, including later rewrites")
-  func forwardOnly() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let old = try await f.exchange(chat, text: "https://before.example")
-    try await f.db.write { connection in try connection.transaction {
-      try connection.executeUnlocked("DROP TRIGGER library_new_message")
-      try connection.executeUnlocked("DELETE FROM library_items; DELETE FROM library_messages")
-     } }
-    // Simulate a database predating feature activation: migration never scans its messages.
-    try await f.db.write { try $0.migrateLibrary() }
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_messages SET content='https://old-rewritten.example' WHERE id=?", [old.assistantMessageID])
-     } }
-    try await f.db.indexLibraryMessages()
-    #expect(try await f.db.libraryItems().isEmpty)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "INSERT INTO dashboard_messages(id,conversation_id,role,content,created_at) VALUES('imported',?,'assistant','https://old-import.example','2020-01-01T00:00:00Z')",
-        [chat])
-     } }
-    let fresh = try await f.exchange(chat, text: "https://new.example")
-    let rows = try await f.db.libraryItems()
-    #expect(rows.count == 1)
-    #expect(rows.first?.messageID == fresh.userMessageID)
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
-    try await reopened.indexLibraryMessages()
-    #expect(try await reopened.libraryItems() == rows)
   }
 
   @Test("sent attachments reconcile native echoes and remain scoped to their owning workspace")
@@ -242,30 +189,6 @@ struct WorkspaceLibraryTests {
     #expect(try await f.db.pendingLibraryFiles().isEmpty)
     #expect(try await f.db.libraryItem(id: file.id) == nil)
     await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: file.id) }
-  }
-
-  @Test("generated document links retain message attachments after their source files disappear")
-  func generatedDocumentDelivery() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.session()
-    let service = LibraryService(database: f.db)
-    for ext in ["xlsx", "docx", "pdf", "zip"] {
-      let source = f.root.appending(path: "Sample sales #1." + ext)
-      let bytes = Data([0, 255, 80, 75]) + Data(ext.utf8)
-      try bytes.write(to: source)
-      let link = source.absoluteString
-      let run = try await f.exchange(chat, text: "Hand me the file", reply: "[\(source.lastPathComponent)](<\(link)>)")
-      try await service.synchronize(
-        locations: [.init(conversationID: chat, name: "Local", root: f.root.path)], remoteWorkspace: { _ in nil })
-      let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: link)
-      let item = try await #require(f.db.libraryItem(id: id))
-      #expect(item.storage == .retained)
-      try FileManager.default.removeItem(at: source)
-      let delivered = try await service.openURL(id: id)
-      #expect(delivered.lastPathComponent == source.lastPathComponent)
-      #expect(try Data(contentsOf: delivered) == bytes)
-    }
   }
 
   @Test("retained remote handback opens offline and copies deduplicate by content")

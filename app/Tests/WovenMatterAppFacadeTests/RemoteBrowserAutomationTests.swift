@@ -6,18 +6,6 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct RemoteBrowserAutomationTests {
-    @Test func routeUsesTheSavedExecutionOwnerAndRejectsAnUnknownWorkspace() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let caller = try await fixture.createConversation()
-        #expect(try await fixture.model.automationRemoteWorkspace(callerID: caller)?.id == fixture.remote.id)
-        let unknownWorkspace = UUID()
-        let unknownCaller = try await fixture.database.createRemoteACPSession(runtimeKind: .codex,
-            remoteWorkspaceID: unknownWorkspace, remoteWorkspaceName: "Unconfigured", title: "Unconfigured",
-            ownerDeviceID: UUID(), executionRoot: .init(folderID: nil,
-                location: .init(workspaceID: "remote:" + unknownWorkspace.uuidString.lowercased(), rootPath: "/workspace", managed: false),
-                defaultPath: "/workspace"))
-        await #expect(throws: (any Error).self) { try await fixture.model.automationRemoteWorkspace(callerID: unknownCaller) }
-    }
     @Test func remoteBrowserHonorsCurrentPolicyReplaysAndJoinsCallerCancellation() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await fixture.createConversation(), other = try await fixture.createConversation()

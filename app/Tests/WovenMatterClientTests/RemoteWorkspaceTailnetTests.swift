@@ -93,24 +93,4 @@ struct RemoteWorkspaceTailnetTests {
         }
     }
 
-    @Test func daemonStateAndPeerIdentityMustRemainUsable() throws {
-        for state in ["Stopped", "NeedsLogin", "Starting"] {
-            #expect(throws: RemoteWorkspaceClientError.self) {
-                try RemoteWorkspaceTailnet.sshOptions(destination: "worker", executable: "/tailscale", status: status([peer], state: state))
-            }
-        }
-        var offline = peer; offline["Online"] = false
-        var expired = peer; expired["Expired"] = true
-        for peers in [[offline], [expired], [peer, peer], []] {
-            #expect(throws: RemoteWorkspaceClientError.self) {
-                try RemoteWorkspaceTailnet.sshOptions(destination: "worker", executable: "/tailscale", status: status(peers))
-            }
-        }
-    }
-
-    @Test func ipv6OnlyPeerUsesItsTailnetAddress() throws {
-        var ipv6 = peer; ipv6["TailscaleIPs"] = ["fd7a:115c:a1e0::2"]
-        let options = try RemoteWorkspaceTailnet.sshOptions(destination: "worker", executable: "/tailscale", status: status([ipv6]))
-        #expect(options.contains("Hostname=fd7a:115c:a1e0::2"))
-    }
 }

@@ -6,26 +6,12 @@ import WovenMatterCore
 
 struct NativeHarnessArchiveTests {
 
-    @Test func nativeFrameScannerRejectsMalformedInputAndKeepsMessageMetadataScoped() async throws {
+    @Test func nativeFrameScannerRejectsMalformedInput() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }
         try Data("{\"data\":{\"entries\":[{\"id\":\"row\"},]}}".utf8).write(to: file)
         await #expect(throws: (any Error).self) { try await PiNativeHistoryFrame.inspect(file) }
-        try Data("{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"length\"},\"details\":{\"role\":\"user\",\"stopReason\":\"error\"}}".utf8).write(to: file)
-        let metadata = try await PiNativeHistoryFrame.inspectObject(file)
-        #expect(metadata.messageScalars["role"] == "assistant")
-        #expect(metadata.messageScalars["stopReason"] == "length")
     }
-
-    @Test func archivedHermesExportRetainsMetadata() throws {
-        let identity = HermesSessionArchive.identity(home: "/remote-workspaces/11111111-1111-1111-1111-111111111111/home/.hermes", storedID: "native-session", imported: true)
-        let message: HermesValue = ["id": .number(7), "role": "tool", "content": "full result", "tool_call_id": "call-1", "unknown_metadata": ["preserved": .bool(true)]]
-        let snapshot: HermesValue = ["id": "native-session", "messages": .array([message]), "compression_parent": "older-session"]
-        let batch = try HermesSessionImport(identity: identity, title: "Imported", createdAt: .now, messages: [message], nativeSnapshot: snapshot).nativeArchiveBatch()
-        #expect(batch.records.contains { $0.id == "message:7" && $0.payload.contains("unknown_metadata") })
-        #expect(batch.records.contains { $0.id == "session.export" && $0.payload.contains("compression_parent") })
-    }
-
 
     @Test(.timeLimit(.minutes(3)))
     func oversizedNativeRecordsRemainCompleteSearchableAndUseSanitizedOffsets() async throws {

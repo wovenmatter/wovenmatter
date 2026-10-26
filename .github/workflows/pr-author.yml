@@ -1,8 +1,6 @@
 name: PR Author
 
 on:
-  pull_request_target:
-    types: [opened, reopened]
   issue_comment:
     types: [created]
 
@@ -15,11 +13,10 @@ jobs:
   label:
     if: >-
       github.repository == 'wovenmatter/wovenmatter' &&
-      (github.event_name == 'pull_request_target' ||
-       (github.event.issue.pull_request && github.event.comment.body == '/recheck-author'))
+      github.event.issue.pull_request && github.event.comment.body == '/recheck-author'
     runs-on: ubuntu-latest
     concurrency:
-      group: pr-author-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: pr-author-${{ github.event.issue.number }}
       cancel-in-progress: false
     steps:
       # Only GitHub metadata is read. Never check out or execute PR code in
@@ -31,14 +28,10 @@ jobs:
         with:
           script: |
             const repo = context.repo;
-            let pullRequest = context.payload.pull_request;
-            if (context.eventName === "issue_comment") {
-              const { data } = await github.rest.pulls.get({
-                ...repo,
-                pull_number: context.payload.issue.number,
-              });
-              pullRequest = data;
-            }
+            const { data: pullRequest } = await github.rest.pulls.get({
+              ...repo,
+              pull_number: context.payload.issue.number,
+            });
 
             const author = pullRequest.user?.login;
             const association = pullRequest.author_association;

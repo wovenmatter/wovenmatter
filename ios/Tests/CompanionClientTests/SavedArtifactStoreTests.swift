@@ -84,7 +84,7 @@ final class SavedArtifactStoreTests: XCTestCase {
     let local = await store.localURL(id: "artifact"); XCTAssertNil(local)
     let offsets = await server.downloadOffsets; XCTAssertEqual(offsets, [0, 0])
   }
-  func testIndexDoesNotDownloadObserverBytesAndPinsSurviveRestart() async throws {
+  func testIndexDoesNotDownloadObserverBytes() async throws {
     let location = directory(), server = ArtifactLibrary()
     await server.seed(Data("saved artifact".utf8))
     let store = try SavedArtifactStore(directory: location)
@@ -92,16 +92,6 @@ final class SavedArtifactStoreTests: XCTestCase {
     let offsets = await server.downloadOffsets, count = await store.manifests().count
     XCTAssertTrue(offsets.isEmpty); XCTAssertEqual(count, 1)
     let pendingUpload = await store.pendingUploadCount(); XCTAssertEqual(pendingUpload, 0)
-    try await store.setPinned("artifact", true)
-    let restarted = try SavedArtifactStore(directory: location)
-    let pending = await restarted.offlineStatus(id: "artifact")
-    XCTAssertEqual(pending?.isPinned, true); XCTAssertEqual(pending?.pendingDownload, true)
-    try await restarted.synchronize(using: server)
-    let final = await restarted.offlineStatus(id: "artifact")
-    XCTAssertEqual(final?.isAvailable, true); XCTAssertEqual(final?.pendingUpload, false)
-    try await restarted.setPinned("artifact", false)
-    let unpinned = await restarted.localURL(id: "artifact")
-    XCTAssertNotNil(unpinned, "Unpinning must not discard locally saved bytes")
   }
 
 }

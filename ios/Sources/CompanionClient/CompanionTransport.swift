@@ -153,9 +153,9 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     }
     headers["MCP-Protocol-Version"] = negotiated.protocolVersion
     if let sessionID = negotiated.id { headers["MCP-Session-Id"] = sessionID }
-    let (data, _) = try await data("mcp", method: "POST", body: JSONEncoder().encode(message),
+    let (responseData, _) = try await data("mcp", method: "POST", body: JSONEncoder().encode(message),
       maximumBytes: 80 * 1_024 * 1_024, timeout: 24 * 60 * 60, headers: headers)
-    return try JSONDecoder().decode(GatewayJSONValue.self, from: data)
+    return try JSONDecoder().decode(GatewayJSONValue.self, from: responseData)
   }
   public func readWorkspace(_ value: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {

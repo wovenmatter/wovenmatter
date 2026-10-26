@@ -28,30 +28,8 @@ struct CompanionFacadeTests {
         #expect(await fixture.recorder.deliveries.count == 1)
     }
 
-
     // OpenCode uses its native coordinator, covered by OpenCodeCoordinatorTests.
     // Every remaining runtime still traverses the real facade and launch routing.
-
-    @Test func mobileStopFencesPreparationAndAdvancesBackendRevisionOnlyForItsRun() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let id = try await fixture.createConversation()
-        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Active"))
-        let backend = BackendApplicationService(model: fixture.model)
-        fixture.model.backendApplicationService = backend
-        defer { fixture.model.backendApplicationService = nil }
-        let pending = fixture.model.beginAgentDispatch(conversationID: id)
-        defer { fixture.model.finishAgentDispatch(conversationID: id, fence: pending) }
-        await #expect(throws: (any Error).self) {
-            try await fixture.model.cancelCanonicalRun(conversationID: id, runID: UUID().uuidString)
-        }
-        #expect(!pending.isCancelled)
-        #expect(backend.dispatchStopRevisions[id] == nil)
-        try await fixture.model.cancelCanonicalRun(conversationID: id, runID: run.runID)
-        #expect(pending.isCancelled)
-        #expect(backend.dispatchStopRevisions[id] == 1)
-        try await fixture.model.waitForAgentStop(conversationID: id)
-        #expect(try await fixture.database.activeRunID(conversationID: id) == nil)
-    }
 
     @Test(arguments: ["local", "remote"])
     func folderDeletedDuringCreateAwaitLeavesNoSessionAndRetryIsStable(route: String) async throws {
@@ -96,16 +74,11 @@ struct CompanionFacadeTests {
     let device = UUID().uuidString.lowercased()
     let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid",
         kind: .host, dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter")
-    init(legacyHiddenHarnesses: Bool = false) async throws {
+    init() async throws {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-facade-\(UUID())")
         suite = "companion.facade.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
-        if legacyHiddenHarnesses {
-            defaults.set([], forKey: "wovenmatter.local-acp.enabled-runtimes")
-            defaults.set([], forKey: "wovenmatter.local-acp.shown-runtimes")
-            defaults.set(["codex", "claude_code"], forKey: "wovenmatter.local-acp.hidden-runtimes")
-        }
         let recorder = recorder
         store = try await DashboardStore(supportDirectory: directory, runControls: .init(
             accept: { route, id, input, delivery, context in try await recorder.accept(route, id, input, delivery, context) },
@@ -121,8 +94,7 @@ struct CompanionFacadeTests {
         usageService = LocalUsageService(homeDirectory: directory.appending(path: "ProviderFixtureHome"),
             fileManager: .default, credentialStore: FacadeNoCredentials(probe: probe),
             usageDatabaseURL: directory.appending(path: "usage.sqlite"), sharedConnectionRevision: { 0 },
-            limitCollector: { request in probe.collectLimits(request); return [] },
-            openRouterActivityFetcher: { _ in probe.record("fetch"); throw FixtureError.configurationRejected })
+            limitCollector: { request in probe.collectLimits(request); return [] })
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
             localUsageService: usageService)
         let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)

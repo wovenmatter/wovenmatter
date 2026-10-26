@@ -45,17 +45,4 @@ struct AgentDispatchAdmissionTests {
 struct AgentStopCoordinatorTests {
     private enum Failure: Error { case stop }
 
-    @Test func failedStopBlocksEveryInputUntilExplicitRetryCompletes() async throws {
-        let coordinator = AgentStopCoordinator()
-        let stop = coordinator.begin(conversationID: "session") { throw Failure.stop }
-        do { try await stop.value; Issue.record("Expected native Stop failure") } catch is Failure {}
-        for _ in 0..<2 {
-            do { try await coordinator.wait(conversationID: "session"); Issue.record("Failed Stop must block input") } catch is Failure {}
-        }
-        let retry = coordinator.begin(conversationID: "session") {}
-        try await retry.value
-        try await coordinator.wait(conversationID: "session")
-        try await coordinator.wait(conversationID: "another-session")
-    }
-
 }

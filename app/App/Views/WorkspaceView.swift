@@ -64,10 +64,6 @@ struct DashboardSendResult: Equatable {
     let draft: String
     let accepted: Bool
 
-    static func resolve(draft: String, accepted: Bool) -> DashboardSendResult {
-        DashboardSendResult(draft: accepted ? "" : draft, accepted: accepted)
-    }
-
     static func resolve(
         submittedDraft: String,
         currentDraft: String,

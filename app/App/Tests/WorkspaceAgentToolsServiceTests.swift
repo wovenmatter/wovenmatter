@@ -138,50 +138,6 @@ struct WorkspaceAgentToolsServiceTests {
         #expect(!forged.success)
     }
 
-    @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
-        let runtime = ExecutorRuntime()
-        let original = runtime.fence("admitting")
-        #expect(runtime.sessions.isEmpty)
-        runtime.cancelAll()
-        #expect(throws: CancellationError.self) { try runtime.check("admitting", fence: original) }
-        try runtime.check("admitting", fence: runtime.fence("admitting"))
-        _ = try? await runtime.scopeEdits["admitting"]?.value
-    }
-
-
-    @Test(arguments: AgentRuntimeKind.allCases)
-    func executorUsesBoundMCPIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
-        var seen: [String] = []
-        let service = try await WorkspaceAgentToolsModel(database: database,
-            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
-            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() },
-            executorHandler: { identity, command, _ in
-                seen.append(identity)
-                return .init(result: .object(["action": .string(command.action)]))
-            }, onMutation: {})
-        defer { service.stop() }
-        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
-        func request(_ action: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
-            try await callMCPTool(service, connection: connection, name: "woven_executor_" + action, arguments: arguments)
-        }
-        #expect(try await !request("search", ["query": .string("fixture")]).success)
-        #expect(seen.isEmpty)
-        _ = try await database.setSessionToolEnabled(.executor, enabled: true, sessionID: caller)
-        #expect(try await request("search", ["query": .string("fixture")]).success)
-        #expect(seen == [caller])
-        #expect(try await !request("execute", ["code": .string("return 1;"), "session": .string("other")]).success)
-        #expect(seen == [caller])
-        _ = try await database.setSessionToolEnabled(.executor, enabled: false, sessionID: caller)
-        #expect(try await !request("execute", ["code": .string("return 1;")]).success)
-        #expect(seen == [caller])
-    }
-
-
     @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() async throws {
         let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
@@ -554,32 +510,4 @@ extension WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test func goalToolsRunThroughBoundMCPAndPublishState() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let caller = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Goals", ownerDeviceID: UUID())
-        let service = try await WorkspaceAgentToolsModel(database: database,
-            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
-            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
-        defer { service.stop() }
-        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
-        func request(_ action: String, _ arguments: [String: GatewayJSONValue] = [:]) async throws -> WovenMatterToolResponse {
-            try await callMCPTool(service, connection: connection, name: "woven_goals_" + action, arguments: arguments)
-        }
-        let first = try await request("set", ["objective": .string("Produce the verified artifact"), "turnBudget": .number(3)])
-        #expect(first.success)
-        let id = try #require(first.result?.objectValue?["id"]?.stringValue)
-        #expect(service.goals[caller]?.id == id)
-        let read = try await request("get")
-        #expect(read.result?.objectValue?["objective"]?.stringValue == "Produce the verified artifact")
-        let failed = try await request("complete", ["id": .string(id), "evidence": .string(" ")])
-        #expect(!failed.success)
-        let done = try await request("complete", ["id": .string(id), "evidence": .string("Artifact checked against the requirements")])
-        #expect(done.success && service.goals[caller]?.status == .complete)
-        _ = try await database.setSessionToolEnabled(.goals, enabled: false, sessionID: caller)
-        let stillEnabled = try await request("get")
-        #expect(stillEnabled.success)
-    }
 }

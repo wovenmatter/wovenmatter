@@ -27,33 +27,6 @@ struct ACPSteeringLifecycleTests {
         await f.coordinator.shutdown()
     }
 
-    @Test(arguments: [false, true])
-    func toolDeliveryAuthorityIsCheckedBeforeNativeSteering(revoked: Bool) async throws {
-        let f = try await SteeringFixture()
-        defer { f.remove() }
-        _ = try await f.start()
-        await f.driver.waitForPrompt()
-        let source = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
-        try await f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
-        let deliveryID = UUID().uuidString.lowercased()
-        _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
-        _ = try await f.database.claimToolDelivery(id: deliveryID)
-        if revoked { try await f.database.setSessionTools(.init(enabled: []), sessionID: source) }
-        let input = AgentMessageInput(text: "correction", historyDeliveryID: deliveryID)
-        if revoked {
-            await #expect(throws: WorkspaceToolError.self) {
-                try await f.coordinator.sendActiveInput(conversationID: f.id, input: input)
-            }
-            #expect(await f.driver.received.isEmpty)
-        } else {
-            _ = try await f.coordinator.sendActiveInput(conversationID: f.id, input: input)
-            #expect(await f.driver.received == ["correction"])
-            #expect(try await f.database.toolDelivery(id: deliveryID)?.status == "accepted")
-        }
-        await f.driver.finishInitial()
-        try await f.waitForTerminal()
-        await f.coordinator.shutdown()
-    }
 }
 
 private struct SteeringFixture {

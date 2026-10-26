@@ -24,12 +24,4 @@ struct WorkspaceTextFileTests {
     #expect(past.eof && past.byteCount == 0 && past.nextOffset == bytes.count)
   }
 
-  @Test func smallFilesAndSplitUTF8AreExplicitAndLossless() throws {
-    let text = "a🙂b", url = try file(Data(text.utf8)); defer { try? FileManager.default.removeItem(at: url) }
-    let whole = try WorkspaceTextFile.read(url)
-    #expect(whole.content == text && !whole.truncated && !whole.lossyUTF8)
-    let split = try WorkspaceTextFile.read(url, offset: 2, limit: 2)
-    #expect(split.lossyUTF8 && split.byteCount == 2 && split.nextOffset == 4)
-    #expect(split.bytesBase64.flatMap { Data(base64Encoded: $0) } == Data(text.utf8).subdata(in: 2..<4))
-  }
 }

@@ -7,10 +7,33 @@ build. Use `--macos` or `--remote` for focused validation.
 Container lifecycle changes also use `scripts/test-container.sh` when Docker is
 available. Tests use temporary data and must not consume provider services.
 
-CI selects desktop, companion integration, iPhone/iPad UI, and remote jobs by
-changed paths. Changes to the CI orchestrator or its scope/runner tests exercise
-every lane. Documentation-only changes run the public-tree scan and stable CI
-gate. Remote image builds run on Linux.
+Every PR runs one Linux **CI** check: public-tree and syntax checks, then portable
+fixtures, agent/service tests and generated-resource verification selected by
+changed paths. JavaScript tests run once on Linux. Use
+`scripts/test-changes.sh --ci` for the same selection locally, or
+`scripts/test-ci.sh --all` for all portable suites.
+
+New PR commits cancel obsolete CI runs. Merges to main do not repeat CI, and
+there is no separate detector or aggregate gate job. Swift-only changes receive
+repository scans and infrastructure checks; automatic CI does not establish native
+compilation, simulator acceptance, container isolation or image security results.
+
+Run **Manual validation** (`validation.yml`) explicitly on the desired branch:
+
+| Scope | Validation |
+| --- | --- |
+| `desktop` | Native macOS fixtures, package tests, unsigned app build, embedded WebKit smoke, companion integration and signed delta round trip |
+| `mobile` | iPhone and iPad package/app/UI tests on disposable simulators |
+| `images` | amd64/arm64 workspace and Executor images, isolation, native helpers, permissions/cancellation and vulnerability inventory |
+| `all` (default) | All portable suites plus every platform check above |
+
+For example, `gh workflow run validation.yml --ref BRANCH -f scope=desktop`
+requests desktop validation. Platform validation runs without provider or
+signing credentials; it does not install, release or publish an app. Build
+intermediates use toolchain/dependency-specific caches. Release dependency/compiler
+warming is also manual through **Prepare release dependencies** on main; releases
+can build from a cache miss. See the [CI audit](CI_AUDIT.md) for measured costs and
+the automatic coverage boundary.
 
 The embedded Python smoke uses the production WebKit executor with no visible
 web view. Its inactive scheduling policy must keep the worker running until
@@ -30,15 +53,15 @@ writes a unique `results.*/TestResults.xcresult` and `xcodebuild.log` under
 desktop logs and the embedded-runtime report on desktop failure. Log pipelines
 must preserve failure status (`shell: bash` in Actions or `set -o pipefail`).
 Validation uses disposable GitHub-hosted runners without provider, signing, or
-deployment credentials. The `pull_request_target` author workflow inspects only
-GitHub metadata; it does not check out or execute contributor code.
+deployment credentials. The explicitly requested author-label workflow inspects
+only GitHub metadata; it does not check out or execute contributor code.
 
 ## Contributions
 
 Pull requests target `main`; code-owner approval is the merge gate. The PR Author
-workflow labels new and reopened pull requests; it does not run on pushed commits,
-draft transitions, or changes on `main`. Comment exactly `/recheck-author` on a PR
-to refresh classification, including after organization membership changes. The
+workflow runs only when someone comments exactly `/recheck-author` on a PR; it
+does not add an automatic check on open, reopen or pushed commits. Use that
+command to request classification, including after organization membership changes. The
 recheck fetches the PR author's current metadata rather than classifying the
 commenter. Existing PRs can be rechecked individually after this workflow lands.
 
@@ -83,11 +106,11 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
-Release from clean, current `origin/main`. Development/main CI validates source;
+Release from clean, current `origin/main`. PR CI and explicit platform runs validate source;
 release preparation never runs local suites, an unsigned Debug build, or another
-CI cycle. The release workflow records already-completed exact-source main CI
-when available, then builds and verifies a fresh production Release app. Missing
-CI metadata does not trigger tests. Immutable tags, signing, notarization,
+CI cycle. The release workflow builds and verifies a fresh production Release app
+without dispatching source validation or looking for removed main CI runs.
+Immutable tags, signing, notarization,
 artifact verification, and exact approved release-copy gates still apply.
 
 A supplied or confirmed version authorizes building and verifying a private

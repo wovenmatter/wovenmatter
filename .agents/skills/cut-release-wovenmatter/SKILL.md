@@ -34,19 +34,19 @@ snapshot. Report any concrete upstream blocker explicitly. Do not resolve or
 install newer versions inside the signed release build: it must use the accepted
 lockfiles. A previously verified private draft retains its original snapshot.
 
-Release from clean, current `origin/main`. Development/main CI owns source
-validation. Do not run `scripts/test-changes.sh --all`, any test suite, or an
-unsigned Debug build as a release prerequisite. Do not trigger, wait for, or
-rerun main CI during release preparation. Create and push an annotated `vX.Y.Z`
+Release from clean, current `origin/main`. PR CI and explicitly requested platform
+validation own source validation. Do not run `scripts/test-changes.sh --all`, any
+test suite, or an unsigned Debug build as a release prerequisite. Do not trigger,
+wait for, or rerun CI during release preparation. Create and push an annotated `vX.Y.Z`
 tag at that exact accepted commit to start the release workflow. Never move or
 reuse a release tag; an existing private draft can be resumed at its original
 accepted commit.
 
-The workflow records already-completed exact-source main CI when available as
-informational evidence. Missing/inaccessible metadata or skipped scopes do not
-start another validation cycle or block the release. Lightweight tag/main source
-checks remain before importing signing secrets. Always build a new production
-Release app; a Debug app is never a distribution artifact.
+Automatic CI runs on PRs only; native/mobile/image validation is manual. Release
+preparation does not recreate a main CI run or dispatch platform validation.
+Lightweight tag/main source checks remain before importing signing secrets.
+Always build a new production Release app; a Debug app is never a distribution
+artifact.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
 Apple Silicon app and stages a private draft. After its successful run, verify

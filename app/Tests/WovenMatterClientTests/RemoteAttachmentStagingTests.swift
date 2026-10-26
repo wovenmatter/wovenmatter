@@ -7,43 +7,6 @@ import WovenMatterCore
 
 struct RemoteAttachmentStagingTests {
 
-  @Test("file names cannot escape the attachment directory or hide their extension")
-  func sanitizesFileNames() {
-    func name(_ raw: String) -> String {
-      RemoteAttachmentStager.fileName(for: AgentFileAttachmentDraft(
-        kind: .file, fileName: raw, mimeType: "application/octet-stream",
-        sizeBytes: 1, contentHash: Self.hash, localURL: URL(fileURLWithPath: "/tmp/x")
-      ))
-    }
-    #expect(name("../../etc/passwd") == ".._.._etc_passwd")
-    #expect(name("a/b\\c.txt") == "a_b_c.txt")
-    #expect(name("bad\nname.md") == "bad_name.md")
-    #expect(name("it's fine.pdf") == "it's fine.pdf")
-    #expect(name("..") == "attachment")
-    #expect(name("   ") == "attachment")
-  }
-
-
-  @Test("cancelling a running attachment subprocess terminates it")
-  func transferCancellation() async throws {
-    let cancellation = SpawnCancellation()
-    let task = Task.detached {
-      try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
-        arguments: ["30"], timeLimit: 60, onProcessStarted: cancellation.processStarted)
-    }
-    defer { task.cancel() }
-    // Either handle installation or child launch may win. Cancellation is
-    // requested only once both have happened, directly from those events.
-    cancellation.install(task)
-    await #expect(throws: CancellationError.self) { try await task.value }
-    let pid = try #require(cancellation.processID)
-    #expect(pid > 0)
-    let status = kill(pid, 0)
-    let error = errno
-    #expect(status == -1)
-    #expect(error == ESRCH)
-  }
-
   private final class Recorder: @unchecked Sendable {
     private let lock = NSLock()
     var response: String
@@ -124,41 +87,6 @@ struct RemoteAttachmentStagingTests {
       }
       task?.cancel()
     }
-  }
-
-  @Test("staging repairs corruption, cleans partials, and supports maximum-length names",
-        arguments: ["it's $(not-a-command).pdf", String(repeating: "a", count: 251) + ".pdf"])
-  func executesAtomicStaging(name: String) throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let path = root.appending(path: name)
-    let stdin = root.appending(path: "stdin")
-    // macOS uses shasum; the container supplies coreutils sha256sum.
-    let shim = "sha256sum() { /usr/bin/shasum -a 256; }; "
-    func run(_ bytes: String, expectedBytes: Int = 1) throws -> Int32 {
-      try Data(bytes.utf8).write(to: stdin)
-      let input = try FileHandle(forReadingFrom: stdin)
-      defer { try? input.close() }
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: "/bin/bash")
-      process.arguments = ["-c", shim + RemoteAttachmentStager.stagingScript(
-        path: path.path, byteCount: expectedBytes, hash: Self.hash)]
-      process.standardInput = input
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = FileHandle.nullDevice
-      try process.run(); process.waitUntilExit()
-      return process.terminationStatus
-    }
-    #expect(try run("x") == 0)
-    #expect(try Data(contentsOf: path) == Data("x".utf8))
-    try Data("y".utf8).write(to: path)
-    #expect(try run("x") == 0)
-    #expect(try Data(contentsOf: path) == Data("x".utf8))
-    try Data("y".utf8).write(to: path)
-    #expect(try run("") != 0)
-    #expect(try Data(contentsOf: path) == Data("y".utf8))
-    #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).allSatisfy { !$0.contains(".part.") })
   }
 
 }

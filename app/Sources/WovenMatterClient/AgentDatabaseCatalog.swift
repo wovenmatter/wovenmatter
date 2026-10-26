@@ -10,8 +10,6 @@ public struct LocalAgentDatabase: Codable, Equatable, Identifiable, Sendable {
     public var updatedAt: String
     public let owner: String
     public let url: URL
-    public var preference: AgentDatabasePreference { .sqlite }
-    public var isExternal: Bool { false }
 }
 
 public struct ManagedDatabaseSnapshot: Codable, Sendable {
@@ -21,7 +19,6 @@ public struct ManagedDatabaseSnapshot: Codable, Sendable {
 
 public enum AgentDatabaseCatalogError: LocalizedError, Equatable, Sendable {
     case invalidName, rootUnavailable, databaseAlreadyExists, databaseUnavailable
-    case externalDirectoryUnavailable, externalDirectoryContainsRoot, unsafeRelativePath
     case dataFileTooLarge, unsupportedManifest
     case sql(String)
     public var errorDescription: String? {
@@ -30,7 +27,6 @@ public enum AgentDatabaseCatalogError: LocalizedError, Equatable, Sendable {
         case .databaseAlreadyExists: "A database with that name already exists."
         case .sql(let message): "Database query failed: \(message)"
         case .dataFileTooLarge: "The database snapshot is too large."
-        case .externalDirectoryUnavailable, .externalDirectoryContainsRoot: "Databases are managed by Woven Matter."
         default: "The managed database is unavailable."
         }
     }
@@ -102,7 +98,7 @@ public enum AgentDatabaseCatalog {
         try locked(root) { try catalog(root).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
     }
     @discardableResult
-    public static func create(named rawName: String, preference: AgentDatabasePreference = .sqlite, in root: URL, owner: String = "") throws -> LocalAgentDatabase {
+    public static func create(named rawName: String, in root: URL, owner: String = "") throws -> LocalAgentDatabase {
         try locked(root) {
             let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, name.count <= 128, !name.contains("\0") else { throw AgentDatabaseCatalogError.invalidName }

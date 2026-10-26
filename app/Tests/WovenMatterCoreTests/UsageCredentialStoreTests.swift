@@ -26,7 +26,6 @@ struct UsageCredentialStoreTests {
       let snapshot = try await service.analyticsSnapshot(
         range: .last30Days,
         refreshReason: .startup,
-        enabledProviders: [.openRouter],
         now: Date(timeIntervalSince1970: 1_800_000_000)
       )
       #expect(!snapshot.sources.contains { $0.id == "openrouter" })
@@ -51,10 +50,6 @@ struct UsageCredentialStoreTests {
       limitCollector: { request in
         collector.recordLimit(request.openRouterAPIKey)
         return []
-      },
-      openRouterActivityFetcher: { key in
-        collector.recordActivity(key)
-        return OpenRouterActivityResult(samplesByUTCDate: [:], detail: "Fixture activity")
       }
     )
     func refresh() async throws {
@@ -73,7 +68,6 @@ struct UsageCredentialStoreTests {
     #expect(credentials.authorizationCount == 1)
     #expect(credentials.readCount == 0)
     #expect(collector.limitKeys == ["original", "original"])
-    #expect(collector.activityKeys.isEmpty)
 
     credentials.denyAuthorization()
     await #expect(throws: UsageCredentialStoreError.self) {
@@ -81,20 +75,17 @@ struct UsageCredentialStoreTests {
     }
     try await refresh()
     #expect(collector.limitKeys.last == "original")
-    #expect(collector.activityKeys.isEmpty)
     #expect(credentials.readCount == 0)
 
     try await service.saveOpenRouterAPIKey(" replacement ")
     revision.advance()
     try await refresh()
     #expect(collector.limitKeys.last == "replacement")
-    #expect(collector.activityKeys.isEmpty)
     #expect(credentials.readCount == 0)
 
     try await service.deleteOpenRouterAPIKey()
     try await refresh()
     #expect(collector.limitKeys.last == "missing")
-    #expect(collector.activityKeys.isEmpty)
     #expect(credentials.readCount == 1) // Limits only; analytics never reads the key.
   }
 
@@ -333,11 +324,8 @@ private final class SessionCredentialFixture: UsageCredentialStoring, @unchecked
 private final class CredentialUseRecorder: @unchecked Sendable {
   private let lock = NSLock()
   private var limits: [String] = []
-  private var activity: [String] = []
   var limitKeys: [String] { lock.withLock { limits } }
-  var activityKeys: [String] { lock.withLock { activity } }
   func recordLimit(_ value: String?) { lock.withLock { limits.append(value ?? "missing") } }
-  func recordActivity(_ value: String) { lock.withLock { activity.append(value) } }
 }
 
 private final class ConnectionRevisionFixture: @unchecked Sendable {

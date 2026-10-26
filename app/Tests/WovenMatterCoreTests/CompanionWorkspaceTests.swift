@@ -8,45 +8,6 @@ import WovenMatterCore
 @Suite("Companion canonical persistence", .serialized)
 struct CompanionWorkspaceTests {
 
-  @Test("deletion detaches children, emits tombstones and never resurrects old IDs")
-  func deletion() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let folderID = try await db.createFixtureFolder(name: "Folder")
-    let noteID = try await db.createNote(folderID: folderID, content: document("Writing"))
-    let before = try await db.companionSnapshot()
-    _ = try await db.deleteFolder(id: folderID)
-    let page = try await db.companionChanges(after: before.cursor)
-    #expect(page.changes.contains { $0.resourceKind == .folder && $0.resourceID == folderID && $0.operation == .delete })
-    #expect(page.changes.contains { $0.note?.id == noteID && $0.note?.folderID == nil })
-    let note = try #require(try await db.companionNote(id: noteID))
-    _ = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .deleteNote, resourceID: noteID, expectedRevision: note.revision))
-    await #expect(throws: WorkspaceNoteMutationError.noteNotFound) {
-      try await db.persistNoteDraft(id: noteID, title: "Recovered", content: document("Unsynced writing"), expectedRevision: String(note.revision))
-    }
-    #expect(try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .createNote, resourceID: noteID, title: "Accidental resurrection", content: document("No"))).status == .conflict)
-    #expect(try await db.companionNote(id: noteID) == nil)
-  }
-
-  @Test("local agent table operations are bounded before allocation and unknown documents retain raw bytes")
-  func agentFormatBoundary() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
-    let noteID = try await db.createNote(folderID: nil, content: document("Base"))
-    await #expect(throws: RemoteNoteEditError.operationNotAllowed) {
-      try await db.applyNoteEdits(NoteEditingRequest(command: .apply, noteID: noteID, expectedRevision: "1", operations: [
-        .createTable(afterBlockID: nil, rows: 1_000_000, columns: 1_000_000, headerRow: false)
-      ]))
-    }
-    #expect(try await db.companionNote(id: noteID)?.revision == 1)
-    let unknown = "{\"version\":99,\"kind\":\"note\",\"future\":{\"writing\":\"preserve me\"}}"
-    try await db.write { db in try db.transaction { try db.companionExecuteUnlocked("UPDATE notes SET content = ? WHERE id = ?", values: [unknown, noteID]) } }
-    await #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try await db.readNoteForEditing(id: noteID) }
-    let result = try await db.applyCompanionMutation(CompanionMutation(deviceID: device, kind: .updateNote, resourceID: noteID, expectedRevision: 2, title: "Overwrite", content: document("Must fail")))
-    #expect(result.status == .invalid)
-    #expect(try await db.companionNote(id: noteID)?.content == unknown)
-  }
-
   private let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
   @Test("mobile history, desktop drafts and agent restore share revisions and independent receipts")

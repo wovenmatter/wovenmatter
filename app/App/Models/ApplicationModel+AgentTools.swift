@@ -525,7 +525,7 @@ extension ApplicationModel {
         if let workspaceID = source.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
             if action == "list" { return try WovenMatterToolResponse.value(await remoteWorkspaces.databases(for: configuration)) }
-            if action == "create" { return try WovenMatterToolResponse.value(await remoteWorkspaces.createDatabase(name: command.required("title"), preference: .sqlite, in: configuration)) }
+            if action == "create" { return try WovenMatterToolResponse.value(await remoteWorkspaces.createDatabase(name: command.required("title"), in: configuration)) }
             let result = try await remoteWorkspaces.datasetOperation(action: action, id: command.required("database-id"), sql: command.required("query"), in: configuration)
             if action == "execute" { await refreshDatabases() }
             return .init(result: result)

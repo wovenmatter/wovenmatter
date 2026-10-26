@@ -89,7 +89,6 @@ public enum LocalACPRuntimeCatalog {
                     ? ["claude-code-acp"]
                     : harness.id == .opencode ? ["opencode2"] : [],
                 arguments: harness.arguments,
-                environment: environment(for: harness.id),
                 underlyingCLIName: harness.adapterPackage == nil
                     ? nil
                     : harness.cliCommand,
@@ -101,25 +100,10 @@ public enum LocalACPRuntimeCatalog {
                     : nil,
                 adapterPackage: harness.adapterPackage,
                 minimumAdapterVersion: harness.minimumAdapterVersion,
-                adapterDescription: "Woven Matter uses \(harness.transport) transport for \(harness.displayName).",
-                readinessProbe: readinessProbe(for: harness.id)
+                adapterDescription: "Woven Matter uses \(harness.transport) transport for \(harness.displayName)."
             )
         }
     }()
-
-    private static func environment(
-        for runtimeKind: AgentRuntimeKind
-    ) -> [String: String] {
-        // The invocation wrapper composes required Codex settings and Woven
-        // instructions with its inherited CODEX_CONFIG without replacing it.
-        [:]
-    }
-
-    private static func readinessProbe(
-        for runtimeKind: AgentRuntimeKind
-    ) -> LocalACPRuntimeReadinessProbe? {
-        nil
-    }
 
     public static func definition(
         for runtimeKind: AgentRuntimeKind
@@ -159,10 +143,6 @@ public struct LocalACPRuntimeAvailability: Codable, Equatable, Identifiable, Sen
 
     public var id: AgentRuntimeKind { runtimeKind }
     public var isReady: Bool { state == .ready }
-    public var needsCLIInstallation: Bool { state == .cliMissing }
-    public var needsAdapterInstallation: Bool {
-        state == .adapterMissing || state == .adapterOutdated
-    }
     public var compactDetail: String {
         switch state {
         case .ready:

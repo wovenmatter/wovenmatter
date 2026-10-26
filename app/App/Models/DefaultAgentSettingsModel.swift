@@ -280,7 +280,6 @@ final class DefaultAgentSettingsModel {
     private var process: Process?
     private var input: FileHandle?
     private let inputQueue = DispatchQueue(label: "wovenmatter.built-in.settings-input", qos: .userInitiated)
-    private var outputBuffer = Data()
     private var generation = UUID()
     private var operationTask: Task<Void, Never>?
     private var signInLease: UUID?

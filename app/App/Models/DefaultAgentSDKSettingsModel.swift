@@ -42,7 +42,7 @@ final class DefaultAgentSDKSettingsModel {
                         if self.workspaces[command.key] != state { self.workspaces[command.key] = state }
                         if !state.busy {
                             if command.request.action == .update && state.error == nil {
-                                self.refreshModels(after: command, connections: connections, remoteWorkspaces: remoteWorkspaces)
+                                self.refreshModels(after: command, connections: connections)
                             }
                             return
                         }
@@ -61,13 +61,12 @@ final class DefaultAgentSDKSettingsModel {
         } else {
             start(command, remoteWorkspaces: remoteWorkspaces) { [weak self, weak connections] in
                 guard let self, let connections else { return }
-                self.refreshModels(after: command, connections: connections, remoteWorkspaces: remoteWorkspaces)
+                self.refreshModels(after: command, connections: connections)
             }
         }
     }
 
-    private func refreshModels(after command: DefaultAgentSDKCommand, connections: DefaultAgentSettingsModel,
-                               remoteWorkspaces: RemoteWorkspacesModel) {
+    private func refreshModels(after command: DefaultAgentSDKCommand, connections: DefaultAgentSettingsModel) {
         guard command.request.action == .update else { return }
         // The invalidator refreshes only the backend projection and enabled labels.
         // Do not start full helper discovery merely because an SDK was replaced.

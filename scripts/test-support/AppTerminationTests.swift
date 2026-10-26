@@ -271,36 +271,18 @@ private struct AppTerminationTests {
             return
         }
         try! verifyStaleSocketRecovery()
-        // Policy and login-job checks never register a job or enable the feature.
-        let suite = "wovenmatter.background-policy-tests." + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        precondition(LocalBackgroundExecution(defaults: defaults, developmentMode: nil).isEnabled)
-        precondition(defaults.object(forKey: LocalBackgroundExecution.preferenceKey) == nil)
-        precondition(LocalExecutionRole.resolve(arguments: [],
-            backgroundEnabled: LocalBackgroundExecution.resolvedEnabled(defaults: defaults, developmentMode: nil)) == .frontend)
-        defaults.set(false, forKey: LocalBackgroundExecution.preferenceKey)
-        precondition(LocalBackgroundExecution(defaults: defaults, developmentMode: nil).isEnabled)
-        precondition(LocalExecutionRole.resolve(arguments: [],
-            backgroundEnabled: LocalBackgroundExecution.resolvedEnabled(defaults: defaults, developmentMode: nil)) == .frontend)
-        defaults.set(true, forKey: LocalBackgroundExecution.preferenceKey)
-        precondition(LocalBackgroundExecution(defaults: defaults, developmentMode: nil).isEnabled)
+        // Policy and login-job checks never register a job.
+        precondition(LocalBackgroundExecution(developmentMode: nil).isEnabled)
         for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
-            precondition(!LocalBackgroundExecution(defaults: defaults, developmentMode: mode).isEnabled)
+            precondition(!LocalBackgroundExecution(developmentMode: mode).isEnabled)
         }
-        defaults.removeObject(forKey: LocalBackgroundExecution.preferenceKey)
-        precondition(!LocalBackgroundExecution(defaults: defaults, developmentMode: .snapshot).isEnabled)
-        // The termination probe models a foreground owner. Keep its process
-        // role explicit without persisting preferences or registering a job.
-        UserDefaults.standard.register(defaults: [LocalBackgroundExecution.preferenceKey: false])
-        precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false) == .frontend)
-        precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: true) == .frontend)
-        precondition(LocalExecutionRole.resolve(arguments: ["--backend"], backgroundEnabled: false) == .backend)
-        precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: true, libraryClientEnabled: true) == .libraryClient)
-        precondition(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false, libraryClientEnabled: true) == .libraryClient)
+        precondition(LocalExecutionRole.resolve(arguments: []) == .frontend)
+        precondition(!LocalExecutionRole.frontend.ownsExecution)
+        precondition(LocalExecutionRole.resolve(arguments: ["--backend"]) == .backend)
+        precondition(LocalExecutionRole.resolve(arguments: [], libraryClientEnabled: true) == .libraryClient)
         precondition(!LocalExecutionRole.libraryClient.ownsExecution)
         precondition(LocalExecutionRole.libraryClient.leaseFileName != LocalExecutionRole.developmentHost.leaseFileName)
-        precondition(LocalExecutionRole.resolve(arguments: ["--backend"], backgroundEnabled: false, libraryClientEnabled: true) == .backend)
+        precondition(LocalExecutionRole.resolve(arguments: ["--backend"], libraryClientEnabled: true) == .backend)
         precondition(LocalExecutionRole.backend.leaseFileName == LocalExecutionRole.developmentHost.leaseFileName)
         precondition(LocalExecutionRole.frontend.leaseFileName != LocalExecutionRole.backend.leaseFileName)
         let endpoint = LocalExecutionRole.backendSocketURL(workspaceDirectory: URL(fileURLWithPath: "/private/tmp/" + String(repeating: "long", count: 100)))

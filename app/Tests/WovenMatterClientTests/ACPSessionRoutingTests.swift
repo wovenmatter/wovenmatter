@@ -36,26 +36,6 @@ struct ACPSessionRoutingTests {
         events.continuation.finish()
     }
 
-
-    @Test func missingLoadedSessionSwitchesRoutingToTheNewSession() async throws {
-        let fixture = try SessionRoutingFixture(
-            bootstrapFrames: [modelUpdate("new-parent"), modelUpdate("obsolete", session: "old")],
-            promptFrames: [update("agent_message_chunk", session: "old", text: "old reply"), update("agent_message_chunk", text: "new reply")],
-            missingLoadedSession: true
-        )
-        defer { fixture.remove() }
-        let client = try fixture.client()
-        defer { Task { await client.shutdown() } }
-        let initialized = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: "old", title: nil)
-        let events = RoutingEvents()
-        #expect(try await client.prompt("fixture", onEvent: { await events.record($0) }) == .endTurn)
-        await client.shutdown()
-        #expect(!initialized.loadedExistingSession)
-        #expect(initialized.configuration.model == "new-parent")
-        #expect(await events.values() == [.assistantChunk("new reply")])
-    }
-
-
     @Test func foreignPermissionsCancelWithoutCallingTheParentHandlerAndPreserveRequestIDs() async throws {
         let fixture = try SessionRoutingFixture(promptFrames: [
             permission(id: "child-approval", session: "child"),

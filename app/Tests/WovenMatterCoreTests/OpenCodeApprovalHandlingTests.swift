@@ -7,37 +7,6 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeApprovalHandlingTests {
-
-    @Test func desktopNormalizedFormPreservesClearedDefaultsAndConditionalFields() async throws {
-        let context = try await ApprovalContext()
-        defer { context.clean() }
-        let fields: [OpenCodeValue] = [
-            ["key": "amount", "type": "integer", "default": .number(2)],
-            ["key": "amountDetail", "type": "string", "required": .bool(true),
-             "when": .array([["key": "amount", "op": "eq", "value": .number(2)]])],
-            ["key": "choice", "type": "string", "default": "suggested"],
-            ["key": "enabled", "type": "boolean", "default": .bool(true)],
-            ["key": "details", "type": "string", "required": .bool(true),
-             "when": .array([["key": "enabled", "op": "eq", "value": .bool(true)]])],
-            ["key": "choices", "type": "multiselect", "custom": .bool(true)],
-            ["key": "ratio", "type": "number", "minimum": .number(0), "maximum": .number(5)],
-            ["key": "verification", "type": "external"]
-        ]
-        let form: OpenCodeValue = ["id": "form_normalized", "fields": .array(fields)]
-        let desktopAnswer = try OpenCodeFormAnswers.reply(fields: fields, answers: [
-            "amount": "", "choice": .null, "enabled": .bool(false), "details": "hidden stale value",
-            "choices": .array(["custom", "selected"]), "ratio": "2.75", "verification": .bool(true)
-        ])
-        #expect(desktopAnswer["amount"].isNull && desktopAnswer["choice"].isNull && desktopAnswer["details"].isNull)
-        await context.fixture.setForms([form], session: "ses_a")
-        let coordinator = context.coordinator()
-        try await coordinator.connect(context.connection)
-        try await coordinator.replyToForm(context.a, expectedRequest: form, expectedRunID: nil, answers: desktopAnswer)
-        #expect(await context.fixture.replies.first?.1 == ["answer": desktopAnswer])
-        await coordinator.shutdown()
-    }
-
-
     @Test func nativeManualResponsesValidateCurrentRequestAndResolveOnlyOnce() async throws {
         let context = try await ApprovalContext()
         defer { context.clean() }
@@ -75,6 +44,36 @@ struct OpenCodeApprovalHandlingTests {
             try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "once")
         }
         #expect(await context.fixture.replies.count == 1)
+        await coordinator.shutdown()
+    }
+
+
+    @Test func desktopNormalizedFormPreservesClearedDefaultsAndConditionalFields() async throws {
+        let context = try await ApprovalContext()
+        defer { context.clean() }
+        let fields: [OpenCodeValue] = [
+            ["key": "amount", "type": "integer", "default": .number(2)],
+            ["key": "amountDetail", "type": "string", "required": .bool(true),
+             "when": .array([["key": "amount", "op": "eq", "value": .number(2)]])],
+            ["key": "choice", "type": "string", "default": "suggested"],
+            ["key": "enabled", "type": "boolean", "default": .bool(true)],
+            ["key": "details", "type": "string", "required": .bool(true),
+             "when": .array([["key": "enabled", "op": "eq", "value": .bool(true)]])],
+            ["key": "choices", "type": "multiselect", "custom": .bool(true)],
+            ["key": "ratio", "type": "number", "minimum": .number(0), "maximum": .number(5)],
+            ["key": "verification", "type": "external"]
+        ]
+        let form: OpenCodeValue = ["id": "form_normalized", "fields": .array(fields)]
+        let desktopAnswer = try OpenCodeFormAnswers.reply(fields: fields, answers: [
+            "amount": "", "choice": .null, "enabled": .bool(false), "details": "hidden stale value",
+            "choices": .array(["custom", "selected"]), "ratio": "2.75", "verification": .bool(true)
+        ])
+        #expect(desktopAnswer["amount"].isNull && desktopAnswer["choice"].isNull && desktopAnswer["details"].isNull)
+        await context.fixture.setForms([form], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        try await coordinator.replyToForm(context.a, expectedRequest: form, expectedRunID: nil, answers: desktopAnswer)
+        #expect(await context.fixture.replies.first?.1 == ["answer": desktopAnswer])
         await coordinator.shutdown()
     }
 

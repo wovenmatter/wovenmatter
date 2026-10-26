@@ -11,7 +11,7 @@ struct StorageCorrectnessReviewTests {
 
 
   @Test(arguments: [false, true])
-  func hermesArchiveDTOAndPersistedChecklistRemainReadable(clear: Bool) async throws {
+  func hermesPersistedChecklistRemainReadable(clear: Bool) async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let db = try await WorkspaceDatabase(url: fixture.databaseURL)
@@ -24,19 +24,16 @@ struct StorageCorrectnessReviewTests {
       "result": ["revision": .number(3), "todos": .array([["id": "invalid"]])]]) == nil)
     let rows: [HermesValue] = [["id": .number(1), "role": "assistant", "content": "Retained Hermes work"],
       ["id": .number(2), "role": "tool", "tool_call_id": "old-todo", "content": .string(result.json)]]
-    let archived = HermesSessionImport(identity: HermesSessionArchive.identity(home: "/tmp/fixture", storedID: "parent", imported: true),
-      title: "History", createdAt: Date(), messages: rows)
     // Seed the rows an older build already saved; no retired runtime is created or resumed.
     let conversation = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
     let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Retained history")
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: plan)
     try await db.completeLocalACPRun(runID: run.runID)
-    try await db.recordNativeRunRecords(archived.nativeArchiveBatch(), conversationID: conversation, harness: "hermes")
     for row in rows {
       try await db.recordHistory(.init(conversationID: conversation, harness: "hermes", kind: "import.message", payload: row.json, completeness: "native-export"))
     }
     try await db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET runtime_kind='hermes',acp_session_id=? WHERE conversation_id=?", [archived.identity,conversation])
+      try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET runtime_kind='hermes',acp_session_id=? WHERE conversation_id=?", ["hermes-import:L3RtcC9maXh0dXJl:parent",conversation])
       // Historical sessions carry the retirement marker created by import or
       // the execution-ownership migration, with no executable workspace root.
       try connection.toolsExecuteUnlocked("INSERT INTO retained_execution_history(conversation_id) VALUES(?)", [conversation])

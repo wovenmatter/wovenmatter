@@ -21,19 +21,6 @@ extension CompanionModel {
     }
   }
 
-  func setChatKeptOffline(_ id: String, _ pinned: Bool) async {
-    let key = "chat:" + id
-    guard let store, !offlineOperationIDs.contains(key) else { return }
-    offlineOperationIDs.insert(key); offlineProblems.removeValue(forKey: key)
-    defer { offlineOperationIDs.remove(key) }
-    do {
-      try await store.setTranscriptPinned(id, pinned)
-      await reload()
-      if pinned { try await downloadOfflineConversation(id) }
-      await reload()
-    } catch { offlineProblems[key] = error.localizedDescription }
-  }
-
   func downloadOfflineConversation(_ id: String) async throws {
     let owner = executionOwner(of: id)
     if owner == "local" { return } // Native checkpoint/history already lives here.
@@ -51,28 +38,10 @@ extension CompanionModel {
     }
   }
 
-  func chatOfflineLabel(_ id: String) -> String {
-    if offlineOperationIDs.contains("chat:" + id) { return "Downloading…" }
-    if executionOwner(of: id) == "local" { return "Saved on this device" }
-    guard let transcript = state.transcripts[id] else { return "Download when connected" }
-    return transcript.olderCursor == nil ? "Available on this device" : "Recent messages available"
-  }
-
   func artifactURL(_ id: String) async throws -> URL {
     if let url = await store?.artifacts.localURL(id: id) { return url }
     guard let engine, online else { throw DeviceExecutionError.unavailable("Connect to the central database to download this artifact.") }
     return try await engine.ensureArtifactCached(id)
   }
 
-  func setArtifactKeptOffline(_ id: String, _ pinned: Bool) async {
-    let key = "artifact:" + id
-    guard let artifacts = store?.artifacts, !offlineOperationIDs.contains(key) else { return }
-    offlineOperationIDs.insert(key); offlineProblems.removeValue(forKey: key)
-    defer { offlineOperationIDs.remove(key) }
-    do {
-      try await artifacts.setPinned(id, pinned)
-      if pinned, online, let engine { try await engine.keepArtifactOffline(id) }
-      await refreshSynchronizationStatus()
-    } catch { offlineProblems[key] = error.localizedDescription }
-  }
 }

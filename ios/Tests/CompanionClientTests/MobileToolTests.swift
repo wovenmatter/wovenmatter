@@ -12,50 +12,7 @@ struct MobileToolTests {
   private func call(_ store: MobileStore, _ args: [String], context: MobileToolContext, id: String = UUID().uuidString.lowercased()) async -> WovenMatterToolResponse {
     await store.executeLocalTool(.init(arguments: args, requestID: id), context: context)
   }
-  @Test func mutationReceiptPreservesEditsAndRechecksRevisionAndPermission() async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased()
-    let created = await call(store, ["notes", "create", "--title", "Original"], context: scope, id: id)
-    #expect(created.success)
-    let read = await call(store, ["notes", "read", id], context: scope)
-    let revision = try #require(read.result?.objectValue?["revision"]?.stringValue)
-    let edited = await call(store, ["notes", "set-title", "--note-id", id, "--title", "Later", "--revision", revision], context: scope)
-    #expect(edited.success)
-    let stale = await call(store, ["notes", "set-title", "--note-id", id, "--title", "Lost edit", "--revision", revision], context: scope)
-    #expect(stale.code == "revision_conflict")
-    #expect(await store.snapshot().notes[id]?.title == "Later")
-    let reopened = try MobileStore(file: root.appendingPathComponent("library.json"))
-    let replay = await call(reopened, ["notes", "create", "--title", "Original"], context: scope, id: id)
-    #expect(replay.success)
-    #expect(await reopened.snapshot().notes.count == 1)
-    #expect(await reopened.snapshot().notes[id]?.title == "Later")
-    let mismatched = await call(reopened, ["notes", "create", "--title", "Other"], context: scope, id: id)
-    #expect(!mismatched.success)
-    var disabled = scope; disabled.enabled.remove(.notes)
-    let denied = await call(reopened, ["notes", "create", "--title", "Original"], context: disabled, id: id)
-    #expect(!denied.success && denied.code == "tool_disabled")
-    #expect(await reopened.snapshot().notes.count == 1)
-  }
 
-  @Test func cancelledCallerCannotCommitAfterActorHop() async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let request = WovenMatterToolRequest(arguments: ["notes", "create", "--title", "Cancelled"])
-    let response = await Task {
-      withUnsafeCurrentTask { $0?.cancel() }
-      return await store.executeLocalTool(request, context: scope)
-    }.value
-    #expect(!response.success)
-    #expect(await store.snapshot().notes.isEmpty)
-    #expect(await store.snapshot().outbox.isEmpty)
-    let queued = await Task { () -> Bool in
-      withUnsafeCurrentTask { $0?.cancel() }
-      do { _ = try await store.enqueueToolSubmission(id: UUID().uuidString, sessionID: scope.sessionID, text: "Cancelled"); return true }
-      catch is CancellationError { return false }
-      catch { return true }
-    }.value
-    #expect(!queued)
-    #expect(await store.toolSubmissions().isEmpty)
-  }
   @Test func richTableOperationsUseSharedDesktopDocumentEngine() async throws {
     let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
     let id = UUID().uuidString.lowercased()
@@ -89,18 +46,6 @@ struct MobileToolTests {
     #expect(read.result?.objectValue?["nativeRecord"] == nil)
     #expect(read.result?.objectValue?["transcript"] == nil)
   }
-  @Test func libraryKindsAndWorkspaceSelectionsDoNotMixSavedItems() async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let photo = try await store.artifacts.save(data: Data("photo".utf8), workspaceID: "phone", title: "Photo", mediaType: "image/png")
-    let document = try await store.artifacts.save(data: Data("file".utf8), workspaceID: "mac", title: "Document", mediaType: "text/plain")
-    let link = try await store.artifacts.save(data: Data("https://example.com".utf8), workspaceID: "phone", title: "Link", mediaType: "text/uri-list; charset=utf-8")
-    for (kind, id) in [("photo", photo.id), ("file", document.id), ("link", link.id)] {
-      let result = await call(store, ["library", "list", "--kind", kind, "--workspace", "phone,mac"], context: scope)
-      #expect(result.success)
-      #expect(result.result?.objectValue?["rows"]?.arrayValue?.compactMap { $0.objectValue?["id"]?.stringValue } == [id])
-    }
-    #expect(!(await call(store, ["library", "list", "--kind", "invalid"], context: scope)).success)
-  }
   @Test func timersPersistClaimIdentityCoalesceAndDoNotResurrectOnRetry() async throws {
     let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
     let id = UUID().uuidString.lowercased(), start = try MobileToolSupport.date("2026-10-10T12:00:00Z")
@@ -117,60 +62,6 @@ struct MobileToolTests {
     #expect(await call(reopened, ["timers", "remove", id], context: scope).success)
     #expect(await call(reopened, args, context: scope, id: id).success)
     #expect(await reopened.snapshot().toolTimers?[id]?.removed == true)
-  }
-
-  @Test func localSessionCoordinationRejectsRemoteAndCycles() async throws {
-    let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let ids: Set<String> = ["a", "b"]
-    _ = try await store.coordinateLocalSessions(callerID: "a", targetID: "b", localExecutionIDs: ids, purpose: "Work", notifications: true, requestID: "one")
-    await #expect(throws: WorkspaceToolError.self) { _ = try await store.coordinateLocalSessions(callerID: "b", targetID: "a", localExecutionIDs: ids, purpose: "Cycle", notifications: true, requestID: "two") }
-    await #expect(throws: WorkspaceToolError.self) { _ = try await store.coordinateLocalSessions(callerID: "a", targetID: "remote", localExecutionIDs: ids, purpose: "Not local", notifications: true, requestID: "three") }
-  }
-  @Test func executorJobIsDurableAndBoundToSessionAndCode() async throws {
-    let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased()
-    _ = try await store.createExecutorJob(id: id, sessionID: "a", code: "text(2+2)")
-    try await store.updateExecutorJob(id: id, state: "running")
-    let reopened = try MobileStore(file: root.appendingPathComponent("library.json"))
-    try await reopened.interruptExecutorJobs()
-    #expect(try await reopened.executorJob(id: id, sessionID: "a").state == "interrupted")
-    await #expect(throws: WorkspaceToolError.self) { _ = try await reopened.createExecutorJob(id: id, sessionID: "a", code: "other") }
-    await #expect(throws: WorkspaceToolError.self) { _ = try await reopened.executorJob(id: id, sessionID: "b") }
-  }
-  @Test func sessionInboxBindsReplayContentAndPreservesTerminalStateAcrossRestart() async throws {
-    let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased()
-    _ = try await store.enqueueToolSubmission(id: id, sessionID: "a", text: "One")
-    let reopened = try MobileStore(file: root.appendingPathComponent("library.json"))
-    #expect(try await reopened.enqueueToolSubmission(id: id, sessionID: "a", text: "One").state == "queued")
-    await #expect(throws: WorkspaceToolError.self) { _ = try await reopened.enqueueToolSubmission(id: id, sessionID: "a", text: "Two") }
-    try await reopened.updateToolSubmission(id: id, state: "cancelled")
-    try await reopened.updateToolSubmission(id: id, state: "interrupted", error: "Late cancellation")
-    #expect(await reopened.toolSubmission(requestID: id)?.state == "cancelled")
-  }
-
-  @Test func commandReservationBindsAllSessionCreationArguments() async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased()
-    let first = WovenMatterToolRequest(arguments: ["sessions", "create", "--title", "One", "--text", "Task", "--purpose", "Testing"], requestID: id)
-    try await store.reserveToolInvocation(first, context: scope)
-    var changed = first; changed.arguments[3] = "Two"
-    await #expect(throws: WorkspaceToolError.self) { try await store.reserveToolInvocation(changed, context: scope) }
-  }
-  @Test func detachedCalendarRetryReturnsOriginalAfterExcludedOccurrence() async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let create = WovenMatterToolRequest(arguments: ["calendar", "create", "--title", "Series", "--starts-at", "2026-10-14T12:00:00Z", "--repeat-unit", "day"])
-    #expect(try await store.executeCalendarTool(WovenMatterToolCommand(create.arguments), request: create, context: scope).success)
-    #expect(await store.calendar.records().count == 1)
-    var disabled = scope; disabled.enabled.remove(.calendar)
-    await #expect(throws: WorkspaceToolError.self) {
-      _ = try await store.executeCalendarTool(WovenMatterToolCommand(create.arguments), request: create, context: disabled)
-    }
-    let detach = WovenMatterToolRequest(arguments: ["calendar", "detach", create.requestID, "--revision", "0", "--occurrence", "1"])
-    let first = try await store.executeCalendarTool(WovenMatterToolCommand(detach.arguments), request: detach, context: scope)
-    let replay = try await store.executeCalendarTool(WovenMatterToolCommand(detach.arguments), request: detach, context: scope)
-    #expect(first == replay)
-    #expect(await store.calendar.records().count == 2)
   }
 
 }

@@ -39,13 +39,6 @@ final class ConversationTranscriptState {
         }
     }
 
-    /// Clears all disclosure state, for example when the conversation changes.
-    func reset() {
-        runExpansion = [:]
-        expandedItems = []
-        tasksExpanded = false
-    }
-
     static func disclosureKey(runID: String, itemID: String) -> String {
         "\(runID)\u{1F}\(itemID)"
     }

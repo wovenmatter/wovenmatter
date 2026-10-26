@@ -108,8 +108,7 @@ struct DashboardDatabasesView: View {
                     defer { isCreatingDatabase = false }
                     if let id = await model.createDatabase(
                         sourceID: sourceID,
-                        name: name,
-                        preference: .sqlite
+                        name: name
                     ) {
                         await model.analytics.record(.active)
                         selectedSourceID = sourceID

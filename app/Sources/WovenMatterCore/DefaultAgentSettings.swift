@@ -99,10 +99,4 @@ public enum DefaultAgentModelCatalog {
         if text.contains("minimax") { return "MiniMax" }
         return "Other"
     }
-    public static func visibleIDs(explicit: [String], defaultModel: String?, catalog: [String]) -> [String] {
-        let effectiveDefault = defaultModel.flatMap { catalog.contains($0) ? $0 : nil } ?? catalog.first
-        var ids = explicit.filter { catalog.contains($0) }
-        if let effectiveDefault, catalog.contains(effectiveDefault), !ids.contains(effectiveDefault) { ids.insert(effectiveDefault, at: 0) }
-        return ids
-    }
 }

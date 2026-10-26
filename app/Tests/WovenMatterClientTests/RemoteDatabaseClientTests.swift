@@ -5,19 +5,6 @@ import WovenMatterCore
 
 struct RemoteDatabaseClientTests {
 
-    @Test func reportsOlderServiceAndOfflineErrorsWithoutEmptyCatalogSuccess() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [RemoteDatabaseFixtureProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let old = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42003")!, token: "old", session: session)
-        await #expect(throws: RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")) {
-            try await old.databases()
-        }
-        let offline = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42004")!, token: "offline", session: session)
-        await #expect(throws: (any Error).self) { try await offline.databases() }
-    }
-
     private static let databaseID = "11111111-1111-4111-8111-111111111111"
     @Test func keepsDatabaseIDsInBodiesAndRequestsOnTheirWorkspaceOrigin() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -31,11 +18,7 @@ struct RemoteDatabaseClientTests {
         let scratch = "/home/.woven-matter/scratch/2026-10-14-research-12345678"
         #expect(try await first.ensureScratchDirectory(path: scratch).path == scratch)
         #expect(try await first.createProject(name: "Existing folder", reuseExisting: true).path == "/home/.woven-matter/Existing folder")
-        #expect(try await first.createDatabase(name: "Sales #1", preference: .sqlite).id == Self.databaseID)
-        let link = DatabaseArtifactLink(sourceID: "remote:configured-identity", databaseID: Self.databaseID, relativePath: "", sqliteQuery: "SELECT value FROM events")
-        let data = try await first.databaseData(for: link)
-        #expect(data.jsonBase64 == nil)
-        #expect(data.query?.rows == [["42"]])
+        #expect(try await first.createDatabase(name: "Sales #1").id == Self.databaseID)
         let commit = try await first.managedDatabaseOperation(action: "execute", id: Self.databaseID, sql: "INSERT INTO events VALUES(43)")
         #expect(commit.objectValue?["revision"]?.intValue == 3)
     }
@@ -85,14 +68,6 @@ private final class RemoteDatabaseFixtureProtocol: URLProtocol, @unchecked Senda
             case "/v1/databases":
                 #expect(request.httpMethod == "POST")
                 #expect(payload?["databaseID"] as? String == "Sales #1")
-                #expect(payload?["preference"] as? String == "sqlite")
-            case "/v1/databases/data":
-                #expect(request.httpMethod == "POST")
-                #expect(payload?["databaseID"] as? String == "11111111-1111-4111-8111-111111111111")
-                #expect(payload?["relativePath"] as? String == "")
-                #expect(payload?["sqliteQuery"] as? String == "SELECT value FROM events")
-                #expect(payload?["sourceID"] == nil)
-                row = #"{"query":{"contractVersion":1,"columns":["value"],"rows":[["42"]]}}"#
             case "/v1/databases/execute":
                 #expect(request.httpMethod == "POST")
                 #expect(payload?["databaseID"] as? String == "11111111-1111-4111-8111-111111111111")

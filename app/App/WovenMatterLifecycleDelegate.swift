@@ -159,21 +159,11 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
 @MainActor @Observable
 final class LocalBackgroundExecution {
     static let shared = LocalBackgroundExecution()
-    nonisolated static let preferenceKey = "localBackgroundExecutionEnabled"
     private(set) var isEnabled: Bool
-    private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) {
-        self.defaults = defaults
-        isEnabled = Self.resolvedEnabled(defaults: defaults, developmentMode: developmentMode)
-    }
-
-    nonisolated static func resolvedEnabled(defaults: UserDefaults = .standard,
-                                           developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) -> Bool {
-        // Development profiles use separate processes without installing a
-        // login job, even when a preference was copied from an older build.
-        guard developmentMode == nil else { return false }
-        return true // Legacy off preferences no longer select a production execution owner.
+    init(developmentMode: DevelopmentLaunch.Mode? = DevelopmentLaunch.mode) {
+        // Development profiles run separate processes without installing a login job.
+        isEnabled = developmentMode == nil
     }
 
     static func launchAgentPropertyList(bundleURL: URL, executableURL: URL, identifier: String) -> [String: Any] {
@@ -220,7 +210,6 @@ final class LocalBackgroundExecution {
                 try FileManager.default.removeItem(at: url)
             }
         }
-        defaults.set(enabled, forKey: Self.preferenceKey)
         isEnabled = enabled
     }
 }
@@ -328,8 +317,8 @@ enum LocalExecutionTransition {
     }
 }
 
-/// Captured once at startup; changing the preference cannot change a running
-/// process's ownership role. Standalone and backend share the execution lease.
+/// Captured once at startup; a running process keeps its ownership role.
+/// Isolated test hosts and the backend share the execution lease name.
 enum LocalExecutionRole: String {
     case developmentHost, frontend, backend, libraryClient
 
@@ -340,22 +329,11 @@ enum LocalExecutionRole: String {
     static let current: LocalExecutionRole = .developmentHost
     #else
     static let current: LocalExecutionRole = resolve(arguments: CommandLine.arguments,
-        backgroundEnabled: startupBackgroundEnabled,
         libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey),
         developmentMode: DevelopmentLaunch.mode)
     #endif
 
-    private static var startupBackgroundEnabled: Bool {
-        #if COMPANION_FACADE_TESTS
-        // Facade fixtures own isolated stores; they must not attach to a login
-        // backend because a production preference now defaults on.
-        return false
-        #else
-        return LocalBackgroundExecution.resolvedEnabled()
-        #endif
-    }
-
-    static func resolve(arguments: [String], backgroundEnabled: Bool, libraryClientEnabled: Bool = false,
+    static func resolve(arguments: [String], libraryClientEnabled: Bool = false,
                         developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {
         if let developmentMode {
             if developmentMode == .client { return .libraryClient }

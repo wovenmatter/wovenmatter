@@ -197,7 +197,8 @@ or alter them.
   `node scripts/build-ios-embedded-runtime.mjs` after updating their locked
   inputs. These generate offline resources, not native app builds.
 - Review breaking changes and fix affected integration code. Run focused checks
-  for the changes and use existing PR CI for native validation. Report any
+  for the changes. PR CI covers portable fixtures; native/mobile/image validation
+  uses explicitly requested manual runs. Report any
   platform-specific resolution or validation still pending; version metadata
   alone does not establish native compatibility.
 - Open or update one focused PR with the changes, compatibility notes, and

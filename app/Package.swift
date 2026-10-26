@@ -82,7 +82,7 @@ let package = Package(
       name: "WovenMatterAppFacade",
       dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "CompanionClient", package: "ios")],
       path: "App",
-      exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Resources", "Tests"],
+      exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],
       swiftSettings: [.define("COMPANION_FACADE_TESTS")]
     ),

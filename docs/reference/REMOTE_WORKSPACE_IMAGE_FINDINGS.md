@@ -4,8 +4,9 @@ The last completed image-audit baseline rebuilt both Linux images from scratch
 and scanned Docker image exports with the checksum-verified official Trivy
 0.76.1 release. OS and language vulnerability scanners were enabled. No
 advisory, severity, or unfixed record was suppressed. The current source adds
-the later curl 8.23.0 repair and exact Python 3.15.2 security build; CI retains a
-new unsuppressed JSON inventory for every amd64 image build.
+the later curl 8.23.0 repair and exact Python 3.15.2 security build. Explicit
+**Manual validation** image runs retain a new unsuppressed JSON inventory for
+every amd64 image build; automatic PR CI does not build or scan images.
 
 ## Last completed raw baseline
 

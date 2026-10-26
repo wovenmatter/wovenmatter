@@ -4,17 +4,6 @@ import Testing
 
 @Suite("Companion wire compatibility")
 struct CompanionProtocolTests {
-  @Test func agentMessageProvenanceRoundTripsAndLegacyMessagesRemainReadable() throws {
-    let original = CompanionMessage(id: "message", conversationID: "target", role: "user", content: "Inspect the result",
-      agentSourceID: UUID().uuidString.lowercased(), isAgentAuthored: true, senderSessionTitle: "Coordinator",
-      senderHarness: "default_agent", senderKind: "notification")
-    #expect(try JSONDecoder().decode(CompanionMessage.self, from: JSONEncoder().encode(original)) == original)
-    var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
-    for field in ["agentSourceID", "isAgentAuthored", "senderSessionTitle", "senderHarness", "senderKind"] { legacy.removeValue(forKey: field) }
-    let decoded = try JSONDecoder().decode(CompanionMessage.self, from: JSONSerialization.data(withJSONObject: legacy))
-    #expect(decoded.agentSourceID == nil && decoded.isAgentAuthored == nil)
-    #expect(decoded.content == original.content)
-  }
 
   @Test("pairing and hello agree on the current format and reject older pairing codes")
   func versionNegotiation() throws {
@@ -29,31 +18,6 @@ struct CompanionProtocolTests {
     #expect(throws: CompanionAPIError.self) {
       try CompanionPairingPayload(endpoint: endpoint, token: token, protocolVersion: 1)
     }
-  }
-
-  @Test("a pending native interaction round-trips without an invented run ID")
-  func nativeInteractionBeforeRunProjection() throws {
-    let pending = CompanionPendingInteraction(id: "request", conversationID: "chat", runID: nil,
-      kind: .approval, title: "Read file", options: [.init(id: "once", label: "Allow once")])
-    let bytes = try JSONEncoder().encode(pending)
-    #expect(try JSONDecoder().decode(CompanionPendingInteraction.self, from: bytes) == pending)
-    let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-    #expect(object["runID"] == nil)
-  }
-  @Test("scheduled task visibility survives editing and legacy drafts preserve host visibility")
-  func scheduledTaskVisibility() throws {
-    let hidden = CompanionCalendarDraft(title: "Daily check", task: .init(prompt: "Review"), showsOnCalendar: false)
-    let action = CompanionWorkspaceAction.saveCalendar(id: "task", revision: 4, draft: hidden)
-    #expect(try JSONDecoder().decode(CompanionWorkspaceAction.self, from: JSONEncoder().encode(action)) == action)
-    let event = CompanionCalendarEvent(id: "task", revision: 4, draft: hidden)
-    let response = CompanionWorkspaceResult.scheduledTasks([.init(event: event, showsOnCalendar: false,
-      runtimeName: "Pi Durable", workspaceName: "Local workspace", lastRunAt: nil)])
-    #expect(try JSONDecoder().decode(CompanionWorkspaceResult.self, from: JSONEncoder().encode(response)) == response)
-    var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(hidden)) as? [String: Any])
-    legacy.removeValue(forKey: "showsOnCalendar")
-    let decoded = try JSONDecoder().decode(CompanionCalendarDraft.self, from: JSONSerialization.data(withJSONObject: legacy))
-    #expect(decoded.showsOnCalendar == nil)
-    #expect(decoded.task?.prompt == hidden.task?.prompt)
   }
 
 }

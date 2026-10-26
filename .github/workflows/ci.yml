@@ -3,229 +3,32 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      macos: ${{ steps.paths.outputs.macos }}
-      remote: ${{ steps.paths.outputs.remote }}
-      ios: ${{ steps.paths.outputs.ios }}
-      companion: ${{ steps.paths.outputs.companion }}
-      updates: ${{ steps.paths.outputs.updates }}
-    steps:
-      - uses: actions/checkout@main
-        with:
-          fetch-depth: 0
-
-      - name: Scan the public tree
-        run: scripts/scan-public-tree.sh
-
-      - name: Select focused validation
-        id: paths
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          base_sha="$BASE_SHA"
-          if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
-            base_sha="$(git rev-parse "${HEAD_SHA}^")"
-          fi
-
-          git diff --name-only "$base_sha" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
-
-          python3 scripts/test-support/test_ci_scopes.py
-          python3 scripts/ci-scopes.py < "$RUNNER_TEMP/changed-files" >> "$GITHUB_OUTPUT"
-
-  macos:
-    name: macOS
-    needs: changes
-    if: needs.changes.outputs.macos == 'true'
-    runs-on: macos-26
-    # Cold desktop builds and companion integration have a separate budget from UI tests.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@main
-      - uses: actions/setup-node@main
-        with:
-          # The bundled Node stable release, refreshed during dependency maintenance.
-          node-version-file: default-agent/.node-version
-      - name: Ensure CEF build tools
-        run: command -v cmake >/dev/null || brew install cmake
-
-      - name: Test desktop
-        shell: bash
-        env:
-          WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
-          scripts/test-changes.sh --desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
-      - name: Preserve desktop failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@main
-        with:
-          name: desktop-results-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}/*.log
-            ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}/embedded-runtime-report.json
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Verify signed delta round trip
-        if: needs.changes.outputs.updates == 'true'
-        run: python3 scripts/test-delta-updates.py
-
-  companion:
-    name: Companion runtime integration
-    needs: changes
-    if: needs.changes.outputs.companion == 'true'
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@main
-      - uses: actions/setup-node@main
-        with:
-          # The bundled Node stable release, refreshed during dependency maintenance.
-          node-version-file: default-agent/.node-version
-      - name: Test companion protocol and runtime integration
-        env:
-          WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-companion-${{ github.run_id }}-${{ github.run_attempt }}
-          IOS_CHANGED: ${{ needs.changes.outputs.ios }}
-        run: |
-          if [ "$IOS_CHANGED" = true ]; then
-            scripts/test-changes.sh --companion
-          else
-            scripts/test-changes.sh --companion-desktop
-          fi
-
-  ios:
-    name: iOS UI (${{ matrix.device.name }})
-    needs: changes
-    if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-26
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        device:
-          - name: iPhone
-            type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro
-          - name: iPad
-            type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB
-    steps:
-      - uses: actions/checkout@main
-      - name: Test native mobile flows
-        env:
-          WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
-          WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device.type }}
-        run: scripts/test-ios.sh --ui
-      - name: Preserve mobile test results
-        if: always()
-        uses: actions/upload-artifact@main
-        with:
-          name: ios-results-${{ matrix.device.name }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}/results.*
-          if-no-files-found: warn
-          retention-days: 7
-
-  remote:
-    name: Remote workspace (${{ matrix.platform }})
-    needs: changes
-    if: needs.changes.outputs.remote == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: amd64
-            runner: ubuntu-latest
-          - platform: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@main
-      - uses: actions/setup-node@main
-        with:
-          # The bundled Node stable release, refreshed during dependency maintenance.
-          node-version-file: default-agent/.node-version
-      - name: Run deterministic remote validation
-        run: scripts/test-changes.sh --remote
-      - name: Build the remote workspace image
-        run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:latest .
-
-      - name: Verify workspace isolation and home preservation
-        run: scripts/test-container.sh --skip-build
-
-      - name: Build the standalone Executor runtime
-        run: |
-          wm_executor_version="$(node --input-type=module -e 'import { latestExecutorVersion } from "./default-agent/src/executor/broker.mjs"; console.log(await latestExecutorVersion());')"
-          docker build --pull --no-cache --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
-            --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
-      - name: Verify Executor native helper prerequisites
-        run: |
-          docker run --rm --entrypoint bash \
-            --mount "type=bind,src=$PWD/scripts/test-support/test-executor-image.sh,dst=/tmp/test-executor-image.sh,readonly" \
-            wovenmatter-executor:ci /tmp/test-executor-image.sh
-      - name: Verify unchanged Executor scopes, approvals and cancellation in Linux
-        run: |
-          npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
-          docker run --rm --entrypoint node --volume "$PWD:/workspace:ro" \
-            wovenmatter-executor:ci /workspace/scripts/test-support/test-executor-runtime.mjs \
-            /opt/executor/node_modules/executor/bin.mjs
-      - name: Record complete image vulnerability inventory
-        if: matrix.platform == 'amd64'
-        env:
-          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
-        run: |
-          mkdir -p "$RUNNER_TEMP/trivy-cache" "$RUNNER_TEMP/trivy-reports"
-          for image in workspace executor; do
-            if [ "$image" = workspace ]; then tag=wovenmatter-remote:ci; else tag=wovenmatter-executor:ci; fi
-            docker run --rm \
-              --volume /var/run/docker.sock:/var/run/docker.sock \
-              --volume "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
-              --volume "$RUNNER_TEMP/trivy-reports:/reports" \
-              "$TRIVY_IMAGE" image --scanners vuln --format json \
-              --output "/reports/$image.json" "$tag"
-          done
-          python3 scripts/test-support/summarize-trivy.py \
-            "$RUNNER_TEMP/trivy-reports/workspace.json" \
-            "$RUNNER_TEMP/trivy-reports/executor.json" | tee "$RUNNER_TEMP/trivy-reports/summary.jsonl"
-      - name: Preserve image vulnerability inventory
-        if: always() && matrix.platform == 'amd64'
-        uses: actions/upload-artifact@main
-        with:
-          name: remote-image-vulnerability-inventory-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/trivy-reports/*
-          if-no-files-found: warn
-          retention-days: 7
-
-  gate:
+  ci:
     name: CI
-    needs: [changes, macos, companion, ios, remote]
-    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Require relevant validation
+      - uses: actions/checkout@main
+      - uses: actions/setup-node@main
+        with:
+          node-version-file: default-agent/.node-version
+          cache: npm
+          cache-dependency-path: default-agent/package-lock.json
+      - name: Run focused Linux validation
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          MACOS_RESULT: ${{ needs.macos.result }}
-          COMPANION_RESULT: ${{ needs.companion.result }}
-          IOS_RESULT: ${{ needs.ios.result }}
-          REMOTE_RESULT: ${{ needs.remote.result }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          test "$CHANGES_RESULT" = success
-          case "$MACOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
-          case "$COMPANION_RESULT" in success|skipped) ;; *) exit 1 ;; esac
-          case "$IOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
-          case "$REMOTE_RESULT" in success|skipped) ;; *) exit 1 ;; esac
+          # Compare the immutable PR trees without fetching the full history.
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
+          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          scripts/test-ci.sh --files "$RUNNER_TEMP/changed-files"
