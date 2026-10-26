@@ -6,6 +6,9 @@ is a client; legacy off preferences no longer select a foreground execution owne
 Development profiles use isolated background servers and never install login jobs.
 Remote workspaces retain their own independent execution preferences.
 
+See the [pre-change parity audit](BACKGROUND_SERVER_PARITY_AUDIT.md) for the
+ownership comparison, repaired failures, verification and remaining provider boundary.
+
 The separate paired-library-client architecture still hosts its optional secondary
 Mac execution workspace inside the client process. This change does not convert
 that federation transport into a background service. Client development profiles
@@ -252,7 +255,7 @@ the session can change policy. A configuration read's internal idle lease does
 not become a user-facing busy error. Cancellation and session ownership are
 revalidated after the wait, and foreground runs still prevent permission edits.
 
-Inspect chat activity opens a conversation-scoped tab alongside notes and browser
-tabs. Inspection is passive and does not start Pi workers or replay agent input.
-Disconnected inspectors retain their last observation with its timestamp and mark
-it disconnected; saved records are never evidence that a process is still alive.
+Server inspection stays in Settings and never starts Pi workers or replays agent
+input. Disconnected readings retain their observation timestamp. Live agent text,
+reasoning, tool output and subprocess progress appear in the chat transcript.
+There is no separate per-chat activity asset tab.

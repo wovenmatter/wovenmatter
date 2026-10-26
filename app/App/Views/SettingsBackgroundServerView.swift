@@ -116,7 +116,6 @@ struct SettingsBackgroundServerView: View {
 struct RuntimeInspectionView: View {
     @Bindable var model: ApplicationModel
     var workspaceID: UUID?
-    var conversationID: String?
     var onConnectionChange: ((Bool) -> Void)?
     @State private var snapshot: RuntimeInspection?
     @State private var connected = false
@@ -125,7 +124,7 @@ struct RuntimeInspectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(conversationID == nil ? "Managed activity" : "Chat activity").font(.headline)
+                Text("Managed activity").font(.headline)
                 Spacer()
                 Text(connected ? "Connected" : "Disconnected").font(.caption).foregroundStyle(.secondary)
             }
@@ -139,10 +138,10 @@ struct RuntimeInspectionView: View {
             }
             if snapshot != nil, let error { Text(error).font(.caption).foregroundStyle(.secondary) }
         }
-        .task(id: "\(workspaceID?.uuidString ?? "local"):\(conversationID ?? "all")") {
+        .task(id: workspaceID?.uuidString ?? "local") {
             while !Task.isCancelled {
                 do {
-                    let value = try await model.runtimeInspection(.init(workspaceID: workspaceID, conversationID: conversationID))
+                    let value = try await model.runtimeInspection(.init(workspaceID: workspaceID))
                     guard !Task.isCancelled else { return }
                     snapshot = value; connected = true; error = nil
                     onConnectionChange?(true)

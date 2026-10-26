@@ -2655,7 +2655,7 @@ public actor LocalACPClient {
                 ?? (phase == "start" ? displayToolName(update["kind"]?.stringValue) : nil),
             status: status ?? (phase == "start" ? "pending" : nil),
             toolName: update["kind"]?.stringValue,
-            content: terminalDelta ?? textParts.joined(separator: "\n\n").nilIfEmpty,
+            content: terminalDelta ?? (update["content"]?.arrayValue == nil ? nil : textParts.joined(separator: "\n\n")),
             contentIsDelta: terminalDelta != nil,
             locations: locations,
             changes: changes,

@@ -5,6 +5,43 @@ import WovenMatterCore
 
 struct ACPHarnessStreamingReviewTests {
 
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
+  func liveToolOutputArrivesBeforePromptCompletion(kind: AgentRuntimeKind) async throws {
+    let gate = FileManager.default.temporaryDirectory.appending(path: "acp-stream-release-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: gate) }
+    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"streaming"}"#, extras: [:], promptOverride: """
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"shell","kind":"execute","title":"Shell"}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"progress one 🧵"}}]}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"in_progress","content":[]}}}'
+        while [ ! -f '\(gate.path)' ]; do sleep 0.02; done
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"completed","content":[{"type":"content","content":{"type":"text","text":"progress two"}}]}}}'
+        respond "$id" '{"stopReason":"end_turn"}'; continue
+        """)
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let events = ACPReviewEvents()
+    let run = Task { try await client.prompt("Stream fixture output") { await events.record($0) } }
+    let deadline = Date().addingTimeInterval(3)
+    var tools: [AgentRunActivity] = []
+    repeat {
+      tools = await events.values().compactMap { event in
+        if case .activity(let activity, _) = event, activity.kind == .tool { return activity }; return nil
+      }
+      if tools.count >= 3 { break }
+      try await Task.sleep(for: .milliseconds(10))
+    } while Date() < deadline
+    // Release before assertions/cleanup, even if live delivery regresses.
+    try Data().write(to: gate)
+    #expect(tools.contains { $0.status == "in_progress" && $0.content == "progress one 🧵" })
+    #expect(!tools.contains { $0.status == "completed" })
+    #expect(tools.last?.content == "")
+    if tools.count >= 3 { #expect(tools[1].merging(tools[2]).content == "") }
+    #expect(try await run.value == .endTurn)
+    await client.shutdown()
+  }
+
   @Test(arguments: [false, true])
   func claudeContextVariantsSharePresentationButKeepExactSelections(legacy: Bool) async throws {
     let rows: [(String, String, String)] = [

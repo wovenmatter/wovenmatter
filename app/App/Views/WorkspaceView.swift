@@ -1605,18 +1605,6 @@ struct DashboardWorkspaceSurface: View {
                 onCommandNavigation: handleComposerNavigation,
                 onUnavailableComposerAction: onUnavailableComposerAction
             )
-            if let conversation {
-                Button {
-                    do { try assets.tabs.open(.inspection(conversation.id)); compactPane = .note }
-                    catch { assets.notice = error.localizedDescription }
-                } label: {
-                    Image(systemName: "waveform.path").font(.system(size: 12))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help("Inspect chat activity").accessibilityLabel("Inspect chat activity")
-                .padding(.trailing, showNoteButton ? 138 : 52).padding(.top, 12)
-            }
             if showNoteButton {
                 Button {
                     compactPane = .note
