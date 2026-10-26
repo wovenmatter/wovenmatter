@@ -27,14 +27,14 @@ remote debugging port, Node integration, or certificate-error bypass. Existing
 HTML artifact WebKit isolation remains independent.
 
 Browser Use is enabled by default and exposes Playwright operations through the
-session-bound CLI and MCP. The GUI owns an automation socket beside the backend
+authenticated Woven MCP. The GUI owns an automation socket beside the backend
 socket, with the same private directory and kernel peer checks as backend RPC.
 The backend checks the caller's current capability and persists an input digest
 before dispatch. The GUI rechecks it on each native protocol command. An ephemeral
 Node helper translates one owned CEF page into a token-protected loopback CDP
 connection for Playwright; CEF itself has no debugging port. Native frame IDs,
 utility worlds and domain cleanup preserve repeated connections and iframes.
-The helper receives no CLI socket or provider credentials. Shared tabs remain
+The helper receives no MCP bearer or provider credentials. Shared tabs remain
 owned by ApplicationModel's WorkspaceAssetSession across pane visibility changes.
 
 Secondary Macs inject the visible client's same asset session into their native
@@ -50,7 +50,7 @@ retries after completion inspect fresh state instead of replaying input.
 Computer Use is an independent, default-off capability. Peekaboo's Swift
 libraries, selected by the shared native lockfile within a compatible release
 range, run inside the signed GUI process, so macOS grants apply to Woven Matter.
-MCP and CLI route local and remote harnesses to this host. Screen capture returns
+Woven MCP routes local and remote harnesses to this host. Screen capture returns
 a bounded image and a single-use, chat-scoped frame for coordinate input; Stop or
 capability revocation cancels work. Cua and cross-platform desktop hosts are deferred.
 
@@ -128,7 +128,7 @@ all proprietary Chrome services, codecs, or DRM. Sources:
   with the same disposable profile, hidden window and mock Keychain. It covers
   snapshots, repeated connections, form input, upload/download, screenshot,
   navigation and shutdown. Build that target before invoking the script.
-  Browser MCP/CLI, capability migration, revocation, admission digests and image
+  Browser MCP, capability migration, revocation, admission digests and image
   transport have provider-free tests in the normal validation suite. Human testing
   still covers signed-app TCC grants, multi-display desktop input, Stop during
   active control, and provider acceptance in each harness.

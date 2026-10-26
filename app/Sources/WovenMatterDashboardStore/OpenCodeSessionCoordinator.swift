@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import WovenMatterClient
 import WovenMatterCore
 
@@ -55,10 +56,10 @@ public actor OpenCodeSessionCoordinator {
         let stream = AsyncStream<OpenCodeSessionUpdate>.makeStream(bufferingPolicy: .bufferingNewest(256))
         updates = stream.stream; continuation = stream.continuation
     }
-    private var cliConnectionProvider: (@Sendable (String) async throws -> AgentCLIContext?)?
-    private var cliConnectionTokens: [String: UUID] = [:]
-    public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) {
-        cliConnectionProvider = provider
+    private var mcpConnectionProvider: (@Sendable (String) async throws -> WovenMCPConnection?)?
+    private var mcpConnectionTokens: [String: UUID] = [:]
+    public func setMCPConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> WovenMCPConnection?) {
+        mcpConnectionProvider = provider
     }
 
     public func connect(_ connection: OpenCodeConnection) async throws {
@@ -503,10 +504,10 @@ public actor OpenCodeSessionCoordinator {
         snapshot.forms = pendingForms
         snapshot.inbox = responses.4["data"].array
         snapshot.active = !responses.5["data"][link.sessionID].isNull
-        if snapshot.active, cliConnectionTokens[link.conversationID] != token,
-           let context = try await cliConnectionProvider?(link.conversationID) {
-            try await configureCLI(link, context: context, client: client)
-            cliConnectionTokens[link.conversationID] = token
+        if snapshot.active, mcpConnectionTokens[link.conversationID] != token,
+           let context = try await mcpConnectionProvider?(link.conversationID) {
+            try await configureMCP(link, context: context, client: client)
+            mcpConnectionTokens[link.conversationID] = token
         }
         if let acknowledged { snapshot.cursor = max(snapshot.cursor ?? -1, acknowledged) }
         try Task.checkCancellation()
@@ -559,13 +560,22 @@ public actor OpenCodeSessionCoordinator {
         pendingDispatches[conversationID]?.fence.cancel()
     }
     @discardableResult
-    private func configureCLI(_ link: OpenCodeSessionLink, context: AgentCLIContext?, client: OpenCodeHTTPClient) async throws -> [String: String] {
+    private func configureMCP(_ link: OpenCodeSessionLink, context: WovenMCPConnection?, client: OpenCodeHTTPClient) async throws -> [String: String] {
         guard let context else { return [:] }
         let info = try await client.call("GET", "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID))
         let query = ["location[directory]": info["data"]["location"]["directory"].text]
-        _ = try await client.call("POST", "/api/rpc/wovenmatter-cli/connect", query: query, body: ["input": [
+        let connected = try await client.call("POST", "/api/rpc/woven-mcp/connect", query: query, body: ["input": [
             "sessionID": .string(link.sessionID),
             "context": try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))]])
+        let proxy = connected["data"]
+        guard let endpoint = proxy["endpointURL"].string, let credential = proxy["bearerToken"].string else {
+            throw OpenCodeError.message("OpenCode did not confirm the Woven MCP connection.")
+        }
+        let server = "woven_" + String(SHA256.hash(data: Data(link.sessionID.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16))
+        _ = try await client.call("PUT", "/api/experimental/mcp/" + server, query: query, body: ["config": [
+            "type": .string("remote"), "url": .string(endpoint), "oauth": .bool(false), "codemode": .bool(false),
+            "headers": ["Authorization": .string("Bearer " + credential)]
+        ]])
         return query
     }
 
@@ -755,7 +765,7 @@ public actor OpenCodeSessionCoordinator {
             guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else { throw OpenCodeError.message("Attachment exceeds Woven Matter's size limit.") }
             files.append(["uri": .string("data:\(file.mimeType);base64," + bytes.base64EncodedString()), "name": .string(file.fileName)])
         }
-        let cliQuery = try await configureCLI(link, context: input.cliContext, client: client)
+        let mcpQuery = try await configureMCP(link, context: input.mcpContext, client: client)
         if let command {
             // Native commands return 204 and do not accept a caller message ID.
             // Never journal or retry them as idempotent prompt submissions.
@@ -764,13 +774,13 @@ public actor OpenCodeSessionCoordinator {
             commandPayload["delivery"] = .string("steer")
             var commandPath = "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command"
             var query: [String: String] = [:]
-            if let context = input.cliContext {
+            if let context = input.mcpContext {
                 commandPayload["sessionID"] = .string(link.sessionID)
-                commandPayload["context"] = try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))
-                commandPath = "/api/rpc/wovenmatter-cli/command"
-                query = cliQuery
+                commandPayload["context"] = ["captureID": context.captureID.map(OpenCodeValue.string) ?? .null]
+                commandPath = "/api/rpc/woven-mcp/command"
+                query = mcpQuery
             }
-            let payload = input.cliContext == nil ? OpenCodeValue.object(commandPayload) : ["input": .object(commandPayload)]
+            let payload = input.mcpContext == nil ? OpenCodeValue.object(commandPayload) : ["input": .object(commandPayload)]
             try fence.check()
             if let deliveryID = input.historyDeliveryID {
                 try await database.markToolDeliveryTransportStarted(id: deliveryID, targetID: link.conversationID, nativeCommand: command)
@@ -797,8 +807,8 @@ public actor OpenCodeSessionCoordinator {
         // Let native state choose live injection or an idle start. A cached
         // activity snapshot can lag a rapid second composer submission.
         promptPayload["delivery"] = .string("steer")
-        if let context = input.cliContext {
-            promptPayload["metadata"] = ["wovenTools": try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))]
+        if let context = input.mcpContext {
+            promptPayload["metadata"] = ["wovenMCP": ["captureID": context.captureID.map(OpenCodeValue.string) ?? .null]]
         }
         let payload = OpenCodeValue.object(promptPayload)
         try fence.check()

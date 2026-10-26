@@ -117,8 +117,8 @@ final class ApplicationModel {
                     guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
                     try await apply(id, tools)
                 }
-                await instance.coordinator.setCLIConnectionProvider { [weak self] id in
-                    try await self?.sessionCLIConnection(id)
+                await instance.coordinator.setMCPConnectionProvider { [weak self] id in
+                    try await self?.sessionMCPConnection(id)
                 }
                 remoteOpenCodes[configuration.id] = instance
                 instance.onChange = { [weak self, weak instance] id in
@@ -517,9 +517,7 @@ final class ApplicationModel {
                 database: dashboardStore.database)
         }
         if agentTools == nil { try await configureAgentTools(store: dashboardStore) }
-        agentTools?.companionFixtureCLIPath = { _, _, remote in
-            remote == nil ? directory.appending(path: "wovenmatter-fixture").path : "/fixture/remote/wovenmatter"
-        }
+        agentTools?.companionFixtureMCPConnection = { _, local, _ in local }
         await refreshWorkspace()
         state = .ready
     }
@@ -553,7 +551,7 @@ final class ApplicationModel {
             guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
             try await apply(id, tools)
         }
-        await openCode.coordinator.setCLIConnectionProvider { [weak self] id in try await self?.sessionCLIConnection(id) }
+        await openCode.coordinator.setMCPConnectionProvider { [weak self] id in try await self?.sessionMCPConnection(id) }
         openCode.onChange = { [weak self, weak openCode] id in
             guard let self, let openCode else { return }
             if openCode.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
@@ -606,8 +604,10 @@ final class ApplicationModel {
                 guard let self else { throw CancellationError() }
                 _ = try await self.mutateConversationGoal(id: id, mutation: mutation)
             }, onMutation: { [weak self] in await self?.refreshWorkspace() })
-        try await dashboardStore.setCLIConnectionProvider { [weak self] id in
-            try await self?.sessionCLIConnection(id)
+        try await dashboardStore.setMCPConnectionProvider(onRelease: { [weak self] id in
+            await self?.agentTools?.revokeSessionMCP(id)
+        }) { [weak self] id in
+            try await self?.sessionMCPConnection(id)
         }
         agentTools?.automationHandler = { [weak self] caller, command, request in
             guard let self else { throw CancellationError() }
@@ -649,8 +649,8 @@ final class ApplicationModel {
                 guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
                 try await apply(id, tools)
             }
-            await openCode.coordinator.setCLIConnectionProvider { [weak self] id in
-                try await self?.sessionCLIConnection(id)
+            await openCode.coordinator.setMCPConnectionProvider { [weak self] id in
+                try await self?.sessionMCPConnection(id)
             }
             self.openCode = openCode
             openCode.onChange = { [weak self, weak openCode] id in
@@ -2677,7 +2677,7 @@ final class ApplicationModel {
         if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
         let capturedInputID = try await dashboardStore.database.captureInputContext(conversationID: conversation.id,
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
-        normalized.cliContext = try await agentTools.cliContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
+        normalized.mcpContext = try await agentTools.mcpContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
         let deliveryContent = normalized.text
         if WorkspaceGoal.supports(conversation.localRuntimeKind),
            try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.goals) {
@@ -2687,15 +2687,14 @@ final class ApplicationModel {
 
             <wovenmatter-goals>
             \(goalContext)
-            When the user explicitly requests a goal, use `wovenmatter goals set --objective TEXT --request-id UUID`.
-            Read `wovenmatter goals help` for controls. Manage this chat's goal through this CLI,
-            not provider-native goal tools or /goal loops. Complete only with verified evidence.
+            When the user explicitly requests a goal, call `woven_goals_set` with objective and requestID.
+            Manage this chat's goal through the focused Woven MCP goal tools. Complete only with verified evidence.
             Set, pause, resume and clear require explicit user intent. While active, report useful
-            progress with goals checkpoint or an explained blocker with goals block before ending.
+            progress with `woven_goals_checkpoint` or an explained blocker with `woven_goals_block` before ending.
             </wovenmatter-goals>
             """
             normalized = AgentMessageInput(text: normalized.text + guidance, attachments: normalized.attachments,
-                historyDeliveryID: normalized.historyDeliveryID, visibleWorkspace: normalized.visibleWorkspace, cliContext: normalized.cliContext)
+                historyDeliveryID: normalized.historyDeliveryID, visibleWorkspace: normalized.visibleWorkspace, mcpContext: normalized.mcpContext)
         }
         try dispatchFence.check()
         if let deliveryID = normalized.historyDeliveryID {
@@ -3300,12 +3299,12 @@ final class ApplicationModel {
         }
     }
 
-    private func sessionCLIConnection(_ conversationID: String) async throws -> AgentCLIContext? {
+    private func sessionMCPConnection(_ conversationID: String) async throws -> WovenMCPConnection? {
         guard let agentTools, let database = dashboardStore?.database else { return nil }
         let session = try await database.localACPSession(conversationID: conversationID)
         let remote = session.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
         guard session.remoteWorkspaceID == nil || remote != nil else { throw ApplicationModelError.remoteHarnessUnavailable }
-        return try await agentTools.cliContext(sessionID: conversationID, remote: remote, captureID: "")
+        return try await agentTools.mcpContext(sessionID: conversationID, remote: remote, captureID: "")
     }
 
     func directACPLaunchContext(

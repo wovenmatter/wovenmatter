@@ -3,7 +3,7 @@ import Testing
 import WovenMatterCompanion
 @testable import CompanionClient
 
-@Suite("Mobile CLI durable boundaries")
+@Suite("Mobile MCP durable boundaries")
 struct MobileToolBoundaryTests {
   @Test func computerUseIsOptInButScopedCancellationSurvivesDisable() throws {
     let context = MobileToolContext(sessionID: "caller", workspaceID: "phone")
@@ -135,14 +135,14 @@ struct MobileToolBoundaryTests {
   @Test func copyingScheduledTaskNarrowsInheritedNativeTools() async throws {
     let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
     let deviceID = await store.snapshot().deviceID
-    let scope = MobileToolContext(sessionID: "parent", workspaceID: deviceID, enabled: [.calendar, .sessions], nativeToolIDs: ["wovenmatter_calendar", "wovenmatter_sessions"])
+    let scope = MobileToolContext(sessionID: "parent", workspaceID: deviceID, enabled: [.calendar, .sessions], nativeToolIDs: ["woven_calendar_create", "woven_sessions_create"])
     let original = try await store.calendar.save(expectedRevision: nil,
       draft: .init(title: "Work", startsAt: MobileToolSupport.date("2026-10-10T12:00:00Z"), task: .init(prompt: "Work", workspaceID: deviceID, enabledTools: ["execute_command", "wovenmatter_calendar"])), ownerDeviceID: deviceID)
     let args = ["calendar", "copy", original.id, "--starts-at", "2026-10-15T12:00:00Z"]
     let request = WovenMatterToolRequest(arguments: args)
     _ = try await store.executeCalendarTool(WovenMatterToolCommand(args), request: request, context: scope)
     let copy = try #require(await store.calendar.record(id: request.requestID))
-    #expect(copy.event.draft.task?.enabledTools == ["wovenmatter_calendar"])
+    #expect(copy.event.draft.task?.enabledTools == ["woven_calendar_create"])
     var revoked = scope; revoked.enabled.remove(.sessions)
     await #expect(throws: WorkspaceToolError.self) {
       _ = try await store.executeCalendarTool(WovenMatterToolCommand(args), request: request, context: revoked)

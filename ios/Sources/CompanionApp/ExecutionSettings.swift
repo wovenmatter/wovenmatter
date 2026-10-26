@@ -95,10 +95,12 @@ struct DeviceAgentSettingsPane: View {
       Section {
         ForEach(toolDefinitions, id: \.id) { tool in
           Toggle(tool.label, isOn: Binding(get: { CompanionModel.deviceToolEnabled(tool.id, selection: defaults.enabledTools) }, set: { enabled in
-            var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id).filter { CompanionModel.deviceToolEnabled($0, selection: nil) })
+            var selected = Set(CompanionModel.migratedDeviceToolSelection(defaults.enabledTools) ?? toolDefinitions.map(\.id).filter { CompanionModel.deviceToolEnabled($0, selection: nil) })
             if enabled { selected.insert(tool.id) } else {
               selected.remove(tool.id)
-              if tool.id == "wovenmatter_notes" { selected.subtract(["list_notes", "read_note", "save_note"]) }
+              selected.subtract(CompanionModel.deviceMCPTools.compactMap { $0["name"] as? String }.filter { name in
+                WovenMCPCatalog.tools.first { $0.name == name }?.group.map { CompanionModel.deviceToolSelectionID($0) } == tool.id
+              })
             }
             defaults.enabledTools = selected.sorted()
           }))
@@ -106,7 +108,7 @@ struct DeviceAgentSettingsPane: View {
       } header: {
         VStack(alignment: .leading, spacing: 6) {
           Text("Tool Access")
-          Text("Choose which Woven Matter CLI tools are available to new chats by default.")
+          Text("Choose which Woven MCP tools are available to new chats by default.")
             .font(.subheadline).fontWeight(.regular).foregroundStyle(DashboardPalette.mutedForeground)
         }.textCase(nil)
       }

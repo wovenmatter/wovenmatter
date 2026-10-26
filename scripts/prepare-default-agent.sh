@@ -41,6 +41,10 @@ output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
   rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=/.node-version --exclude=.DS_Store "$agent_root/" "$output/"
+  # The remote bootstrap serves authenticated HTTP MCP inside the workspace.
+  # Copy the canonical relay source beside the bundled agent; no CLI is shipped.
+  cp "$repo_root/remote/src/mcp-relay.mjs" "$(dirname "$output")/mcp-relay.mjs"
+  rm -f "$(dirname "$output")/wovenmatter" "$(dirname "$output")/wovenmatter-remote.py"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"

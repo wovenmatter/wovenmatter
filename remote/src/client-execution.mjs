@@ -1,10 +1,12 @@
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync, chmodSync, mkdtempSync, rmSync } from 'node:fs'
-import { createServer } from 'node:net'
-import { fileURLToPath } from 'node:url'
-import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance, goalCLI } from './client-goals.mjs'
+import { mkdirSync, chmodSync } from 'node:fs'
+import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance } from './client-goals.mjs'
 import { resolve } from 'node:path'
+import { createWorkspaceMCP } from './workspace-mcp.mjs'
+import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.mjs'
+import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
+import { databaseOperation } from './database-catalog.mjs'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
@@ -26,12 +28,12 @@ function textParts(value) {
 }
 function inputMessages(command,runID) {
   return textParts(command.text).map((content,index)=>({id:index?`${command.commandID}-part-${index}`:command.commandID,
-    conversationID:command.conversationID,runID,role:'user',content,createdAt:date()}))
+    conversationID:command.conversationID,runID,role:'user',content,createdAt:date(),...(command.agentSourceID?{agentSourceID:command.agentSourceID,isAgentAuthored:true,senderSessionTitle:command.senderSessionTitle,senderHarness:command.senderHarness,senderKind:command.senderKind??'message'}:{})}))
 }
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000 }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), mcpCatalog,externalRunningSessions=()=>0 }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -48,46 +50,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   let flushTimer
   let closed = false, unlockMaterial
   let goalsTickRunning = false
-  // Keep Unix socket names below platform limits even for long workspace roots.
-  const goalSocketDirectory=mkdtempSync('/tmp/wm-goals-');chmodSync(goalSocketDirectory,0o700)
-  const goalSocketPath = resolve(goalSocketDirectory,'goals.sock')
-  const goalServer = createServer(socket => {
-    let input='';socket.setEncoding('utf8')
-    socket.on('data',chunk=> {
-      input+=chunk
-      if(Buffer.byteLength(input)>32768){socket.destroy();return}
-      if(!input.includes('\n'))return
-      socket.pause()
-      void (async()=> {
-        if(closed)throw fail(503,'The workspace is stopping.')
-        const request=JSON.parse(input.trim())
-        if(typeof request.token!=='string'||!request.token)throw fail(403,'This goal tool binding is no longer active.')
-        const row=db.prepare("SELECT body FROM conversations WHERE json_extract(body,'$.goalBinding.token')=?").get(request.token)
-        if(!row)throw fail(403,'This goal tool binding is no longer active.')
-        const record=JSON.parse(row.body)
-        request.conversationID=record.conversation.id
-        if(!record.goalBinding||record.goalBinding.token!==request.token||record.goalBinding.runID!==record.conversation.activeRunID)throw fail(403,'This goal tool binding is no longer active.')
-        const cli=goalCLI(request.arguments)
-        if(cli.action==='get')return record.goal??null
-        return serialize(request.conversationID,()=> {
-          if(closed)throw fail(503,'The workspace is stopping.')
-          const latest=getRecord(request.conversationID)
-          if(latest.goalBinding?.token!==request.token||latest.goalBinding.runID!==latest.conversation.activeRunID)throw fail(403,'This goal tool binding is no longer active.')
-          const previous=latest.goalReceipts?.[cli.requestID],fingerprint=JSON.stringify(ordered(cli.mutation))
-          if(previous){if(previous.fingerprint!==fingerprint)throw fail(409,'This request ID belongs to another goal change.');return previous.result}
-          const wasActive=latest.goal?.status==='active'
-          mutateGoal(latest,cli.mutation,latest.conversation.activeRunID)
-          if(cli.action==='set'||(cli.action==='resume'&&!wasActive))latest.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
-          const result=latest.goal??null;(latest.goalReceipts??={})[cli.requestID]={fingerprint,result:copy(result)}
-          save(latest);return result
-        })
-      })().then(result=>socket.end(JSON.stringify({success:true,result})+'\n'),error=>socket.end(JSON.stringify({success:false,error:error.message})+'\n'))
-    })
-    socket.on('error',()=>{})
-  })
-  const goalSocketReady = new Promise((resolve_,reject)=> { goalServer.once('error',reject);goalServer.listen(goalSocketPath,()=> {chmodSync(goalSocketPath,0o600);resolve_()}) })
-  goalSocketReady.catch(()=>{})
-  goalServer.unref()
   const transaction = action => {
     db.exec('BEGIN IMMEDIATE')
     try { const value = action(); db.exec('COMMIT'); return value }
@@ -95,7 +57,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   }
   function assertIdentity() { if (!identity) throw fail(409, 'This workspace has not been enrolled in a central library.') }
   function event(kind, conversationID, payload, runID) {
-    const record = { eventID: randomUUID(), workspaceID: identity.id, conversationID, kind, ...(runID ? {runID} : {}), ...payload }
+    const record = { eventID: randomUUID(), recordedAt:date(), workspaceID: identity.id, conversationID, kind, ...(runID ? {runID} : {}), ...payload }
     const result = db.prepare('INSERT INTO events(body) VALUES (?)').run('{}')
     record.originSequence = Number(result.lastInsertRowid)
     db.prepare('UPDATE events SET body=? WHERE sequence=?').run(JSON.stringify(record), record.originSequence)
@@ -145,11 +107,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     for (const row of db.prepare('SELECT body FROM conversations').all()) {
       const record = JSON.parse(row.body)
-      delete record.goalBinding
       if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
         for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
-        delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
+        delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = record.pending.filter(item=>item.mcpManageAccessID)
         for (const message of record.transcript.messages) if (message.status === 'running') message.status = 'interrupted'
         publish(record)
       }
@@ -269,9 +230,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     queues.set(id, tail); void tail.finally(() => { if (queues.get(id) === tail) queues.delete(id) })
     return task
   }
-  async function command(body, device) {
+  async function command(body, device, {internal=false}={}) {
     assertIdentity()
     if (closed) throw fail(503, 'The workspace is stopping.')
+    if(!internal&&['agentSourceID','coordinationNotification','initialConfiguration','senderSessionTitle','senderHarness','senderKind'].some(key=>Object.hasOwn(body,key)))throw fail(400,'Agent provenance and frozen creation intent belong to the execution owner.')
     if (!identifier(body.commandID) || !identifier(body.deviceID) || body.deviceID !== device.id
       || (body.libraryID && body.libraryID !== identity.libraryID) || (body.workspaceID && body.workspaceID !== identity.id)
       || !['createSession','send','steer','stop','respond','workspace'].includes(body.kind)) throw fail(400, 'Invalid workspace command.')
@@ -301,8 +263,15 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const provider = providers.find(item => item.id === route)
       if (!provider?.available || provider.canStart === false || (command.runtimeKind && command.runtimeKind !== provider.runtimeKind)) throw fail(409, 'The selected agent route is unavailable or does not match its runtime.')
       const selected = provider.runtimeKind
-      const native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id })
-      const record = { native, pending: [], conversation: { id: command.conversationID, title: 'New conversation', preview: '', runtimeKind: selected,
+      const defaults=mcp.settings().harnessDefaults?.[selected]??{},initial=command.initialConfiguration??{}
+      const enabledTools=initial.enabledTools??[...new Set([...(defaults.tools??mcp.settings().enabledByDefault),'goals'])]
+      // The authenticated tool session exists before a native MCP client
+      // discovers its catalog. No prompt has been submitted at this point.
+      save({native:{},pending:[],enabledTools,conversation:{id:command.conversationID,runtimeKind:selected,workspaceID:identity.id,routeID:identity.id,...(command.folderID?{folderID:command.folderID}:{})},transcript:{conversationID:command.conversationID,messages:[],activities:[]}})
+      let native
+      try {native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory:initial.nativeWorkingDirectory,permission:initial.permission??defaults.permission })}
+      catch(error){db.prepare('DELETE FROM conversations WHERE id=?').run(command.conversationID);mcp.revokeSession(command.conversationID);throw error}
+      const record = { native, pending: [], enabledTools, conversation: { id: command.conversationID, title:initial.title??'New conversation', preview: '', runtimeKind: selected,
         providerID: provider.id, routeID: identity.id, workspaceID: identity.id, ...(command.folderID ? {folderID: command.folderID} : {}), updatedAt: date() },
         transcript: { conversationID: command.conversationID, messages: [], activities: [] } }
       return transaction(() => { publish(record); return receipt(command, 'completed') })
@@ -349,8 +318,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (record.conversation.activeRunID) throw fail(409,'Wait for this run to finish before changing its settings.')
       if(command.workspaceAction?.sessionTools) {
         const options=command.workspaceAction.sessionTools
-        if(options.id!==command.conversationID||!Array.isArray(options.enabled)||options.enabled.some(value=>value!=='goals'))throw fail(400,'Invalid execution tool selection.')
-        record.goalsEnabled=true
+        if(options.id!==command.conversationID||!Array.isArray(options.enabled)||options.enabled.some(value=>!allToolGroups.includes(value)))throw fail(400,'Invalid execution tool selection.')
+        record.enabledTools=[...new Set([...options.enabled,'goals'])]
       } else if (command.workspaceAction?.configureSession) {
         const options = command.workspaceAction.configureSession
         if (options.id !== command.conversationID) throw fail(400,'Session identity does not match.')
@@ -366,9 +335,20 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       } else throw fail(400,'This action belongs to the central library, not an execution workspace.')
       return transaction(() => {publish(record);return receipt(command,'completed')})
     }
+    if(command.kind==='respond') {
+      const approval=record.pending.find(item=>item.id===command.interactionID&&item.mcpManageAccessID&&item.runID===command.runID)
+      if(approval) {
+        if(!command.response||!command.response.cancelled&&!approval.options.some(option=>option.id===command.response.optionID))throw fail(400,'Choose an offered response.')
+        orchestration.respondAccess(command.conversationID,approval,!command.response.cancelled&&command.response.optionID==='allow_once')
+        record.pending=record.pending.filter(item=>item.id!==approval.id)
+        return transaction(()=>{save(record);return receipt(command,'completed')})
+      }
+    }
     if (['steer','stop','respond'].includes(command.kind) && (!command.runID || command.runID !== record.conversation.activeRunID)) throw fail(409, 'This command belongs to an older run.')
     if (command.kind === 'send') {
       if (record.conversation.activeRunID) throw fail(409, 'This conversation is already running.')
+      const running=db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count
+      if(running+externalRunningSessions()>=mcp.settings().maximumRunningSessions)throw fail(409,'The workspace has reached its simultaneous-session limit.')
       if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
       if(command.goalID&&(record.goal?.id!==command.goalID||record.goal?.status!=='active'||record.goal?.pendingDeliveryID!==command.commandID))throw fail(409,'The goal continuation was cancelled.')
       const runID = command.runID ?? randomUUID()
@@ -391,12 +371,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const job = { command, runtimeKind:record.conversation.runtimeKind, stopped: false }
       jobs.set(runID, job)
       job.completion = Promise.resolve().then(async () => {
-        await goalSocketReady
-        const binding={token:randomBytes(32).toString('base64url'),runID}
-        const latest=getRecord(command.conversationID)
         if(job.stopped)throw fail(409,'The run stopped before native dispatch.')
-        latest.goalBinding=binding;save(latest)
-        command.goalToolContext={executablePath:fileURLToPath(new URL('./wovenmatter',import.meta.url)),socketPath:goalSocketPath,captureID:binding.token}
+        command.mcpConnection={...mcp.sessionConnection(command.conversationID),captureID:command.commandID}
         return runtime.run({ native: record.native, runtimeKind: record.conversation.runtimeKind,
         command, publish: update => applyUpdate(command.conversationID, runID, update),
         interaction: value => setInteraction(command.conversationID, runID, value) }) })
@@ -422,7 +398,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return transaction(() => receipt(command, 'completed'))
     }
     if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
-    if(record.goalBinding)command.goalToolContext={executablePath:fileURLToPath(new URL('./wovenmatter',import.meta.url)),socketPath:goalSocketPath,captureID:record.goalBinding.token}
+    command.mcpConnection={...mcp.sessionConnection(command.conversationID),captureID:command.commandID}
     await runtime.steer({ native: record.native, runtimeKind: record.conversation.runtimeKind, command })
     // Read again: streaming updates may have arrived while the steer was sent.
     const latest = getRecord(command.conversationID)
@@ -435,6 +411,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     const value = { ...interaction, conversationID, runID }
     record.pending = [...record.pending.filter(item => item.id !== value.id), value]
     save(record)
+    orchestration.needsInput(conversationID,runID,interaction)
   }
   function applyUpdate(conversationID, runID, update) {
     if (closed) return
@@ -500,11 +477,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for (const item of record.transcript.messages) if (item.runID === command.runID && item.role === 'assistant') item.status = stopped ? 'cancelled' : error ? 'failed' : 'completed'
     if (error && !message.content) message.content = 'The workspace run stopped before completion. Review its saved history before retrying.'
     for(const activity of record.transcript.activities)if(activity.runID===command.runID&&activity.status==='running')activity.status=stopped?'cancelled':error?'failed':'completed'
-    delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = []
+    delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = record.pending.filter(item=>item.mcpManageAccessID)
     dirty.delete(command.conversationID)
-    delete record.goalBinding
     settleGoal(record,command.runID,!error&&!stopped,record.runUsage?.[command.runID])
     transaction(() => { publish(record); receipt(command, error ? 'outcomeUnknown' : 'completed', error ? {message: message.content} : {}) })
+    orchestration.settled(command.conversationID,command.runID,error,command.coordinationNotification===true)
   }
   async function tickGoals() {
     if(closed||!identity||goalsTickRunning)return
@@ -588,7 +565,60 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   }
   const publisher = createClientExecutionPublisher({db,identity:descriptor,secret:publisherKey,events,
     flush:()=>{for(const id of dirty.keys())flush(id)},fetchImpl:publisherFetch,intervalMilliseconds:publisherIntervalMilliseconds})
-  return { descriptor, provision, principal, revoke, adopt, importRetainedEvents,
+  const allToolGroups=['notes','history','sessions','goals','timers','usage','calendar','library','browser','computer','executor']
+  const toolLabels={notes:'Notes',history:'Conversation history',sessions:'Session management',timers:'Timers',usage:'Usage data',calendar:'Calendar',library:'Library',browser:'Browser Use',computer:'Computer Use',executor:'Executor'}
+  const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
+    'woven_sessions_list','woven_sessions_status','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
+    'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute']
+  db.exec('CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id))')
+  const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
+    policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
+    shouldDelegate:(scope,name,input)=>name==='woven_sessions_create'&&input.workspace!=null&&![identity.id,'current'].includes(input.workspace),
+    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,
+    ...(mcpCatalog?{catalog:mcpCatalog}:{})})
+  const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
+  async function performMCP(scope,name,input,{signal}={}) {
+    const caller=name==='woven_context'||name.startsWith('woven_databases_')?null:getRecord(scope.conversationID),requestID=input.requestID
+    let value
+    if(name==='woven_context')value=null // Device-originated inputs have no borrowed Mac asset capture.
+    else if(name.startsWith('woven_sessions_')&&!['woven_sessions_list','woven_sessions_status','woven_sessions_harnesses'].includes(name))return orchestration.call(scope,name,input,{signal})
+    else if(name.startsWith('woven_goals_')) {
+      const action=name.slice('woven_goals_'.length)
+      if(action==='get')value=caller.goal??null
+      else value=await serialize(scope.conversationID,()=> {
+        const record=getRecord(scope.conversationID),payload={...input};delete payload.requestID
+        const mutation={[action]:payload},fingerprint=JSON.stringify(ordered(mutation)),previous=record.goalReceipts?.[requestID]
+        if(previous){if(previous.fingerprint!==fingerprint)throw fail(409,'This request ID belongs to another goal change.');return previous.result}
+        const wasActive=record.goal?.status==='active'
+        mutateGoal(record,mutation,record.conversation.activeRunID)
+        if(action==='set'||action==='resume'&&!wasActive)record.goalCommandBaseline=Number(db.prepare('SELECT coalesce(max(rowid),0) AS sequence FROM commands').get().sequence)
+        const result=record.goal??null;(record.goalReceipts??={})[requestID]={fingerprint,result:copy(result)}
+        save(record);return result
+      })
+    } else if(name.startsWith('woven_databases_')) {
+      const action=name.slice('woven_databases_'.length),request={action,name:input.title,databaseID:input.databaseID,sql:input.query}
+      const fingerprint=digest(JSON.stringify(ordered(request)))
+      if(['create','execute'].includes(action)) {
+        const previous=db.prepare('SELECT fingerprint,response FROM mcp_tool_receipts WHERE caller=? AND request_id=?').get(scope.conversationID,requestID)
+        if(previous){if(previous.fingerprint!==fingerprint)throw fail(409,'This request ID belongs to another database change.');if(!previous.response)throw fail(409,'The prior database effect is uncertain. Query current data before starting a new request.');return JSON.parse(previous.response)}
+        db.prepare('INSERT INTO mcp_tool_receipts VALUES(?,?,?,NULL)').run(scope.conversationID,requestID,fingerprint)
+      }
+      value=await databaseOperation(managedDataRoot,request)
+      if(['create','execute'].includes(action)) {
+        const response={success:true,result:value,requestID}
+        db.prepare('UPDATE mcp_tool_receipts SET response=? WHERE caller=? AND request_id=?').run(JSON.stringify(response),scope.conversationID,requestID)
+      }
+    } else {
+      const records=db.prepare('SELECT rowid AS sequence,body FROM conversations ORDER BY rowid').all().map(row=>({...JSON.parse(row.body),_sequence:Number(row.sequence)}))
+      const journal=db.prepare('SELECT sequence,body FROM events ORDER BY sequence').all().map(row=>({...JSON.parse(row.body),originSequence:Number(row.sequence)}))
+      const readableConversationIDs=(caller.enabledTools??mcp.settings().enabledByDefault).includes('history')?undefined:
+        orchestration.readableConversationIDs?.(scope.conversationID)??new Set([scope.conversationID])
+      value=queryWorkspaceMCPHistory(name,input,{records,events:journal,callerID:scope.conversationID,workspace:descriptor(),
+        providers:name==='woven_sessions_harnesses'?await runtime.providers():[],relationship:id=>orchestration.relationship(id),readableConversationIDs})
+    }
+    return {success:true,result:value,requestID}
+  }
+  return { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, adopt, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
     configurePublisher:publisher.configure, publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, saveArtifact:publisher.saveArtifact,
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
@@ -617,7 +647,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (request?.session) {
         const record = getRecord(request.session.id)
         const settings = await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
-        return {session:{_0:{...settings,availableTools:[],enabledTools:['goals'],conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
+        return {session:{_0:{...settings,availableTools:allToolGroups.filter(id=>id!=='goals').map(id=>({id,label:toolLabels[id]})),enabledTools:record.enabledTools??mcp.settings().enabledByDefault,conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
       }
       if (request?.exportConversation) {
         const {id,format}=request.exportConversation, record=getRecord(id)
@@ -628,6 +658,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
     tickGoals,
-    async close() { closed=true;clearInterval(goalTimer);goalServer.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close();rmSync(goalSocketDirectory,{recursive:true,force:true}) },
+    async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
 }

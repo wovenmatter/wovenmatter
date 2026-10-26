@@ -178,7 +178,7 @@ actor FacadeRecorder {
         await acceptGate.pass()
         deliveries.append(.init(route: route, input: input, delivery: delivery, context: context))
         let visible = AgentMessageInput(text: delivery ?? input.text, attachments: input.attachments,
-            historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, cliContext: input.cliContext)
+            historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
         return try await database.beginLocalACPRun(conversationID: id, input: visible, noteContext: context)
     }
     func steer(_ route: DashboardRunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
@@ -188,7 +188,7 @@ actor FacadeRecorder {
         }
         deliveries.append(.init(route: route, input: input, delivery: delivery, context: nil))
         let visible = AgentMessageInput(text: delivery ?? input.text, attachments: input.attachments,
-            historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, cliContext: input.cliContext)
+            historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
         return try await database.beginLocalACPSteeringTurn(runID: runID, input: visible)
     }
     func cancel(_ route: DashboardRunControlAdapters.Route, _ id: String, _ expectedRunID: String?) async throws {

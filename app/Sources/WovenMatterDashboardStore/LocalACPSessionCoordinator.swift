@@ -267,9 +267,11 @@ public actor LocalACPSessionCoordinator {
     private let onChange: ChangeHandler?
     private let onUsage: (@Sendable (UsageRunRecorder.Observation) async -> Void)?
     private var resumePermissionHandler: ResumePermissionHandler?
-    private var cliConnectionProvider: (@Sendable (String) async throws -> AgentCLIContext?)?
-    public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) {
-        cliConnectionProvider = provider
+    private var mcpConnectionProvider: (@Sendable (String) async throws -> WovenMCPConnection?)?
+    private var mcpConnectionReleaser: (@Sendable (String) async -> Void)?
+    public func setMCPConnectionProvider(onRelease: (@Sendable (String) async -> Void)? = nil, _ provider: @escaping @Sendable (String) async throws -> WovenMCPConnection?) {
+        mcpConnectionProvider = provider
+        mcpConnectionReleaser = onRelease
     }
     private var activeSessions: [String: ActiveSession] = [:]
     // Losing a client after an unsuccessful Stop is not evidence that native
@@ -475,7 +477,7 @@ public actor LocalACPSessionCoordinator {
                 attachments: input.attachments,
                 historyDeliveryID: input.historyDeliveryID,
                 visibleWorkspace: input.visibleWorkspace,
-                cliContext: input.cliContext
+                mcpContext: input.mcpContext
             )
             publishChange(
                 conversationID: conversationID,
@@ -1105,7 +1107,7 @@ public actor LocalACPSessionCoordinator {
             dispatchStarted = true
             let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text,
                 attachments: input.attachments, visibleWorkspace: input.visibleWorkspace,
-                cliContext: input.cliContext)
+                mcpContext: input.mcpContext)
             let receipt: LocalACPActiveInputReceipt
             if let fencedInput = active.client.fencedActiveInput {
                 receipt = try await fencedInput(deliveryInput, operationFence)
@@ -1610,6 +1612,7 @@ public actor LocalACPSessionCoordinator {
             task: task
         )
         await task.value
+        await mcpConnectionReleaser?(conversationID)
         finishPendingSessionShutdown(
             conversationID: conversationID,
             id: id
@@ -1828,9 +1831,9 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
-        let cliConnection: AgentCLIContext?
-        if let provider = cliConnectionProvider { cliConnection = try await provider(descriptor.conversationID) }
-        else { cliConnection = launch.cliConnection }
+        let mcpConnection: WovenMCPConnection?
+        if let provider = mcpConnectionProvider { mcpConnection = try await provider(descriptor.conversationID) }
+        else { mcpConnection = launch.mcpConnection }
         // The launch descriptor is shared across conversations; permission is not.
         var scopedEnvironment = launch.environment
         if descriptor.runtimeKind == .codex, let systemPrompt, !systemPrompt.isEmpty {
@@ -1845,7 +1848,7 @@ public actor LocalACPSessionCoordinator {
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
         )
-        launch.cliConnection = cliConnection
+        launch.mcpConnection = mcpConnection
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,
             sourceScope: [.defaultAgent, .codex, .claudeCode, .grokBuild].contains(descriptor.runtimeKind)

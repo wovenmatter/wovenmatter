@@ -7,7 +7,7 @@ style. Write for someone who knows AI agents and harnesses but may not be an
 engineer. Explain what they can do in the app without making Git or terminal
 workflows the starting point.
 
-Lead with **The workspace for all of your harnesses.** Name all eight harnesses,
+Lead with **The workspace for all of your harnesses.** Name Pi Durable, Codex, Claude Code, Grok Build, and OpenCode,
 then explain the shared root within each workspace and the central work history.
 Remote workspaces, panels, notes, and usage support that story. Keep the other
 features concise and link to practical guides for detail.

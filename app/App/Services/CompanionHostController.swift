@@ -67,6 +67,7 @@ final class CompanionHostController {
     private var executionAuthentication: CompanionExecutionAuthentication?
     private var provisioningWorkspaceIDs: Set<String> = []
     private var revokingDeviceIDs: Set<String> = []
+    var mcpSettingsFingerprints: [String: String] = [:]
     private var registryRefreshInProgress = false
     private var revocationRetryInProgress = false
     private static let pendingRevocationsKey = "companion.execution.pending-revocations"
@@ -225,6 +226,11 @@ final class CompanionHostController {
     private func handle(_ request: CompanionHTTPRequest, generation expected: UUID, libraryAPI: CompanionWorkspaceAPI) async -> CompanionHTTPResponse {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        if path == "/mcp" || path == "/wovenmatter/mcp" {
+            if let response = await model?.agentTools?.handleMCP(request) { return response }
+            return await libraryAPI.handle(request)
+        }
+        if path == "/mcp/workspace" || path == "/wovenmatter/mcp/workspace" { return await libraryAPI.handle(request) }
         if path == "/v1/execution" || path.hasPrefix("/v1/execution/") || path == "/wovenmatter/v1/execution" || path.hasPrefix("/wovenmatter/v1/execution/") {
             guard let executionAPI else { return .error("unavailable", "This execution workspace is starting.", status: 503) }
             return await executionAPI.handle(request)
@@ -252,6 +258,7 @@ final class CompanionHostController {
             if !stoppingExposures.contains(where: { $0 === serve }) { stoppingExposures.append(serve) }
             self.serve = nil
         }
+        mcpSettingsFingerprints.removeAll()
         endpoint = nil; isStarting = false; status = "Unavailable"
         pairingPayload = nil; pairingExpiresAt = nil; discoveryIdentity = nil; pendingPairingRequests = []
         if let authentication { Task { await authentication.cancelOffer() } }

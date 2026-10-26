@@ -26,6 +26,6 @@ layout and never overwrites project instructions or user global instructions.
   and [SystemPart shape](https://github.com/anomalyco/opencode/blob/v2.0.22/packages/ai/src/schema/messages.ts#L19-L34).
 
 Scheduled ACP tasks use the same launch wrapper. Scheduled OpenCode tasks connect
-only their own session to the service owner's local data CLI, allowing database
+only their own session to the service owner's MCP endpoint, allowing database
 writes while the Mac is offline. Unrelated sessions on a shared OpenCode service
 receive no Woven system block.

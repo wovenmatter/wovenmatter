@@ -1,6 +1,6 @@
 import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
-// cross the session CLI. Executor is used unchanged through its public local API.
+// cross the session MCP boundary. Executor is used unchanged through its public local API.
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';

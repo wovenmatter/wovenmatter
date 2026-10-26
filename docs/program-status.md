@@ -59,7 +59,7 @@ heuristic is used for this status model. A harness can report only the details
 its native transport actually exposes; we do not invent authentication waits
 or progress percentages for it.
 
-`wovenmatter sessions list/status` expose the standard `status` plus
+`woven_sessions_list` and `woven_sessions_status` expose the standard `status` plus
 `programStatus` (effective status, records, run ID and execution facts).
 Run IDs and free-text status details follow existing transcript grants; session
 discovery without those grants retains only status metadata. Advisory write

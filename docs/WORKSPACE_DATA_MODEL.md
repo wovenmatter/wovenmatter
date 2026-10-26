@@ -30,13 +30,14 @@ that option. These operations require the normal destructive confirmation.
 
 Each named dataset is a separate UUID-named SQLite file with one writable owner,
 kept under Woven application/service storage, outside history SQLite and projects.
-`wovenmatter databases --help` exposes create, list, execute, and query. The
+Woven MCP exposes `woven_databases_create`, `woven_databases_list`,
+`woven_databases_execute`, and `woven_databases_query`. The
 existing Notes tool permission grants this data tool; discovery documents that
 relationship. Dataset transactions can freely change their own tables and schema.
 They cannot attach other files, load extensions, or take over transaction control.
 
-Remote tasks use the remote owner's local CLI, so collection does not depend on a
-Mac socket or connected chat bridge. Woven reads complete replicas at app open,
+Remote tasks call their execution owner's authenticated MCP endpoint, so collection
+does not depend on a viewing Mac or a connected chat bridge. Woven reads complete replicas at app open,
 on reconnect, and through the existing coordination tick at a two-minute minimum
 interval. Local committed tool writes refresh immediately. SQLite online backup
 captures schema and data together; bounded temporary files are verified and
@@ -63,7 +64,7 @@ file editing of datasets.
 
 Provider-free automated checks cover blank creation, root/owner persistence,
 archived history, deletion confinement, atomic SQL, schema changes, WAL backups,
-stale replicas, copies, binary values, wide schemas, and owner-local CLI writes.
+stale replicas, copies, binary values, wide schemas, and owner-local MCP writes.
 The AppKit note fixture covers inline rendering, editing, paste identity, and undo.
 
 Trey should exercise these remaining integration checks on the PR build:

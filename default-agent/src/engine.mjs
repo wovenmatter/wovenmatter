@@ -10,7 +10,7 @@ import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
-import { SessionCLIContext } from './cli-context.mjs';
+import { SessionMCPContext } from './mcp-context.mjs';
 import { reportProgramStatus } from './program-status.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -212,7 +212,7 @@ export class DefaultAgentEngine {
       throw new DefaultAgentError('The Pi Durable session working directory is unavailable.');
     }
   }
-  async create(id, requestedCwd) {
+  async create(id, requestedCwd, mcpConnection) {
     const requested = requestedCwd === undefined ? undefined : await this.sessionDirectory(requestedCwd);
     if (id && this.sessions.has(id)) {
       const record = this.sessions.get(id);
@@ -220,10 +220,20 @@ export class DefaultAgentEngine {
         throw new DefaultAgentError('This Pi Durable session belongs to a different working directory. Create a new session for this location.');
       }
       if (record.archiveError) throw new DefaultAgentError('The native archive is unavailable. Start a new conversation.');
+      if (mcpConnection) {
+        record.mcp.reconnect(mcpConnection);
+        await record.refreshMCPTools(mcpConnection);
+      }
       return record;
     }
     const record = await openDurableSession(this, id, requested);
     try {
+      // Reinstall credentials and native MCP registrations before resuming
+      // committed child work. Child captures come from immutable provenance.
+      if (mcpConnection) {
+        record.mcp.reconnect(mcpConnection);
+        await record.refreshMCPTools(mcpConnection);
+      }
       const options = record.options;
       const native = await record.harness.inspect(record.nativeContext);
       if (native.tasks.length || native.submissions.length) {
@@ -289,11 +299,11 @@ export class DefaultAgentEngine {
     await record.configurationQueue;
     return this.configuration(record);
   }
-  async prompt(record, text, emit, cliContext, identity) {
+  async prompt(record, text, emit, mcpContext, identity) {
     if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
     const nextRunID = identity === undefined ? record.runID : identity.runID;
     record.busy = true;
-    record.cli ??= new SessionCLIContext();
+    record.mcp ??= new SessionMCPContext();
     let ready;
     record.steeringReady = new Promise(resolve => { ready = resolve; });
     let finished;
@@ -307,6 +317,8 @@ export class DefaultAgentEngine {
     let unsubscribe = () => {};
     let statusStarted = false, statusError, statusOutcome;
     try {
+      controller.signal.throwIfAborted();
+      if (mcpContext) await record.refreshMCPTools(mcpContext, { force: true });
       controller.signal.throwIfAborted();
       await record.subagents.beginGroup(nextRunID);
       record.runID = nextRunID;
@@ -379,7 +391,7 @@ export class DefaultAgentEngine {
           const acceptSteer = (input, requestId, binding) => new Promise((resolve, reject) => {
             controller.signal.throwIfAborted();
             let accepted = false;
-            const removeBinding = record.cli.enqueue(binding);
+            const removeBinding = record.mcp.enqueue(binding);
             const task = withAccount(() => record.session.prompt(input, {
               streamingBehavior: 'steer', requestId,
               preflightResult: disposition => {
@@ -403,7 +415,7 @@ export class DefaultAgentEngine {
           });
           try {
             let initialError;
-            const removeInputBinding = record.cli.enqueue(cliContext);
+            const removeInputBinding = record.mcp.enqueue(mcpContext);
             try {
               await record.session.prompt(text, { preflightResult: disposition => {
                 if (disposition === 'started' || disposition === 'queued') { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
@@ -452,7 +464,7 @@ export class DefaultAgentEngine {
         msg: controller.signal.aborted || statusOutcome === 'cancelled' ? 'Cancelled' : statusError ? 'The model request failed.' : undefined,
       });
       unsubscribe();
-      record.cli.finish();
+      record.mcp.finish();
       record.busy = false;
       ready();
       record.steeringReady = undefined;
@@ -461,20 +473,19 @@ export class DefaultAgentEngine {
       record.promptController = undefined;
     }
   }
-  async steer(record, text, inputID, cliContext) {
+  async steer(record, text, inputID, mcpContext) {
     if (!text.trim()) throw new DefaultAgentError('A message is required.');
     if (!record.busy) return { outcome: 'promptRequired' };
     await record.steeringReady;
     if (record.promptController?.signal.aborted) throw new DefaultAgentError('The run is stopping. Send this message after it stops.');
     if (!record.acceptSteer) { await record.promptFinished; return { outcome: 'promptRequired' }; }
-    return record.acceptSteer(text, inputID ?? crypto.randomUUID(), cliContext);
+    return record.acceptSteer(text, inputID ?? crypto.randomUUID(), mcpContext);
   }
   async handle(method, params = {}, emit = () => {}) {
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
     if (method === 'woven/status') return this.status();
     if (method === 'session/new' || method === 'session/load') {
-      const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd);
-      if (params._meta?.wovenToolsConnection) record.cli.reconnect(params._meta.wovenToolsConnection);
+      const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd, params._meta?.wovenMCPConnection);
       if (!record.busy) record.emit = emit;
       return { sessionId: record.session.sessionId, ...this.configuration(record) };
     }
@@ -495,11 +506,11 @@ export class DefaultAgentEngine {
       await record.session.abort();
       return {};
     }
-    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), params._meta?.wovenInputID, params._meta?.wovenTools);
+    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), params._meta?.wovenInputID, params._meta?.wovenMCP);
     if (method === 'session/prompt') {
       if (record.busy) throw new DefaultAgentError('This Pi Durable session is still responding. Wait or stop it first.');
       const runID = params._meta?.wovenRunID;
-      const result = await this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, params._meta?.wovenTools, { runID, inputID: params._meta?.wovenInputID ?? runID });
+      const result = await this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, params._meta?.wovenMCP, { runID, inputID: params._meta?.wovenInputID ?? runID });
       return result;
     }
     throw new Error('Unsupported Pi Durable operation.');

@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { acquireHostLock } from './runtime-maintenance.mjs'
 import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
 
-const { installOpenCode } = await import(harnessResource('cli/install.mjs'))
+const { installOpenCode } = await import(harnessResource('mcp/install.mjs'))
 const prefix = '/v1/workspace-instances/opencode'
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const executeFile = promisify(execFile)
@@ -26,9 +26,9 @@ export function createWorkspaceInstances(options) {
   const stateHome = resolve(workspaceRoot, '.woven-matter', 'opencode-state')
   const registrationPath = resolve(stateHome, 'opencode', 'service.json')
   const isEnabled = options.isEnabled ?? (async () => true)
-  const installCLI = options.installCLI ?? installOpenCode
-  let cliInstalled = false
-  function prepareCLI() { if (!cliInstalled) { installCLI(environment()); cliInstalled = true } }
+  const installMCP = options.installMCP ?? installOpenCode
+  let mcpInstalled = false
+  function prepareMCP() { if (!mcpInstalled) { installMCP(environment()); mcpInstalled = true } }
   let operation = null
   let launched = null
   let lastError = null
@@ -85,7 +85,7 @@ export function createWorkspaceInstances(options) {
   }
   async function start() {
     if (!await isEnabled('opencode')) throw fail(409, 'runtime_disabled')
-    prepareCLI()
+    prepareMCP()
     const existing = await registration()
     if (existing && alive(existing.pid)) { await health(existing); return }
     if (launched && launched.exitCode === null) throw fail(409, 'opencode_start_pending_refresh_before_retry')
@@ -164,7 +164,7 @@ export function createWorkspaceInstances(options) {
     if (!info || !alive(info.pid)) throw fail(503, 'opencode_not_running')
     // Authenticated health verifies the registration's service identity before mutations.
     await health(info)
-    prepareCLI()
+    prepareMCP()
     const target = new URL(info.url)
     target.pathname = path
     if (!target.pathname.startsWith('/api/')) throw fail(400, 'invalid_opencode_path')

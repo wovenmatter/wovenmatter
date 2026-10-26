@@ -39,7 +39,7 @@ struct ACPActiveInputTests {
         _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
         let events = ActiveInputEvents()
         func input(_ text: String) -> AgentMessageInput {
-            .init(text: text, cliContext: .init(executablePath: "/tmp/wovenmatter", socketPath: "/tmp/session.sock", captureID: text))
+            .init(text: text, mcpContext: .init(endpointURL: "http://127.0.0.1:43129/mcp", bearerToken: "fixture-session-bearer", captureID: text))
         }
         let prompt = Task { try await client.prompt(input("start"), onEvent: { await events.record($0) }) }
         try await f.waitForPrompt()
@@ -58,7 +58,7 @@ struct ACPActiveInputTests {
         for (request, expected) in zip(inputs, ["start", "first", "second", "finish"]) {
             let params = try #require(request["params"] as? [String: Any])
             let metadata = try #require(params["_meta"] as? [String: Any])
-            #expect((metadata["wovenTools"] as? [String: Any])?["captureID"] as? String == expected)
+            #expect((metadata["wovenMCP"] as? [String: Any])?["captureID"] as? String == expected)
             let blocks = params["prompt"] as? [[String: Any]]
             #expect((params["text"] as? String ?? blocks?.first?["text"] as? String) == expected)
         }

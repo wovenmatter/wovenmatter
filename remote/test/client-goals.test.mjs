@@ -3,12 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { createClientExecution } from '../src/client-execution.mjs'
-const exec = promisify(execFile)
 const turn=()=>new Promise(resolve=>setImmediate(resolve))
 function fixture(t, runtimeKind='default_agent') {
   const directory=mkdtempSync(join(tmpdir(),'wm-goals-')),runs=[]
@@ -22,10 +18,15 @@ function fixture(t, runtimeKind='default_agent') {
   const command=(kind,values={})=>({commandID:randomUUID(),deviceID:principal.id,kind,...values})
   const read=async id=>(await service.readWorkspace({session:{id}})).session._0.goal
   const mutate=(id,mutation)=>service.command(command('workspace',{conversationID:id,workspaceAction:{goal:{id,mutation}}}),principal)
-  const cliWith=async (context,cwd,...args)=>JSON.parse((await exec('python3',[fileURLToPath(new URL('../src/wovenmatter',import.meta.url)),'goals',...args],{cwd,env:{...process.env,WOVENMATTER_SOCKET:context.socketPath,WOVENMATTER_CONTEXT_ID:context.captureID}})).stdout)
-  const cli=async (...args)=>cliWith(runs.at(-1).command.goalToolContext,directory,...args)
+  const toolWith=async (context,action,values={})=>{
+    const scope=service.mcp.resolvePrincipal('Bearer '+context.bearerToken)
+    const response=await service.mcp.handle(scope,{jsonrpc:'2.0',id:randomUUID(),method:'tools/call',params:{name:'woven_goals_'+action,arguments:values}})
+    if(response.error)throw new Error(response.error.message)
+    return response.result.structuredContent
+  }
+  const tool=async (action,values={})=>toolWith(runs.at(-1).command.mcpConnection,action,values)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  return {directory,runs,runtime,command,principal,read,mutate,cli,cliWith,get service(){return service},async restart(){await service.close();service=createClientExecution({directory,runtime,goalIntervalMilliseconds:3600000})}}
+  return {directory,runs,runtime,command,principal,read,mutate,tool,toolWith,get service(){return service},async restart(){await service.close();service=createClientExecution({directory,runtime,goalIntervalMilliseconds:3600000})}}
 }
 for(const kind of ['default_agent','codex','claude_code','grok_build','opencode'])test(`owner goal controls and ordinary continuation dispatch: ${kind}`,async t=>{
   const f=fixture(t,kind),opened=await f.service.command(f.command('createSession',{providerID:kind}),f.principal),id=opened.conversationID
@@ -35,15 +36,15 @@ for(const kind of ['default_agent','codex','claude_code','grok_build','opencode'
   assert.match(f.runs[0].command.text,/When the user explicitly requests a goal/)
   assert.equal(f.service.transcript(id).messages[0].content,'Continuing toward the goal.')
   const goal=await f.read(id),requestID=randomUUID()
-  const args=['checkpoint','--id',goal.id,'--evidence','Changed and verified one issue','--request-id',requestID]
-  assert.equal((await f.cli(...args)).success,true)
-  assert.equal((await f.cli(...args)).success,true)
+  const values={id:goal.id,evidence:'Changed and verified one issue',requestID}
+  assert.equal((await f.tool('checkpoint',values)).success,true)
+  assert.equal((await f.tool('checkpoint',values)).success,true)
   f.runs[0].publish({sessionUpdate:'usage_update',usage:{totalTokens:100}})
   f.runs[0].end();await turn()
   assert.equal((await f.read(id)).completedTurns,1)
   await f.service.tickGoals();await turn()
   assert.equal(f.runs.length,2)
-  await f.cli('checkpoint','--id',goal.id,'--evidence','Second verified improvement','--request-id',randomUUID())
+  await f.tool('checkpoint',{id:goal.id,evidence:'Second verified improvement',requestID:randomUUID()})
   f.runs[1].publish({sessionUpdate:'usage_update',usage:{totalTokens:50}})
   f.runs[1].end();await turn()
   const result=await f.read(id)
@@ -55,12 +56,13 @@ test('missing or duplicate progress cannot continue forever; stale bindings are 
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
   await f.mutate(id,{set:{objective:'Verify'}});await f.service.tickGoals();await turn()
   const goal=await f.read(id)
-  await f.cli('checkpoint','--id',goal.id,'--evidence','Progress','--request-id',randomUUID())
+  await f.tool('checkpoint',{id:goal.id,evidence:'Progress',requestID:randomUUID()})
   f.runs[0].end();await turn();await f.service.tickGoals();await turn()
-  await f.cli('checkpoint','--id',goal.id,'--evidence','Progress','--request-id',randomUUID())
+  await f.tool('checkpoint',{id:goal.id,evidence:'Progress',requestID:randomUUID()})
   f.runs[1].end();await turn()
   assert.equal((await f.read(id)).status,'blocked')
-  await assert.rejects(f.cli('get'))
+  f.service.mcp.revokeSession(id)
+  await assert.rejects(f.tool('get'))
   await f.service.tickGoals();assert.equal(f.runs.length,2)
 })
 test('Stop, edit and restart require explicit resume and preserve accounting',async t=>{
@@ -79,7 +81,7 @@ test('token budget without provider accounting blocks before a second run',async
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
   await f.mutate(id,{set:{objective:'Verify',tokenBudget:10}});await f.service.tickGoals();await turn()
   const goal=await f.read(id)
-  await f.cli('checkpoint','--id',goal.id,'--evidence','Progress','--request-id',randomUUID())
+  await f.tool('checkpoint',{id:goal.id,evidence:'Progress',requestID:randomUUID()})
   f.runs[0].end();await turn();await f.service.tickGoals()
   assert.equal((await f.read(id)).status,'blocked');assert.match((await f.read(id)).evidence,/usage is unavailable/);assert.equal(f.runs.length,1)
   assert.equal((await f.mutate(id,{resume:{id:goal.id}})).status,'rejected')
@@ -93,7 +95,7 @@ test('out-of-order cumulative usage reports cannot reduce the consumed token bud
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal),id=opened.conversationID
   await f.mutate(id,{set:{objective:'Verify',tokenBudget:100}});await f.service.tickGoals();await turn()
   const goal=await f.read(id)
-  await f.cli('checkpoint','--id',goal.id,'--evidence','Verified change','--request-id',randomUUID())
+  await f.tool('checkpoint',{id:goal.id,evidence:'Verified change',requestID:randomUUID()})
   f.runs[0].publish({sessionUpdate:'woven_usage',usage:{totalTokens:120}})
   f.runs[0].publish({sessionUpdate:'usage_update',usage:{totalTokens:20}})
   f.runs[0].end();await turn();await f.service.tickGoals()

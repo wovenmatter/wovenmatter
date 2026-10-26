@@ -1075,6 +1075,17 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
     }
 
+    public func executionMCPLibraryStatus() async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
+    }
+    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
+    }
+
+    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
+    }
+
     public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
         try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
     }

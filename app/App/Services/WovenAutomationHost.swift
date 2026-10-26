@@ -8,7 +8,7 @@ import WovenMatterDashboardStore
 import WovenMatterAutomation
 
 /// The visible app owns CEF and TCC grants. Background/remote runtimes reach
-/// this host through their already-scoped CLI service, never a raw CDP endpoint.
+/// this host through authenticated, caller-scoped Woven MCP dispatch.
 @MainActor
 final class WovenAutomationHost {
     private let assets: WorkspaceAssetSession
@@ -46,7 +46,6 @@ final class WovenAutomationHost {
         do {
             guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Invalid automation request ID.") }
             let command = try WovenMatterToolCommand(invocation.request.arguments)
-            guard command.options["image"] == nil else { throw WorkspaceToolError.invalid("Image paths must be handled on the CLI host.") }
             guard let group = command.group, [.browser, .computer].contains(group) else { throw WorkspaceToolError.invalid("Invalid automation group.") }
             if command.action == "cancel" {
                 let target = try command.required("id")

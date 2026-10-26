@@ -323,7 +323,7 @@ public struct LocalACPRuntimeWrappedCommand: Sendable {
 
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
     public var historyRecorder: WorkspaceWireRecorder? = nil
-    public var cliConnection: AgentCLIContext? = nil
+    public var mcpConnection: WovenMCPConnection? = nil
     public let runtimeKind: AgentRuntimeKind
     public let executableURL: URL
     public let arguments: [String]

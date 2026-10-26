@@ -8,7 +8,7 @@ import WovenMatterDashboardStore
 @MainActor @Suite(.serialized)
 struct CompanionToolFacadeTests {
     @Test(arguments: [false, true])
-    func executionPolicyGatesCLITargetButKeepsSharedDataAndOtherWorkspaces(remoteDenied: Bool) async throws {
+    func executionPolicyGatesToolTargetButKeepsSharedDataAndOtherWorkspaces(remoteDenied: Bool) async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)
         let identity = try await fixture.database.companionLibraryIdentity()
@@ -52,7 +52,7 @@ struct CompanionToolFacadeTests {
         for call in deniedCalls {
             do {
                 _ = try await fixture.model.companionCommands.executeTool(call, deviceID: fixture.device)
-                Issue.record("Disabled workspace accepted CLI execution")
+                Issue.record("Disabled workspace accepted tool execution")
             } catch let error as CompanionAPIError { #expect(error.code == "execution_disabled") }
         }
         let configure = CompanionCommand(deviceID: fixture.device, kind: .workspace,
@@ -92,7 +92,7 @@ struct CompanionToolFacadeTests {
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
 
-    @Test func importedPhoneCallerUsesActualCLINotesCalendarAndHistoryWithoutProvider() async throws {
+    @Test func importedPhoneCallerUsesActualNotesCalendarAndHistoryWithoutProvider() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)
         func request(_ arguments: [String]) -> CompanionToolRequest {
@@ -130,22 +130,24 @@ struct CompanionToolFacadeTests {
             deviceName: "Fixture phone", protocolVersion: CompanionProtocol.version), workspaceID: workspaceID)
         let api = CompanionWorkspaceAPI(database: fixture.database, authentication: auth,
             commands: fixture.model.companionCommands, isActive: { true })
-        var call = CompanionToolRequest(conversationID: caller, request: .init(arguments: ["notes", "list"]),
-            enabledGroups: [.notes])
-        var headers = ["x-woven-protocol": String(CompanionProtocol.version), "x-woven-workspace": workspaceID]
-        #expect(await api.handle(.init(method: "POST", target: "/v1/tools", headers: headers,
+        let call: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
+            "method": .string("tools/call"), "params": .object(["name": .string("woven_notes_list"), "arguments": .object([:])])])
+        var headers = ["x-woven-protocol": String(CompanionProtocol.version), "x-woven-workspace": workspaceID,
+            "x-woven-conversation-id": caller, "x-woven-enabled-groups": "notes"]
+        #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
             body: try JSONEncoder().encode(call))).status == 401)
         headers["authorization"] = "Bearer " + paired.credential
-        let accepted = await api.handle(.init(method: "POST", target: "/wovenmatter/v1/tools", headers: headers,
+        let accepted = await api.handle(.init(method: "POST", target: "/wovenmatter/mcp", headers: headers,
             body: try JSONEncoder().encode(call)))
         #expect(accepted.status == 200)
-        #expect(try JSONDecoder().decode(WovenMatterToolResponse.self, from: accepted.body).success)
-        call.conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
-        #expect(await api.handle(.init(method: "POST", target: "/v1/tools", headers: headers,
+        let result = try JSONDecoder().decode(GatewayJSONValue.self, from: accepted.body)
+        #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        headers["x-woven-conversation-id"] = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
+        #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
             body: try JSONEncoder().encode(call))).status == 403)
-        call.conversationID = caller
+        headers["x-woven-conversation-id"] = caller
         try await auth.revoke(deviceID: fixture.device)
-        #expect(await api.handle(.init(method: "POST", target: "/v1/tools", headers: headers,
+        #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
             body: try JSONEncoder().encode(call))).status == 401)
         #expect(await fixture.recorder.deliveries.isEmpty)
     }

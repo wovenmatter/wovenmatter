@@ -102,7 +102,7 @@ and advances its existing checkpoint without dispatching it; concurrent user sen
 cannot take over the reserved session while its settings are being prepared.
 OpenCode affirmative permission/form replies and automatic approvals claim the
 conversation's Stop fence after outbound history persistence. Denials remain
-available. Pi and Hermes likewise revalidate permission responses after journal
+available. Pi Durable likewise revalidates permission responses after journal
 waits, so an approval chosen before Stop cannot be sent afterward.
 
 The ledger retains at most 4,096 conversations and client/conversation pairs and

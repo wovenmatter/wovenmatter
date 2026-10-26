@@ -70,8 +70,17 @@ public struct CompanionMessage: Codable, Equatable, Identifiable, Sendable {
   public var status: String?
   public var createdAt: String
   public var sequence: Int64?
-  public init(id: String, conversationID: String, runID: String? = nil, role: String, content: String, status: String? = nil, createdAt: String = "", sequence: Int64? = nil) {
+  /// Presentation provenance from the execution owner; never an authorization grant.
+  public var agentSourceID: String?
+  public var isAgentAuthored: Bool?
+  public var senderSessionTitle: String?
+  public var senderHarness: String?
+  public var senderKind: String?
+  public init(id: String, conversationID: String, runID: String? = nil, role: String, content: String, status: String? = nil, createdAt: String = "", sequence: Int64? = nil,
+              agentSourceID: String? = nil, isAgentAuthored: Bool? = nil, senderSessionTitle: String? = nil, senderHarness: String? = nil, senderKind: String? = nil) {
     self.sequence = sequence
+    self.agentSourceID = agentSourceID; self.isAgentAuthored = isAgentAuthored
+    self.senderSessionTitle = senderSessionTitle; self.senderHarness = senderHarness; self.senderKind = senderKind
     self.id = id; self.conversationID = conversationID; self.runID = runID; self.role = role
     self.content = content; self.status = status; self.createdAt = createdAt
   }

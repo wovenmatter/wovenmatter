@@ -72,7 +72,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> CompanionTranscript {
-    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,(SELECT kind FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id) FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
+    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT kind FROM companion_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_id FROM companion_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_title FROM companion_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_agent FROM companion_message_provenance WHERE message_id=dashboard_messages.id)) FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)
     var transcript = CompanionTranscript(conversationID: conversationID)
@@ -82,7 +82,9 @@ extension WorkspaceDatabaseConnection {
       guard code == SQLITE_ROW else { throw stepError() }
       transcript.messages.append(try CompanionMessage(id: text(statement, column: 0), conversationID: conversationID,
         runID: optionalText(statement, column: 1), role: text(statement, column: 2), content: text(statement, column: 2) == "user" ? (optionalText(statement, column: 6) == "goal" ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt(text(statement, column: 3))) : text(statement, column: 3),
-        status: optionalText(statement, column: 4), createdAt: text(statement, column: 5)))
+        status: optionalText(statement, column: 4), createdAt: text(statement, column: 5),
+        agentSourceID: optionalText(statement, column: 7), isAgentAuthored: optionalText(statement, column: 7) == nil ? nil : true,
+        senderSessionTitle: optionalText(statement, column: 8), senderHarness: optionalText(statement, column: 9), senderKind: optionalText(statement, column: 6)))
     }
     let events = try prepareUnlocked("SELECT id,run_id,content FROM dashboard_run_events WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(events) }

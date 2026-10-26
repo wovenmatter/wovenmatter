@@ -100,13 +100,13 @@ final class EmbeddedExecutionTests: XCTestCase {
     let marker: [String:Any] = ["requestDigest":digest,"acceptedAt":Date().timeIntervalSinceReferenceDate]
     try JSONSerialization.data(withJSONObject:marker).write(to:job.appendingPathComponent("accepted.json"))
     do {
-      _ = try await EmbeddedCommandExecutor().run(request,workspaceURL:root) { _,_ in XCTFail("Must not reach native tools"); return "{}" }
+      _ = try await EmbeddedCommandExecutor().run(request,workspaceURL:root) { _,_,_ in XCTFail("Must not reach native tools"); return "{}" }
       XCTFail("Accepted command must not rerun without a receipt")
     } catch { XCTAssertTrue(error.localizedDescription.contains("will not be replayed automatically")) }
   }
 
   @MainActor
-  func testNestedCLIIDsStableAcrossReplay() {
+  func testNestedMCPIDsStableAcrossReplay() {
     let id = UUID()
     let first = EmbeddedCommandExecutor.commandID(request:id,sequence:1)
     XCTAssertNotNil(UUID(uuidString:first))

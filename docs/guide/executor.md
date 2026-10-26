@@ -1,7 +1,7 @@
 # Executor apps
 
 Woven Matter connects every supported agent to one managed
-[Executor v2](https://v2.executor.sh/docs) runtime through its session-bound CLI.
+[Executor v2](https://v2.executor.sh/docs) runtime through its authenticated Woven MCP tools.
 An Executor **app** supplies capabilities backed by an API, one or more MCP
 servers, or code. Accounts linked in the Executor dashboard supply the credentials an
 app uses. An app and an MCP server are not necessarily one-to-one.
@@ -59,14 +59,14 @@ messages. Choose each app and the linked accounts it may use; apps with
 multiple account requirements can grant more than one account.
 
 Whenever Executor is on, the agent can use its raw **Execute**, scoped tool
-search and skills through the Woven CLI. Execute and search use only the selected
+search and skills through Woven MCP. Execute and search use only the selected
 apps and accounts. Executor enforces the scope on each invocation, including guessed
 or dynamically constructed tool names and actions resumed after approval. Full
-access keeps the same scope. Turning Executor off blocks new CLI calls and
+access keeps the same scope. Turning Executor off blocks new tool calls and
 requests cancellation of active programs. Removing an app blocks subsequent
 calls to that app; effects already completed cannot be undone.
 
-These are capabilities enforced by Woven's CLI and Executor, not an operating
+These are capabilities enforced by Woven MCP and Executor, not an operating
 system sandbox against an agent or administrator with unrestricted access to the
 host's credential files. Keep managed runtime data private and protect host
 access as you would any other connected application's credentials.
@@ -108,18 +108,16 @@ supplies its own tool list. This setting applies to Pi Durable's Pi Durable SDK 
 its global/workspace inheritance; changes apply to subsequent turns. It does not
 control Executor Execute, which belongs to the Executor conversation switch.
 
-## CLI and recovery
+## MCP tools and recovery
 
-Agents receive the same session-bound CLI across Pi Durable and external harnesses,
-including remote agent workspaces. Use `wovenmatter executor help` for commands.
-A typical sequence is:
+Every supported harness receives the same focused tools, including in remote
+workspaces. Discover their schemas through the Woven MCP server. A typical
+sequence is:
 
-```sh
-"$WOVENMATTER_CLI" executor search --query "capability to find"
-"$WOVENMATTER_CLI" executor status JOB_ID
-"$WOVENMATTER_CLI" executor execute --file /path/to/program.js
-"$WOVENMATTER_CLI" executor status JOB_ID
-```
+1. Call `woven_executor_search` with `query` describing the capability.
+2. Call `woven_executor_status` with the returned job `id`.
+3. Call `woven_executor_execute` with inline JavaScript in `code`.
+4. Poll `woven_executor_status` for the execution job.
 
 Search and Execute return a job ID immediately; poll status until `completed`,
 `cancelled` or `interrupted`. Search results contain exact callable paths and
@@ -129,23 +127,25 @@ host filesystem access. `completed` means the program finished: inspect
 Approvals and input are resumed by Woven; agents never receive continuation
 credentials or a command to answer their own approval requests.
 
-Reuse `--request-id UUID` with identical code after a lost receipt. Stored IDs
+Reuse the same `requestID` UUID with identical code after a lost receipt. Stored IDs
 prevent replay across background-service restarts. An interrupted or uncertain
 program may have completed earlier external actions: inspect those effects,
 then explicitly start new work. In-memory Executor continuations do not survive
 an Executor restart. Woven retains receipts, not durable program execution.
 Older large output bodies may be retired while their replay-prevention IDs stay.
 
-Woven's remote CLI relay still requires the Mac background service. Hosting
-Executor on Linux does not remove that requirement. Separate clients using the
-remote Executor endpoint directly can operate independently of Woven.
+Executor calls go to the configured owning service. A Linux workspace's access to
+central-library-backed Executor operations requires its provisioned library grant
+and a reachable central Mac. Hosting Executor on Linux does not make that Mac
+optional for those operations. Separate clients using the Executor endpoint
+directly have their own connection and scope.
 
 Executor Cloud authentication and Pi Durable are outside this integration.
 
 ## Validation
 
 `scripts/test-changes.sh --all` covers native compilation, persisted defaults,
-bound CLI identity, every harness's permission mapping, code mode's nested tool
+bound MCP identity, every harness's permission mapping, code mode's nested tool
 approvals, manager receipts, typed input, and deterministic deployment fixtures.
 CI additionally builds the standalone Linux image and runs
 `scripts/test-support/test-executor-runtime.mjs` against its unchanged published

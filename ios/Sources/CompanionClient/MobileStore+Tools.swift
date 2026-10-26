@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCompanion
 
 extension MobileStore {
-  /// Native tools and the embedded command line share this dispatcher. Permissions
+  /// Native MCP tools and sandboxed Python share this dispatcher. Permissions
   /// are checked on every call, including a retry of a previously successful write.
   public func executeLocalTool(_ request: WovenMatterToolRequest, context: MobileToolContext) async -> WovenMatterToolResponse {
     do {
@@ -11,7 +11,7 @@ extension MobileStore {
       let command = try WovenMatterToolCommand(request.arguments)
       if let id = command.options["request-id"], UUID(uuidString: id) != uuid { throw WorkspaceToolError.invalid("--request-id must match the request envelope.") }
       try context.authorize(command)
-      if command.wantsHelp { return .init(result: .object(["help": .string(WovenMatterToolCommand.help(for: command))])) }
+      guard !command.wantsHelp else { throw WorkspaceToolError.invalid("Use a named Woven MCP tool with structured arguments.") }
       if command.action == "context" { return .init(result: request.contextID.map(GatewayJSONValue.string) ?? .null) }
       let key = context.sessionID + ":" + uuid.uuidString.lowercased()
       if command.isMutation, let receipt = state.toolReceipts?[key] {

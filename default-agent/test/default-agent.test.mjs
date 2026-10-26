@@ -51,7 +51,8 @@ test('real SDK loads the complete selected tool set and resumes an empty draft w
   const engine = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const record = await engine.create();
   const selected = (await record.conversation.agent(BACKGROUND_CONTEXT)).tools.map(tool => tool.name);
-  assert.deepEqual(new Set(selected), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', 'update_checklist', 'browser', 'computer', 'subagent', 'codemode']));
+  // App tools are discovered only from an authenticated Woven MCP connection.
+  assert.deepEqual(new Set(selected), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', 'update_checklist', 'subagent', 'codemode']));
   assert.deepEqual(new Set(record.registry.snapshot().tools().map(({ tool }) => tool.name)), new Set(selected));
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   const second = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();

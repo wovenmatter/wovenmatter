@@ -234,7 +234,7 @@ final class OpenCodeModel {
             else {
                 connection = try OpenCodeConnection.discover(file: registration)
                 _ = try await OpenCodeHTTPClient(connection: connection).health()
-                try await NativeCLIAdapter.installOpenCode()
+                try await NativeMCPAdapter.installOpenCode()
             }
             try Task.checkCancellation()
             guard generation == connectionGeneration, !quitting else { throw CancellationError() }
@@ -765,7 +765,7 @@ final class OpenCodeModel {
         try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             return try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, cliContext: input.cliContext), requiresIdle: requiresIdle, dispatchFence: fence)
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext), requiresIdle: requiresIdle, dispatchFence: fence)
         } else {
             return try await coordinator.prompt(link, input: input, requiresIdle: requiresIdle, dispatchFence: fence)
         }

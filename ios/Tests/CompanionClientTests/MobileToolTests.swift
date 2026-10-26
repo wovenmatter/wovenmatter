@@ -3,7 +3,7 @@ import Testing
 import WovenMatterCompanion
 @testable import CompanionClient
 
-@Suite("Offline Woven Matter CLI")
+@Suite("Offline Woven MCP service operations")
 struct MobileToolTests {
   private func fixture() throws -> (MobileStore, URL, MobileToolContext) {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("wm-tool-tests-" + UUID().uuidString)

@@ -111,34 +111,18 @@ public enum AgentMessageAttachmentDraft: Codable, Equatable, Identifiable, Senda
   }
 }
 
-/// Transport metadata, never rendered or added to the model's message text.
-public struct AgentCLIContext: Codable, Equatable, Sendable {
-  public let executablePath: String
-  public let socketPath: String?
-  public let captureID: String
-  /// Stable app conversation identity; no tool capability or credential.
-  public let sessionID: String?
-
-  public init(executablePath: String, socketPath: String?, captureID: String, sessionID: String? = nil) {
-    self.executablePath = executablePath
-    self.socketPath = socketPath
-    self.captureID = captureID
-    self.sessionID = sessionID
-  }
-}
-
 public struct AgentMessageInput: Codable, Equatable, Sendable {
   public let text: String
   public private(set) var attachments: [AgentMessageAttachmentDraft]
 
   public let visibleWorkspace: WorkspaceVisibleContext?
   public let historyDeliveryID: String?
-  public var cliContext: AgentCLIContext?
+  public var mcpContext: WovenMCPConnection?
 
-  public init(text: String, attachments: [AgentMessageAttachmentDraft] = [], historyDeliveryID: String? = nil, visibleWorkspace: WorkspaceVisibleContext? = nil, cliContext: AgentCLIContext? = nil) {
+  public init(text: String, attachments: [AgentMessageAttachmentDraft] = [], historyDeliveryID: String? = nil, visibleWorkspace: WorkspaceVisibleContext? = nil, mcpContext: WovenMCPConnection? = nil) {
     self.visibleWorkspace = visibleWorkspace
     self.historyDeliveryID = historyDeliveryID
-    self.cliContext = cliContext
+    self.mcpContext = mcpContext
     self.text = text
     self.attachments = attachments
   }

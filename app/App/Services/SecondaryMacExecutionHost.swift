@@ -112,6 +112,7 @@ final class SecondaryMacExecutionHost {
         guard generation == attempt, let api, endpoint != nil else { return .error("unavailable", "Execution sharing is starting or stopped.", status: 503) }
         let target = URLComponents(string: "http://localhost" + request.target)?.path ?? ""
         let path = target.hasPrefix("/wovenmatter/") ? String(target.dropFirst("/wovenmatter".count)) : target
+        if path == "/mcp", let response = await workspace.model.agentTools?.handleMCP(request) { return response }
         if path.hasPrefix("/v1/inference/"), let inference { return await inference.handle(request) }
         guard path.hasPrefix("/v1/execution/manage/") else { return await api.handle(request) }
         do {

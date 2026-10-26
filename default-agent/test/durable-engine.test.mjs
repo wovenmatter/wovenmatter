@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { defineExtension, defineTask } from '@earendil-works/pi-durable';
@@ -371,34 +372,56 @@ test('native child checklist records stay in native capture without becoming roo
   assert.equal(JSON.parse(archived.projectionJSON).childID, String(child.id));
 });
 
-test('native CLI bindings advance when steering is consumed and preserve running shell snapshots', async t => {
-  const { engine, root } = await fixture(t), record = await engine.create();
-  const binding = captureID => ({ captureID, executablePath: join(root, 'bin', 'wovenmatter'), socketPath: join(root, 'woven.sock') });
-  const environment = 'printf "%s|%s|%s|%s" "$WOVENMATTER_CONTEXT_ID" "$WOVENMATTER_CLI" "$WOVENMATTER_SOCKET" "$WOVENMATTER_NOTE_ID"';
-  const params = (text, captureID) => ({ sessionId: record.session.sessionId, prompt: [{ type: 'text', text }], _meta: { wovenInputID: randomUUID(), ...(captureID ? { wovenTools: binding(captureID) } : {}) } });
+test('Durable invokes discovered Woven MCP tools without shell access and pins consumed input through steering', async t => {
+  let releaseFirst;
+  const released = new Promise(resolve => { releaseFirst = resolve; });
+  const observed = [];
+  const server = createServer(async (request, response) => {
+    assert.equal(request.headers.authorization, 'Bearer native-fixture-token');
+    if (request.method !== 'POST') { response.writeHead(405).end(); return; }
+    let text = ''; for await (const bytes of request) text += bytes;
+    const packet = JSON.parse(text);
+    if (packet.id === undefined) { response.writeHead(202).end(); return; }
+    let result;
+    if (packet.method === 'initialize') result = { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'Fixture', version: '1' } };
+    else if (packet.method === 'tools/list') result = { tools: [{ name: 'woven_notes_read', description: 'Read a note.', inputSchema: { type: 'object', properties: { noteID: { type: 'string' }, requestID: { type: 'string' } }, required: ['noteID'] }, annotations: { readOnlyHint: true } }] };
+    else if (packet.method === 'tools/call') {
+      observed.push({ captureID: packet.params._meta.wovenContextID, noteID: packet.params.arguments.noteID });
+      if (observed.length === 1) await released;
+      result = { content: [{ type: 'text', text: packet.params._meta.wovenContextID }], structuredContent: { captureID: packet.params._meta.wovenContextID } };
+    } else { response.writeHead(405).end(); return; }
+    response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id: packet.id, result }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { releaseFirst(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const { engine } = await fixture(t), record = await engine.create();
+  const binding = captureID => ({ endpointURL: `http://127.0.0.1:${server.address().port}/mcp`, bearerToken: 'native-fixture-token', captureID });
+  const params = (text, captureID) => ({ sessionId: record.session.sessionId, prompt: [{ type: 'text', text }], _meta: { wovenInputID: randomUUID(), wovenMCP: binding(captureID) } });
   let calls = 0;
-  record.streamFunction = model => stream(model, ++calls === 1
-    ? [{ type: 'toolCall', id: 'first-shell', name: 'bash', arguments: { command: `${environment} > first-env; for ((i=0;i<500;i++)); do [ -f release-shell ] && break; sleep 0.01; done; ${environment} > first-finished-env` } }]
-    : calls === 2 ? [{ type: 'toolCall', id: 'second-shell', name: 'codemode', arguments: { code: `return await tools.bash({command: ${JSON.stringify(`${environment} > second-env`)}});` } }]
-      : [{ type: 'text', text: 'Done' }]);
-  const first = engine.handle('session/prompt', params('First input', 'first'));
+  record.streamFunction = model => stream(model, ++calls <= 2
+    ? [{ type: 'toolCall', id: `mcp-${calls}`, name: calls === 1 ? 'woven_notes_read' : 'codemode', arguments: calls === 1 ? { noteID: 'first-note' } : { code: 'return await tools.woven_notes_read({noteID:"second-note"});' } }]
+    : [{ type: 'text', text: 'Done' }]);
+  const first = engine.handle('session/prompt', params('First', 'first-input'));
   const deadline = Date.now() + 5000;
-  while (true) {
-    try { await readFile(join(root, 'first-env')); break; }
-    catch (error) { if (error.code !== 'ENOENT' || Date.now() >= deadline) throw error; await new Promise(resolve => setTimeout(resolve, 10)); }
-  }
-  assert.deepEqual(await engine.handle('_session/steering', params('Second input', 'second')), { outcome: 'injected' });
-  assert.equal(record.cli.environment({}).WOVENMATTER_CONTEXT_ID, 'first');
-  await writeFile(join(root, 'release-shell'), '');
-  await first;
-  const expected = captureID => `${captureID}|${binding(captureID).executablePath}|${binding(captureID).socketPath}|`;
-  assert.equal(await readFile(join(root, 'first-env'), 'utf8'), expected('first'));
-  assert.equal(await readFile(join(root, 'first-finished-env'), 'utf8'), expected('first'));
-  assert.equal(await readFile(join(root, 'second-env'), 'utf8'), expected('second'));
-  let next = 0;
-  record.streamFunction = model => stream(model, ++next === 1 ? [{ type: 'toolCall', id: 'unbound-shell', name: 'bash', arguments: { command: `${environment} > unbound-env` } }] : [{ type: 'text', text: 'Done' }]);
-  await engine.handle('session/prompt', params('An unbound input'));
-  assert.equal(await readFile(join(root, 'unbound-env'), 'utf8'), '|||');
+  while (!observed.length) { assert.ok(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 10)); }
+  assert.deepEqual(await engine.handle('_session/steering', params('Second', 'second-input')), { outcome: 'injected' });
+  assert.equal(record.mcp.connection().captureID, 'first-input');
+  releaseFirst(); await first;
+  assert.deepEqual(observed, [{ captureID: 'first-input', noteID: 'first-note' }, { captureID: 'second-input', noteID: 'second-note' }]);
+  assert.equal(record.session.messages.find(message => message.role === 'toolResult' && message.toolCallId === 'mcp-1').isError, false);
+  const archive = JSON.stringify((await record.history()).recordBatch);
+  assert.ok(!archive.includes('native-fixture-token'));
+  await engine.apply({ config: { ...engine.config, codeMode: 'off' } });
+  calls = 0;
+  record.streamFunction = model => stream(model, ++calls === 1
+    ? [{ type: 'toolCall', id: 'subagent-after-discovery', name: 'subagent', arguments: { action: 'status' } }]
+    : [{ type: 'text', text: 'Subagents available' }]);
+  await engine.handle('session/prompt', params('Inspect child work', 'third-input'));
+  assert.equal(record.session.messages.find(message => message.role === 'toolResult' && message.toolCallId === 'subagent-after-discovery').isError, false);
+  const active = (await record.conversation.agent(BACKGROUND_CONTEXT)).tools.map(tool => tool.name);
+  assert.ok(active.includes('subagent') && active.includes('woven_notes_read'));
+  assert.ok(!active.includes('codemode'));
+  assert.ok(record.registry.snapshot().tools().find(entry => entry.tool.name === 'codemode').tool.description.includes('For parent conversations only, subagent:'));
 });
 
 test('client adoption inspects native idle state without resuming unfinished work',async t=>{
@@ -451,4 +474,51 @@ for (const codeMode of ['off', 'only']) test(`native checklist is registered and
   record.streamFunction = model => stream(model, [{ type: 'text', text: 'New task' }]);
   await engine.prompt(record, 'Fresh task', update => next.push(update));
   assert.equal(next.filter(update => update.sessionUpdate === 'plan').length, 0);
+});
+
+test('a restored native child uses refreshed MCP credentials with its durable original capture', async t => {
+  const calls = [];
+  const server = createServer(async (request, response) => {
+    if (request.method !== 'POST') { response.writeHead(405).end(); return; }
+    let body = ''; for await (const bytes of request) body += bytes;
+    const packet = JSON.parse(body);
+    if (packet.id === undefined) { response.writeHead(202).end(); return; }
+    let result;
+    if (packet.method === 'initialize') result = { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'Fixture', version: '1' } };
+    else if (packet.method === 'tools/list') result = { tools: [{ name: 'woven_context', inputSchema: { type: 'object', properties: { requestID: { type: 'string' } } }, annotations: { readOnlyHint: true } }] };
+    else if (packet.method === 'tools/call') {
+      calls.push({ authorization: request.headers.authorization, captureID: packet.params._meta.wovenContextID });
+      result = { content: [{ type: 'text', text: packet.params._meta.wovenContextID }] };
+    } else { response.writeHead(405).end(); return; }
+    response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ jsonrpc: '2.0', id: packet.id, result }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const { engine, open } = await fixture(t);
+  const record = await engine.create();
+  const connection = { endpointURL: `http://127.0.0.1:${server.address().port}/mcp`, bearerToken: 'original-token', sessionID: 'original-app-session' };
+  record.mcp.reconnect(connection);
+  record.mcp.enqueue({ ...connection, captureID: 'original-input-capture' }); record.mcp.consumed();
+  const child = await record.harness.createConversation({ ownership: { kind: 'ownerless' }, init: async (tx, id) => {
+    Object.assign(await tx.doc(ChildContext, id), { parentConversationID: record.conversation.id, sessionID: randomUUID(),
+      provider: record.session.model.provider, modelId: record.session.model.id, selectedModel: record.session.model,
+      accountID: 'fixture-account', mcpOrigin: record.mcp.origin() });
+  } }, BACKGROUND_CONTEXT);
+  const id = record.session.sessionId;
+  await record.session.dispose();
+  const restoredEngine = await open();
+  const restored = await restoredEngine.create(id, undefined, { ...connection, bearerToken: 'renewed-token' });
+  restored.mcp.enqueue({ ...connection, bearerToken: 'renewed-token', captureID: 'later-parent-input' }); restored.mcp.consumed();
+  const tool = restored.registry.snapshot().tools().find(entry => entry.tool.name === 'woven_context').tool;
+  const api = { conversationId: child.id, callId: 'restored-child-tool', output() {}, details: async () => {} };
+  const result = await tool.execute({}, api, { abortSignal: new AbortController().signal });
+  assert.equal(result.isError, false);
+  assert.deepEqual(calls, [{ authorization: 'Bearer renewed-token', captureID: 'original-input-capture' }]);
+  const saved = await restored.harness.snapshot(ChildContext, child.id, BACKGROUND_CONTEXT);
+  assert.deepEqual(saved.mcpOrigin, { captureID: 'original-input-capture', sessionID: 'original-app-session' });
+  assert.ok(!JSON.stringify(saved).includes('original-token'));
+  assert.ok(!JSON.stringify(saved).includes('renewed-token'));
+  restored.mcp.reconnect({ ...connection, sessionID: 'foreign-app-session', bearerToken: 'foreign-token' });
+  await assert.rejects(tool.execute({}, api, { abortSignal: new AbortController().signal }), /originating Woven session is unavailable/);
+  assert.equal(calls.length, 1);
 });

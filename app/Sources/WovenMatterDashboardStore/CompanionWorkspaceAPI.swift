@@ -1,6 +1,8 @@
 import Foundation
 import WovenMatterCore
 
+private struct MCPMalformedJSON: Error {}
+
 @MainActor
 public protocol CompanionCommandServing: AnyObject {
     func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse
@@ -16,6 +18,157 @@ public protocol CompanionCommandServing: AnyObject {
     func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript
     func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt?
     func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt
+}
+
+private extension CompanionWorkspaceAPI {
+    func mcpInput(_ request: CompanionHTTPRequest) throws -> (GatewayJSONValue, String, [WorkspaceToolGroup], String?) {
+        guard request.method == "POST" else {
+            throw CompanionAPIError(code: "method_not_allowed", message: "Woven MCP uses HTTP POST for JSON-RPC requests.")
+        }
+        guard request.body.count <= 4 * 1_024 * 1_024 else {
+            throw CompanionAPIError(code: "too_large", message: "The MCP request exceeds 4 MiB.")
+        }
+        guard request.headers["origin"] == nil else {
+            throw CompanionAPIError(code: "invalid_origin", message: "Browser-origin MCP requests are unavailable on this device route.")
+        }
+        if let version = request.headers["mcp-protocol-version"], !WovenMCPServer.supportedProtocolVersions.contains(version) {
+            throw CompanionAPIError(code: "invalid_request", message: "The requested MCP protocol version is unsupported.")
+        }
+        guard let conversationID = request.headers["x-woven-conversation-id"], UUID(uuidString: conversationID) != nil,
+              let rawGroups = request.headers["x-woven-enabled-groups"], rawGroups.utf8.count <= 512 else {
+            throw CompanionAPIError(code: "invalid_request", message: "MCP requires a native conversation binding and current tool selection.")
+        }
+        let names = rawGroups.split(separator: ",", omittingEmptySubsequences: true).map(String.init)
+        let groups = names.compactMap(WorkspaceToolGroup.init(rawValue:))
+        guard groups.count == names.count else {
+            throw CompanionAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
+        }
+        let message: GatewayJSONValue
+        do { message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body) }
+        catch { throw MCPMalformedJSON() }
+        let capture = request.headers["x-woven-context-id"]
+            ?? message.objectValue?["params"]?.objectValue?["_meta"]?.objectValue?["wovenContextID"]?.stringValue
+        guard (capture?.utf8.count ?? 0) <= 128 else {
+            throw CompanionAPIError(code: "invalid_request", message: "The input context is invalid.")
+        }
+        return (message, conversationID.lowercased(), Array(Set(groups)), capture)
+    }
+
+    func mcpTools(groups: [WorkspaceToolGroup]) -> Set<String> {
+        let enabled = Set(groups)
+        return Set(WovenMCPCatalog.tools.filter { tool in
+            tool.name == "woven_context" || tool.name.hasSuffix("_cancel") && tool.group?.isAutomation == true
+                || tool.group.map { enabled.contains($0) } == true
+        }.map(\.name))
+    }
+
+    func handleDeviceMCP(_ request: CompanionHTTPRequest, device: CompanionPairedDevice) async throws -> CompanionHTTPResponse {
+        let (message, conversationID, groups, captureID) = try mcpInput(request)
+        guard let workspace = try await database.companionConversationExecutionWorkspace(conversationID: conversationID),
+              workspace.kind == .ios || workspace.kind == .mac else {
+            throw CompanionAPIError(code: "wrong_owner", message: "A paired-device MCP connection cannot impersonate a Linux execution workspace.")
+        }
+        // Even schema discovery needs a real, live conversation owned by this
+        // paired device. A pasted conversation UUID is never a new grant.
+        let identity = CompanionToolRequest(conversationID: conversationID,
+            request: .init(arguments: ["context"]), enabledGroups: groups)
+        try await database.authorizeCompanionTool(identity, deviceID: device.id)
+        let result = await WovenMCPServer.handle(message, contextID: captureID, allowedTools: mcpTools(groups: groups)) { call in
+            await self.performMCP(call, conversationID: conversationID, groups: groups, device: device)
+        }
+        guard isActive(), await authentication.isCurrent(device) else {
+            return .error("unauthorized", "This paired device's MCP access has stopped.", status: 401)
+        }
+        guard let result else { return .init(status: 202, body: Data()) }
+        return try .json(result)
+    }
+
+    func performMCP(_ call: WovenMatterToolRequest, conversationID: String, groups: [WorkspaceToolGroup],
+                    device: CompanionPairedDevice) async -> WovenMatterToolResponse {
+        do {
+            guard isActive(), await authentication.isCurrent(device) else {
+                throw CompanionAPIError(code: "unauthorized", message: "This paired device's MCP access was revoked.")
+            }
+            let request = CompanionToolRequest(conversationID: conversationID, request: call, enabledGroups: groups)
+            try await database.authorizeCompanionTool(request, deviceID: device.id)
+            let response = try await commands.executeTool(request, deviceID: device.id)
+            if response.success { onMutation() }
+            return response.bounded()
+        } catch let error as CompanionAPIError {
+            return .init(success: false, error: error.message, code: error.code, requestID: call.requestID)
+        } catch {
+            return .init(success: false, error: error.localizedDescription, code: "tool_unavailable", requestID: call.requestID)
+        }
+    }
+
+    func handleWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version), let bearer = request.bearer else {
+            return .error("unauthorized", "A library MCP grant is required.", status: 401)
+        }
+        let principal = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        guard request.headers["x-woven-workspace"] == principal.libraryID else {
+            return .error("library_mismatch", "This MCP grant belongs to another library.", status: 409)
+        }
+        let (message, conversationID, groups, captureID) = try mcpInput(request)
+        try await database.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: principal)
+        let result = await WovenMCPServer.handle(message, contextID: captureID, allowedTools: mcpTools(groups: groups)) { call in
+            await self.performWorkspaceMCP(call, conversationID: conversationID, groups: groups, bearer: bearer, principal: principal)
+        }
+        guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
+        _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        guard let result else { return .init(status: 202, body: Data()) }
+        return try .json(result)
+    }
+
+    func prepareWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+        guard request.method == "POST" else { return .error("method_not_allowed", "Scheduled caller registration uses POST.", status: 405) }
+        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else { return .error("version_mismatch", "Update the execution workspace to a compatible version.", status: 426) }
+        guard request.body.count <= 1_048_576 else { return .error("too_large", "The scheduled caller registration exceeds 1 MiB.", status: 413) }
+        guard let bearer = request.bearer else { return .error("unauthorized", "A library MCP grant is required.", status: 401) }
+        let principal = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        guard request.headers["x-woven-workspace"] == principal.libraryID else {
+            return .error("library_mismatch", "This MCP grant belongs to another library.", status: 409)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let value = try decoder.singleValueContainer().decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: value) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            guard let date = formatter.date(from: value) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "An ISO-8601 schedule timestamp is required."))
+            }
+            return date
+        }
+        let preparation = try decoder.decode(CompanionScheduledMCPPreparation.self, from: request.body)
+        let enabled = try await database.prepareCompanionScheduledMCP(preparation, principal: principal)
+        guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
+        _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        onMutation()
+        return try .json(["enabledGroups": enabled.map(\.rawValue)])
+    }
+
+    func performWorkspaceMCP(_ call: WovenMatterToolRequest, conversationID: String, groups: [WorkspaceToolGroup],
+                             bearer: String, principal: CompanionWorkspaceMCPPrincipal) async -> WovenMatterToolResponse {
+        do {
+            guard isActive() else { throw CompanionAPIError(code: "unavailable", message: "The library MCP host stopped.") }
+            let current = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+            guard current.grantID == principal.grantID else {
+                throw CompanionAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
+            }
+            try await database.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: current)
+            let request = CompanionToolRequest(conversationID: conversationID, request: call, enabledGroups: groups)
+            try await database.authorizeCompanionTool(request, deviceID: current.executionDeviceID)
+            let response = try await commands.executeTool(request, deviceID: current.executionDeviceID)
+            if response.success { onMutation() }
+            return response.bounded()
+        } catch let error as CompanionAPIError {
+            return .init(success: false, error: error.message, code: error.code, requestID: call.requestID)
+        } catch {
+            return .init(success: false, error: error.localizedDescription, code: "tool_unavailable", requestID: call.requestID)
+        }
+    }
 }
 
 public extension CompanionCommandServing {
@@ -81,6 +234,12 @@ public final class CompanionWorkspaceAPI {
             let workspaceID = try await database.companionWorkspaceID()
             if path == "/v1/discovery", request.method == "GET", let advertisement = discovery() {
                 return try .json(advertisement)
+            }
+            if path == "/mcp/workspace/prepare" {
+                return try await prepareWorkspaceMCP(request)
+            }
+            if path == "/mcp/workspace" {
+                return try await handleWorkspaceMCP(request)
             }
             if path == "/v1/pairing/request", request.method == "POST" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
@@ -150,6 +309,9 @@ public final class CompanionWorkspaceAPI {
                 return .error("workspace_mismatch", "This credential belongs to a different workspace. Your local writing is preserved.", status: 409)
             }
             onRequest()
+            if path == "/mcp" {
+                return try await handleDeviceMCP(request, device: device)
+            }
             if path == "/v1/analytics/preference", request.method == "GET" { return try .json(await commands.analyticsPreference()) }
             if path == "/v1/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
             if path == "/v1/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
@@ -272,15 +434,6 @@ public final class CompanionWorkspaceAPI {
                     return try .json(note)
                 }
             } else if request.method == "POST" {
-                if path == "/v1/tools" {
-                    let call = try JSONDecoder().decode(CompanionToolRequest.self, from: request.body)
-                    try await database.authorizeCompanionTool(call, deviceID: device.id)
-                    let response = try await commands.executeTool(call, deviceID: device.id)
-                    guard isActive() else { return .error("unavailable", "Companion sharing is stopped.", status: 503) }
-                    _ = try await authentication.authenticate(bearer: bearer)
-                    if response.success { onMutation() }
-                    return try .json(response.bounded())
-                }
                 if path == "/v1/workspace-read" {
                     let read = try JSONDecoder().decode(CompanionWorkspaceRead.self, from: request.body)
                     let value = try await commands.readWorkspace(read)
@@ -302,8 +455,11 @@ public final class CompanionWorkspaceAPI {
                 }
             }
             return .error("not_found", "Unknown companion endpoint.", status: 404)
+        } catch is MCPMalformedJSON {
+            return (try? .json(WovenMCPServer.error(code: -32700, message: "Invalid JSON."), status: 400))
+                ?? .error("invalid_request", "Invalid JSON.", status: 400)
         } catch let error as CompanionAPIError {
-            let status = error.code == "unauthorized" ? 401 : error.code == "wrong_owner" ? 403 : error.code == "not_found" ? 404 : error.code == "version_mismatch" ? 426 : error.code == "rate_limited" ? 429 : ["revision_conflict", "event_conflict", "origin_gap", "receipt_conflict", "record_conflict", "chunk_conflict"].contains(error.code) ? 409 : 400
+            let status = error.code == "unauthorized" ? 401 : ["wrong_owner", "invalid_origin"].contains(error.code) ? 403 : error.code == "not_found" ? 404 : error.code == "method_not_allowed" ? 405 : error.code == "too_large" ? 413 : error.code == "version_mismatch" ? 426 : error.code == "rate_limited" ? 429 : ["revision_conflict", "event_conflict", "origin_gap", "receipt_conflict", "record_conflict", "chunk_conflict"].contains(error.code) ? 409 : 400
             return .error(error.code, error.message, status: status)
         } catch let error as CompanionCalendarError {
             let status: Int

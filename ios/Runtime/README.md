@@ -31,6 +31,16 @@ nativeConversationID, taskID, toolCallID}` and returns upstream
 Swift task cancellation. They default to unsafe replay: interrupted side
 effects are reported as interrupted, not blindly repeated.
 
+Woven capabilities use the shared `WovenMCPCatalog` names and structured schemas.
+The phone registers those definitions directly with Pi Durable and dispatches
+local operations through its offline mobile services. Explicit `target: central`
+requests use the paired Mac's authenticated HTTP MCP endpoint; device and
+conversation headers identify the existing execution owner, while each call
+rechecks the user's tool selection. Browser and computer tools retain the Mac's
+execution owner and inline MCP image results. There is no Woven command-line
+bridge. Sandboxed Python can call the same tools with
+`await woven_mcp("woven_notes_read", {"noteID": "..."})`.
+
 `open()` is a read-only execution viewer after its migration/configuration
 commits; it does not schedule saved work. `resume()` explicitly enables the
 scheduler. `submit(text:requestID:)` durably admits input and returns its receipt.

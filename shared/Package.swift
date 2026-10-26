@@ -6,6 +6,7 @@ let package = Package(
   products: [.library(name: "WovenMatterCompanion", targets: ["WovenMatterCompanion"])],
   targets: [
     .target(name: "WovenMatterCompanion"),
+    .executableTarget(name: "WovenMCPCatalogExport", dependencies: ["WovenMatterCompanion"], path: "Tools/WovenMCPCatalogExport"),
     .testTarget(name: "WovenMatterCompanionTests", dependencies: ["WovenMatterCompanion"])
   ]
 )

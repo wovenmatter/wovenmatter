@@ -694,7 +694,7 @@ public actor LocalACPClient {
     private var activeReasoningPhaseID: String?
     private var assistantSnapshotAssembly = NativeTextSnapshotAssembler()
     private var thoughtSnapshotAssemblies: [String: NativeTextSnapshotAssembler] = [:]
-    private let cliConnection: AgentCLIContext?
+    private let mcpConnection: WovenMCPConnection?
     private var closed = false
     private var shutdownTask: Task<Void, Never>?
 
@@ -706,10 +706,10 @@ public actor LocalACPClient {
         workingDirectory: URL,
         requestedPermission: String?,
         historyRecorder: WorkspaceWireRecorder? = nil,
-        cliConnection: AgentCLIContext? = nil,
+        mcpConnection: WovenMCPConnection? = nil,
         accountCoordinator: ProviderAccountCoordinator?
     ) {
-        self.cliConnection = cliConnection
+        self.mcpConnection = mcpConnection
         self.accountCoordinator = accountCoordinator
         self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
@@ -748,7 +748,7 @@ public actor LocalACPClient {
             "-c",
             #"ulimit -c 0; set -m; exec "$@""#,
             "wovenmatter-local-acp",
-        ] + NativeCLIAdapter.command(launch: launch, arguments: preparedLaunch.arguments)
+        ] + NativeMCPAdapter.command(launch: launch, arguments: preparedLaunch.arguments)
         process.currentDirectoryURL = launch.processWorkingDirectoryURL
             ?? workingDirectory
         var environment = ProcessInfo.processInfo.environment
@@ -786,7 +786,7 @@ public actor LocalACPClient {
             workingDirectory: workingDirectory,
             requestedPermission: preparedLaunch.explicitPermission,
             historyRecorder: launch.historyRecorder,
-            cliConnection: launch.cliConnection,
+            mcpConnection: launch.mcpConnection,
             accountCoordinator: accountCoordinator
         )
     }
@@ -844,7 +844,7 @@ public actor LocalACPClient {
                     params: .object([
                         "sessionId": .string(existingSessionID),
                         "cwd": .string(workingDirectory.path),
-                        "mcpServers": automationMCPServers(),
+                        "mcpServers": wovenMCPServers(),
                         "_meta": .object(try nativeConnectionMetadata()),
                     ])
                 )
@@ -935,16 +935,16 @@ public actor LocalACPClient {
     }
 
     private func nativeConnectionMetadata() throws -> [String: ACPJSONValue] {
-        guard let cliConnection else { return [:] }
-        return ["wovenToolsConnection": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(cliConnection))]
+        guard let mcpConnection else { return [:] }
+        return ["wovenMCPConnection": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(mcpConnection))]
     }
 
-    private func automationMCPServers() -> ACPJSONValue {
-        guard let cliConnection, runtimeKind != .defaultAgent, runtimeKind != .pi else { return .array([]) }
-        var env: [ACPJSONValue] = [.object(["name": .string("WOVENMATTER_CLI"), "value": .string(cliConnection.executablePath)])]
-        if let socket = cliConnection.socketPath { env.append(.object(["name": .string("WOVENMATTER_SOCKET"), "value": .string(socket)])) }
-        return .array([.object(["name": .string("woven-automation"), "command": .string(cliConnection.executablePath),
-            "args": .array([.string("mcp")]), "env": .array(env)])])
+    private func wovenMCPServers() -> ACPJSONValue {
+        guard let mcpConnection, runtimeKind != .defaultAgent else { return .array([]) }
+        return .array([.object(["type": .string("http"), "name": .string("woven"),
+            "url": .string(mcpConnection.endpointURL), "headers": .array([.object([
+                "name": .string("Authorization"), "value": .string("Bearer " + mcpConnection.bearerToken)
+            ])])])])
     }
 
     private func createSession(
@@ -954,7 +954,7 @@ public actor LocalACPClient {
     ) async throws -> LocalACPInitializedSession {
         var parameters: [String: ACPJSONValue] = [
             "cwd": .string(workingDirectory.path),
-            "mcpServers": automationMCPServers(),
+            "mcpServers": wovenMCPServers(),
         ]
         var metadata = try nativeConnectionMetadata()
         if let systemPrompt, !systemPrompt.isEmpty {
@@ -1228,8 +1228,8 @@ public actor LocalACPClient {
             var steeringMetadata: [String: ACPJSONValue] = [
                 "steering": .object(["idleBehavior": .string("promptRequired")]),
             ]
-            if let context = input.cliContext {
-                steeringMetadata["wovenTools"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))
+            if let context = input.mcpContext {
+                steeringMetadata["wovenMCP"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))
             }
             let promptBlocks = try Self.promptBlocks(input)
             let commandOnly = runtimeKind == .codex && Self.codexCommandCompletesWithoutTurn(
@@ -1309,9 +1309,9 @@ public actor LocalACPClient {
                     "sessionId": .string(sessionID),
                     "text": .string(input.transportText()),
                 ]
-                if let context = input.cliContext {
+                if let context = input.mcpContext {
                     params["_meta"] = .object([
-                        "wovenTools": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context)),
+                        "wovenMCP": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context)),
                     ])
                 }
                 _ = try await request(
@@ -1414,12 +1414,12 @@ public actor LocalACPClient {
             if runtimeKind == .defaultAgent || durableRemoteACP {
                 metadata["wovenRunID"] = .string(promptRunID)
                 metadata["wovenInputID"] = .string(UUID().uuidString.lowercased())
-                if let conversationID = input.cliContext?.sessionID {
+                if let conversationID = input.mcpContext?.sessionID {
                     metadata["wovenConversationID"] = .string(conversationID)
                 }
             }
-            if let context = input.cliContext {
-                metadata["wovenTools"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))
+            if let context = input.mcpContext {
+                metadata["wovenMCP"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))
             }
             response = try await beginRequest(
                 method: "session/prompt",
@@ -2402,7 +2402,16 @@ public actor LocalACPClient {
         guard !closed else { throw LocalACPClientError.processExited }
         if envelope.method == "session/prompt" { try Task.checkCancellation() }
         var data = try JSONEncoder().encode(envelope)
-        if runtimeKind != .defaultAgent { try await historyRecorder?("out", data) }
+        if runtimeKind != .defaultAgent {
+            var recorded = String(decoding: data, as: UTF8.self)
+            let privateTokens = [mcpConnection?.bearerToken,
+                envelope.params?["_meta"]?["wovenMCP"]?["bearerToken"]?.stringValue,
+                envelope.params?["_meta"]?["wovenMCPConnection"]?["bearerToken"]?.stringValue].compactMap { $0 }
+            for token in privateTokens where !token.isEmpty {
+                recorded = recorded.replacingOccurrences(of: token, with: "<woven-mcp-credential>")
+            }
+            try await historyRecorder?("out", Data(recorded.utf8))
+        }
         guard !closed else { throw LocalACPClientError.processExited }
         let isInput = ["session/prompt", "_session/steering", "_x.ai/interject"].contains(envelope.method ?? "")
         if isInput, Task.isCancelled || sessionCancellationRequested { throw LocalACPClientError.activeInputUnsupported }

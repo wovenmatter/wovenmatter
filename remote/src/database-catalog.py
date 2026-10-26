@@ -184,7 +184,7 @@ def operation(directory, request):
 
     except MemoryError as error:
         # Python raises MemoryError for SQLITE_NOMEM, outside sqlite3.Error.
-        # Keep the response bounded and useful to both HTTP and owner-local CLI callers.
+        # Keep the response bounded and useful to both native HTTP and owner-local MCP callers.
         raise ValueError('The query exceeded the SQLite memory limit. Try a smaller query.') from error
     finally:
         os.close(lock)

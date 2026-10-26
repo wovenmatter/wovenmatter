@@ -65,7 +65,7 @@ function validateSchedule(value) {
   return structuredClone(value)
 }
 
-export function createTaskGateway({ directory, execute, workspaceRoot, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, syncJournal = fsyncSync }) {
+export function createTaskGateway({ directory, execute, workspaceRoot, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, availableExecutionSlots=()=>Infinity, syncJournal = fsyncSync }) {
   mkdirSync(directory, { recursive:true, mode:0o700 })
   const path = resolve(directory, 'state.json')
   let state = read(path, { enabled:true, schedules:[], knownRuns:[], results:[], claims:{}, publicationIDs:[] })
@@ -197,7 +197,7 @@ export function createTaskGateway({ directory, execute, workspaceRoot, now = Dat
     active.set(id,job)
     job.completion = (async () => {
       try {
-        const result = await execute({ run:claim.run,nativeSessionID:claim.nativeSessionID,signal:controller.signal,publish:publishUpdate,bindSession })
+        const result = await execute({ run:claim.run,eventRevision:claim.eventRevision,nativeSessionID:claim.nativeSessionID,signal:controller.signal,publish:publishUpdate,bindSession })
         claim.result = result ?? null; claim.run.status = 'accepted'
       } catch (error) {
         if (error?.beforePrompt === true && error?.deferred === true) {
@@ -226,7 +226,7 @@ export function createTaskGateway({ directory, execute, workspaceRoot, now = Dat
   function tick() {
     if (closed || !state.enabled || disabling || state.requiresPublication) return
     for (const schedule of state.schedules) {
-      if (active.size >= maximumConcurrent) break
+      if (active.size >= maximumConcurrent||availableExecutionSlots()<=0) break
       if (schedule.retryAfter && Date.parse(schedule.retryAfter)>now()) continue
       if (schedule.nextFireAt == null || Date.parse(schedule.nextFireAt) > now()) continue
       if ([...active.values()].some(job => job.eventID === schedule.id)) continue

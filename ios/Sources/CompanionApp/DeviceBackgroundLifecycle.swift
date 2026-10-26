@@ -70,7 +70,7 @@ extension CompanionModel {
   func beginFallbackExecutionBackgroundTask() {
     guard !fixture, !isolatedTestHost, UIApplication.shared.applicationState == .background,
           backgroundTaskID == .invalid,
-          (DeviceCLIExecutorJobs.hasUncontinuedJobs { self.hasDeviceContinuation($0) } || executionRecords.values.contains(where: { record in
+          (DeviceMCPExecutorJobs.hasUncontinuedJobs { self.hasDeviceContinuation($0) } || executionRecords.values.contains(where: { record in
             guard let runID = record.runID, ["running", "stopping"].contains(record.status), localRuntimes[record.id] != nil else { return false }
             return !deviceBackgroundExecution.isContinuing(conversationID: record.id, runID: runID)
           })) else { return }
@@ -79,7 +79,7 @@ extension CompanionModel {
     backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "Save Pi Durable progress") { [weak self] in
       Task { @MainActor [weak self] in
         guard let self, self.backgroundFallbackToken == token else { return }
-        DeviceCLIExecutorJobs.cancelWithoutContinuation { self.hasDeviceContinuation($0) }
+        DeviceMCPExecutorJobs.cancelWithoutContinuation { self.hasDeviceContinuation($0) }
         // Capture exact identities before the first await; a newly resumed runtime is unrelated.
         let runs = self.executionRecords.values.compactMap { record -> (String, String, String, PiDurableRuntime)? in
           guard let runID = record.runID, let runtime = self.localRuntimes[record.id],
@@ -106,7 +106,7 @@ extension CompanionModel {
   }
 
   func endIdleExecutionBackgroundTask() {
-    if !DeviceCLIExecutorJobs.hasUncontinuedJobs({ self.hasDeviceContinuation($0) }) && !executionRecords.values.contains(where: { $0.runID != nil && ["running", "stopping"].contains($0.status) }) {
+    if !DeviceMCPExecutorJobs.hasUncontinuedJobs({ self.hasDeviceContinuation($0) }) && !executionRecords.values.contains(where: { $0.runID != nil && ["running", "stopping"].contains($0.status) }) {
       endExecutionBackgroundTask()
     }
   }

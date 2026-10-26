@@ -56,9 +56,10 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   stable Peekaboo release lifts it; check both releases during each maintenance
   scan. Local automation tests and native compilation validate this graph;
   Accessibility permission and real desktop input still need manual acceptance.
-- **MCP TypeScript SDK** uses the current v2 client and server packages. The
-  automation stdio server and Executor Streamable HTTP client migrate together;
-  validate cancellation across both real transports with provider-free fixtures.
+- **MCP TypeScript SDK** uses the current v2 client and server packages. Woven MCP and
+  Executor use the supported Streamable HTTP client, with the shared native MCP
+  protocol core serving the same focused schemas on Mac, Linux and iOS adapters;
+  validate authentication, cancellation and inline results with provider-free fixtures.
   Executor forms without a declared schema dialect retain their prior draft-07
   validation semantics; explicit newer dialects remain supported and tested.
 - **Pi family and Chord** must resolve to one release, because the desktop

@@ -64,9 +64,9 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(goal.sessionID, id)
     XCTAssertTrue(model.localRuntimes.isEmpty)
     let requestID = UUID().uuidString
-    let arguments = ["goals", "checkpoint", "--id", goal.id, "--evidence", "Verified a change", "--request-id", requestID]
-    let first = try await model.performDeviceCLI(arguments: arguments, conversationID: id, requestID: requestID)
-    let retry = try await model.performDeviceCLI(arguments: arguments, conversationID: id, requestID: requestID)
+    let arguments: [String: GatewayJSONValue] = ["id": .string(goal.id), "evidence": .string("Verified a change"), "requestID": .string(requestID)]
+    let first = try await model.performDeviceMCP(name: "woven_goals_checkpoint", arguments: arguments, conversationID: id, requestID: requestID)
+    let retry = try await model.performDeviceMCP(name: "woven_goals_checkpoint", arguments: arguments, conversationID: id, requestID: requestID)
     XCTAssertEqual(first, retry)
     XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.progressRevision, 1)
     XCTAssertTrue(model.localPending.isEmpty, "Goal evidence does not require approval for an external effect")
@@ -323,7 +323,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(explicit.thinking(for: descriptor), "off")
   }
 
-  @MainActor func testToolAccessGatesOnlyCLIAndItsLegacyNoteAliases() async throws {
+  @MainActor func testToolAccessUsesFocusedMCPAndMigratesSavedSelectionsWithoutExpansion() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
@@ -333,25 +333,31 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionRecords[record.id] = record
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
-    XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command"]))
-    XCTAssertEqual(names.filter { $0.hasPrefix("wovenmatter_") }, ["wovenmatter_goals"])
+    XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command", "woven_goals_get"]))
+    XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
     XCTAssertFalse(names.contains("read_note"))
+    XCTAssertFalse(names.contains("woven_notes_read"))
     let context = try model.deviceToolContext(conversationID: record.id)
     XCTAssertEqual(context.enabled, [.goals])
-    for name in ["wovenmatter_calendar", "read_note"] {
+    for name in ["woven_calendar_list", "woven_notes_read"] {
       do {
         _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
         XCTFail("Disabled app-data access was accepted")
       } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
     }
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["wovenmatter_notes"]))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_browser", selection: nil))
-    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: nil))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: ["wovenmatter_computer"]))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["read_note"]))
-    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_notes", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.filter { $0 != .goals }.map { "wovenmatter_" + $0.rawValue }))
-    XCTAssertTrue(CompanionModel.deviceCLITools.contains { $0["name"] as? String == "wovenmatter_goals" })
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["wovenmatter_notes"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_browser", selection: nil))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_computer", selection: ["wovenmatter_computer"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["read_note"]))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_notes_create", selection: ["read_note"]))
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.allCases.filter { $0 != .goals }.map { "woven_" + $0.rawValue }))
+    XCTAssertTrue(CompanionModel.deviceMCPTools.contains { $0["name"] as? String == "woven_goals_get" })
+    for tool in CompanionModel.deviceMCPTools {
+      let schema = try XCTUnwrap(tool["parameters"] as? [String: Any])
+      let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+      XCTAssertNil(properties["arguments"], "Focused tools must not expose argv")
+    }
   }
 
   @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {

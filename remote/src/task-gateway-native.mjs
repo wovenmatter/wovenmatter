@@ -1,7 +1,6 @@
-import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
 import { createTaskNativeArchive, publishNativePresentation } from './task-native-archive.mjs'
@@ -24,7 +23,7 @@ export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest
   }
 }
 
-async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,cliContext}) {
+async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,mcpConnection}) {
   const permission=config.permission
   if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
@@ -40,13 +39,14 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     let session=(await call(nativeSessionID?'GET':'POST',nativeSessionID?`/api/session/${encodeURIComponent(sessionID)}`:'/api/session',nativeSessionID?undefined:{id:sessionID,title:run.title,location:{directory:cwd,...(config.nativeWorkspaceID?{workspaceID:config.nativeWorkspaceID}:{})},metadata:{wovenmatter:{origin:'created'}}})).data
     if(session?.id!==sessionID)throw before('OpenCode did not confirm the recurring session identity.')
     const path='/api/session/'+encodeURIComponent(sessionID)
-    bindSession(sessionID)
-    // Bind only this Woven task to the owner-local CLI. Its databases stay
-    // writable when the Mac's connected-session bridge is unavailable.
-    const query = new URLSearchParams({'location[directory]': cwd})
-    await call('POST', '/api/rpc/wovenmatter-cli/connect?' + query, {input: {
-      sessionID, context: cliContext ?? {executablePath: fileURLToPath(new URL('./wovenmatter', import.meta.url)), captureID: ''},
-    }})
+    await bindSession(sessionID)
+    if(mcpConnection) {
+      const query=new URLSearchParams({'location[directory]':cwd})
+      const proxy=(await call('POST','/api/rpc/woven-mcp/connect?'+query,{input:{sessionID,context:mcpConnection}})).data
+      if(!proxy||typeof proxy.endpointURL!=='string'||typeof proxy.bearerToken!=='string')throw before('OpenCode did not confirm its Woven MCP connection.')
+      const name='woven_'+createHash('sha256').update(sessionID).digest('hex').slice(0,16)
+      await call('PUT','/api/experimental/mcp/'+name+'?'+query,{config:{type:'remote',url:proxy.endpointURL,headers:{Authorization:'Bearer '+proxy.bearerToken},oauth:false,codemode:false}})
+    }
     if(config.model||config.thinking){const model=config.model??[session.model?.providerID,session.model?.id].filter(Boolean).join('/'),split=model.indexOf('/');if(split<1)throw before('The saved OpenCode model is invalid.');const selection={providerID:model.slice(0,split),id:model.slice(split+1),...(config.thinking&&config.thinking!=='default'?{variant:config.thinking}:{})};await call('POST',path+'/model',{model:selection});session=(await call('GET',path)).data;if(session.model?.id!==selection.id||session.model?.providerID!==selection.providerID||(session.model?.variant??'default')!==(selection.variant??'default'))throw before('OpenCode did not confirm the saved model and thinking level.')}
     if (permission) {
       const rules = [...(session.permissions ?? [])]
@@ -88,7 +88,7 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     if(active[sessionID])throw before('The recurring OpenCode task is already running.')
     if(signal.aborted)throw before('Background execution was turned off.')
     accepted=true
-    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[],...(cliContext?{metadata:{wovenTools:cliContext}}:{})})
+    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[],...(mcpConnection?{metadata:{wovenMCP:{captureID:mcpConnection.captureID??''}}}:{})})
     if(receipt.data?.id!==messageID)throw new Error('OpenCode did not acknowledge the task prompt. Check its session before retrying.')
     let observed=false, presentedText
     const presentedActivities=new Map()

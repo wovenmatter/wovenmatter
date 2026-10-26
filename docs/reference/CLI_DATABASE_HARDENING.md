@@ -1,4 +1,8 @@
-# CLI and database hardening
+# Historical CLI and database hardening audit
+
+This records the earlier CLI implementation and its PR85/PR86 validation. Woven
+MCP now replaces that public transport; current tool names, authentication, and
+retry behavior are documented in [agent tools](../AGENT_TOOLS.md).
 
 PR85 depends on PR86's asynchronous database boundary. Land PR86 first, then
 PR85. The SQL implementations run on `WorkspaceDatabaseConnection`; app callers

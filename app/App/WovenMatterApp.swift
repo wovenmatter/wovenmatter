@@ -367,7 +367,7 @@ enum WovenMatterEntryPoint {
         }
         // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
         // Install CEF's required AppKit subclass first, without loading Chromium.
-        if !CommandLine.arguments.contains("--wovenmatter-cli"), LocalExecutionRole.current != .backend {
+        if LocalExecutionRole.current != .backend {
             WMBrowserRuntime.prepareApplication()
         }
         WovenMatterApp.main()
@@ -382,12 +382,7 @@ struct WovenMatterApp: App {
     @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
 
     init() {
-        if let commandIndex = CommandLine.arguments.firstIndex(of: "--wovenmatter-cli") {
-            Darwin.exit(WovenMatterCommandLine.run(
-                arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),
-                environment: ProcessInfo.processInfo.environment
-            ))
-        }
+
         let environment = ProcessInfo.processInfo.environment
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil

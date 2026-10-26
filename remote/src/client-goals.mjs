@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 const fail = message => Object.assign(new Error(message), {statusCode:409})
 const now = () => (Date.now()/1000)-978307200 // Swift Codable Date
-export const goalGuidance = '\n<wovenmatter-goals>\nWhen the user explicitly requests a goal, use `wovenmatter goals set --objective TEXT --request-id UUID`. Read `wovenmatter goals get`. Report verified completion with complete, useful unfinished progress with checkpoint, and blockers with block; supply --id, --evidence and a stable --request-id. Never complete because a turn or budget ended. Set, pause, resume and clear only when requested. Do not start a provider-native goal loop.\n</wovenmatter-goals>'
-export const goalPrompt = goal => `Continue the Woven Matter goal in this conversation:\n${goal.objective}\n\nGoal ID: ${goal.id}\nRead wovenmatter goals get. Respect new user instructions and existing permissions. Before ending, run wovenmatter goals complete --id ${goal.id} --evidence 'verification results' --request-id UUID if achieved; otherwise checkpoint with evidence of useful progress and the next step, or block with the blocker. Never mark complete because a turn or budget ended. Pause, resume, clear and set only when requested.`
+export const goalGuidance = '\n<wovenmatter-goals>\nWhen the user explicitly requests a goal, use `woven_goals_set` with objective and a stable requestID. Read `woven_goals_get`. Report verified completion with complete, useful unfinished progress with checkpoint, and blockers with block; supply id, evidence and a stable requestID. Never complete because a turn or budget ended. Set, pause, resume and clear only when requested. Do not start a provider-native goal loop.\n</wovenmatter-goals>'
+export const goalPrompt = goal => `Continue the Woven Matter goal in this conversation:\n${goal.objective}\n\nGoal ID: ${goal.id}\nRead woven_goals_get. Respect new user instructions and existing permissions. Before ending, call woven_goals_complete with id ${goal.id}, evidence describing verification results, and a stable requestID if achieved; otherwise checkpoint with evidence of useful progress and the next step, or block with the blocker. Never mark complete because a turn or budget ended. Pause, resume, clear and set only when requested.`
 // Dates use the same reference epoch as Swift Codable Date.
 export function setGoalStatus(goal, status, at = now()) {
   if (goal.status === status) return
@@ -74,13 +74,3 @@ export const goalUsageUnavailable = (record,currentRunID) =>
   ((record.goalBaseCompletedTurns??0)>0&&record.goalBaseTokensUsed==null)
   || Object.entries(record.goalRuns??{}).some(([id,run])=>id!==currentRunID&&run.tokens==null)
 export const budgetReached = goal => (goal.turnBudget!=null&&goal.completedTurns>=goal.turnBudget)||(goal.tokenBudget!=null&&(goal.tokensUsed??0)>=goal.tokenBudget)
-export function goalCLI(arguments_) {
-  if(!Array.isArray(arguments_)||arguments_[0]!=='goals')throw fail('Expected a goals command.')
-  const action=arguments_[1],options={}
-  for(let i=2;i<arguments_.length;i+=2){if(!arguments_[i]?.startsWith('--')||typeof arguments_[i+1]!=='string'||options[arguments_[i].slice(2)]!=null)throw fail('Invalid goal options.');options[arguments_[i].slice(2)]=arguments_[i+1]}
-  if(action==='get')return {action,requestID:options['request-id']}
-  const payload={id:options.id,evidence:options.evidence,objective:options.objective}
-  for(const [key,field] of [['token-budget','tokenBudget'],['turn-budget','turnBudget']])if(options[key]!=null)payload[field]=Number(options[key])
-  if(!/^[0-9a-f-]{36}$/i.test(options['request-id']??''))throw fail('Goal mutations require a stable UUID request ID.')
-  return {action,requestID:options['request-id'],mutation:{[action]:payload}}
-}

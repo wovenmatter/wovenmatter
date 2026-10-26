@@ -71,9 +71,10 @@ const durableACP = createDurableACP({ catalog, workspaceRoot,
 const taskGateway = runningAsService ? createTaskGateway({
   workspaceRoot,
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
+  availableExecutionSlots:()=>clientExecution.mcp.settings().maximumRunningSessions-clientExecution.runningSessionCount()-taskGateway.status().activeRuns,
   execute:createTaskExecutor({catalog,workspaceRoot,
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
-    defaultAgent,instances,
+    defaultAgent,instances,prepareMCP:context=>clientExecution.prepareTaskMCP(context),
     isEnabled:id => maintenance.isEnabled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
@@ -81,6 +82,7 @@ const taskGateway = runningAsService ? createTaskGateway({
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
   publisherKey: apiToken,
+  mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
@@ -96,6 +98,26 @@ const server = createServer(async (request, response) => {
   try {
     const administrator = authorized(request)
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+    if (url.pathname === '/mcp') {
+      const principal=clientExecution?.mcp.resolvePrincipal(request.headers.authorization)
+      if(!principal){response.writeHead(401,{'content-type':'application/json','cache-control':'no-store','www-authenticate':'Bearer'});response.end(JSON.stringify({error:'invalid_mcp_credential'}));return}
+      if(request.method!=='POST'){response.writeHead(405,{allow:'POST','cache-control':'no-store'});response.end();return}
+      if(request.headers.origin) {
+        let permitted=false
+        try {permitted=new URL(request.headers.origin).host===request.headers.host} catch {}
+        if(!permitted)return json(response,403,{error:'invalid_origin'})
+      }
+      if(!request.headers['content-type']?.toLowerCase().startsWith('application/json'))return json(response,415,{error:'json_required'})
+      const protocol=request.headers['mcp-protocol-version']
+      if(protocol&&!['2025-11-25','2025-06-18','2025-03-26'].includes(protocol))return json(response,400,{error:'unsupported_mcp_protocol'})
+      const controller=new AbortController(),disconnected=()=>{if(!response.writableEnded)controller.abort()}
+      response.once('close',disconnected)
+      try {
+        const result=await clientExecution.mcp.handle(principal,await readJSON(request,4*1024*1024),{signal:controller.signal})
+        if(result===null){response.writeHead(202,{'cache-control':'no-store'});response.end();return}
+        return json(response,200,result)
+      } finally {response.removeListener('close',disconnected)}
+    }
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
     const device = clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
@@ -106,6 +128,27 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,201,clientExecution.provision(await readJSON(request)))
+    }
+    if(url.pathname==='/v1/execution/mcp-settings') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      if(request.method==='GET')return json(response,200,clientExecution.mcp.settings())
+      if(request.method==='POST')return json(response,200,clientExecution.mcp.configureSettings(await readJSON(request)))
+    }
+    if (url.pathname === '/v1/execution/mcp-library') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      if(request.method==='GET')return json(response,200,clientExecution.mcp.libraryStatus())
+      if(request.method==='POST')return json(response,200,clientExecution.mcp.configureLibrary(await readJSON(request)))
+      if(request.method==='DELETE')return json(response,200,clientExecution.mcp.clearLibrary())
+    }
+    if (url.pathname === '/v1/mcp/clients') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      if(request.method==='GET')return json(response,200,{clients:clientExecution.mcp.clients()})
+      if(request.method==='POST')return json(response,201,clientExecution.mcp.provisionClient(await readJSON(request)))
+    }
+    const revokeMCP=url.pathname.match(/^\/v1\/mcp\/clients\/([0-9a-f-]+)$/)
+    if(revokeMCP&&request.method==='DELETE') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      return json(response,200,clientExecution.mcp.revokeClient(revokeMCP[1]))
     }
     if (url.pathname === '/v1/execution/publisher') {
       if (!administrator) return json(response,403,{error:'administrator_required'})

@@ -1,7 +1,7 @@
 # Woven Matter documentation
 
-WovenMatter brings eight harnesses together in one interface, with shared agent
-workspaces and a central work history. Use these guides to set up your harnesses,
+WovenMatter brings Pi Durable, Codex, Claude Code, Grok Build, and OpenCode
+together in one interface, with shared agent workspaces and a central work history. Use these guides to set up your harnesses,
 work across sessions, and organize your conversations, notes, and data.
 
 ## Get started

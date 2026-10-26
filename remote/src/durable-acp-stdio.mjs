@@ -41,8 +41,8 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
         if (!attachmentToken && !['initialize', 'session/load'].includes(message.method)) {
           throw new Error('Update the workspace service and reconnect before sending messages; this service cannot fence replaced attachments.')
         }
-        const cliConnection = message.params?._meta?.wovenToolsConnection
-        if (cliConnection) await call('cli', { context: cliConnection, attachmentToken })
+        const mcpConnection = message.params?._meta?.wovenMCPConnection
+        if (mcpConnection) await call('mcp', { context: mcpConnection, attachmentToken })
         if (message.method === 'initialize' && state.initialized) {
           await write({ jsonrpc: '2.0', id: message.id, result: state.initialized }); return
         }

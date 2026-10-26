@@ -17,15 +17,13 @@ No credentials or Keychain values are returned to the presentation layer.
 | --- | --- | --- |
 | OpenRouter usage key | Attributes-only presence checks; noninteractive secret reads; successful reads cached for the session and used by limits; device analytics does not read credentials | Saving/removing the key stays silent; General recovery may authorize access |
 | Claude subscriptions | Usage reads the saved Pi Durable profile; native Claude owns its credential permissions | Sign-in lives in Pi Durable and Usage settings; General does not probe unrelated native profiles |
-| OpenClaw device identity/token | Cached by gateway scope; unchanged tokens are not rewritten; reads and token updates suppress UI; failures stop reconnect retries and remain blocked until explicit recovery | General recovery; Link/Reconnect/Restart stays noninteractive |
 | Remote workspace API token | Cached by workspace; noninteractive on service calls; denied reads are not repeated; disabling access clears the cache | General recovery; provisioning, reconnect and deletion stay noninteractive |
 | Codex/Grok usage limits | Saved account API reads only; no native CLI fallback during refresh | Account management lives in Usage settings; the limits page has no authentication controls |
 | Browser encryption key and website passwords | Consent-gated, noninteractive preflight before CEF starts; exact-origin password vault cached in memory; writes suppress UI | General recovery preauthorizes Chromium Safe Storage and the website-password vault |
 | Local runtime readiness | Startup, reopen, Settings, and passive refresh resolve installed executables without starting credential-sensitive provider sessions | Installed harnesses are available without an Enable step; explicit Sign in opens only the chosen native CLI flow |
 | Codex title options | No automatic session solely to discover models | Existing Refresh options action |
 
-OpenCode service registration and local OpenClaw
-configuration/SQLite credential resolution do not call Keychain. Existing
+OpenCode service registration does not call Keychain. Existing
 user-enabled service restoration and actual conversation runs can start external
 provider processes; those processes own their own credential storage and system
 permissions. Woven Matter's process-local suppression does not control another
@@ -56,10 +54,9 @@ bundled Chromium build. Website passwords use a separate Keychain item under
 context, snapshots, diagnostics, defaults or plaintext files. Dev and production
 have separate password vaults as well as separate Chromium profiles.
 
-A denied read is different from a missing item: it must never generate a new
-OpenClaw identity, erase a token, or imply that a user needs a replacement key.
-Failed OpenClaw token persistence retains the pending identity/token for one
-explicit retry. Credential values are never written to diagnostics. Tests use
+A denied read is different from a missing item: it must never erase a token or
+imply that a user needs a replacement key. Credential values are never written
+to diagnostics. Tests use
 in-memory operations and synthetic credentials rather than the user's Keychain.
 
 ## Development builds
@@ -88,8 +85,8 @@ Apple references: [Code signing requirements](https://developer.apple.com/docume
 
 Provider-free regression suites cover read/write suppression and policy
 restoration, denied/missing credentials, concurrent operations, last-good usage
-retention, one-time authorization reuse, OpenClaw identity preservation and
-unchanged-token writes, remote-token caching, provider-scoped CLI fallback, and
+retention, one-time authorization reuse, remote-token caching, provider-scoped
+CLI fallback, and
 passive runtime discovery. `scripts/test-dev-signing.sh` verifies certificate
 selection, persistence, ambiguity handling, and failure without identity
 downgrade using fake tools. The normal full test command also builds and

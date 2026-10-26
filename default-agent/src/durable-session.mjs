@@ -4,11 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { SessionCLIContext } from './cli-context.mjs';
+import { SessionMCPContext } from './mcp-context.mjs';
 import { ownNativeStore } from './native-owner.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
-import { createCodingTools, createBashTool, createGrepTool, createFindTool, createLsTool, createCodemodeExtension, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { createCodingTools, createGrepTool, createFindTool, createLsTool, createCodemodeExtension, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section, watchEvents } from '@earendil-works/pi-durable';
 import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
 import { DefaultAgentError, accessFailure, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
@@ -22,7 +22,7 @@ import { createNativeCompactionRegistry } from './native-compaction-registry.mjs
 import { createSubagentContext } from './subagent-context.mjs';
 import { ChildContext, Subagents, createSubagents } from './subagents.mjs';
 import { reportProgramStatus } from './program-status.mjs';
-import { automationTools } from './automation-tools.mjs';
+import { WovenMCPClient, wovenMCPTools } from './woven-mcp.mjs';
 import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 
 const context = BACKGROUND_CONTEXT;
@@ -55,7 +55,7 @@ export async function openDurableSession(engine, id, requested) {
     const archiveStore = await openNativeArchive(archivePath);
     const archiveIDs = archiveStore.identities;
     const pendingArchiveIDs = new Set();
-    record = { cli: new SessionCLIContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, archivePath, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
+    record = { mcp: new SessionMCPContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, archivePath, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
     const batch = records => ({ schemaVersion: 1, sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
     record.nativeRoot = root;
     record.nativeContext = context;
@@ -72,7 +72,7 @@ export async function openDurableSession(engine, id, requested) {
         if (!metadata || metadata.parentConversationID !== record.conversation.id) throw new DefaultAgentError('This child does not belong to the current Pi Durable conversation.');
         const child = await record.harness.conversation(conversationID, context);
         if (!child) throw new DefaultAgentError('This native child conversation is unavailable.');
-        const scope = createSubagentContext(record, engine, { conversation: child, sessionID: metadata.sessionID, model: await engine.ensureModel(`${metadata.provider}/${metadata.modelId}`, metadata.selectedModel), accountID: metadata.accountID, thinkingLevel: metadata.thinking, runID: metadata.runID, cli: childBindings.get(conversationID) ?? new SessionCLIContext().fork(), appendArchive: items => record.appendArchive(scopedArchive({ conversation: child, runID: metadata.runID }, items)), reportUsage: usage => record.reportUsage?.(usage) }, context);
+        const scope = createSubagentContext(record, engine, { conversation: child, sessionID: metadata.sessionID, model: await engine.ensureModel(`${metadata.provider}/${metadata.modelId}`, metadata.selectedModel), accountID: metadata.accountID, thinkingLevel: metadata.thinking, runID: metadata.runID, mcp: childBindings.get(conversationID) ?? SessionMCPContext.restore(metadata.mcpOrigin, () => record.mcp.discoveryConnection()), appendArchive: items => record.appendArchive(scopedArchive({ conversation: child, runID: metadata.runID }, items)), reportUsage: usage => record.reportUsage?.(usage) }, context);
         scope.connectionPin = metadata;
         return scope;
       })());
@@ -194,7 +194,7 @@ export async function openDurableSession(engine, id, requested) {
         const messages = change.type === 'entry' ? change.value.model : undefined;
         // Binding advances on native input placement, before any dependent tool
         // task can start. Queued steering has no pi.user entry until consumed.
-        if (isRoot && change.type === 'entry' && change.value.kind === 'pi.user' && !reportEntries.has(change.value.id)) record.cli.consumed();
+        if (isRoot && change.type === 'entry' && change.value.kind === 'pi.user' && !reportEntries.has(change.value.id)) record.mcp.consumed();
         if (isRoot) for (const message of messages ?? []) if (message.role === 'assistant') { if (message.stopReason === 'error') record.lastError = message.errorMessage; if (message.content?.some(b => b.type === 'toolCall' || b.text || b.thinking)) record.nativeVisible = true; }
         if (child) for (const message of messages ?? []) if (message.role === 'assistant' && message.usage) record.reportUsage?.(message.usage);
         if (isRoot && change.type === 'document' && change.record.kind === 'pi.live' && change.value?.generation?.message?.content?.some(b => b.text || b.thinking)) record.nativeVisible = true;
@@ -241,21 +241,14 @@ export async function openDurableSession(engine, id, requested) {
     const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => {
       const provider = engine.config.searchProvider;
       return { provider, key: (await engine.credentials.read(provider))?.key };
-    }), checklistTool,
-      ...automationTools(() => (toolScopes.getStore() ?? record).cli.environment(process.env))];
-    record.ordinaryTools.push('browser', 'computer');
+    }), checklistTool];
+    const ordinaryCount = tools.length;
+    const mcpClient = new WovenMCPClient();
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
-    const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
+    const adaptTool = tool => ({ ...tool, replay: tool.replay ?? (['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe'), execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
-      const env = scope.cli.environment(process.env);
-      for (const key of ['PI_SESSION_FILE', 'PI_SESSION_ID', 'PI_PROVIDER', 'PI_MODEL', 'PI_REASONING_LEVEL']) delete env[key];
-      const boundTool = tool.name === 'bash' ? createBashTool(cwd, { spawnHook: context => {
-        const nativeEnv = { ...context.env };
-        for (const key of ['WOVENMATTER_CONTEXT_ID', 'WOVENMATTER_NOTE_ID', 'WOVENMATTER_SOCKET', 'WOVENMATTER_CLI']) delete nativeEnv[key];
-        return { ...context, env: { ...nativeEnv, ...env } };
-      } }) : tool;
       let output = '', detailsError, detailsQueue = Promise.resolve();
-      const result = await toolScopes.run(scope, () => boundTool.execute(api.callId, args, ctx.abortSignal, update => {
+      const result = await toolScopes.run(scope, () => tool.execute(api.callId, args, ctx.abortSignal, update => {
         const snapshot = textOf([{ content: update.content }]);
         if (snapshot.startsWith(output)) api.output(snapshot.slice(output.length));
         output = snapshot;
@@ -270,7 +263,8 @@ export async function openDurableSession(engine, id, requested) {
       // Preserve the classic coding-tool result for retained 1.1 generations;
       // Durable 1.2 reads the same model-visible blocks from output.
       return { ...result, output: result.content ?? [], ...(result.structuredContent === undefined ? {} : { details: { ...result.details, structuredContent: result.structuredContent } }) };
-    } }));
+    } });
+    const adapted = tools.map(adaptTool);
     const codeTool = { ...codemode, description: 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: ' + tools.map(t => t.name + ': ' + t.description).join('\n'), replay: 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId), conversation = scope.conversation;
       if (scope.codeModeState.value === 'off') throw new DefaultAgentError('Code mode is disabled.');
@@ -331,7 +325,7 @@ export async function openDurableSession(engine, id, requested) {
     } };
     record.subagents = createSubagents({ record, engine, context, allTools: () => [...adapted, codeTool], send,
       getTrustedInstructions: () => [...(record.userInstructions ?? []), ...loader.getAgentsFiles().agentsFiles.map(file => file.content)],
-      onSpawn: (metadata, conversationID) => { childBindings.set(conversationID, record.cli.fork()); childMetadata.set(conversationID, metadata); scopes.delete(conversationID); },
+      onSpawn: (metadata, conversationID) => { childBindings.set(conversationID, SessionMCPContext.restore(metadata.mcpOrigin, () => record.mcp.discoveryConnection())); childMetadata.set(conversationID, metadata); scopes.delete(conversationID); },
     });
     record.ordinaryTools.push(record.subagents.tool.name);
     codeTool.description += '\nFor parent conversations only, ' + record.subagents.tool.name + ': ' + record.subagents.tool.description;
@@ -357,6 +351,25 @@ export async function openDurableSession(engine, id, requested) {
         } catch (error) { if (ctx.abortSignal.aborted) throw error; scope.nativeContextFailure = safeNativeFailure(error); return undefined; }
       } } },
     ], sections: [section('woven', () => wovenInstructions, { tag: false }), section('workspace', () => loader.getAgentsFiles().agentsFiles.map(f => f.content).join('\n\n'), { tag: false })] }));
+    let mcpDiscoveryIdentity;
+    record.refreshMCPTools = async (connection, { force = false } = {}) => {
+      if (!connection) return;
+      const identity = JSON.stringify([connection.endpointURL, connection.bearerToken]);
+      if (!force && identity === mcpDiscoveryIdentity) return;
+      const definitions = await mcpClient.listTools(connection);
+      const discovered = wovenMCPTools(definitions, mcpClient, () => (toolScopes.getStore() ?? record).mcp.connection());
+      tools.splice(ordinaryCount, tools.length - ordinaryCount, ...discovered);
+      adapted.splice(ordinaryCount, adapted.length - ordinaryCount, ...discovered.map(adaptTool));
+      registry.install(defineExtension({ name: 'woven-mcp', tools: adapted.slice(ordinaryCount) }));
+      record.ordinaryTools.splice(ordinaryCount, record.ordinaryTools.length - ordinaryCount,
+        record.subagents.tool.name, ...discovered.map(tool => tool.name));
+      codeTool.description = 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: '
+        + tools.map(tool => tool.name + ': ' + tool.description).join('\n')
+        + '\nFor parent conversations only, ' + record.subagents.tool.name + ': ' + record.subagents.tool.description;
+      mcpDiscoveryIdentity = identity;
+      engine.normalizeSelection(record);
+      await record.configurationQueue;
+    };
     record.subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener); };
     record.reportUsage = usage => { for (const listener of listeners) listener({ usage }); };
     const session = { sessionId: sessionID, thinkingLevel: options.thinking ?? 'medium', messages: [],
@@ -371,6 +384,7 @@ export async function openDurableSession(engine, id, requested) {
         // lock or prevent the remaining resources from shutting down.
         for (const close of [
           () => record.configurationQueue,
+          () => mcpClient.close(),
           () => record.subagents.dispose(),
           () => eventStream?.stop(),
           () => harness.close(context),

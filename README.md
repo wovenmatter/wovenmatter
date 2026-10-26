@@ -93,6 +93,13 @@ Agents can also read and edit a note you're working on through Woven Matter's
 note tools. This gives longer responses and reference material a place beside
 the chat, where you can keep reading without scrolling back through messages.
 
+Woven MCP exposes focused app tools over authenticated HTTP. Supported harnesses
+receive session-scoped access automatically. You can also grant an outside agent
+access to a chosen conversation and tool groups, then revoke that access in Woven.
+The same permissions govern notes, orchestration, calendar, Executor, and embedded
+browser tools across local Macs, connected workspaces, and the iPhone app. See
+[agent tools and access](docs/AGENT_TOOLS.md).
+
 Managed SQLite databases let agents curate data that you can revisit in live
 note tables and values, spreadsheets, and HTML artifacts. Each database has one
 writable workspace owner; the Mac keeps complete readable replicas of remote

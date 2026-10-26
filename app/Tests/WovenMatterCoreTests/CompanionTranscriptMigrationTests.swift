@@ -5,6 +5,25 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct CompanionTranscriptMigrationTests {
+  @Test func executionOwnerAgentProvenanceReachesNativeMessagePresentation() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let source = UUID().uuidString.lowercased()
+    let message = CompanionMessage(id: UUID().uuidString.lowercased(), conversationID: fixture.conversationID,
+      role: "user", content: "Inspect the result", agentSourceID: source, isAgentAuthored: true,
+      senderSessionTitle: "Coordinator", senderHarness: "default_agent", senderKind: "notification")
+    let transcript = CompanionTranscript(conversationID: fixture.conversationID, messages: [message])
+    try await fixture.ingest([fixture.entry(transcript, sequence: 2)])
+    let mirrored = try #require(try await fixture.database.companionFederatedTranscript(conversationID: fixture.conversationID))
+    #expect(mirrored.messages.first == message)
+    let content = try await fixture.database.conversationContent(id: fixture.conversationID)
+    let native = try #require(content.messages.first)
+    #expect(native.senderSessionID == source)
+    #expect(native.senderSessionTitle == "Coordinator")
+    #expect(native.senderAgent == "default_agent")
+    #expect(native.senderKind == .notification)
+    var changed = transcript; changed.messages[0].agentSourceID = UUID().uuidString.lowercased()
+    await #expect(throws: (any Error).self) { try await fixture.ingest([fixture.entry(changed, sequence: 3)]) }
+  }
 
   @Test func nativeMigrationCannotHideUserTextOrReassignAnEstablishedRun() async throws {
     let fixture = try await Fixture()
