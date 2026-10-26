@@ -257,9 +257,9 @@ final class ExecutionRoutingTests: XCTestCase {
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
     var other = record; other.id = "second"
     model.executionRecords = [record.id: record, other.id: other]; model.selectedConversationID = record.id
-    try await model.configureDeviceChat(thinking: "high", permission: .full, tools: ["read_note"])
+    try await model.configureDeviceChat(thinking: "high", permission: .full, tools: ["woven_notes_read"])
     XCTAssertEqual(model.executionRecords[record.id]?.thinkingLevel, "high")
-    XCTAssertEqual(model.executionRecords[record.id]?.enabledTools, ["read_note"])
+    XCTAssertEqual(model.executionRecords[record.id]?.enabledTools, ["woven_notes_read"])
     XCTAssertEqual(model.executionRecords[other.id], other)
     XCTAssertEqual(model.inferenceConnections, [connection])
     let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: root.appendingPathComponent("execution/preferences.json")))
@@ -285,7 +285,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let descriptor = InferenceModel(id: "existing-model", name: "Saved model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
     let connection = InferenceConnection(id: "saved", name: "Saved key", provider: "openai", route: .direct, modelID: descriptor.id, selectedModel: descriptor)
     model.inferenceConnections = [connection]
-    let record = DeviceConversationRecord(id: "existing", title: "Existing", enabledTools: ["read_note"], additionalInstructions: "Original instructions",
+    let record = DeviceConversationRecord(id: "existing", title: "Existing", enabledTools: ["woven_notes_read"], additionalInstructions: "Original instructions",
       connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
     model.executionRecords = [record.id: record]; model.selectedConversationID = record.id
     let defaults = DeviceAgentDefaults(thinkingLevel: "high", instructions: "New conversations only", enabledTools: [])
@@ -423,7 +423,7 @@ final class ExecutionRoutingTests: XCTestCase {
     var edited = original
     edited.content = "New local text"
     XCTAssertEqual(original.revision, edited.revision)
-    XCTAssertNotEqual(try CompanionModel.noteLocalVersion(original), try CompanionModel.noteLocalVersion(edited))
+    XCTAssertNotEqual(try MobileToolSupport.fingerprint(original), try MobileToolSupport.fingerprint(edited))
   }
 
   @MainActor func testFullAccessRunsToolsWithoutPromptsAndAskModeStillRequiresApproval() async throws {
