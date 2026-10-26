@@ -1,12 +1,33 @@
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile, symlink } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion, tailnetSSHOptions } from '../src/executor/broker.mjs';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('Executor broker serves IPC when launched through an application symlink', {timeout:5000}, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-executor-entrypoint-'));
+  t.after(() => rm(root, {recursive:true,force:true}));
+  const entrypoint = join(root, 'broker.mjs');
+  await symlink(fileURLToPath(new URL('../src/executor/broker.mjs', import.meta.url)), entrypoint);
+  const child = spawn(process.execPath, [entrypoint, join(root,'manager')], {stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH}});
+  const exited = once(child,'close');
+  t.after(async () => {if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL');await exited;});
+  const lines = createInterface({input:child.stdout});
+  t.after(() => lines.close());
+  const response = once(lines,'line');
+  child.stdin.write(JSON.stringify({operation:'stop'})+'\n');
+  assert.deepEqual(JSON.parse((await response)[0]), {result:{}});
+  child.stdin.end();
+  assert.deepEqual(await exited,[0,null]);
+});
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

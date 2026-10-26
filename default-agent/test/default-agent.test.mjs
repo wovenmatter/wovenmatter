@@ -63,12 +63,12 @@ test('real SDK loads the complete selected tool set and resumes an empty draft w
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   t.after(() => resumed.session.dispose());
 });
-function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter'], visible = false, streamEvents = [] } = {}) {
-  const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', models: ['openrouter/fallback'], fallbackModels: ['openrouter/fallback'] } });
+function fixtureEngine({ errors = [], connected = ['openai', 'openrouter'], visible = false, streamEvents = [] } = {}) {
+  const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai/primary', models: ['openrouter/fallback'], fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
   const record = {
-    selected: 'openai-codex/primary', busy: false,
+    selected: 'openai/primary', busy: false,
     manifest: { storeID: 'fixture' }, subagents: { async beginGroup() {} },
     contextLeaf: () => 'before', rewind() {}, saveOptions() {},
     subscribe(fn) { listener = fn; return () => {}; },
@@ -84,7 +84,7 @@ function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter']
   };
   engine.resolveModel = ref => { const [provider, id] = ref.split('/'); return { provider, id, name: id }; };
   engine.credentials = new Credentials(Object.fromEntries(connected.map(p => [p, { type: 'api_key', key: 'fixture' }])));
-  engine.runtime = { getAuth: async () => ({}), getModels: () => [{ provider: 'openai-codex', id: 'primary', name: 'Primary' }, { provider: 'openrouter', id: 'fallback', name: 'Fallback' }] };
+  engine.runtime = { getAuth: async () => ({}), getModels: () => [{ provider: 'openai', id: 'primary', name: 'Primary' }, { provider: 'openrouter', id: 'fallback', name: 'Fallback' }] };
   return { engine, record, selected };
 }
 
@@ -170,16 +170,16 @@ test('remote admission deduplicates current output and fences uncertain prior ac
 test('account fallback follows priority without changing another session credential', async () => {
   const { engine, record } = fixtureEngine({ errors: ['insufficient_quota'] });
   engine.config.fallbackModels = [];
-  engine.credentials.accounts = { 'openai-codex': [
+  engine.credentials.accounts = { 'openai': [
     { id: 'first', label: 'First', credential: { type: 'api_key', key: 'first-secret' } },
     { id: 'second', label: 'Second', credential: { type: 'api_key', key: 'second-secret' } },
   ] };
   const used = []; const events = [];
-  engine.runtime.getAuth = async () => { used.push((await engine.credentials.read('openai-codex')).key); return {}; };
+  engine.runtime.getAuth = async () => { used.push((await engine.credentials.read('openai')).key); return {}; };
   await engine.prompt(record, 'hello', event => events.push(event));
   assert.deepEqual(used, ['first-secret', 'second-secret']);
   assert.match(events.at(-1)._meta.fallbackReason, /Second/);
-  assert.equal((await engine.credentials.read('openai-codex')).key, 'fixture');
+  assert.equal((await engine.credentials.read('openai')).key, 'fixture');
 });
 
 test('account backups are encrypted and borrowed tokens never export renewal secrets', async t => {
@@ -197,13 +197,13 @@ test('account backups are encrypted and borrowed tokens never export renewal sec
   const credentials = new Credentials({}, vault);
   const candidates = await credentials.candidates('openai-codex');
   assert.equal(candidates[0].credential.access, 'workspace-owned');
-  assert.equal(candidates[1].credential.access, 'borrowed-access');
+  assert.equal(candidates.length, 1);
 });
 test('account fallback never retries throttling or a turn with visible output', async () => {
   for (const [error, visible] of [['429 Too Many Requests', false], ['insufficient_quota', true]]) {
     const { engine, record } = fixtureEngine({ errors: [error], visible });
     engine.config.fallbackModels = [];
-    engine.credentials.accounts = { 'openai-codex': ['one', 'two'].map(id => ({ id, label: id, credential: { type: 'api_key', key: id } })) };
+    engine.credentials.accounts = { 'openai': ['one', 'two'].map(id => ({ id, label: id, credential: { type: 'api_key', key: id } })) };
     let attempts = 0; engine.runtime.getAuth = async () => { attempts++; return {}; };
     await assert.rejects(engine.prompt(record, 'hello', () => {}));
     assert.equal(attempts, 1);
@@ -228,3 +228,19 @@ test('removing a workspace-owned account does not silently switch an active turn
   });
   assert.equal((await credentials.read('openai')).key, 'shared');
 });
+
+
+for (const provider of ['openai-codex', 'xai']) {
+  test(`${provider} usage exhaustion does not try a backup subscription`, async () => {
+    const { engine, record } = fixtureEngine({ errors: ['insufficient_quota'], connected: [provider] });
+    record.selected = `${provider}/primary`;
+    engine.config.defaultModel = record.selected;
+    engine.config.fallbackModels = [];
+    engine.runtime.getModels = () => [{ provider, id: 'primary', name: 'Fixture subscription' }];
+    engine.credentials.accounts = { [provider]: ['first', 'backup'].map(id => ({ id, label: id, credential: { type: 'oauth', access: id, expires: 9000000000000 } })) };
+    const attempts = [];
+    engine.runtime.getAuth = async () => { attempts.push((await engine.credentials.read(provider)).access); return {}; };
+    await assert.rejects(engine.prompt(record, 'Fixture only', () => {}));
+    assert.deepEqual(attempts, ['first']);
+  });
+}

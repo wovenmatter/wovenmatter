@@ -96,7 +96,7 @@ The composer has a Tools menu with independent groups:
 | Usage data | `woven_usage_read`: recorded analytics and cached limits; no credential access or mutation |
 | Calendar | `woven_calendar_*`: events and scheduled tasks, subject to the configured access mode |
 | Library | `woven_library_list`, `woven_library_read`: exchanged-item metadata, original links and retention/source references |
-| Browser Use | `woven_browser`: control the designated Woven Mac's embedded Chromium browser, including inline screenshots |
+| Browser Use | `woven_browser`: control the execution owner's shared Chromium browser, including inline screenshots |
 | Computer Use | `woven_computer`: control that Mac's desktop through embedded Peekaboo; off by default |
 | Executor | `woven_executor_*`: scoped connected-app search and execution; off by default |
 
@@ -112,12 +112,14 @@ Read only configurable in General. Usage is always read-only.
 Their MCP results contain native text and image blocks, so supported harnesses
 receive screenshots inline without saving a file through a shell command.
 
-Browser Use controls the browser inside the designated Woven Matter Mac. It shares
-the user's visible tabs, profile, and existing signed-in sessions. Secondary Mac
-agents use their own browser. An iPhone agent's explicit browser/computer calls
-route to its paired central Mac. A Linux run uses only its configured reachable
-automation owner; it does not borrow the viewing client's browser. Normal Device
-execution access and conversation tool policy apply between input steps.
+Browser Use controls the execution owner's shared browser. On a Mac, this is
+Woven Matter's embedded browser with the user's visible tabs, profile, and
+existing signed-in sessions. Secondary Mac agents use their own browser. Linux
+agents use their workspace's shared Chromium browser; the Mac's **View browser**
+window can interact with those same pages. An iPhone agent's explicit browser and
+computer calls route to its paired central Mac. Computer Use requires a reachable
+authorized Mac and does not control the Linux desktop or the iPhone UI. Normal
+Device execution access and conversation tool policy apply between input steps.
 
 For example, a browser call uses these MCP arguments:
 
@@ -148,7 +150,8 @@ action. Capture again to inspect the effect. `press` uses comma-separated macOS
 keys such as `cmd,shift,t`; scrolling takes `direction` and an integer `amount`
 from 1 to 50.
 
-The visible Mac app owns Chromium and desktop automation. Cancellation uses the
+The visible Mac app owns its embedded browser and desktop automation; the Linux
+workspace service owns its shared Chromium browser. Cancellation uses the
 matching `woven_browser_cancel` or `woven_computer_cancel` operation identity.
 Cleanup remains scoped to the caller even after the tool is disabled. Interrupted
 actions are never automatically replayed. Persistent activity metadata omits page

@@ -21,7 +21,7 @@ async function fixture(t, overrides = {}) {
   const calls = []
   const options = {acquireLock:async()=>()=>{},catalog:new Map([['opencode',opencode]]),workspaceRoot:root,environment:()=>({HOME:root,SECRET_TOKEN:'very-secret-token'}),verifiedInstaller:async()=>{throw Error('unexpected')},
     execute:async(command,env,cwd)=>{
-      assert.equal(cwd,root); assert.equal(env.HOME,root); calls.push(command)
+      assert.equal(cwd,root); assert.equal(env.HOME,root); assert.equal(env.npm_config_cache, resolve(root, ".wovenmatter/npm-cache")); calls.push(command)
       if(command==='ps -eo pid=,args=') return {code:0,output:''}
       if(command.startsWith('command -v')) return {code:installed?0:1,output:root+'/opencode'}
       if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
@@ -34,24 +34,28 @@ async function finished(service) {
   for(let i=0;i<100;i++){const value=(await service.list()).runtimes[0];if(value.operation?.status!=='running')return value;await new Promise(r=>setTimeout(r,5))}
   throw Error('operation timeout')
 }
-test('host state gates enable, persists visibility, checks latest only for enabled and never installs at startup',async t=>{
-  const f=await fixture(t)
-  assert.equal((await f.service.list()).runtimes[0].installed,false)
-  await assert.rejects(f.service.preferences(opencode,{enabled:true}),/requirements_not_verified/)
-  await f.service.check();assert.equal(f.requests,0);assert.equal(f.executions,0)
-  f.install(); await f.service.preferences(opencode,{enabled:true,visible:false})
-  await f.service.check();assert.equal(f.requests,1);assert.equal(f.executions,0)
-  const service=createRuntimeMaintenance(f.options)
-  const value=(await service.list()).runtimes[0]
-  assert.equal(value.enabled,true);assert.equal(value.visible,false)
-  await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'invalid saved preferences')
-  assert.equal(await createRuntimeMaintenance(f.options).isEnabled('opencode'), false)
+test('installation alone controls availability and update checks never install software', async t => {
+  const f = await fixture(t)
+  assert.equal(await f.service.isInstalled('opencode'), false)
+  await f.service.check(); assert.equal(f.requests, 0); assert.equal(f.executions, 0)
+  await f.service.start(opencode, 'install', { confirmed: true })
+  const installed = await finished(f.service)
+  assert.equal(installed.installed, true)
+  assert.equal(installed.enabled, true) // Compatibility fields for older apps.
+  assert.equal(installed.visible, true)
+  assert.equal(await f.service.isInstalled('opencode'), true)
+  const calls = f.calls.length
+  await f.service.isInstalled('opencode')
+  assert.equal(f.calls.length, calls, 'execution checks reuse verified inventory')
+  const requests = f.requests
+  await f.service.check(); assert.equal(f.requests, requests + 1); assert.equal(f.executions, 1)
 })
 
 test('duplicate operations share a reservation and verify actual installed result',async t=>{
   const f=await fixture(t)
   const [a,b]=await Promise.all([f.service.start(opencode,'install',{confirmed:true}),f.service.start(opencode,'install',{confirmed:true})])
   assert.equal(a.id,b.id)
+  assert.equal((await f.service.operation(a.id.toUpperCase())).id, a.id)
   const value=await finished(f.service)
   assert.equal(value.operation.status,'succeeded');assert.equal(value.installed,true);assert.equal(f.executions,1)
 })
@@ -97,23 +101,23 @@ test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releas
   assert.equal(other.executions, 0)
 })
 
-test('preference migration preserves verified legacy runtimes without enabling later installs or overriding choices', async t => {
-  const legacy = await fixture(t)
-  legacy.install()
-  assert.equal(await legacy.service.isEnabled('opencode'), true, 'gateway/start checks can be the first migration caller')
-  await legacy.service.check()
-  assert.equal(legacy.requests, 1, 'migrated enabled runtimes receive the startup latest check')
-  assert.equal(legacy.executions, 0)
-  await legacy.service.preferences(opencode, { enabled: false, visible: false })
-  const restarted = createRuntimeMaintenance(legacy.options)
-  const retained = (await restarted.list()).runtimes[0]
-  assert.equal(retained.enabled, false)
-  assert.equal(retained.visible, false)
-
-  const missing = await fixture(t)
-  assert.equal(await missing.service.isEnabled('opencode'), false)
-  missing.install()
-  assert.equal((await createRuntimeMaintenance(missing.options).list()).runtimes[0].enabled, false)
+test('retired hidden and disabled preferences cannot suppress installed harnesses', async t => {
+  const f = await fixture(t)
+  await mkdir(resolve(f.root, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), JSON.stringify({
+    opencode: { enabled: false, visible: false, failureCount: 2 },
+  }))
+  f.install()
+  const service = createRuntimeMaintenance(f.options)
+  assert.equal(await service.isInstalled('opencode'), true)
+  const row = (await service.list()).runtimes[0]
+  assert.equal(row.enabled, true); assert.equal(row.visible, true); assert.equal(row.failureCount, 2)
+  await service.recordFailure(opencode, 'install', new Error('fixture'))
+  const saved = JSON.parse(await (await import('node:fs/promises')).readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
+  assert.deepEqual(saved.opencode, { failureCount: 3 })
+  await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'corrupt legacy file')
+  assert.equal(await createRuntimeMaintenance(f.options).isInstalled('opencode'), true)
+  assert.equal(await service.isInstalled('unknown'), false)
 })
 
 test('bundled Codex latest is checked separately and refresh respects adapter range', async t => {

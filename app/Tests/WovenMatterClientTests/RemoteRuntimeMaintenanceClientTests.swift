@@ -4,6 +4,17 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteRuntimeMaintenanceClientTests {
+    @Test func missingHarnessesAreNeverActivatedByLegacyMigration() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RemoteMaintenanceFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:41003")!, token: "workspace-two", session: session)
+        let rows = try await client.runtimeMaintenance()
+        #expect(rows.count == 1)
+        #expect(rows[0].installed == false)
+    }
+
 
     @Test func bundledUpgradeArrowUsesOnlyCompatibleTarget() throws {
         func component(id: String = "bundled", installed: String = "0.153.4", target: String? = nil) throws -> RemoteRuntimeComponent {
@@ -59,6 +70,7 @@ struct RemoteRuntimeMaintenanceClientTests {
         let second = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:41002")!, token: "workspace-two", session: session)
         let initial = try await first.runtimeMaintenance()
         #expect(initial.count == 1)
+        #expect(initial[0].enabled && initial[0].visible) // Legacy flags retired automatically.
         #expect(initial[0].components[0].installedVersion == "1.7.0")
         #expect(initial[0].components[1].installedVersion == "0.148.0")
         #expect(initial[0].failureCount == 2)
@@ -67,9 +79,10 @@ struct RemoteRuntimeMaintenanceClientTests {
         let selected = try await first.checkRuntimeUpdates(.codex)
         #expect(selected.id == .codex)
         #expect(selected.versionCheckAvailable == true)
-        try await first.setRuntimePreferences(.codex, enabled: true, visible: false)
         let operation = try await second.maintainRuntime(.codex, action: "update", sourceSHA256: "reviewed-digest", packageSpec: "fixture@1.2.3")
         #expect(operation.status == "running")
+        let polled = try await second.operation(id: operation.id)
+        #expect(polled.id == operation.id)
         let hermes = try await second.maintainRuntime(.hermes, action: "update", sourceSHA256: nil)
         #expect(hermes.harnessID == .hermes)
         let status = try await second.workspaceInstance(.opencode, action: "start")
@@ -98,11 +111,12 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         }
         let payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
 
-        let row = #"{"id":"codex","displayName":"Codex","enabled":true,"visible":false,"installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true,"versionCheckAvailable":true}"#
+        var row = #"{"id":"codex","displayName":"Codex","enabled":false,"visible":false,"installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true,"versionCheckAvailable":true}"#
+        if request.url?.port == 41003 { row = row.replacingOccurrences(of: "\"installed\":true", with: "\"installed\":false") }
         let value: String
         switch path {
         case "/v1/runtime-maintenance":
-            #expect(first)
+            #expect(first || request.url?.port == 41003)
             #expect(request.httpMethod == "GET")
             value = "{\"runtimes\":[\(row)]}"
         case "/v1/runtime-maintenance/check":
@@ -115,18 +129,23 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
             #expect(body.isEmpty)
             value = row
         case "/v1/runtime-maintenance/codex":
-            #expect(first)
+            #expect(request.url?.port != 41003, "Missing harnesses must never be activated")
             #expect(payload?["enabled"] as? Bool == true)
-            #expect(payload?["visible"] as? Bool == false)
+            #expect(payload?["visible"] as? Bool == true)
             #expect(request.httpMethod == "PATCH")
-            value = row
+            value = row.replacingOccurrences(of: "\"enabled\":false", with: "\"enabled\":true")
+                .replacingOccurrences(of: "\"visible\":false", with: "\"visible\":true")
         case "/v1/runtime-maintenance/codex/update":
             #expect(!first)
             #expect(payload?["confirmed"] as? Bool == true)
             #expect(payload?["sourceSHA256"] as? String == "reviewed-digest")
             #expect(payload?["packageSpec"] as? String == "fixture@1.2.3")
             #expect(request.httpMethod == "POST")
-            value = #"{"id":"00000000-0000-0000-0000-000000000001","harnessID":"codex","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
+            value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
+        case "/v1/operations/abcdef01-abcd-abcd-abcd-abcdef012345":
+            #expect(!first)
+            #expect(request.httpMethod == "GET")
+            value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"succeeded","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
         case "/v1/runtime-maintenance/hermes/update":
             #expect(!first)
             #expect(request.httpMethod == "POST")

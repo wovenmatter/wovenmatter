@@ -86,7 +86,7 @@ export function sharedAccounts(input = {}) {
   const result = {};
   for (const provider of ['openai', 'openai-codex', 'anthropic', 'xai', 'xai-api', 'openrouter', 'opencode-go', ...Object.keys(searchProviderNames)]) {
     if (!Array.isArray(input[provider])) continue;
-    const entries = input[provider].slice(0, 4).flatMap(account => {
+    const entries = input[provider].slice(0, ['openai-codex', 'xai'].includes(provider) ? 1 : 4).flatMap(account => {
       const credential = sharedCredentials({ [provider]: account?.credential })[provider];
       return credential && typeof account.id === 'string' && typeof account.label === 'string'
         ? [{ id: account.id, label: account.label, credential }] : [];
@@ -94,9 +94,9 @@ export function sharedAccounts(input = {}) {
     if (entries.length) result[provider] = entries;
   }
   // Native profile names are identifiers, never native token material.
-  for (const provider of ['claude-subscription', 'cursor']) {
-    if (!Array.isArray(input[provider])) continue;
-    result[provider] = input[provider].slice(0, 4).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(a.credential.accountId))
+  const profiles = input['claude-subscription'];
+  if (Array.isArray(profiles)) {
+    result['claude-subscription'] = profiles.slice(0, 1).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(a.credential.accountId))
       .map(a => ({ id: a.id, label: a.label, credential: { type: 'native', accountId: a.credential.accountId } }));
   }
   return result;

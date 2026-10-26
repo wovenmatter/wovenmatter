@@ -16,7 +16,7 @@ mkdir -p "$swift_scratch" "$derived_data"
 
 run_static_checks() {
   local file
-  for file in remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
+  for file in remote/build-image.sh remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
     bash -n "$file"
   done
   scripts/test-release.sh
@@ -34,6 +34,7 @@ run_static_checks() {
   python3 scripts/test-support/test_executor_deployment.py
   node --test scripts/test-support/native-mcp.test.mjs
   scripts/test-remote-workspace.sh
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_remote_image.py
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
   done
@@ -49,6 +50,7 @@ run_package_tests() {
     ClosedLidProtectionTests
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
+    RemoteBrowserViewerTests
     WorkspaceAgentToolsServiceTests
     NativeHarnessArchiveTests
     NativeFramePrivacyTests
@@ -62,7 +64,8 @@ run_package_tests() {
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
     swift test --build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
-  # Process/socket fixtures measure startup, deadlines, and reaping; the SDK suite also
+  # Process/socket and browser-feed fixtures measure startup, leases, deadlines,
+  # and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
   # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
   # resource-heavy suites so they cannot consume unrelated IPC timing budgets on

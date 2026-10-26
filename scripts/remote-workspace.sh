@@ -7,6 +7,7 @@ low_storage_bytes="${WOVENMATTER_LOW_STORAGE_BYTES:-10737418240}"
 low_storage_percent="${WOVENMATTER_LOW_STORAGE_PERCENT:-10}"
 active_lock=''
 docker_prefix=()
+docker_engine_problem=''
 host_capacity=''
 host_available=''
 host_storage_low=false
@@ -18,7 +19,7 @@ workspace_storage_legacy=true
 workspace_storage_used=''
 
 usage() {
-  printf '%s\n' 'usage: remote-workspace.sh inspect | expose ID PORT [HTTPS_PORT] | prepare AUTHORIZED | create ID PORT [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] | status ID | start ID | stop ID | restart ID | update ID IMAGE [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [PORT] | delete ID [--data]' >&2
+  printf '%s\n' 'usage: remote-workspace.sh inspect | expose ID PORT [HTTPS_PORT] | prepare AUTHORIZED | create ID PORT [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [IMAGE_ID] | status ID | start ID | stop ID | restart ID | update ID IMAGE [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [PORT] | delete ID [--data]' >&2
   exit 64
 }
 
@@ -143,26 +144,44 @@ docker_info_value() {
 }
 
 docker_engine_supported() {
-  local platform api module major minor version engine_major
-  local_docker_endpoint || return 1
-  platform="$(docker_exec version --format '{{.Server.Platform.Name}}' 2>/dev/null || true)"
-  api="$(docker_exec version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
-  if [[ "$platform" != *"Docker Engine"* ]]; then
-    # Distribution builds can omit Platform.Name. Select the module only from
-    # the exact Engine component: this proves both component presence and the
-    # actual Moby daemon identity. Explicit shim labels never use this fallback.
-    [ -z "$platform" ] || return 1
-    module="$(docker_exec version --format '{{range .Server.Components}}{{if eq .Name "Engine"}}{{index .Details "Module"}}{{end}}{{end}}' 2>/dev/null || true)"
-    [ "$module" = 'github.com/moby/moby/v2' ] || return 1
+  local platform components api major minor version engine_major
+  docker_engine_problem=''
+  if ! local_docker_endpoint; then
+    docker_engine_problem='Docker is targeting a remote endpoint. Select a local Docker Engine socket on this SSH host, then inspect again. Remote Docker contexts are not supported for workspace storage and ports.'
+    return 1
   fi
+  platform="$(docker_exec version --format '{{.Server.Platform.Name}}' 2>/dev/null || true)"
+  components="$(docker_exec version --format '{{range .Server.Components}}{{println .Name}}{{end}}' 2>/dev/null || true)"
+  case "$platform"$'\n'"$components" in
+    *[Pp][Oo][Dd][Mm][Aa][Nn]*)
+      docker_engine_problem='This host is using Podman through a Docker compatibility command. Install Docker Engine alongside it without replacing existing containers, then inspect again.'
+      return 1 ;;
+  esac
+  # Docker/Moby distribution packages (including Arch/Omarchy) may leave the
+  # optional branding field empty. The Engine component identifies the daemon.
+  if [[ "$platform" != *"Docker Engine"* ]] \
+    && [[ $'\n'"$components"$'\n' != *$'\nEngine\n'* ]]; then
+    docker_engine_problem="The container runtime could not be identified as Docker Engine (reported name: ${platform:-not provided}). Install Docker Engine on this host, then inspect again. Docker-compatible command shims are not supported."
+    return 1
+  fi
+  api="$(docker_exec version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
   # Docker <28 can expose localhost-published ports to adjacent LAN hosts.
   version="$(docker_exec version --format '{{.Server.Version}}' 2>/dev/null || true)"
   engine_major="${version%%.*}"
-  [[ "$engine_major" =~ ^[0-9]+$ ]] && [ "$engine_major" -ge 28 ] || return 1
-  [[ "$api" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+  if ! [[ "$engine_major" =~ ^[0-9]+$ ]] || [ "$engine_major" -lt 28 ]; then
+    docker_engine_problem="Workspaces require Docker Engine 28 or newer to keep published ports private. Update Docker Engine on this host, then inspect again."
+    return 1
+  fi
+  if ! [[ "$api" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    docker_engine_problem='Docker answered, but its Engine API version could not be read. Check docker version using this SSH account, then inspect again.'
+    return 1
+  fi
   major="${api%%.*}"
   minor="${api#*.}"
-  [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 41 ]; }
+  if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 41 ]; }; then
+    docker_engine_problem="This host reports Docker Engine API ${api}; workspaces require API 1.41 or newer. Update Docker Engine on this host, then inspect again."
+    return 1
+  fi
 }
 
 local_docker_endpoint() {
@@ -186,7 +205,7 @@ require_docker() {
     "Docker Engine is installed but unavailable. Inspect and authorize host preparation first." 69
   docker_engine_supported || fail \
     "unsupported_container_runtime" \
-    "Woven Matter requires Docker Engine 28 or newer (API 1.41+); Docker-compatible command shims are not supported." 69
+    "$docker_engine_problem" 69
 }
 
 is_rootless() {
@@ -312,7 +331,7 @@ inspect_host() {
     swap_capable && swap=true
     [ "$memory" = true ] || limitations+=("Memory limits are unavailable in this Docker and cgroup configuration.")
     [ "$swap" = true ] || limitations+=("Swap limits are unavailable in this Docker, kernel, or cgroup configuration.")
-    [ "$engine_supported" = true ] || blockers+=("Woven Matter requires a local Docker Engine 28 or newer (API 1.41+). Docker-compatible command shims such as Podman and remote Docker contexts are not supported by this lifecycle implementation.")
+    [ "$engine_supported" = true ] || blockers+=("$docker_engine_problem")
     refresh_host_storage_metrics
     if [ -z "$host_capacity" ]; then
       limitations+=("Host storage capacity could not be measured safely.")
@@ -566,9 +585,13 @@ validate_workspace_volume() {
 }
 
 create_workspace() {
-  [ "$#" -ge 2 ] && [ "$#" -le 4 ] || usage
+  [ "$#" -ge 2 ] && [ "$#" -le 5 ] || usage
   local id="$1" port="$2" token="${WOVENMATTER_API_TOKEN:-}" memory="${3:-}"
   local memory_and_swap="${4:-}" name volume output
+  if [ -n "${5:-}" ]; then
+    [[ "$5" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "invalid_image_identity" "Expected a verified Docker image identity."
+    image_name="$5"
+  fi
   validate_id "$id"
   validate_port "$port"
   [[ "$token" =~ ^[A-Za-z0-9+/=_-]{32,256}$ ]] || fail "invalid_api_token" "Use a 32-256 character random API credential."

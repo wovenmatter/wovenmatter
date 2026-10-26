@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { binding, consume, recordCallContext } from './binding.mjs';
@@ -26,7 +26,7 @@ export function handleHook(runtime, directory, event) {
   // context. It grants no authority and leaves all native approval policy intact.
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...input, requestID } } };
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { process.stdout.write(JSON.stringify(handleHook(process.argv[2], process.env.WOVEN_MCP_BINDING_DIRECTORY, JSON.parse(readFileSync(0, 'utf8'))))); }
   catch (error) { process.stderr.write('Woven MCP input binding: ' + error.message + '\n'); process.exitCode = 1; }
 }

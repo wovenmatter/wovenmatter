@@ -17,7 +17,8 @@ struct ExecutionSettingsPane: View {
         }
       }
       Section("Add connection") {
-        ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") }) { provider in
+        ForEach(InferenceCatalog.providers.filter { provider in !provider.id.hasPrefix("local-server-") &&
+          (!InferenceConnectionPolicy.isSingleSubscription(provider.id) || !model.inferenceConnections.contains(where: { $0.provider == provider.id })) }) { provider in
           NavigationLink(provider.name) { InferenceConnectionEditor(model: model, connection: nil, provider: provider.id) }
         }
       }
@@ -310,7 +311,8 @@ private struct InferenceConnectionEditor: View {
       else if state.mode == .hosted {
         Section {
           Picker("Provider", selection: Binding(get: { state.provider }, set: { chooseProvider($0) })) {
-            ForEach(InferenceCatalog.providers.filter { !$0.id.hasPrefix("local-server-") }) { Text($0.name).tag($0.id) }
+            ForEach(InferenceCatalog.providers.filter { provider in !provider.id.hasPrefix("local-server-") &&
+              (!InferenceConnectionPolicy.isSingleSubscription(provider.id) || !model.inferenceConnections.contains(where: { $0.provider == provider.id && $0.id != state.original?.id })) }) { Text($0.name).tag($0.id) }
           }.disabled(state.original != nil)
         }
         hostedFields
@@ -459,7 +461,9 @@ private struct InferenceConnectionEditor: View {
         let result = try await CompanionInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
         guard !Task.isCancelled, state.catalogGeneration == generation else { return }
         state.endpoint = credential.endpoint.absoluteString
-        state.accounts = result.accounts
+        // Older hosts may still advertise backup subscription accounts.
+        state.accounts = InferenceConnectionPolicy.isSingleSubscription(provider)
+          ? Array(result.accounts.filter { $0.provider == provider }.prefix(1)) : result.accounts
         state.receiveModels(result.models, generation: generation)
         let accounts = state.accounts.filter { $0.provider == provider && $0.connected }
         if !accounts.contains(where: { $0.id == state.accountID }) { state.accountID = accounts.count == 1 ? accounts[0].id : "" }

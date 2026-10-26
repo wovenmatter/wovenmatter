@@ -24,6 +24,22 @@ import { authenticationInput, authenticationDeadline, downloadInstallerSource, p
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
 
+test('runtime inspection is authenticated and never starts a Pi worker', async context => {
+  const root = await temporaryFixture(context, 'woven-runtime-inspection-')
+  const token = 'inspection-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({workspace:root, home:root, catalog:catalogPath, token})
+  context.after(() => stopService(service.child))
+  assert.equal((await fetch(service.url+'/v1/runtime/inspection')).status,401)
+  const response = await fetch(service.url+'/v1/runtime/inspection', {headers:{Authorization:'Bearer '+token}})
+  assert.equal(response.status,200)
+  const snapshot = await response.json()
+  assert.equal(snapshot.ownerID,'remote')
+  assert.ok(Math.abs(snapshot.observedAt - (Date.now()/1000-978307200)) < 5)
+  assert.equal(snapshot.items.find(item=>item.kind==='service').processID,service.child.pid)
+  assert.ok(!snapshot.items.some(item=>item.id==='pi-worker'))
+  assert.ok(!JSON.stringify(snapshot).includes(token))
+})
+
 test('installer download rejects non-HTTPS sources and redirect destinations', async () => {
   let requests = 0
   const fetchImplementation = async () => {
@@ -553,6 +569,13 @@ test('direct client grants expose only execution routes and enforce revocation',
   assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
   assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
   assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
+  for (const [path, method] of [['tabs', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
+    assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
+    assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
+  }
+  const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
+  assert.deepEqual(await tabs.json(), {running:false,tabs:[]})
+  assert.equal(tabs.headers.get('cache-control'), 'no-store')
   assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
   const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
   assert.equal(foreign.status,400)

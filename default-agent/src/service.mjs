@@ -183,5 +183,23 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       throw error;
     }
   }
-  return { engine, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
+  async function inspection() {
+    if (!enginePromise) return [];
+    const current = await enginePromise;
+    const { BACKGROUND_CONTEXT } = await import('@earendil-works/chord/context');
+    const items = [];
+    for (const record of current.sessions.values()) {
+      if (items.length >= 1000) break;
+      const nativeSessionID = record.session.sessionId;
+      const id = `native:${nativeSessionID}`;
+      items.push({id, parentID:'pi-worker', nativeSessionID, kind:'conversation', title:'Pi Durable session',
+        state:record.busy?'working':'idle', detail:record.selected});
+      if (!record.harness) continue;
+      const view = await record.harness.inspect(BACKGROUND_CONTEXT);
+      for (const task of view.tasks.slice(0,200)) items.push({id:`${id}:task:${task.record.id}`,parentID:id,nativeSessionID,
+        kind:task.record.kind.includes('subagent')?'subagent':'task',title:task.record.kind.includes('subagent')?'Subagent':'Agent task',state:task.state.kind});
+    }
+    return items.slice(0,1000);
+  }
+  return { engine, inspection, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
 }

@@ -47,6 +47,11 @@ retains caller ownership and works after capability or execution-access revocati
 Automation receipts retain completion metadata, without page or desktop captures;
 retries after completion inspect fresh state instead of replaying input.
 
+Linux execution workspaces expose the same `woven_browser` MCP tool against their
+own shared Chromium service. Its tabs appear in the remote workspace's **View
+browser** window. The browser profile and lifecycle remain with the Linux owner;
+MCP does not redirect those calls to the Mac currently viewing the conversation.
+
 Computer Use is an independent, default-off capability. Peekaboo's Swift
 libraries, selected by the shared native lockfile within a compatible release
 range, run inside the signed GUI process, so macOS grants apply to Woven Matter.

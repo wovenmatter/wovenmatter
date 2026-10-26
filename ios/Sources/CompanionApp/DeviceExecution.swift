@@ -87,6 +87,7 @@ struct InferenceSetupCredential: InferenceCredentialReading {
     var saved = proposed
     saved.name = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
     try saved.validate()
+    try InferenceConnectionPolicy.validateSave(saved, existing: existing)
     try Task.checkCancellation()
     let previous = existing.first { $0.id == proposed.id }
     let previousSecret = try await credentials.read(connectionID: proposed.id)
@@ -102,8 +103,9 @@ struct InferenceSetupCredential: InferenceCredentialReading {
       credential = previousSecret
     }
     let reusesCredential = previous != nil && sameAuthority && previousSecret == credential
-    if previous != nil && !reusesCredential {
-      // Running conversations retain the old account/credential binding after edits.
+    if previous != nil && !reusesCredential && (!InferenceConnectionPolicy.isSingleSubscription(saved.provider) || !sameAuthority) {
+      // Changed accounts retain a historical binding; reconnecting the same
+      // single subscription replaces its credential in the existing slot.
       saved.id = UUID().uuidString.lowercased()
     }
     saved.selectedModel = try await resolveModel(saved, credential)
@@ -248,8 +250,12 @@ extension CompanionModel {
     }
   }
   var selectedInferenceConnection: InferenceConnection? {
-    if let id = selectedConversationID, let connection = executionRecords[id]?.connection { return connection }
-    if selectedConversationID == nil, let connection = draftDeviceSettings.connection { return connection }
+    if let id = selectedConversationID, let connection = executionRecords[id]?.connection {
+      return InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) ? connection : nil
+    }
+    if selectedConversationID == nil, let connection = draftDeviceSettings.connection {
+      return InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) ? connection : nil
+    }
     let id = selectedConversationID.flatMap { executionRecords[$0]?.connectionID } ?? inferenceConnectionID
     return inferenceConnections.first { $0.id == id }
   }
@@ -295,7 +301,8 @@ extension CompanionModel {
     let file = executionDirectory.appendingPathComponent("preferences.json")
     if FileManager.default.fileExists(atPath: file.path) {
       let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
-      inferenceConnections = saved.connections; inferenceConnectionID = saved.selectedConnectionID
+      inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections, preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
+      inferenceConnectionID = saved.selectedConnectionID
       executionWorkspaceID = saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
       draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
@@ -308,7 +315,14 @@ extension CompanionModel {
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
       }
+      // Persist the retained connections before removing old device-only secrets.
+      // Historical chats keep their binding instead of switching accounts.
+      if let connection = draftDeviceSettings.connection,
+         !InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) { draftDeviceSettings.connection = nil }
       try persistExecutionConfiguration()
+      let previous = saved.connections + saved.conversations.values.compactMap(\.connection) + [saved.chatSettings?.connection].compactMap { $0 }
+      let retiredIDs = Set(previous.filter { !InferenceConnectionPolicy.isAvailable($0, in: inferenceConnections) }.map(\.id))
+      for id in retiredIDs { try await executionCredentialStore.remove(connectionID: id) }
     }
     restoreAgentCatalog()
     try await store?.restoreExecutionProjection()
@@ -330,20 +344,28 @@ extension CompanionModel {
       var connections = inferenceConnections.filter { $0.id != connection.id }
       connections.append(saved)
       var records = executionRecords
+      var chatSettings = draftDeviceSettings
       if let previous = inferenceConnections.first(where: { $0.id == connection.id }) {
+        if previous.id != saved.id, InferenceConnectionPolicy.isSingleSubscription(previous.provider),
+           chatSettings.connection?.id == previous.id { chatSettings.connection = nil }
         for id in records.keys where records[id]?.connectionID == previous.id && records[id]?.connection == nil {
           records[id]?.connection = previous
         }
       }
       let workspaceID = credential == nil && selectedConversationID == nil ? "local" : executionWorkspaceID
       let preferences = DeviceExecutionPreferences(connections: connections, selectedConnectionID: saved.id,
-        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults, chatSettings: draftDeviceSettings)
+        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults, chatSettings: chatSettings)
       try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
       try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       executionRecords = records
+      draftDeviceSettings = chatSettings
     }
+    let previous = inferenceConnections.first { $0.id == connection.id }
     inferenceConnections.removeAll { $0.id == connection.id }; inferenceConnections.append(saved)
     inferenceConnectionID = saved.id
+    if let previous, previous.id != saved.id, InferenceConnectionPolicy.isSingleSubscription(previous.provider) {
+      try await executionCredentialStore.remove(connectionID: previous.id)
+    }
     if credential == nil && selectedConversationID == nil { executionWorkspaceID = "local"; providerID = "" }
     inferenceProblem = nil
   }
@@ -429,6 +451,8 @@ extension CompanionModel {
   }
   func deviceRuntime(_ id: String) async throws -> PiDurableRuntime {
     guard !localInterrupting.contains(id) else { throw DeviceExecutionError.unavailable("This agent is saving its progress. Try again when it finishes.") }
+    if let connection = executionRecords[id]?.connection,
+       !InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) { throw InferenceError.accountUnavailable }
     if let existing = localRuntimes[id] { try await finishDeviceCancellation(id, runtime: existing); return existing }
     guard let record = executionRecords[id], let root = executionDirectory,
           let connection = record.connection ?? inferenceConnections.first(where: { $0.id == record.connectionID }) else { throw InferenceError.missingCredential }

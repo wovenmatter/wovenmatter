@@ -586,6 +586,11 @@ final class InferenceSetupTests: XCTestCase {
     XCTAssertEqual(resaved.id, saved.id)
     let reopenedKeys = await credentials.snapshot()
     XCTAssertEqual(reopenedKeys, [saved.id: "device-key"])
+    let extra = InferenceConnection(name: "Second OpenCode Go key", provider: saved.provider, route: .direct, modelID: descriptor.id)
+    let second = try await InferenceConnectionSaveTransaction.save(extra, secret: "second-key", existing: [saved], credentials: credentials,
+      resolveModel: { _, _ in descriptor }, persist: { _ in })
+    let multipleKeys = await credentials.snapshot()
+    XCTAssertEqual(multipleKeys, [saved.id: "device-key", second.id: "second-key"])
   }
   @MainActor func testCredentialReplacementKeepsOldBindingAndRollsBackFailedSave() async throws {
     let descriptor = Self.descriptor()
@@ -624,6 +629,35 @@ final class InferenceSetupTests: XCTestCase {
     XCTAssertEqual(saved.modelID, replacementModel.id)
     let stored = await credentials.snapshot()
     XCTAssertEqual(stored, [original.id: "oauth-after-refresh"])
+  }
+  @MainActor func testDuplicateSubscriptionsFailBeforeCredentialOrModelChanges() async throws {
+    for provider in ["openai-codex", "claude-subscription", "xai"] {
+      let descriptor = Self.descriptor(provider: provider)
+      let current = InferenceConnection(id: "current", name: provider, provider: provider, route: .direct, modelID: descriptor.id)
+      let extra = InferenceConnection(id: "extra", name: provider, provider: provider, route: .adapter,
+        baseURL: "https://fixture.ts.net", modelID: descriptor.id)
+      let credentials = InferenceSetupMemoryCredentials([current.id: "current-secret"])
+      do {
+        _ = try await InferenceConnectionSaveTransaction.save(extra, secret: "new-secret", existing: [current], credentials: credentials,
+          resolveModel: { _, _ in XCTFail("Duplicate account must fail before model resolution"); return descriptor },
+          persist: { _ in XCTFail("Duplicate account must not persist") })
+        XCTFail("Duplicate subscription was accepted")
+      } catch InferenceError.singleSubscriptionAccount {}
+      let stored = await credentials.snapshot()
+      XCTAssertEqual(stored, [current.id: "current-secret"])
+    }
+  }
+  @MainActor func testSingleSubscriptionReconnectKeepsItsExistingBinding() async throws {
+    for provider in ["openai-codex", "claude-subscription", "xai"] {
+      let descriptor = Self.descriptor(provider: provider)
+      let current = InferenceConnection(id: "current", name: provider, provider: provider, accountID: "same-account", route: .direct, modelID: descriptor.id)
+      let credentials = InferenceSetupMemoryCredentials([current.id: "old-secret"])
+      let saved = try await InferenceConnectionSaveTransaction.save(current, secret: "new-secret", existing: [current], credentials: credentials,
+        resolveModel: { _, _ in descriptor }, persist: { _ in })
+      XCTAssertEqual(saved.id, current.id)
+      let stored = await credentials.snapshot()
+      XCTAssertEqual(stored, [current.id: "new-secret"])
+    }
   }
   @MainActor func testEmptyKeyCannotCreateConnectionOrStartModelResolution() async throws {
     let credentials = InferenceSetupMemoryCredentials(), descriptor = Self.descriptor()

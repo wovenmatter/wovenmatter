@@ -58,12 +58,12 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       return defaultAgent.withRuntimeLease ? defaultAgent.withRuntimeLease(execute) : execute()
     }
     if (config.runtimeKind === 'opencode') {
-      if (!await isEnabled(config.runtimeKind)) throw before('This agent is disabled in the workspace.')
+      if (!await isEnabled(config.runtimeKind)) throw before('This agent is not installed in the workspace.')
       return native({run,nativeSessionID,signal,publish,bindSession:bindMCP,mcpConnection})
     }
     const harness = catalog.get(config.runtimeKind)
     if (!harness || !['acp','agent-stdio'].includes(harness.transport)) throw before('This agent does not yet support autonomous workspace tasks. Use a connected session for this agent.')
-    if (!await isEnabled(harness.id)) throw before('This agent is disabled in the workspace.')
+    if (!await isEnabled(harness.id)) throw before('This agent is not installed in the workspace.')
     if (signal.aborted) throw before('Background execution was turned off.')
     const directory = config.nativeWorkingDirectory ?? workspaceRoot
     if (!isAbsolute(directory) || directory.includes('\0')) throw before('The task working directory is invalid.')

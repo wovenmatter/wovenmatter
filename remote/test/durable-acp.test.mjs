@@ -1,11 +1,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, open } from 'node:fs/promises'
+import { mkdtemp, rm, open, symlink } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { createDurableACP } from '../src/durable-acp.mjs'
+
+test('remote stdio relay executes its fail-closed startup through a symlink', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'durable-relay-entrypoint-'))
+  t.after(() => rm(root, {recursive:true,force:true}))
+  const entrypoint = join(root, 'relay.mjs')
+  await symlink(fileURLToPath(new URL('../src/durable-acp-stdio.mjs', import.meta.url)), entrypoint)
+  const result = spawnSync(process.execPath, [entrypoint], {env:{PATH:process.env.PATH},encoding:'utf8',timeout:5000})
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /remote session relay disconnected/)
+})
 
 
 

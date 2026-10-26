@@ -4,12 +4,19 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { browserAction, createCEFBridge } from '../src/browser-runtime.mjs';
 
-test('browser helper keeps its input open until the host acknowledges its terminal result', { timeout: 5000 }, async t => {
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/browser-runtime.mjs', import.meta.url))], {
+test('browser helper launches through a symlink and waits for the host to acknowledge its terminal result', { timeout: 5000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-browser-entrypoint-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const entrypoint = join(root, 'browser-runtime.mjs');
+  await symlink(fileURLToPath(new URL('../src/browser-runtime.mjs', import.meta.url)), entrypoint);
+  const child = spawn(process.execPath, [entrypoint], {
     env: { PATH: process.env.PATH }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const exited = once(child, 'close');

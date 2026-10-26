@@ -12,7 +12,7 @@ struct DevelopmentLaunchTests {
         for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
             let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], backgroundEnabled: true,
                 libraryClientEnabled: true, developmentMode: mode)
-            #expect(role == (mode == .client ? .libraryClient : .standalone))
+            #expect(role == (mode == .client ? .libraryClient : .backend))
         }
         #expect(DevelopmentLaunch.Mode.client.workspaceFolder(instance: "a") == "Woven Matter Dev/a/client")
         #expect(DevelopmentLaunch.Mode.snapshot.workspaceFolder(instance: "a") == "Woven Matter Dev/a/snapshot")
@@ -23,7 +23,7 @@ struct DevelopmentLaunchTests {
     @Test func liveHostUsesTheSameExclusiveLeaseAsProduction() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let role = LocalExecutionRole.resolve(arguments: ["app"], backgroundEnabled: true, developmentMode: .live)
+        let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], backgroundEnabled: true, developmentMode: .live)
         let file = directory.appending(path: DevelopmentLaunch.Mode.live.workspaceFolder(instance: "fixture"))
             .appending(path: role.leaseFileName)
         let productionFile = directory.appending(path: "Woven Matter/workspace-owner.lock")

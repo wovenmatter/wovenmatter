@@ -14,6 +14,7 @@ command -v docker >/dev/null 2>&1 || {
   exit 69
 }
 docker info >/dev/null
+export WOVENMATTER_IMAGE_NAME="${WOVENMATTER_IMAGE_NAME:-wovenmatter/workspace:latest}"
 
 suffix="$$"
 workspace_a="smoke-a-${suffix}"
@@ -42,23 +43,27 @@ cleanup
 mkdir -p "$legacy_data"
 
 if [ "$build_image" = true ]; then
-  docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile .
+  docker build --pull --no-cache --tag "$WOVENMATTER_IMAGE_NAME" --file remote/Dockerfile .
 fi
+image_id="$(docker image inspect --format '{{.Id}}' "$WOVENMATTER_IMAGE_NAME")"
 # Validate the actual image build context before creating any workspace. The
 # allowlist must ship both the MCP adapters and their shared instruction source.
 docker run --rm --network none --read-only --user 10001:10001 \
   --cap-drop ALL --security-opt no-new-privileges:true \
-  --entrypoint node wovenmatter/workspace:latest --input-type=module -e '
+  --entrypoint node "$image_id" --input-type=module -e '
     await import("/opt/wovenmatter/src/workspace-instances.mjs");
     await import("/opt/wovenmatter/harnesses/mcp/adapter.mjs");
     const { wovenInstructions } = await import("/opt/wovenmatter/default-agent/src/woven-instructions.mjs");
     const { loadWorkspaceMCPCatalog } = await import("/opt/wovenmatter/src/workspace-mcp.mjs");
     if (!wovenInstructions || !loadWorkspaceMCPCatalog().length) process.exit(1);
   '
+
 WOVENMATTER_API_TOKEN="$token_a" \
-  scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
+  scripts/remote-workspace.sh create "$workspace_a" "$port_a" '' '' "$image_id" >/dev/null
+[ "$(docker inspect --format '{{.Image}}' "$container_a")" = "$image_id" ]
 WOVENMATTER_API_TOKEN="$token_b" \
-  scripts/remote-workspace.sh create "$workspace_b" "$port_b" >/dev/null
+  scripts/remote-workspace.sh create "$workspace_b" "$port_b" '' '' "$image_id" >/dev/null
+[ "$(docker inspect --format '{{.Image}}' "$container_b")" = "$image_id" ]
 
 wait_for_health() {
   local port="$1" token="$2" deadline=$((SECONDS + 30))
@@ -72,8 +77,20 @@ wait_for_health() {
   done
 }
 
+verify_browser() {
+  # Exercise the actual non-root, read-only workspace from its mounted home.
+  # Feeding stdin avoids installing test files or dependencies in the image.
+  docker exec -i --workdir /home "$1" timeout --kill-after=5s 90s node --input-type=commonjs \
+    < remote/test-support/browser-smoke.cjs
+}
+
 wait_for_health "$port_a" "$token_a"
 wait_for_health "$port_b" "$token_b"
+verify_browser "$container_a"
+verify_browser "$container_b"
+# Fresh named homes must not inherit a root-owned npm cache from image builds.
+docker exec "$container_a" sh -c 'test ! -e /home/.npm || test -w /home/.npm'
+docker exec "$container_a" npm cache verify >/dev/null
 printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port_a}/v1/health")" = 401 ]
 [ "$(docker inspect -f '{{.State.Running}}' "$container_a")" = true ]
@@ -139,16 +156,19 @@ scripts/remote-workspace.sh restart "$workspace_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
-scripts/remote-workspace.sh update "$workspace_a" wovenmatter/workspace:latest "" "" "$port_a" >/dev/null
+scripts/remote-workspace.sh update "$workspace_a" "$WOVENMATTER_IMAGE_NAME" "" "" "$port_a" >/dev/null
 wait_for_health "$port_a" "$token_a"
+verify_browser "$container_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
 delete_status="$(scripts/remote-workspace.sh delete "$workspace_a")"
 printf '%s\n' 'Checking explicit data deletion and legacy storage safety.'
 jq -e '.persistentDataRemoved == false' <<< "$delete_status" >/dev/null
 docker volume inspect "$volume_a" >/dev/null
+image_id="$(docker image inspect --format '{{.Id}}' "$WOVENMATTER_IMAGE_NAME")"
 WOVENMATTER_API_TOKEN="$token_a" \
-  scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
+  scripts/remote-workspace.sh create "$workspace_a" "$port_a" '' '' "$image_id" >/dev/null
+[ "$(docker inspect --format '{{.Image}}' "$container_a")" = "$image_id" ]
 wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 
@@ -156,7 +176,7 @@ printf legacy > "$legacy_data/marker"
 docker create --name "$legacy_container" \
   --label "com.wovenmatter.workspace=${legacy_workspace}" \
   --volume "$legacy_data:/home/legacy" \
-  --entrypoint /bin/true wovenmatter/workspace:latest >/dev/null
+  --entrypoint /bin/true "$WOVENMATTER_IMAGE_NAME" >/dev/null
 if scripts/remote-workspace.sh delete "$legacy_workspace" --data \
   >"$legacy_data/delete.out" 2>"$legacy_data/delete.err"; then
   printf '%s\n' 'legacy storage deletion unexpectedly succeeded' >&2
@@ -175,4 +195,4 @@ fi
 scripts/remote-workspace.sh delete "$workspace_b" --data >/dev/null
 trap - EXIT HUP INT TERM
 cleanup
-printf '%s\n' 'Container home, storage reporting, lifecycle persistence, legacy safety, and explicit deletion passed.'
+printf '%s\n' 'Container browser, home, storage reporting, lifecycle persistence, legacy safety, and explicit deletion passed.'

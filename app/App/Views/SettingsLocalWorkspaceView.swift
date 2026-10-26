@@ -147,12 +147,6 @@ struct SettingsLocalWorkspaceView: View {
                         Button("Manage sign-in") { onMore(kind) }.buttonStyle(SettingsQuietButtonStyle())
                     }
                 }
-                SettingsHarnessControlRow(title: "Sidebar") {
-                    Toggle("Show in sidebar", isOn: Binding(
-                        get: { model.isLocalACPRuntimeShown(kind) },
-                        set: { model.setLocalACPRuntimeShown($0, runtimeKind: kind) }))
-                        .accessibilityLabel("Show \(kind.displayName) in sidebar")
-                }
                 if model.runtimeFailures[kind, default: 0] >= 2
                     || (kind == .opencode && (model.openCode?.installationFailures ?? 0) >= 2) {
                     Button("Copy diagnostic") {

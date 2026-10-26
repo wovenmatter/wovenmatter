@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { appendWovenInstructions } from './instructions.mjs';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -161,4 +162,4 @@ async function main() {
     input.close(); process.exitCode = code ?? (signal ? 1 : 0);
   });
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

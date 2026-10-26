@@ -150,11 +150,8 @@ struct RemoteHarnessSetupView: View {
             installQueue = []; requestedStage = nil
             return
         }
-        if runtime.installed && runtime.enabled {
+        if runtime.installed {
             installQueue.removeFirst(); requestedStage = nil; advanceInstall()
-        } else if runtime.installed && requestedStage != "enable" {
-            requestedStage = "enable"
-            model.setRuntimePreferences(runtime, configuration: workspace, enabled: true)
         } else if requestedStage == nil {
             requestedStage = "install"
             model.prepareHarnessAction("install", harness: harness, configuration: workspace)

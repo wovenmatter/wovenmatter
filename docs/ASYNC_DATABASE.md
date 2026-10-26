@@ -21,6 +21,11 @@ while the writer is occupied, using WAL's last committed snapshot. The existing
 execution-process lease and SQLite locking still govern cross-process ownership.
 WAL, foreign keys, transaction semantics, and durability settings are retained.
 
+Pi Durable has a separate Node-owned connection to private namespaces in this
+same execution-host database. Those writes use SQLite locking rather than the
+Swift worker registry. See [Pi execution storage](architecture/PI_DURABLE_STORAGE.md)
+for transaction, migration, and recovery boundaries.
+
 The async boundary is outside each existing transaction. No transaction suspends
 halfway through. Operations that look like reads but journal access, such as agent
 history queries, remain writer jobs. Dashboard and tool-state refreshes read their

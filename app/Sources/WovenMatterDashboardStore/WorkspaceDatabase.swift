@@ -8,10 +8,12 @@ public final class WorkspaceDatabase: Sendable {
   private let writer: DatabaseConnectionBox<WorkspaceDatabaseConnection>?
   private let readers: [DatabaseConnectionBox<WorkspaceDatabaseConnection>]
   public let supportDirectory: URL
+  public let fileURL: URL
   public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
 
   public init(url: URL, readOnlyProjection: Bool = false) async throws {
+    self.fileURL = url.standardizedFileURL
     let workers = DatabaseWorkers.shared(url: url)
     self.workers = workers
     supportDirectory = url.deletingLastPathComponent()

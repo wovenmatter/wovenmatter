@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,4 +18,4 @@ export function installOpenCode(env = process.env) {
     if (/^export \{ default \} from "file:.*\/harnesses\/cli\/opencode\.mjs";\n$/.test(old)) unlinkSync(retired);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
-if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === 'opencode') installOpenCode();
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === 'opencode') installOpenCode();

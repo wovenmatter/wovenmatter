@@ -446,7 +446,7 @@ extension ApplicationModel {
             try dispatchFence.check()
             if claimed.kind == .calendar, target.localRuntimeKind == .opencode,
                target.remoteWorkspaceID == nil, openCode?.isEnabled != true {
-                throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
+                throw WorkspaceToolError.invalid("Install and connect OpenCode in Local agent workspace before running this task.")
             }
             let sent = try await dispatchAgentMessage(conversation: target,
                 input: .init(text: claimed.text, historyDeliveryID: claimed.id),

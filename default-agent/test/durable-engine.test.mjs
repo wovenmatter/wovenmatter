@@ -90,6 +90,38 @@ test('native owner lock excludes a second runtime and released identities can re
   assert.equal(reopened.permission, 'full');
 });
 
+for (const mode of ['off', 'on', 'only']) test(`native bash output (${mode}) reaches the transcript before the process completes`, {timeout:15000}, async t => {
+  const {engine,root} = await fixture(t, {config:{providers:['claude-subscription'],defaultModel:'claude-subscription/sonnet',codeMode:mode}}), record = await engine.create(), updates = [];
+  const nested = mode !== 'off';
+  const gate = join(root,'release-shell');
+  const command = `printf 'progress one 🧵\\n'; while [ ! -f '${gate}' ]; do sleep 0.05; done; printf 'progress two\\n'`;
+  let calls = 0, completed = false;
+  record.streamFunction = model => stream(model, ++calls === 1
+    ? [{type:'toolCall',id:'streamed-shell',name:nested?'codemode':'bash',arguments:nested
+      ? {code:`const result = await tools.bash({command:${JSON.stringify(command)}}); text(result);`}
+      : {command}}]
+    : [{type:'text',text:'Shell finished'}]);
+  const run = engine.handle('session/prompt',{sessionId:record.session.sessionId,prompt:[{type:'text',text:'Run the fixture shell'}]}, value=>updates.push(value))
+    .finally(()=>{completed=true;});
+  try {
+    const deadline = Date.now()+7000;
+    while(Date.now()<deadline && !completed && !updates.some(value=>value.sessionUpdate==='tool_call_update' && value.status==='in_progress'
+      && value.content?.some(block=>block.content?.text?.includes('progress one')))) await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(completed,false,'the process must still be waiting when its first output is visible');
+    const progress = updates.find(value=>value.sessionUpdate==='tool_call_update' && value.status==='in_progress'
+      && value.content?.some(block=>block.content?.text?.includes('progress one')));
+    assert.ok(progress,'live stdout must be readable ACP content, not only raw diagnostic metadata');
+  } finally {
+    await writeFile(gate,'release');
+    await run;
+  }
+  const starts = updates.filter(value=>value.sessionUpdate==='tool_call' && value.title==='bash');
+  assert.equal(starts.length,1);
+  const terminal = updates.findLast(value=>value.sessionUpdate==='tool_call_update' && value.toolCallId===starts[0].toolCallId && value.status==='completed');
+  assert.ok(terminal,'a completed nested tool must not be marked failed');
+  assert.ok(terminal.content.some(block=>block.content?.text?.includes('progress two')));
+});
+
 for (const scope of ['root', 'child']) test(`a sleeping ${scope} task keeps its execution group owned until it is aborted`, { timeout: 10000 }, async t => {
   const { engine } = await fixture(t), record = await engine.create();
   const conversation = scope === 'root' ? record.conversation
@@ -183,17 +215,30 @@ test('native messages and exposed thinking reach display and the live archive wi
   assert.notEqual(thoughts[0]._meta.wovenThoughtID, thoughts.at(-1)._meta.wovenThoughtID);
 });
 
-test('Stop cancels native bash children before uncertain effects can run', async t => {
+for (const nested of [false, true]) test(`Stop cancels native ${nested?'code-mode ':''}bash children before uncertain effects can run`, {timeout:10000}, async t => {
   const { engine, root } = await fixture(t);
   const record = await engine.create(), events = [];
-  let started; const ready = new Promise(resolve => { started = resolve; });
-  record.streamFunction = model => stream(model, [{ type: 'toolCall', id: 'slow-bash', name: 'bash', arguments: { command: 'sleep 3; touch cancelled-marker' } }]);
-  const run = engine.prompt(record, 'Stop this command', update => { events.push(update); if (update.sessionUpdate === 'tool_call') started(); }, undefined, { runID: randomUUID(), inputID: randomUUID() });
-  await ready;
-  const time = Date.now();
-  await engine.handle('session/cancel', { sessionId: record.session.sessionId });
-  assert.equal((await run).stopReason, 'cancelled');
-  assert.ok(Date.now() - time < 2000);
+  const gate = join(root, 'release-after-stop');
+  const command = `printf 'shell-ready\\n'; while [ ! -f '${gate}' ]; do sleep 0.02; done; touch cancelled-marker`;
+  record.streamFunction = model => stream(model, [{ type: 'toolCall', id: 'slow-bash', name: nested?'codemode':'bash',
+    arguments: nested?{code:`await tools.bash({command:${JSON.stringify(command)}});`}:{command} }]);
+  const run = engine.prompt(record, 'Stop this command', update => events.push(update), undefined, { runID: randomUUID(), inputID: randomUUID() });
+  try {
+    const deadline = Date.now()+3000;
+    while (Date.now()<deadline && !events.some(update=>update.sessionUpdate==='tool_call_update'
+      && update.content?.some(block=>block.content?.text?.includes('shell-ready')))) await new Promise(resolve=>setTimeout(resolve,10));
+    assert.ok(events.some(update=>update.sessionUpdate==='tool_call_update'
+      && update.content?.some(block=>block.content?.text?.includes('shell-ready'))),'wait for actual shell output before Stop');
+    const time = Date.now();
+    await engine.handle('session/cancel', { sessionId: record.session.sessionId });
+    assert.equal((await run).stopReason, 'cancelled');
+    assert.ok(Date.now() - time < 2000);
+  } finally {
+    await writeFile(gate,'release');
+    await engine.handle('session/cancel', {sessionId:record.session.sessionId});
+    await run;
+  }
+  await new Promise(resolve=>setTimeout(resolve,75));
   await assert.rejects(readFile(join(root, 'cancelled-marker')), { code: 'ENOENT' });
   const statuses = events.filter(update => update.sessionUpdate === 'woven_program_status' && !update.status.id);
   assert.equal(statuses.at(-1).status.state, 'idle');
