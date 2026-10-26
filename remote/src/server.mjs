@@ -14,6 +14,7 @@ import { createDurableACP } from './durable-acp.mjs'
 import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
+import { loadWorkspaceMCPCatalog, validateInput } from './workspace-mcp.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -81,11 +82,15 @@ const taskGateway = runningAsService ? createTaskGateway({
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
 
+const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
+const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser', 'woven_browser_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
+
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
   publisherKey: apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
+  workspaceBrowser,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
@@ -95,8 +100,6 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,defaultAgent,execution:clientExecution,
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
-
-const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
@@ -223,6 +226,27 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})
 
+    // A native host uses its existing administrative connection after checking
+    // its bound caller's current tools and trusted remote workspace selection.
+    // Device credentials and public MCP arguments cannot choose this principal.
+    if (['/v1/browser/mcp', '/v1/browser/mcp/cancel'].includes(url.pathname) && request.method === 'POST') {
+      const body = await readJSON(request, 4 * 1024 * 1024)
+      if (typeof body.callerID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.callerID)
+        || Object.keys(body).some(key => !['callerID', 'input'].includes(key))) return json(response,400,{error:'invalid_browser_mcp_caller'})
+      const cancel = url.pathname.endsWith('/cancel'), input = body.input
+      validateInput(browserMCPSchemas.get(cancel ? 'woven_browser_cancel' : 'woven_browser'), input)
+      if (typeof input.requestID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestID)) return json(response,400,{error:'browser_request_id_required'})
+      const controller = new AbortController(), disconnected = () => { if (!response.writableEnded) controller.abort() }
+      response.once('close', disconnected)
+      try {
+        const scope = { conversationID: body.callerID.toLowerCase() }
+        const result = cancel ? await workspaceBrowser.cancelMCP(scope,input.id) : await workspaceBrowser.executeMCP(scope,input,{signal:controller.signal})
+        const envelope = {success:true,result,requestID:input.requestID}
+        if (Buffer.byteLength(JSON.stringify(envelope)) > 1048576) throw Object.assign(new Error('The browser response exceeds 1 MiB. Request a smaller result.'),{statusCode:413})
+        return json(response,200,envelope)
+      } catch (error) { return json(response,200,{success:false,error:error.message,code:controller.signal.aborted?'cancelled':'automation_failed',requestID:input.requestID}) }
+      finally {response.off('close',disconnected)}
+    }
     if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
       await streamBrowserFrames(workspaceBrowser, url.searchParams.get('tabID'), response); return
     }

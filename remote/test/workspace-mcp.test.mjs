@@ -6,10 +6,10 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
 
-async function fixture(t,{fetchImpl}={}) {
+async function fixture(t,{fetchImpl,workspaceBrowser}={}) {
   const directory=mkdtempSync(join(tmpdir(),'woven-workspace-mcp-'))
   const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true}],create:async()=>({sessionID:randomUUID()}),close:async()=>{}}
-  const service=createClientExecution({directory,runtime,managedDataRoot:join(directory,'databases'),publisherKey:'k'.repeat(40),publisherFetch:fetchImpl,publisherIntervalMilliseconds:0})
+  const service=createClientExecution({directory,runtime,managedDataRoot:join(directory,'databases'),publisherKey:'k'.repeat(40),publisherFetch:fetchImpl,publisherIntervalMilliseconds:0,workspaceBrowser})
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
   const grant=service.provision({libraryID:randomUUID(),workspaceID:randomUUID(),deviceID:randomUUID(),ownerDeviceID:randomUUID(),scopes:['execution']})
   const device=service.principal('Bearer '+grant.token,'execution')
@@ -19,6 +19,20 @@ async function fixture(t,{fetchImpl}={}) {
   const call=(name,input={},who=scope)=>service.mcp.handle(who,{jsonrpc:'2.0',id:randomUUID(),method:'tools/call',params:{name,arguments:input}})
   return {directory,service,id,connection,scope,command,call}
 }
+
+test('workspace browser runs locally without library authority and returns inline images, including scheduled callers',async t=>{
+  const calls=[],workspaceBrowser={executeMCP:async(scope,input)=>{calls.push({scope,input});return {content:[{type:'image',mimeType:'image/jpeg',data:'fixture'}]}},cancelMCP:()=>({cancelled:1})}
+  const f=await fixture(t,{workspaceBrowser})
+  const response=await f.call('woven_browser',{action:'screenshot',tabId:randomUUID()})
+  assert.equal(response.result.isError,false);assert.equal(response.result.content[0].type,'image')
+  assert.equal(response.result.structuredContent.requestID,calls[0].input.requestID)
+  const task=await f.service.prepareTaskMCP({run:{id:randomUUID(),sessionID:randomUUID(),task:{configuration:{tools:{enabled:['browser']}}}},eventRevision:1})
+  const taskScope=f.service.mcp.resolvePrincipal('Bearer '+task.bearerToken)
+  assert.equal((await f.call('woven_browser',{action:'tabs'},taskScope)).result.isError,false)
+  await f.command('workspace',{conversationID:f.id,workspaceAction:{sessionTools:{id:f.id,enabled:['goals']}}})
+  assert.equal((await f.call('woven_browser',{action:'tabs'})).error.code,-32602)
+  assert.equal((await f.call('woven_browser_cancel',{id:'all'})).result.structuredContent.result.cancelled,1)
+})
 
 test('session and outside-agent MCP credentials preserve caller scope, readonly access, and current tool policy',async t=>{
   const f=await fixture(t)

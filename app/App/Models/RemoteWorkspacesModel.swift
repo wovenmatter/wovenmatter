@@ -1434,6 +1434,17 @@ final class RemoteWorkspacesModel {
         try await databaseRequest(configuration) { try await $0.runtimeInspection() }
     }
 
+    func browserMCP(configuration: RemoteWorkspaceConfiguration, callerID: String,
+                    input: GatewayJSONValue, requestID: String, cancelling: Bool = false) async throws -> WovenMatterToolResponse {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.browserMCP(callerID: callerID, input: input,
+            requestID: requestID, cancelling: cancelling)
+        try requireCurrent(identity)
+        return value
+    }
+
     private func serviceClient(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteWorkspaceServiceClient {

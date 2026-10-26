@@ -25,6 +25,10 @@ async function main() {
     <button onclick="document.querySelector('output').textContent =
       'Hello ' + document.querySelector('input').value">Greet</button><output></output>`;
   const server = createServer((request, response) => {
+    if (request.url === '/download') {
+      response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="mcp-proof.txt"' });
+      response.end('Woven MCP download proof'); return;
+    }
     response.writeHead(200, { 'Content-Type': 'text/html' });
     response.end(html);
   });
@@ -109,6 +113,7 @@ async function main() {
     assert.equal(Buffer.from(streamed.imageBase64, 'base64').readUInt16BE(), 0xffd8);
     await reader.cancel();
     console.log('Shared browser performance transport: ordered 30-key batch and authenticated live stream passed.');
+    await verifyMCP(serviceURL, sharedTab.id, sharedPage, url, request);
     await browser.close(); browser = undefined;
     assert.ok((await (await request('tabs')).json()).tabs.some(tab => tab.id === sharedTab.id));
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);
@@ -124,6 +129,62 @@ async function main() {
     process.chdir('/home');
     await rm(directory, { recursive: true, force: true });
   }
+}
+async function verifyMCP(serviceURL, tabId, page, url, viewerRequest) {
+  const uuid = require('node:crypto').randomUUID;
+  const admin = async (path, method, body) => {
+    const response = await fetch(serviceURL + path, { method,
+      headers: { Authorization: 'Bearer ' + process.env.WOVENMATTER_API_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    assert.ok(response.ok, path + ': ' + response.status);
+    return response.json();
+  };
+  const deviceID = uuid();
+  await admin('/v1/execution/devices', 'POST', { libraryID: uuid(), workspaceID: uuid(), deviceID, ownerDeviceID: uuid(), scopes: ['execution'] });
+  await admin('/v1/task-gateway', 'PATCH', { enabled: true });
+  // Creating native metadata does not submit a prompt or call a provider.
+  const opened = await admin('/v1/execution/commands', 'POST', { commandID: uuid(), deviceID, kind: 'createSession' });
+  assert.equal(opened.status, 'completed', JSON.stringify(opened));
+  const client = await admin('/v1/mcp/clients', 'POST', { conversationID: opened.conversationID, label: 'Container browser smoke', readOnly: false, enabledGroups: ['browser'] });
+  const call = async (name, input) => {
+    const response = await fetch(serviceURL + '/mcp', { method: 'POST',
+      headers: { Authorization: 'Bearer ' + client.connection.bearerToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: uuid(), method: 'tools/call', params: { name, arguments: input } }),
+      signal: AbortSignal.timeout(30000) });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const invoke = async input => {
+    const response = await call('woven_browser', input);
+    assert.equal(response.result?.isError, false, JSON.stringify(response));
+    return response.result;
+  };
+  const snapshot = await invoke({ action: 'snapshot', tabId });
+  assert.match(snapshot.content[0].text, /Name/);
+  await invoke({ action: 'fill', tabId, selector: 'input[aria-label="Name"]', text: 'MCP and viewer share this tab' });
+  assert.equal(await page.locator('input[aria-label="Name"]').inputValue(), 'MCP and viewer share this tab');
+  const image = await invoke({ action: 'screenshot', tabId });
+  assert.equal(image.content[0].type, 'image');
+  assert.equal(Buffer.from(image.content[0].data, 'base64').readUInt16BE(), 0xffd8);
+  const added = JSON.parse((await invoke({ action: 'open', url: url + '?mcp=1' })).content[0].text);
+  assert.ok((await (await viewerRequest('tabs')).json()).tabs.some(tab => tab.id === added.tabId));
+  await invoke({ action: 'close', tabId: added.tabId });
+  await page.evaluate(() => { const link = document.createElement('a'); link.href = '/download'; link.id = 'mcp-download'; link.textContent = 'Download proof'; document.body.append(link); });
+  const downloaded = JSON.parse((await invoke({ action: 'download', tabId, selector: '#mcp-download' })).content[0].text);
+  assert.equal(downloaded.status, 'complete');
+  const listed = JSON.parse((await invoke({ action: 'downloads', tabId })).content[0].text);
+  assert.ok(listed.some(item => item.id === downloaded.id));
+  const read = JSON.parse((await invoke({ action: 'read-download', tabId, id: downloaded.id })).content[0].text);
+  assert.equal(Buffer.from(read.data, 'base64').toString(), 'Woven MCP download proof');
+  const requestID = uuid(), pending = call('woven_browser', { action: 'click', tabId, selector: '#never-present', requestID });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const cancelled = await call('woven_browser_cancel', { id: requestID });
+  assert.equal(cancelled.result.structuredContent.result.cancelled, 1);
+  assert.equal((await pending).result.isError, true);
+  assert.equal((await viewerRequest('frame', { tabID: tabId })).status, 200);
+  await admin('/v1/mcp/clients/' + client.id, 'DELETE');
+  await admin('/v1/task-gateway', 'PATCH', { enabled: false });
+  console.log('Authenticated Woven MCP: shared-tab discovery, snapshot, form input, inline screenshot, lifecycle and caller cancellation passed without a provider prompt.');
 }
 async function verifyInteraction(page, tabID, request) {
   const assert = require('node:assert/strict');

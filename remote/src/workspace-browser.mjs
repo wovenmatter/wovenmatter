@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { createWorkspaceBrowserMCP } from './workspace-browser-mcp.mjs'
 
 const failure = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 async function deadline(operation, milliseconds = 5000) {
@@ -400,6 +401,7 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
     },
     async close() {
       closed = true
+      await automation.close()
       await starting?.catch(() => {})
       const session = active
       active = undefined
@@ -409,6 +411,29 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
       await session?.context.close()
     },
   }
+  const automation = createWorkspaceBrowserMCP({
+    tabs: () => api.tabs(),
+    connect: async () => { await api.connect(); return active },
+    locate: async id => {
+      inventory()
+      const page = pages.get(id)
+      if (!page) throw failure(410, 'Choose a current tabId from tabs or open.')
+      return { id, page }
+    },
+    createPage: async () => {
+      if (active.context.pages().length >= 64) throw failure(409, 'The shared browser has reached its 64-tab limit.')
+      const page = await active.context.newPage()
+      inventory()
+      return { id: ids.get(page), page }
+    },
+    claim: page => {
+      if (acting.has(page)) throw failure(409, 'browser_busy')
+      acting.add(page)
+      return () => acting.delete(page)
+    },
+  })
+  api.executeMCP = automation.execute
+  api.cancelMCP = automation.cancel
   return api
 }
 

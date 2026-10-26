@@ -7,7 +7,8 @@ const hash = value => createHash('sha256').update(value).digest('hex')
 const groups = new Set(['notes','history','sessions','goals','timers','usage','calendar','library','executor','browser','computer'])
 const groupFor = name => name === 'woven_context' || name.startsWith('woven_databases_') ? 'notes' : name.split('_')[1]
 const errorReply = (id, code, message) => ({jsonrpc:'2.0',id:id??null,error:{code,message}})
-const result = value => ({content:[{type:'text',text:JSON.stringify(value.result ?? null)}],structuredContent:value,isError:value.success===false})
+const result = value => value.result?.content ? {content:value.result.content,structuredContent:{success:value.success,requestID:value.requestID},isError:value.success===false}
+  : {content:[{type:'text',text:JSON.stringify(value.result ?? null)}],structuredContent:value,isError:value.success===false}
 
 export function loadWorkspaceMCPCatalog() {
   return JSON.parse(readFileSync(new URL('./woven-mcp-tools.json', import.meta.url), 'utf8'))
@@ -119,7 +120,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       const group=groupFor(tool.name)
       const cleanup=['woven_browser_cancel','woven_computer_cancel'].includes(tool.name)
       const scopedHistory=!scope.taskProof&&group==='history'&&scopedHistoryAccess(scope)
-      const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'
+      const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'||group==='browser'&&local.has(tool.name)
       const transport=scope.taskProof?(localTask||hasLibrary):(local.has(tool.name)||hasLibrary)
       return (current.has(group)||cleanup||scopedHistory)&&transport
     })
@@ -196,7 +197,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       if(inFlight.has(requestKey))return errorReply(id,-32600,'This JSON-RPC request ID is already active for this caller.')
       requestController=new AbortController();inFlight.set(requestKey,requestController)
       const invocationSignal=signal?AbortSignal.any([signal,requestController.signal]):requestController.signal
-      if(!local.has(name)||shouldDelegate(scope,name,input)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
+      if(!local.has(name)||shouldDelegate(scope,name,input)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       const value=await localCall(scope,name,{...input,requestID:operationRequestID},{signal:invocationSignal})
       const reply=result(value)
       if(Buffer.byteLength(JSON.stringify(reply))>1048576)throw fail(413,'The response exceeds 1 MiB. Request a smaller page or character window.')

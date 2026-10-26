@@ -29,3 +29,7 @@ default-agent/**
 **/node_modules
 **/.env
 **/.env.*
+**/._*
+**/.DS_Store
+**/__pycache__
+**/*.pyc

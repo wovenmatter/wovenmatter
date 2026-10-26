@@ -8,16 +8,21 @@ import WovenMatterDashboardStore
 // This deliberately does not substitute for native ApplicationModel routing tests.
 private actor FixtureOwner {
     let database: WorkspaceDatabase
+    let root: URL
     let journal = BackendInvalidationJournal()
     var shouldStop = false
     var streamingRun: (conversationID: String, runID: String)?
-    init(root: URL) async throws { database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite")) }
+    init(root: URL) async throws {
+        self.root = root
+        database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+    }
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         do {
             switch request.method {
             case "stream":
                 let id = try await database.createLocalACPSession(runtimeKind: .codex,
-                    title: "Streaming fixture", ownerDeviceID: UUID())
+                    title: "Streaming fixture", ownerDeviceID: UUID(), executionRoot: .init(folderID: nil,
+                        location: .init(workspaceID: "local", rootPath: root.path, managed: false), defaultPath: root.path))
                 let run = try await database.beginLocalACPRun(conversationID: id, content: "Fixture only")
                 streamingRun = (id, run.runID)
                 try await database.upsertDeviceOwnedRunActivity(runID: run.runID,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -23,6 +23,25 @@ import { authenticationInput, authenticationDeadline, downloadInstallerSource, p
 
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
+
+test('internal remote browser MCP permits only administrator forwarding and validates the native caller envelope', async context => {
+  const root = await temporaryFixture(context, 'woven-browser-mcp-route-')
+  const token = 'browser-mcp-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({workspace:root, home:root, catalog:catalogPath, token})
+  context.after(() => stopService(service.child))
+  const body = {callerID:randomUUID(),input:{action:'tabs',requestID:randomUUID()}}
+  const request = (path, bearer, input) => fetch(service.url+path,{method:'POST',headers:{Authorization:'Bearer '+bearer,'Content-Type':'application/json'},body:JSON.stringify(input)})
+  assert.equal((await request('/v1/browser/mcp','unrelated',body)).status,401)
+  const forwarded = await request('/v1/browser/mcp',token,body)
+  assert.equal(forwarded.status,200)
+  const reply = await forwarded.json()
+  assert.equal(reply.success,true);assert.equal(reply.requestID,body.input.requestID)
+  assert.deepEqual(JSON.parse(reply.result.content[0].text),[])
+  assert.equal((await request('/v1/browser/mcp',token,{...body,workspace:'forged'})).status,400)
+  assert.equal((await request('/v1/browser/mcp',token,{...body,input:{...body.input,endpoint:'forged'}})).status,400)
+  const device = await (await request('/v1/execution/devices',token,{libraryID:randomUUID(),workspaceID:randomUUID(),deviceID:randomUUID(),ownerDeviceID:randomUUID(),scopes:['execution']})).json()
+  assert.equal((await request('/v1/browser/mcp',device.token,body)).status,403)
+})
 
 test('runtime inspection is authenticated and never starts a Pi worker', async context => {
   const root = await temporaryFixture(context, 'woven-runtime-inspection-')
