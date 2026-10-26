@@ -229,10 +229,7 @@ struct SettingsRemoteWorkspacesView: View {
     }
 
     private var workspacesCard: some View {
-        SettingsCard(
-            title: "Workspaces",
-            detail: "Each workspace keeps its own files, agents, and credentials."
-        ) {
+        SettingsCard(title: "Workspaces") {
             if model.workspaces.isEmpty {
                 SettingsEmpty("No remote workspaces yet.")
             } else {
@@ -376,8 +373,7 @@ struct SettingsRemoteWorkspacesView: View {
     }
 
     private var hostCard: some View {
-        SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace.") {
-            SettingsNote("Remote workspaces run Woven Matter directly on Linux. Native hosts replace the deprecated container workspace option.")
+        SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
             if workspaceKind == .host {
                 SettingsField("Workspace access") {
                     Picker("Workspace access", selection: $accessMode) {
