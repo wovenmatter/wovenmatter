@@ -112,7 +112,7 @@ import WovenMatterClient
         let suite = "remote-browser-tests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let configuration = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
+        let configuration = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
         defaults.set(try JSONEncoder().encode([configuration]), forKey: "wovenmatter.remote-workspaces.v1")
         let owner = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         let projection = RemoteWorkspacesModel(defaults: defaults, backendProjection: true)
