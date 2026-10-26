@@ -166,14 +166,16 @@ enum PiNativeHistoryFrame {
     private struct RootFields {
         var id: String?, kind: String?
         private var expectingKey = true, capturing = false
+        var values: [String: String] = [:]
         private var pendingKey: String?, token = Data(), numeric = Data()
         mutating func consume(_ byte: UInt8, depth: Int, inString: Bool, escaped: Bool) {
             if inString {
                 if capturing, token.count < 16 * 1_024 { token.append(byte) }
                 if byte == 34, !escaped, depth == 1 {
                     if capturing, let value = try? JSONSerialization.jsonObject(with: token, options: [.fragmentsAllowed]) as? String {
-                        if expectingKey { pendingKey = ["id", "type"].contains(value) ? value : nil }
+                        if expectingKey { pendingKey = ["id", "type", "role", "command", "toolCallId", "toolName", "stopReason", "errorMessage", "isError", "message"].contains(value) ? value : nil }
                         else if let pendingKey {
+                            values[pendingKey] = value
                             if pendingKey == "id" { id = value }
                             if pendingKey == "type" { kind = value }
                         }
@@ -191,6 +193,7 @@ enum PiNativeHistoryFrame {
                 if pendingKey == "id", !numeric.isEmpty,
                    let text = String(data: numeric, encoding: .utf8), let number = Double(text),
                    number >= 1, number <= 9_007_199_254_740_991, let integer = Int64(exactly: number) { id = String(integer) }
+                if let pendingKey, !numeric.isEmpty { values[pendingKey] = String(decoding: numeric, as: UTF8.self) }
                 numeric.removeAll(keepingCapacity: true); pendingKey = nil; expectingKey = true
             } else if pendingKey != nil, !expectingKey, numeric.count < 128, !isWhitespace(byte) { numeric.append(byte) }
         }
