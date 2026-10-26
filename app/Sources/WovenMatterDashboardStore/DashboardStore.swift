@@ -125,6 +125,7 @@ public actor DashboardStore {
     get throws { guard let value = ownedMessageAttachments else { throw WorkspaceDatabaseError.readOnlyProjection }; return value }
   }
   private var localWorkspacePrepared = false
+  private var executionWorkspaceDeviceID: UUID?
 
   public init(supportDirectory: URL, readOnlyProjection: Bool = false) async throws {
     try await self.init(supportDirectory: supportDirectory, readOnlyProjection: readOnlyProjection, runControls: nil)
@@ -205,9 +206,15 @@ public actor DashboardStore {
     try await database.recoverInterruptedLocalACPRuns()
   }
 
-  public func prepareLocalWorkspace() async throws {
+  public func prepareLocalWorkspace(executionWorkspaceDeviceID: UUID? = nil) async throws {
     guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
-    guard !localWorkspacePrepared else { return }
+    guard !localWorkspacePrepared else {
+      guard executionWorkspaceDeviceID == nil || executionWorkspaceDeviceID == self.executionWorkspaceDeviceID else {
+        throw WorkspaceToolError.invalid("This instance's execution workspace is already fixed.")
+      }
+      return
+    }
+    self.executionWorkspaceDeviceID = executionWorkspaceDeviceID
     let deviceID = try await deviceIdentity.id()
     try await database.bindDeviceOwnership(ownerDeviceID: deviceID)
     try await database.reconcileLocalCLIAgentCatalog(ownerDeviceID: deviceID)
@@ -430,7 +437,7 @@ public actor DashboardStore {
     executionRoot: SessionCreationRoot
   ) async throws -> String {
     await runControls?.beforeSessionCreation()
-    guard executionRoot.location.workspaceID == "device:" + (try await deviceIdentity.id()).uuidString.lowercased() else {
+    guard executionRoot.location.workspaceID == (try await executionWorkspaceID()) else {
       throw WorkspaceToolError.invalid("Create this chat in its owning execution workspace.")
     }
     return try await database.createLocalACPSession(
@@ -502,6 +509,13 @@ public actor DashboardStore {
       profile,
       ownerDeviceID: deviceID
     )
+  }
+
+  public func executionWorkspaceID() async throws -> String {
+    let id: UUID
+    if let executionWorkspaceDeviceID { id = executionWorkspaceDeviceID }
+    else { id = try await deviceIdentity.id() }
+    return "device:" + id.uuidString.lowercased()
   }
 
   public func dashboardDeviceID() async throws -> UUID {

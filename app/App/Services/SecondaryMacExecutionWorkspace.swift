@@ -47,7 +47,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         let store = try await DashboardStore(supportDirectory: directory)
         let model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
                                      ownsExecutionOverride: true, workspaceAssets: assets)
-        try await model.configureClientExecutionWorkspace(directory: directory)
+        guard let ownerDeviceID = UUID(uuidString: state.deviceID) else { throw MobileStore.Failure.incompatibleStore }
+        try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.isClient ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
             capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])

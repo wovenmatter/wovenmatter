@@ -355,8 +355,9 @@ final class OpenCodeModel {
 
     func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot) async throws -> String {
         if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder, executionRoot)).createdID ?? "" }
-        let owner = remoteConfiguration.map { "remote:" + $0.id.uuidString.lowercased() }
-            ?? "device:" + ownerDeviceID.uuidString.lowercased()
+        let owner: String
+        if let configuration = remoteConfiguration { owner = "remote:" + configuration.id.uuidString.lowercased() }
+        else { owner = try await store.executionWorkspaceID() }
         guard executionRoot.location.workspaceID == owner else {
             throw OpenCodeError.message("Create this chat in its owning execution workspace.")
         }
@@ -431,7 +432,7 @@ final class OpenCodeModel {
               directory.hasPrefix("/"), !directory.contains("\0") else {
             throw OpenCodeError.message("This transcript has no execution directory to retain.")
         }
-        let location = WorkspaceFolderLocation(workspaceID: "device:" + ownerDeviceID.uuidString.lowercased(),
+        let location = WorkspaceFolderLocation(workspaceID: try await store.executionWorkspaceID(),
             rootPath: directory, managed: false)
         _ = try await open(snapshot.info, importedSnapshot: snapshot,
             executionRoot: .init(folderID: nil, location: location, defaultPath: directory))

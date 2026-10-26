@@ -527,13 +527,13 @@ final class ApplicationModel {
 
     /// Starts only the optional execution workspace belonging to a library client.
     /// Its database stores runtime state and a replica projection, never library authority.
-    func configureClientExecutionWorkspace(directory: URL) async throws {
+    func configureClientExecutionWorkspace(directory: URL, executionWorkspaceDeviceID: UUID? = nil) async throws {
         guard !isLibraryClient, !isBackendFrontend, let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
         clientExecutionDirectory = directory
-        try await dashboardStore.prepareLocalWorkspace()
+        try await dashboardStore.prepareLocalWorkspace(executionWorkspaceDeviceID: executionWorkspaceDeviceID)
         await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
             await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
         }
@@ -5233,7 +5233,7 @@ extension ApplicationModel {
     func executionWorkspaceIdentity(workspaceID: UUID?) async throws -> String {
         if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return "device:" + (try await store.dashboardDeviceID()).uuidString.lowercased()
+        return try await store.executionWorkspaceID()
     }
 
     func folderWorkingDirectory(folderID: String?, workspaceID: UUID?, explicit: URL? = nil,
