@@ -372,10 +372,16 @@ struct SettingsRemoteWorkspacesView: View {
                 SettingsInset {
                     VStack(alignment: .leading, spacing: 8) {
                         remoteValueRow(
+                            label: "Host status",
+                            value: preflight.ready ? "Ready to create a workspace"
+                                : preflight.canPrepare == true ? "Host preparation available"
+                                : "Needs attention"
+                        )
+                        remoteValueRow(
                             label: "Runtime",
                             value: preflight.version.isEmpty
                                 ? "Docker Engine not ready · \(preflight.architecture)"
-                                : "Docker Engine \(preflight.version) · \(preflight.architecture)"
+                                : "\(preflight.ready ? "Docker Engine" : "Container runtime") \(preflight.version) · \(preflight.architecture)"
                         )
                         VStack(alignment: .leading, spacing: 8) {
                             remoteValueRow(
@@ -433,7 +439,8 @@ struct SettingsRemoteWorkspacesView: View {
             SettingsNote("Use 0 to disable swap, or leave it blank for the host default.")
             SettingsNote("Files use available disk space on the remote machine.")
 
-            Button(model.isCreating ? "Creating…" : "Create workspace") {
+            Button(model.isCreating ? "Creating…" : currentPreflight?.canPrepare == true
+                ? "Prepare host and create workspace" : "Create workspace") {
                 model.create(
                     name: name,
                     workspaceID: workspaceID,

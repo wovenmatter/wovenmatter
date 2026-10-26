@@ -57,8 +57,9 @@ if [ "${1:-}" = context ] && [ "${2:-}" = inspect ]; then
 fi
 if [ "${1:-}" = version ]; then
   case "${3:-}" in
-    *Platform.Name*) printf '%s\n' "${WOVENMATTER_FAKE_PLATFORM:-Docker Engine - Community}" ;;
-    *APIVersion*) printf '1.55\n' ;;
+    *Platform.Name*) printf '%s\n' "${WOVENMATTER_FAKE_PLATFORM-Docker Engine - Community}" ;;
+    *Components*) printf '%s\n' "${WOVENMATTER_FAKE_COMPONENTS-Engine}" ;;
+    *APIVersion*) printf '%s\n' "${WOVENMATTER_FAKE_API-1.55}" ;;
     *) printf '29.7.2\n' ;;
   esac
   exit 0
@@ -129,8 +130,52 @@ inspection="$(
 )"
 jq -e '
   .ready == false
-  and (.blockingIssues | map(select(contains("remote Docker contexts"))) | length) == 1
+  and (.blockingIssues | map(select(contains("Remote Docker contexts"))) | length) == 1
 ' <<< "$inspection" >/dev/null
+
+# Arch/Omarchy's supported Docker package omits the optional platform name.
+for platform in '' 'Moby Engine'; do
+  inspection="$(
+    PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+    WOVENMATTER_FAKE_PLATFORM="$platform" \
+    WOVENMATTER_FAKE_COMPONENTS=$'Engine\ncontainerd\nrunc' \
+    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  )"
+  jq -e '.ready == true and .preparationRequired == false and (.blockingIssues | length) == 0' \
+    <<< "$inspection" >/dev/null
+done
+
+# A blank platform alone must never admit an unidentified compatibility shim.
+for components in '' 'Some Engine' 'Podman Engine'; do
+  inspection="$(
+    PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+    WOVENMATTER_FAKE_PLATFORM='' WOVENMATTER_FAKE_COMPONENTS="$components" \
+    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  )"
+  jq -e '.ready == false and .canPrepare == false and (.blockingIssues | length) == 1' \
+    <<< "$inspection" >/dev/null
+done
+
+for api in '1.40' '' 'unknown'; do
+  inspection="$(
+    PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+    WOVENMATTER_FAKE_API="$api" \
+    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  )"
+  jq -e '.ready == false and (.blockingIssues[0] | contains("API"))' \
+    <<< "$inspection" >/dev/null
+  if [ "$api" = '1.40' ]; then
+    jq -e '.blockingIssues[0] | contains("API 1.40") and contains("Update Docker Engine")' \
+      <<< "$inspection" >/dev/null
+  fi
+done
+
+inspection="$(
+  PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+  WOVENMATTER_FAKE_API=1.41 WOVENMATTER_FAKE_PLATFORM='' \
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+)"
+jq -e '.ready == true' <<< "$inspection" >/dev/null
 
 if PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \

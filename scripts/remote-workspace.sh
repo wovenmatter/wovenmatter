@@ -7,6 +7,7 @@ low_storage_bytes="${WOVENMATTER_LOW_STORAGE_BYTES:-10737418240}"
 low_storage_percent="${WOVENMATTER_LOW_STORAGE_PERCENT:-10}"
 active_lock=''
 docker_prefix=()
+docker_engine_problem=''
 host_capacity=''
 host_available=''
 host_storage_low=false
@@ -139,15 +140,37 @@ docker_info_value() {
 }
 
 docker_engine_supported() {
-  local platform api major minor
-  local_docker_endpoint || return 1
+  local platform components api major minor
+  docker_engine_problem=''
+  if ! local_docker_endpoint; then
+    docker_engine_problem='Docker is targeting a remote endpoint. Select a local Docker Engine socket on this SSH host, then inspect again. Remote Docker contexts are not supported for workspace storage and ports.'
+    return 1
+  fi
   platform="$(docker_exec version --format '{{.Server.Platform.Name}}' 2>/dev/null || true)"
+  components="$(docker_exec version --format '{{range .Server.Components}}{{println .Name}}{{end}}' 2>/dev/null || true)"
+  case "$platform"$'\n'"$components" in
+    *[Pp][Oo][Dd][Mm][Aa][Nn]*)
+      docker_engine_problem='This host is using Podman through a Docker compatibility command. Install Docker Engine alongside it without replacing existing containers, then inspect again.'
+      return 1 ;;
+  esac
+  # Docker/Moby distribution packages (including Arch/Omarchy) may leave the
+  # optional branding field empty. The Engine component identifies the daemon.
+  if [[ "$platform" != *"Docker Engine"* ]] \
+    && [[ $'\n'"$components"$'\n' != *$'\nEngine\n'* ]]; then
+    docker_engine_problem="The container runtime could not be identified as Docker Engine (reported name: ${platform:-not provided}). Install Docker Engine on this host, then inspect again. Docker-compatible command shims are not supported."
+    return 1
+  fi
   api="$(docker_exec version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
-  [[ "$platform" == *"Docker Engine"* ]] || return 1
-  [[ "$api" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+  if ! [[ "$api" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    docker_engine_problem='Docker answered, but its Engine API version could not be read. Check docker version using this SSH account, then inspect again.'
+    return 1
+  fi
   major="${api%%.*}"
   minor="${api#*.}"
-  [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 41 ]; }
+  if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 41 ]; }; then
+    docker_engine_problem="This host reports Docker Engine API ${api}; workspaces require API 1.41 or newer. Update Docker Engine on this host, then inspect again."
+    return 1
+  fi
 }
 
 local_docker_endpoint() {
@@ -171,7 +194,7 @@ require_docker() {
     "Docker Engine is installed but unavailable. Inspect and authorize host preparation first." 69
   docker_engine_supported || fail \
     "unsupported_container_runtime" \
-    "Woven Matter requires Docker Engine API 1.41 or newer; Docker-compatible command shims are not supported." 69
+    "$docker_engine_problem" 69
 }
 
 is_rootless() {
@@ -297,7 +320,7 @@ inspect_host() {
     swap_capable && swap=true
     [ "$memory" = true ] || limitations+=("Memory limits are unavailable in this Docker and cgroup configuration.")
     [ "$swap" = true ] || limitations+=("Swap limits are unavailable in this Docker, kernel, or cgroup configuration.")
-    [ "$engine_supported" = true ] || blockers+=("Woven Matter requires a local Docker Engine API 1.41 or newer. Docker-compatible command shims such as Podman and remote Docker contexts are not supported by this lifecycle implementation.")
+    [ "$engine_supported" = true ] || blockers+=("$docker_engine_problem")
     refresh_host_storage_metrics
     if [ -z "$host_capacity" ]; then
       limitations+=("Host storage capacity could not be measured safely.")

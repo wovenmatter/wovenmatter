@@ -20,15 +20,21 @@ rather than maintaining a separate SSH key store.
 
 1. Open **Settings → Remote Agent Workspaces** and select or enter a host.
 2. Inspect the host and review the result; inspection does not install software.
-3. If preparation is offered, review and authorize the listed changes; the app
-   verifies the host again before creating the workspace.
+3. If the host needs setup, choose **Prepare host and create workspace**, then
+   review and authorize the listed changes. The app installs Docker on supported
+   Ubuntu/Debian hosts or starts an existing Docker service, verifies the result,
+   and continues creating the workspace.
 4. Create the workspace, then install and authenticate the harnesses you want
    inside it.
 5. Choose its agent in **New chat**.
 
 If preparation is blocked, resolve the reported requirement on the host and
 inspect again. The app does not remove conflicting container packages or change
-your SSH account's Docker group membership for you.
+your SSH account's Docker group membership for you. Existing Docker Engine
+installations on other Linux distributions, including Arch and Omarchy, work
+without host preparation. Inspection identifies the Engine component even when
+the distribution omits Docker's display name; an old API, a remote Docker
+endpoint, or an unsupported runtime gets its own explanation.
 
 ## Browse inside a workspace
 
