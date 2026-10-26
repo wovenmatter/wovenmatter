@@ -270,8 +270,6 @@ public actor LocalUsageService {
     let analytics = try await analyticsSnapshot(
       range: range,
       refreshReason: refreshReason,
-      enabledProviders: enabledProviders,
-      allowCredentialAccess: allowCredentialAccess,
       now: now
     )
     let analyticsID = analyticsGeneration
@@ -473,8 +471,6 @@ public actor LocalUsageService {
   public func analyticsSnapshot(
     range: UsageTimeRange,
     refreshReason: UsageRefreshReason = .manual,
-    enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
-    allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async throws -> UsageAnalyticsSnapshot {
     try Task.checkCancellation()

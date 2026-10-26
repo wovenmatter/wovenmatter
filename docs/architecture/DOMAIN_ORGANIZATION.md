@@ -122,15 +122,14 @@ except the explicitly documented access qualifiers and lock/row-count access.
 
 ### WorkspaceDatabase+LocalACP.swift
 
-Public value/error types: `LocalACPSessionDescriptor`, `LocalACPRunIdentifiers`, `LocalACPSteeringIdentifiers`, `LocalACPSessionDatabaseError`. The nested `WorkspaceDatabase.DeviceOwnedAssistantMutation` and `WorkspaceDatabase.DeviceOwnedGatewayProjectionResult` declarations move here as well.
+Public value/error types: `LocalACPSessionDescriptor`, `LocalACPRunIdentifiers`, `LocalACPSteeringIdentifiers`, `LocalACPSessionDatabaseError`.
 
 - `knownSessionIDs`, `markSessionImportedUnlocked`, `createLocalACPSession`, `createLocalACPSessionUnlocked`.
 - `createRemoteACPSession`, `createRemoteACPSessionUnlocked`, `localACPSession`, `localRunAuthorityUnlocked`.
 - `updateLocalACPSessionID`, `updateLocalACPSessionConfiguration`, `beginLocalACPRun`, `insertMessageAttachmentsUnlocked`.
 - `activeDeviceOwnedConversationIDs`, `beginLocalACPSteeringTurn`, `appendLocalACPAssistantChunk`, `replaceLocalACPAssistantMessage`.
-- `completeLocalACPAssistantMessage`, `recordAssistantStreamBoundary`, `upsertDeviceOwnedRunActivity`, `appendDeviceOwnedGatewayTraceEvent`.
-- `applyDeviceOwnedGatewayProjection`, `deviceOwnedGatewayTraceEvents`, `claimDeviceOwnedGatewayTraceEventUnlocked`, `gatewayTraceRecordID`.
-- `assistantContentReplacingFinalSegmentUnlocked`, `mutateLocalACPAssistantMessageUnlocked`, `recordAssistantStreamBoundaryUnlocked`, `upsertDeviceOwnedRunActivityUnlocked`.
+- `completeLocalACPAssistantMessage`, `recordAssistantStreamBoundary`, `upsertDeviceOwnedRunActivity`.
+- `recordAssistantStreamBoundaryUnlocked`, `upsertDeviceOwnedRunActivityUnlocked`.
 - `completeLocalACPRun`, `cancelLocalACPRun`, `recoverInterruptedLocalACPRuns`, `localAssistantPreviewUnlocked`.
 - `localPreview`.
 

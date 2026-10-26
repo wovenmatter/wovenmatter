@@ -6,7 +6,6 @@ import WovenMatterCompanion
 @MainActor enum DeviceMCPExecutorJobs {
   static var tasks: [String: Task<Void, Never>] = [:]
   static var owners: [String: String] = [:]
-  static func cancelAll() { for task in tasks.values { task.cancel() }; tasks.removeAll(); owners.removeAll() }
   static func cancelWithoutContinuation(_ hasContinuation: (String) -> Bool) {
     for (id, owner) in owners where !hasContinuation(owner) { tasks[id]?.cancel() }
   }

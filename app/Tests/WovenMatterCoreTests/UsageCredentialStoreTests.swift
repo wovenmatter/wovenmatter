@@ -26,7 +26,6 @@ struct UsageCredentialStoreTests {
       let snapshot = try await service.analyticsSnapshot(
         range: .last30Days,
         refreshReason: .startup,
-        enabledProviders: [.openRouter],
         now: Date(timeIntervalSince1970: 1_800_000_000)
       )
       #expect(!snapshot.sources.contains { $0.id == "openrouter" })

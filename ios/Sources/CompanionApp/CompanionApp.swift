@@ -189,12 +189,6 @@ extension WorkspaceRow where Icon == DashboardLucideIcon {
   }
 }
 
-extension WorkspaceRow where Icon == Image {
-  init(systemIcon: String, title: String, detail: String? = nil, action: @escaping () -> Void) {
-    self.init(icon: Image(systemName: systemIcon), title: title, detail: detail, action: action)
-  }
-}
-
 struct GroupLabel: View {
   var text: String
   var body: some View { Text(text).font(.subheadline.weight(.semibold)).foregroundStyle(DashboardPalette.foreground).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.top, 22).padding(.bottom, 6) }

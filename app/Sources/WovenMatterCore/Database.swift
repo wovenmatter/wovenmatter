@@ -1,31 +1,5 @@
 import Foundation
 
-public enum AgentDatabasePreference: String, Codable, CaseIterable, Sendable {
-  case none
-  case json
-  case sqlite
-
-  public var displayName: String {
-    switch self {
-    case .none: "No preference"
-    case .json: "JSON"
-    case .sqlite: "SQLite"
-    }
-  }
-}
-
-public struct AgentDatabaseQueryResponse: Codable, Equatable, Sendable {
-  public let contractVersion: Int
-  public let columns: [String]
-  public let rows: [[String]]
-
-  public init(contractVersion: Int = 1, columns: [String], rows: [[String]]) {
-    self.contractVersion = contractVersion
-    self.columns = columns
-    self.rows = rows
-  }
-}
-
 public struct DatabaseTabularData: Equatable, Codable, Sendable {
   public let columns: [String]
   public let rows: [[String]]

@@ -275,15 +275,6 @@ extension CompanionModel {
     if selectedExecutionWorkspaceID == "central" { return centralProvider }
     return selectedConversationID.flatMap { sessionCapabilities[$0] } ?? availableExecutionProviders.first { $0.id == (selectedConversation?.providerID ?? providerID) }
   }
-  var executionStatus: String {
-    if selectedExecutionWorkspaceID == "local" {
-      if let id = selectedConversationID, let record = executionRecords[id], record.status == "stopping" { return "Stopping saved execution…" }
-      if let id = selectedConversationID, let record = executionRecords[id], record.status == "interrupted" { return "Saved on this device · ready to resume" }
-      if let connection = selectedInferenceConnection { return "\(deviceWorkspaceName) · \(connection.name)" }
-      return "\(deviceWorkspaceName) · choose an inference connection"
-    }
-    return executionOnline ? executionName : "\(executionName) unavailable · draft saved here"
-  }
   var canResumeLocalRun: Bool {
     guard let id = selectedConversationID else { return false }
     return executionRecords[id]?.status == "interrupted" && localRunTasks[id] == nil && !localStopping.contains(id) && !localInterrupting.contains(id)
@@ -362,12 +353,6 @@ extension CompanionModel {
     }
     if credential == nil && selectedConversationID == nil { executionWorkspaceID = "local"; providerID = "" }
     inferenceProblem = nil
-  }
-  func selectExecutionWorkspace(_ id: String) {
-    guard selectedConversationID == nil else { return }
-    executionWorkspaceID = id; providerID = ""
-    if id != "local" { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
-    do { try persistExecutionConfiguration() } catch { errorMessage = error.localizedDescription }
   }
   func sendOnDevice(userInitiated: Bool = true) async {
     guard !sending, !startingChat, selectedConversationID.map({ !configuringDeviceSessions.contains($0) }) ?? true, executionOnline, activeRunID == nil, !canResumeLocalRun,
@@ -636,14 +621,6 @@ extension CompanionModel {
   static func executionObject(_ text: String) throws -> [String: Any] {
     guard let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { throw DeviceExecutionError.unavailable("The execution record could not be read.") }
     return object
-  }
-  static func messageText(_ value: Any?) -> String {
-    if let text = value as? String { return text }
-    return (value as? [[String: Any]] ?? []).compactMap { block in
-      if block["type"] as? String == "text" { return block["text"] as? String }
-      if block["type"] as? String == "toolCall" { return (block["name"] as? String).map { "Tool: " + $0 } }
-      return nil
-    }.joined(separator: "\n")
   }
   func exportDeviceNativeHistory(_ id: String) async {
     guard let runtime = localRuntimes[id], let store else { return }

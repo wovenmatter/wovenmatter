@@ -247,10 +247,6 @@ struct ConversationWorkTranscript: View {
     }
 
     #if os(macOS)
-    static func hasVisibleContent(run: WorkspaceRunRecord, in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> Bool {
-        hasVisibleContent(run: run, timeline: ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs))
-    }
-
     static func hasVisibleContent(run: WorkspaceRunRecord, timeline: ConversationWorkTimeline) -> Bool {
         ConversationWorkTranscriptPresentation(
             runStatus: run.status,

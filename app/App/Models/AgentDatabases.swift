@@ -17,9 +17,7 @@ struct DashboardAgentDatabase: Equatable, Identifiable, Codable, Sendable {
     let sourceID: String
     let databaseID: String
     let name: String
-    let preference: AgentDatabasePreference
     let localURL: URL?
-    let isExternal: Bool
     var revision: Int64 = 0
     var updatedAt: String? = nil
     var offline: Bool = false
@@ -35,7 +33,6 @@ struct DashboardDatabaseSource: Equatable, Identifiable, Codable, Sendable {
     let databases: [DashboardAgentDatabase]
     let error: String?
     let allowsCreation: Bool
-    let allowsExternalLinks: Bool
 }
 
 struct DashboardDatabasesSnapshot: Equatable, Codable, Sendable {

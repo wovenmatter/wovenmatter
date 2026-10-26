@@ -7,8 +7,8 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct HarnessMaintenanceTests {
-    @Test func installedHarnessesIgnoreLegacyHidingAndDisabling() async throws {
-        let fixture = try await FacadeFixture(legacyHiddenHarnesses: true); defer { fixture.remove() }
+    @Test func installedHarnessesPopulateTheRuntimeSnapshot() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let kinds = Set(fixture.model.installedOrderedLocalCLIAgents.map(\.runtimeKind))
         #expect(kinds.contains(.codex))
         #expect(kinds.contains(.claudeCode))

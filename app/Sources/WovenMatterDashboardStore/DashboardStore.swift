@@ -376,25 +376,6 @@ public actor DashboardStore {
   }
 
   @discardableResult
-  public func createCalendarItem(
-    title: String,
-    startsAt: Date,
-    endsAt: Date?,
-    allDay: Bool
-  ) async throws -> String {
-    try await database.createCalendarItem(
-      title: title,
-      startsAt: startsAt,
-      endsAt: endsAt,
-      allDay: allDay
-    )
-  }
-
-  public func updateNote(id: String, title: String, content: String, expectedRevision: String? = nil) async throws {
-    try await database.updateNote(id: id, title: title, content: content, expectedRevision: expectedRevision)
-  }
-
-  @discardableResult
   public func updateConversationTitleIfCurrent(
     id: String,
     expectedTitle: String,

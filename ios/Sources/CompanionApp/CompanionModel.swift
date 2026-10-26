@@ -506,33 +506,6 @@ import CompanionInference
       await refresh()
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
-  func continueLaunch(_ launch: MobileLaunchRecord) async {
-    if let workspaceID = launch.create.workspaceID { await continueWorkspaceLaunch(launch, workspaceID: workspaceID); return }
-    guard online, let engine, !sending else { return }
-    let selection = selectedConversationID
-    let sourceTab = tab
-    let sourceFolder = selectedFolderID
-    let sourceNote = selectedNoteID
-    let route = providerID
-    let draft = draftBuffer["new-chat"] ?? state.chatDrafts["new-chat"]
-    sending = true
-    defer { sending = false }
-    do {
-      let result = try await engine.startConversation(launch)
-      if result.accepted {
-        let current = draftBuffer["new-chat"] ?? state.chatDrafts["new-chat"]
-        let unchanged = current == draft && providerID == route
-        if selectedConversationID == selection, tab == sourceTab, selectedFolderID == sourceFolder, selectedNoteID == sourceNote, unchanged {
-          selectedConversationID = result.initialSend.conversationID; tab = .chat
-        }
-        if unchanged, draft?.text == result.initialSend.text, draft?.noteID == result.initialSend.noteID,
-           draft?.providerID == nil || draft?.providerID == result.create.providerID {
-          updateChatDraft(key: "new-chat", draft: .init(text: ""))
-        }
-      } else { errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "Waiting for the Mac to acknowledge this request." }
-      await reload(); await refresh()
-    } catch { errorMessage = error.localizedDescription; await reload() }
-  }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
     if selectedExecutionWorkspaceID != "central" { await stopExecutionWorkspace(); return }
@@ -635,7 +608,6 @@ import CompanionInference
     try file.data.write(to: url, options: [.atomic, .completeFileProtection])
     return url
   }
-  func retry(_ record: MobileCommandRecord) async { await submit(record.command) }
   private func submit(_ command: CompanionCommand) async {
     guard online, let engine else { errorMessage = MobileConnectionError.offline.localizedDescription; return }
     do {

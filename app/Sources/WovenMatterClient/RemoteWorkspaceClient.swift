@@ -15,9 +15,9 @@ public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
         self.workspaceEpoch = workspaceEpoch
     }
 
-    public func isCurrent(configuration: RemoteWorkspaceConfiguration?, credentialsEnabled: Bool,
+    public func isCurrent(configuration: RemoteWorkspaceConfiguration?,
                           credentialEpoch: UUID, workspaceEpoch: UUID) -> Bool {
-        credentialsEnabled && self.configuration == configuration
+        self.configuration == configuration
             && self.credentialEpoch == credentialEpoch && self.workspaceEpoch == workspaceEpoch
     }
 }
@@ -1188,14 +1188,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return document.databases
     }
 
-    public func createDatabase(name: String, preference: AgentDatabasePreference) async throws -> RemoteAgentDatabase {
-        try await request(path: "v1/databases", method: "POST", body: JSONEncoder().encode(
-            RemoteDatabaseRequest(databaseID: name, preference: preference)))
-    }
-
-    public func databaseData(for link: DatabaseArtifactLink) async throws -> RemoteDatabaseData {
-        try await request(path: "v1/databases/data", method: "POST", body: JSONEncoder().encode(
-            RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
+    public func createDatabase(name: String) async throws -> RemoteAgentDatabase {
+        try await request(path: "v1/databases", method: "POST", body: JSONEncoder().encode(["databaseID": name]))
     }
 
     public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {

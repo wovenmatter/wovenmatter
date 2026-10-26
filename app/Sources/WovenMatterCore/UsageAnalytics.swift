@@ -66,9 +66,6 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
     }
   }
 
-  public func cutoff(relativeTo date: Date, calendar: Calendar = .current) -> Date {
-    interval(relativeTo: date, calendar: calendar).start
-  }
 }
 
 public enum UsageAttributionConfidence: String, Codable, Sendable {
@@ -459,48 +456,6 @@ public struct UsageAnalyticsSummary: Equatable, Sendable {
     requests = samples.reduce(0) { saturatedAdd($0, $1.requestCount) }
     let costs = samples.compactMap(\.directCostUSD)
     costUSD = costs.isEmpty ? nil : costs.reduce(0, +)
-  }
-}
-
-public struct UsageChartBucket: Equatable, Identifiable, Sendable {
-  public let date: Date
-  public let modelFamily: String
-  public let tokens: Int64
-
-  public var id: String { "\(date.timeIntervalSinceReferenceDate):\(modelFamily)" }
-
-  public init(date: Date, modelFamily: String, tokens: Int64) {
-    self.date = date
-    self.modelFamily = modelFamily
-    self.tokens = tokens
-  }
-
-  public static func aggregate(
-    samples: [UsageSample],
-    range: UsageTimeRange,
-    calendar: Calendar = .current
-  ) -> [UsageChartBucket] {
-    var totals: [String: (date: Date, modelFamily: String, tokens: Int64)] = [:]
-    for sample in samples {
-      let start: Date
-      if range.usesHourlyBuckets {
-        start = calendar.dateInterval(of: .hour, for: sample.timestamp)?.start ?? sample.timestamp
-      } else {
-        start = calendar.startOfDay(for: sample.timestamp)
-      }
-      let key = "\(start.timeIntervalSinceReferenceDate):\(sample.modelFamily)"
-      let current = totals[key]?.tokens ?? 0
-      totals[key] = (
-        start,
-        sample.modelFamily,
-        saturatedAdd(current, sample.tokens.totalTokens)
-      )
-    }
-    return totals.values
-      .map { UsageChartBucket(date: $0.date, modelFamily: $0.modelFamily, tokens: $0.tokens) }
-      .sorted {
-        $0.date == $1.date ? $0.modelFamily < $1.modelFamily : $0.date < $1.date
-      }
   }
 }
 

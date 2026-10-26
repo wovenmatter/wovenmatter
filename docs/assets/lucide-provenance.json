@@ -178,10 +178,6 @@
       "upstream": "rotate-ccw.svg",
       "sha256": "1cb65de22e6984d3c242d149617fbd3026d151184c35f080b8fbf5d5b2165cbf"
     },
-    "app/App/SharedAssets.xcassets/Lucide/lucide-search-s15.imageset/lucide-search-s15.svg": {
-      "upstream": "search.svg",
-      "sha256": "7b22b21eaafa2bf3486a769d6b61cca777fbc56e85a4b8020922e98c530b62e8"
-    },
     "app/App/SharedAssets.xcassets/Lucide/lucide-search-s20.imageset/lucide-search-s20.svg": {
       "upstream": "search.svg",
       "sha256": "f930c9a29246b0e4bb3f75fac35374e35cb12d2ab16f0a1bb2bfed2b70b6219a"
