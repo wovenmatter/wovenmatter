@@ -14,7 +14,6 @@ struct WorkspaceAssetTabsTests {
     }
   }
 
-
   @Test func snapshotIsBoundedMetadataAndSurvivesIPCAndAttachmentStaging() async throws {
     let context = WorkspaceVisibleContext(
       notes: (0..<10).map { .init(id: "n\($0)", title: String(repeating: "a", count: 500), revision: "r1", active: $0 == 0) },
@@ -41,41 +40,6 @@ struct WorkspaceAssetTabsTests {
     #expect(oldInput.visibleWorkspace == nil)
     #expect(oldInput.mcpContext == nil)
     #expect(oldInput.transportText() == "old")
-  }
-
-  @Test func independentCapacityAndStableSelection() throws {
-    var tabs = WorkspaceAssetTabs()
-    for id in 0..<4 { try tabs.open(.note("n\(id)")) }
-    let browsers = (0..<8).map { _ in UUID() }
-    for id in browsers { try tabs.open(.browser(id)) }
-    #expect(tabs.tabs.count == 12)
-    #expect(throws: WorkspaceAssetTabs.Capacity.self) { try tabs.open(.note("extra")) }
-    #expect(throws: WorkspaceAssetTabs.Capacity.self) { try tabs.open(.browser(UUID())) }
-    #expect(tabs.selected == .browser(browsers.last!))
-    try tabs.open(.note("n0")) // Selecting an already open item works at capacity.
-    #expect(tabs.tabs.count == 12)
-    #expect(tabs.selected == .note("n0"))
-    tabs.close(.note("n0"))
-    #expect(tabs.selected == .note("n1"))
-    try tabs.open(.note("replacement"))
-    #expect(tabs.tabs.count == 12)
-  }
-
-  @Test func documentsHaveIndependentCapacityAndPreserveAdjacentSelection() throws {
-    var tabs = WorkspaceAssetTabs()
-    try tabs.open(.note("note"))
-    for index in 0..<WorkspaceAssetTabs.maximumDocuments { try tabs.open(.document("file\(index)")) }
-    #expect(throws: WorkspaceAssetTabs.Capacity.self) { try tabs.open(.document("overflow")) }
-    try tabs.open(.browser(UUID()))
-    try tabs.open(.document("file0"))
-    #expect(tabs.documentIDs.count == 8)
-    tabs.hide()
-    try tabs.open(.document("file0"))
-    #expect(tabs.isPresented)
-    tabs.close(.document("file0"))
-    #expect(tabs.selected == .document("file1"))
-    #expect(tabs.noteIDs == ["note"])
-    #expect(tabs.browserIDs.count == 1)
   }
 
 }

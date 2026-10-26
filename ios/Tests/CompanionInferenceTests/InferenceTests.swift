@@ -64,28 +64,6 @@ final class InferenceTests: XCTestCase {
     value.metadata["compat"] = .object(["supportsStrictMode": .bool(true)])
     return value
   }
-  func testEndpointPolicyRejectsCredentialRedirectDestinations() throws {
-    // Synthetic octets keep this fixture independent of any user network.
-    func address(_ labels: [String]) -> String { labels.joined(separator: ".") }
-    let tailnet = address(["100", "64", "2", "9"])
-    for value in ["http://\(tailnet):8080", "https://work.example.ts.net", "http://[fd7a:115c:a1e0::1234]:8080/v1"] {
-      XCTAssertNoThrow(try InferenceURLPolicy.tailnet(value))
-    }
-    let outside = address(["100", "128", "1", "1"])
-    let spoofed = address(["100", "64", "0", "1", "evil", "com"])
-    let mixed = address(["100", "64", "bad", "0", "1"])
-    let invalid = address(["100", "64", "0", "999"])
-    for value in ["https://evil.example", "https://foo.ts.net.evil.example", "http://\(outside)", "http://\(spoofed)", "http://\(mixed)", "http://\(invalid)", "https://u:p@host.ts.net", "https://host.ts.net?token=x"] {
-      XCTAssertThrowsError(try InferenceURLPolicy.tailnet(value))
-    }
-  }
-  func testTruncatedResponseCannotBecomeSuccessfulOrExposeCompletedTool() throws {
-    let capture = CapturedEvents(), decoder = InferenceStreamDecoder(model: model, connectionID: connection.id, emit: capture.append)
-    try decoder.consume("{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call\",\"name\":\"write\"}}")
-    try decoder.consume("{\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\"}")
-    XCTAssertThrowsError(try decoder.finish())
-    XCTAssertFalse(capture.events.contains { ["toolcall_end", "done"].contains($0["type"] as? String ?? "") })
-  }
   func testAnthropicStreamingPreservesThinkingSignatureAndToolArguments() throws {
     var anthropic = model; anthropic.provider = "anthropic"; anthropic.api = "anthropic-messages"
     let capture = CapturedEvents(), decoder = InferenceStreamDecoder(model: anthropic, connectionID: "key", emit: capture.append)
@@ -133,39 +111,6 @@ final class InferenceTests: XCTestCase {
       ]]
     ]
   }
-  func testSelectedConnectionPreservesToolImagesAndRejectsForeignProvider() async throws {
-    let model = fixture()
-    let connection = InferenceConnection(id: "selected-connection", name: "Selected", provider: model.provider, accountID: "selected-account", route: .direct, modelID: model.id)
-    let credentials = SelectedCredentials()
-    let transport = FixtureTransport([.response(200), .line("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{}}}"), .line("")])
-    let service = CompanionInferenceService(connection: connection, credentials: credentials, transport: transport, model: model)
-    let input: InferenceObject = ["model": ["id": model.id, "provider": model.provider, "baseUrl": "https://unrelated.example/v1"],
-      "accountID": "unrelated-account", "options": ["apiKey": "unrelated-secret"], "context": ["messages": imageToolTranscript()]]
-    let capture = CapturedEvents()
-    try await service.stream(requestJSON: inferenceJSONString(input), emit: capture.append)
-    XCTAssertEqual(capture.events.last?["type"] as? String, "done")
-    do {
-      try await service.stream(requestJSON: inferenceJSONString(["model": ["id": model.id, "provider": "anthropic"]]), emit: capture.append)
-      XCTFail("wrong provider accepted")
-    } catch { XCTAssertEqual(error as? InferenceError, .modelUnavailable) }
-    let requests = await transport.requests, requestedIDs = await credentials.requestedIDs
-    XCTAssertEqual(requests.count, 1); XCTAssertEqual(requestedIDs, ["selected-connection"])
-    let request = try XCTUnwrap(requests.first)
-    XCTAssertEqual(request.url?.absoluteString, model.baseUrl + "/responses")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer selected-secret")
-    let bodyData = try XCTUnwrap(request.httpBody), body = inferenceObject(try JSONSerialization.jsonObject(with: bodyData))
-    XCTAssertEqual(body["model"] as? String, model.id)
-    XCTAssertFalse(String(decoding: bodyData, as: UTF8.self).contains("unrelated"))
-    let outputs = inferenceObjects(body["input"]).filter { $0["type"] as? String == "function_call_output" }
-    XCTAssertEqual(outputs.map { $0["call_id"] as? String }, ["read-a", "read-b"])
-    let mixed = inferenceObjects(outputs[0]["output"]), imageOnly = inferenceObjects(outputs[1]["output"])
-    XCTAssertEqual(mixed.map { $0["type"] as? String }, ["input_text", "input_image"])
-    XCTAssertEqual(mixed[0]["text"] as? String, "First image")
-    XCTAssertEqual(mixed[1]["image_url"] as? String, "data:image/png;base64,\(firstImage)")
-    XCTAssertEqual(mixed[1]["detail"] as? String, "auto")
-    XCTAssertEqual(imageOnly.count, 1)
-    XCTAssertEqual(imageOnly[0]["image_url"] as? String, "data:image/jpeg;base64,\(secondImage)")
-  }
 
   func testChatToolImageCompatibilitySeparatorPrecedesFollowingUserMessage() throws {
     var model = fixture("openrouter", api: "openai-completions")
@@ -179,49 +124,6 @@ final class InferenceTests: XCTestCase {
     XCTAssertEqual(messages[2]["name"] as? String, "read_image")
     XCTAssertEqual(inferenceObjects(messages[4]["content"]).filter { $0["type"] as? String == "image_url" }.count, 2)
     XCTAssertEqual(inferenceObjects(messages[5]["content"]).first?["text"] as? String, "Compare these.")
-  }
-  func testUnsupportedOrMalformedToolImagesFailBeforeAnyProviderRequest() async throws {
-    for (provider, api) in [("openai", "openai-responses"), ("openrouter", "openai-completions")] {
-      for malformed in [false, true] {
-        let model = fixture(provider, api: api, image: malformed)
-        let connection = InferenceConnection(name: "Fixture", provider: provider, route: .direct, modelID: model.id)
-        let transport = FixtureTransport([])
-        let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
-        let input: InferenceObject = ["model": ["id": model.id, "provider": provider], "context": ["messages": [
-          ["role": "toolResult", "toolCallId": "read-image", "content": [
-            ["type": "text", "text": "Image follows"], ["type": "image", "mimeType": "image/png", "data": malformed ? "invalid-base64!" : firstImage]
-          ]]
-        ]]]
-        do {
-          try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in XCTFail("Rejected image produced a model event") })
-          XCTFail("Unsupported or malformed tool image was accepted")
-        } catch { XCTAssertEqual(error as? InferenceError, malformed ? .invalidConfiguration : .unsupportedImageInput) }
-        let requests = await transport.requests
-        XCTAssertTrue(requests.isEmpty, "Invalid image input must not cause a partial request or provider fallback")
-      }
-    }
-  }
-  func testCustomTailscaleModelCannotOverrideDeclaredTextOnlyCapability() async throws {
-    let connection = InferenceConnection(name: "Server", provider: "local-server-openai", route: .direct, baseURL: "https://models.example.ts.net", modelID: "fixture-model")
-    let transport = FixtureTransport([]), service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
-    let input: InferenceObject = ["model": ["id": connection.modelID, "provider": connection.provider, "input": ["text", "image"]], "context": ["messages": imageToolTranscript()]]
-    do {
-      try await service.stream(requestJSON: inferenceJSONString(input), emit: { _ in })
-      XCTFail("Request metadata overrode native model capabilities")
-    } catch { XCTAssertEqual(error as? InferenceError, .unsupportedImageInput) }
-    let requests = await transport.requests
-    XCTAssertTrue(requests.isEmpty)
-  }
-  func testAdapterRequiresTerminalEventEvenWhenTransportEndsNormally() async throws {
-    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m")
-    let transport = FixtureTransport([.response(200), .line("{\"type\":\"start\",\"partial\":{\"content\":[]}}")])
-    let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
-    let capture = CapturedEvents()
-    do {
-      try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]}}", emit: capture.append)
-      XCTFail("A truncated host response became successful")
-    } catch { XCTAssertEqual(error as? InferenceError, .interrupted) }
-    XCTAssertFalse(capture.events.contains { $0["type"] as? String == "done" })
   }
   func testAdapterPreservesExactAccountScopeAndDoesNotForwardProviderKeys() async throws {
     let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m", hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3))

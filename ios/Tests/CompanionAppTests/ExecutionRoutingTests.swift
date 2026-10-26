@@ -62,8 +62,14 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(prepared.html.contains("data:image/png;base64,"))
     XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/private/app-data.png"))
     XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/../other/image.png"))
-    try FileManager.default.createSymbolicLink(at: image.deletingLastPathComponent().appendingPathComponent("outside.png"), withDestinationURL: root.appendingPathComponent("private.png"))
+    // Use a readable target: Foundation leaves dangling symlinks unresolved.
+    let privateImage = root.appendingPathComponent("private.png")
+    try Data([137,80,78,71,13,10,26,10]).write(to: privateImage)
+    try FileManager.default.createSymbolicLink(at: image.deletingLastPathComponent().appendingPathComponent("outside.png"), withDestinationURL: privateImage)
     XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/outside.png"))
+    XCTAssertThrowsError(try ConversationHTMLResources.prepare("<img src='/workspace/outside.png'>") {
+      try model.deviceHTMLImageURL(conversationID: id, path: $0)
+    })
   }
 
   @MainActor func testDeviceGoalsPersistAndRouteWithoutStartingInference() async throws {

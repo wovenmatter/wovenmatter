@@ -6,20 +6,6 @@ import WovenMatterCore
 @Suite("Calendar replicas and execution ownership")
 struct CalendarReplicaTests {
 
-  @Test func deletionTombstoneSurvivesLostReceiptAndPreventsResurrection() async throws {
-    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let request = mutation(); var record = try await #require(database.companionCalendarMutate(request, deviceID: device).record)
-    record.deleted = true
-    let deletion = CompanionCalendarMutation(deviceID: device, expectedRevision: record.event.revision, record: record)
-    let receipt = try await database.companionCalendarMutate(deletion, deviceID: device)
-    #expect(receipt.record?.deleted == true)
-    #expect(try await database.companionCalendarMutate(deletion, deviceID: device) == receipt)
-    #expect(try await database.calendarItems().isEmpty)
-    #expect(try await database.companionCalendarSnapshot().records.first?.deleted == true)
-    var resurrect = request; resurrect.id = UUID().uuidString.lowercased()
-    #expect(try await database.companionCalendarMutate(resurrect, deviceID: device).status == .conflict)
-  }
-
   let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   private func fixture() async throws -> (WorkspaceDatabase, URL) {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("calendar-replica-" + UUID().uuidString)

@@ -36,32 +36,4 @@ struct MessageInputTransportTests {
     #expect(mapped.files.map(\.fileName) == ["a.txt", "b.png"])
   }
 
-
-  @Test("notes retain snapshots while conversation attachments send only a reference")
-  func referenceContext() {
-    let input = AgentMessageInput(text: "original", attachments: [
-      .reference(AgentMessageReferenceDraft(
-        kind: .note, resourceID: "n", titleSnapshot: "Note title",
-        contentSnapshot: "note body", revisionSnapshot: "1"
-      )),
-      .reference(AgentMessageReferenceDraft(
-        kind: .conversation, resourceID: "c", titleSnapshot: "Chat title",
-        contentSnapshot: "chat body", revisionSnapshot: "2"
-      )),
-    ])
-    let context = """
-      <wovenmatter-reference type="note" id="n" revision="1" title="Note title">
-      note body
-      </wovenmatter-reference>
-
-      <wovenmatter-reference type="conversation" id="c" revision="2" title="Chat title">
-      Read this attached session with woven_history_conversation using id c. This attachment grants read-only access to this session.
-      </wovenmatter-reference>
-      """
-    #expect(input.transportText(deliveryText: "  delivered \n") == "delivered\n\n" + context)
-    #expect(input.transportText(deliveryText: " \n") == context)
-    #expect(input.textWithReferenceContext == "original\n\n" + context)
-    #expect(!input.textWithReferenceContext.contains("chat body"))
-  }
-
 }

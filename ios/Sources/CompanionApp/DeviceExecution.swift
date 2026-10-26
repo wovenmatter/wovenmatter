@@ -291,8 +291,8 @@ extension CompanionModel {
       executionWorkspaceID = saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
       draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
-      for id in executionRecords.keys {
-        executionRecords[id]?.enabledTools = Self.migratedDeviceToolSelection(executionRecords[id]?.enabledTools)
+      for (id, record) in executionRecords {
+        executionRecords[id]?.enabledTools = Self.migratedDeviceToolSelection(record.enabledTools)
       }
       deviceAgentDefaults.enabledTools = Self.migratedDeviceToolSelection(deviceAgentDefaults.enabledTools)
       draftDeviceSettings.enabledTools = Self.migratedDeviceToolSelection(draftDeviceSettings.enabledTools)

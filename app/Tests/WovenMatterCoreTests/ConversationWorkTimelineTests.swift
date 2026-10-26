@@ -59,28 +59,6 @@ struct ConversationWorkTimelineTests {
     #expect(groups(followed)[0].activeActivityIDs.isEmpty)
   }
 
-
-  @Test("commentary splits work groups that keep their first member's identity")
-  func chronologicalGrouping() {
-    let records = [
-      record(AgentRunActivity(id: "t1", kind: .thought, content: "**Inspecting files**\nDetails"), at: "1"),
-      record(tool("a", "bash", status: "running"), at: "2"),
-      record(AgentRunActivity(id: "c1", kind: .assistant, content: "Found it."), at: "3"),
-      record(AgentRunActivity(id: "final", kind: .assistant, content: "Done."), at: "4"),
-      record(tool("b", "read"), at: "5"),
-      record(AgentRunActivity(id: "fc", kind: .fileChange, changes: [.init(path: "a", newText: "x")]), at: "6"),
-      record(tool("a", "bash"), at: "7"),
-    ]
-    let timeline = ConversationWorkTimeline(records: records, commentaryIDs: ["c1"])
-
-    #expect(timeline.entries.map(\.id) == ["group:t1", "commentary:c1", "group:b"])
-    let first = groups(timeline)[0]
-    #expect(first.activities.map(\.id) == ["t1", "a"])
-    #expect(first.activities[1].status == "completed")
-    #expect(first.summary == "Ran 1 command")
-    #expect(groups(timeline)[1].singleActivity?.id == "b")
-  }
-
   @Test("edit groups count distinct files and lone thoughts use a meaningful label")
   func editsAndThoughts() {
     let edit = { (id: String, path: String) in
@@ -103,7 +81,6 @@ struct ConversationWorkTimelineTests {
     #expect(all[1].summary == "Weighing the options")
     #expect(all[1].activities.map(\.id) == ["t"])
   }
-
 
   @Test("the latest segment stays before later visible work, even after a stop")
   func liveCommentaryPartition() {

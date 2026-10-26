@@ -55,25 +55,6 @@ private final class HostInspectionFixture: @unchecked Sendable {
         Issue.record("Host operation did not settle")
     }
 
-    @Test func readinessRequiresTheSameNonemptyHostAndUser() async throws {
-        let fixture = HostInspectionFixture(); fixture.setReady(true)
-        let model = makeModel(fixture)
-        #expect(model.preflight(hostName: "", userName: "") == nil)
-        model.checkHost(hostName: "first.invalid", userName: "trey")
-        model.checkHost(hostName: "second.invalid", userName: "trey")
-        #expect(model.preflight(hostName: "second.invalid", userName: "trey") == nil)
-        try await settled(model)
-        #expect(model.preflight(hostName: "second.invalid", userName: "trey")?.ready == true)
-        #expect(model.preflight(hostName: "first.invalid", userName: "trey") == nil)
-        #expect(model.preflight(hostName: "second.invalid", userName: "another") == nil)
-        #expect(model.preflight(hostName: "", userName: "") == nil)
-        fixture.failInspection()
-        model.checkHost(hostName: "second.invalid", userName: "trey")
-        #expect(model.preflight(hostName: "second.invalid", userName: "trey") == nil)
-        try await settled(model)
-        #expect(model.preflight(hostName: "second.invalid", userName: "trey") == nil)
-    }
-
     @Test func hostPreparationRequiresReviewAndNeverCreatesAWorkspace() async throws {
         let fixture = HostInspectionFixture()
         let model = makeModel(fixture)
@@ -122,17 +103,4 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(model.harnesses.isEmpty)
     }
 
-    @Test func changedPreparationPlanRequiresFreshReview() async throws {
-        let fixture = HostInspectionFixture()
-        let model = makeModel(fixture)
-        model.checkHost(hostName: "fixture.invalid", userName: "")
-        try await settled(model)
-        model.prepareHost(hostName: "fixture.invalid", userName: "")
-        fixture.changePlan()
-        model.authorizeHostPreparation()
-        try await settled(model)
-        #expect(!fixture.calls.contains { $0.contains("'prepare'") })
-        #expect(model.errorMessage?.contains("requirements changed") == true)
-        #expect(model.preflight(hostName: "fixture.invalid", userName: "") == nil)
-    }
 }

@@ -1,0 +1,1130 @@
+{
+  "base_commit": "26f5e3952b11af34aa2b6485dad05e8430ab665b",
+  "counting_unit": "Named Swift test declarations (parameter sets counted once, as in Swift Testing summaries), registered Node tests, and Python unittest methods. Standalone/driver files are listed separately; they are retained and are not added to the named-test total.",
+  "baseline": {
+    "swift_by_component": {
+      "app": 521,
+      "integration": 29,
+      "ios": 188,
+      "scripts": 16,
+      "shared": 45
+    },
+    "node_default_agent": 213,
+    "node_remote": 170,
+    "node_native_mcp": 10,
+    "python_unittest": 30,
+    "total": 1222
+  },
+  "candidate": {
+    "swift_by_component": {
+      "app": 338,
+      "integration": 29,
+      "ios": 155,
+      "scripts": 16,
+      "shared": 16
+    },
+    "node_default_agent": 213,
+    "node_remote": 170,
+    "node_native_mcp": 10,
+    "python_unittest": 30,
+    "total": 977
+  },
+  "net_removed": 245,
+  "reduction_percent": 20.04909983633388,
+  "consolidated": {
+    "WovenMatterClientTests.AgentInteractionBrokerTests/invalidPermissionCannotConsumeAndFirstValidResponseWins()": "Permission assertions retained in responsesMustValidateBeforeResolvingOnce(), together with question validation."
+  },
+  "removed_declarations": [
+    {
+      "file": "app/App/Tests/DashboardNoteWriteBehindTests.swift",
+      "test": "WovenMatterAgentToolsTests.DashboardNoteWriteBehindTests/appendFailureNeverCallsDatabaseAndCanRetryFromPendingDraft()"
+    },
+    {
+      "file": "app/App/Tests/DashboardNoteWriteBehindTests.swift",
+      "test": "WovenMatterAgentToolsTests.DashboardNoteWriteBehindTests/emptyFlushBarrierReportsEarlierAsynchronousFailure()"
+    },
+    {
+      "file": "app/App/Tests/DashboardNoteWriteBehindTests.swift",
+      "test": "WovenMatterAgentToolsTests.DashboardNoteWriteBehindTests/flushWaitsForSuspendedWriteAndSubsequentEditsRemainOrdered()"
+    },
+    {
+      "file": "app/App/Tests/DictationTests.swift",
+      "test": "WovenMatterAgentToolsTests.DictationTests/changedEditorRetainsFinalizedWords()"
+    },
+    {
+      "file": "app/App/Tests/DictationTests.swift",
+      "test": "WovenMatterAgentToolsTests.DictationTests/leavingWorkspaceStopsAndRetainsResultWhenEditorClosed()"
+    },
+    {
+      "file": "app/App/Tests/DictationTests.swift",
+      "test": "WovenMatterAgentToolsTests.DictationTests/rejectedNativeEditRetainsTheTranscript()"
+    },
+    {
+      "file": "app/App/Tests/DictationTests.swift",
+      "test": "WovenMatterAgentToolsTests.DictationTests/stopDestinationPreservesRichTextAndOneUndoableEdit()"
+    },
+    {
+      "file": "app/App/Tests/LibraryModelTests.swift",
+      "test": "WovenMatterAgentToolsTests.LibraryModelTests/generatedDocumentResolvesRetainedIdentityWithoutReadingTheOriginalAgain()"
+    },
+    {
+      "file": "app/App/Tests/RemoteWorkspaceSettingsTests.swift",
+      "test": "WovenMatterAgentToolsTests.RemoteWorkspaceSettingsTests/remoteAccountLabelsRequireVerifiedAuthentication()"
+    },
+    {
+      "file": "app/App/Tests/RemoteWorkspaceSettingsTests.swift",
+      "test": "WovenMatterAgentToolsTests.RemoteWorkspaceSettingsTests/remoteSetupDefaultsToOnlyPiDurable()"
+    },
+    {
+      "file": "app/App/Tests/RemoteWorkspaceSettingsTests.swift",
+      "test": "WovenMatterAgentToolsTests.RemoteWorkspaceSettingsTests/remoteToolBridgeUsesTheTailnetTransport()"
+    },
+    {
+      "file": "app/App/Tests/SavedArtifactsModelTests.swift",
+      "test": "WovenMatterAgentToolsTests.SavedArtifactsModelTests/frontendUsesBackendArtifactIdentityAndRevision()"
+    },
+    {
+      "file": "app/App/Tests/WorkspaceAgentToolsServiceTests.swift",
+      "test": "WovenMatterAgentToolsTests.WorkspaceAgentToolsServiceTests/executorConnectionChangeFencesAdmissionsBeforeTheirJobExists()"
+    },
+    {
+      "file": "app/App/Tests/WorkspaceAgentToolsServiceTests.swift",
+      "test": "WovenMatterAgentToolsTests.WorkspaceAgentToolsServiceTests/executorUsesBoundMCPIdentityAndChecksMasterSwitch(runtime:)"
+    },
+    {
+      "file": "app/App/Tests/WorkspaceAgentToolsServiceTests.swift",
+      "test": "WovenMatterAgentToolsTests.WorkspaceAgentToolsServiceTests/goalToolsRunThroughBoundMCPAndPublishState()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/BackgroundServerTests.swift",
+      "test": "WovenMatterAppFacadeTests.BackgroundServerTests/missingLeaseDoesNotCreateAnOwnerOrAFile()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/BackgroundServerTests.swift",
+      "test": "WovenMatterAppFacadeTests.BackgroundServerTests/unconfirmedStopRechecksCurrentWorkWithoutCancellingIt()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/BackgroundServerTests.swift",
+      "test": "WovenMatterAppFacadeTests.BackgroundServerTests/unresponsiveOwnerStaysPresentUntilItsProcessReleasesTheLease()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/CentralLibraryClientTests.swift",
+      "test": "WovenMatterAppFacadeTests.CentralLibraryClientTests/offlineReplicaEditsSurviveRelaunchAndSync()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/CentralLibraryClientTests.swift",
+      "test": "WovenMatterAppFacadeTests.CentralLibraryClientTests/revokedWorkspaceCanBeGrantedAgainWithoutDiscardingItsCachedHistory()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/CompanionFacadeTests.swift",
+      "test": "WovenMatterAppFacadeTests.CompanionFacadeTests/mobileStopFencesPreparationAndAdvancesBackendRevisionOnlyForItsRun()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/CompanionHostLifecycleTests.swift",
+      "test": "WovenMatterAppFacadeTests.CompanionHostLifecycleTests/executionAccessSettingsRejectDeviceOwnedAndNonExecutableWorkspaces()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/CompanionHostLifecycleTests.swift",
+      "test": "WovenMatterAppFacadeTests.CompanionHostLifecycleTests/quitDuringAutomaticStartupCannotPublishOrRestartService()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/DevelopmentLaunchTests.swift",
+      "test": "WovenMatterAppFacadeTests.DevelopmentLaunchTests/linkedAssetsKeepTheirHostPreviewWhileOrdinaryNotesUseTheDesktopEditor()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/DevelopmentLaunchTests.swift",
+      "test": "WovenMatterAppFacadeTests.DevelopmentLaunchTests/localEnrollmentIsIndependentDurableAndRevocable()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/DevelopmentLaunchTests.swift",
+      "test": "WovenMatterAppFacadeTests.DevelopmentLaunchTests/modesChooseDistinctRolesAndTheCorrectLibrary()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/DevelopmentLaunchTests.swift",
+      "test": "WovenMatterAppFacadeTests.DevelopmentLaunchTests/replicasHaveIndependentIdentityAndCredentialNamespaces()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/DevelopmentLaunchTests.swift",
+      "test": "WovenMatterAppFacadeTests.DevelopmentLaunchTests/snapshotOfRealSchemaPreservesHistoryWithoutSchedulingCopiedTasks()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/HarnessMaintenanceTests.swift",
+      "test": "WovenMatterAppFacadeTests.HarnessMaintenanceTests/configuredWorkspaceRegistersBundledAgentBeforeFirstConnection()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/HarnessMaintenanceTests.swift",
+      "test": "WovenMatterAppFacadeTests.HarnessMaintenanceTests/remoteAvailabilityIgnoresRetiredFlagsButRequiresInstallation()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserAutomationTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserAutomationTests/routeUsesTheSavedExecutionOwnerAndRejectsAnUnknownWorkspace()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/closedTabsAndConnectionErrorsClearOldImages()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/frameIdentityMustMatchSelectedTab()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/idleFrameWaitWakesOnArrivalCancellationAndDisconnect()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/imageRefreshDoesNotWaitForSlowTabMetadataOrRedecodeUnchangedFrames()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/inputContinuesDuringFrameRefreshAndEmptyCopyPreservesClipboard()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/queuedInputIsOrderedAndDismissalDiscardsUnsentText()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/queuedKeysCrossTheNetworkInBoundedOrderedBatches()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/selectionChangesAndViewerDismissalRejectLateFrames()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteBrowserViewerTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteBrowserViewerTests/uncertainInputIsNotRetriedAndCannotDrainIntoAnotherTab()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteWorkspaceHostTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteWorkspaceHostTests/changedPreparationPlanRequiresFreshReview()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/RemoteWorkspaceHostTests.swift",
+      "test": "WovenMatterAppFacadeTests.RemoteWorkspaceHostTests/readinessRequiresTheSameNonemptyHostAndUser()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/SecondaryMacCalendarProjectionTests.swift",
+      "test": "WovenMatterAppFacadeTests.SecondaryMacCalendarProjectionTests/onlyAssignedMacTasksExecuteAndNativeHarnessRunReceiptsSyncCentrally()"
+    },
+    {
+      "file": "app/Tests/WovenMatterAppFacadeTests/SecondaryMacExecutionWorkspaceTests.swift",
+      "test": "WovenMatterAppFacadeTests.SecondaryMacExecutionWorkspaceTests/largeOwnerHistoryImportsCompletelyAndDoesNotBlockLaterEvents()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPActiveInputTests.swift",
+      "test": "WovenMatterClientTests.ACPActiveInputTests/commandOnlyClassificationLeavesNativeWorkUnderObservation()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPHarnessStreamingReviewTests.swift",
+      "test": "WovenMatterClientTests.ACPHarnessStreamingReviewTests/liveToolOutputArrivesBeforePromptCompletion(kind:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPHarnessStreamingReviewTests.swift",
+      "test": "WovenMatterClientTests.ACPHarnessStreamingReviewTests/stoppedDispatchFenceNeverWritesPromptAfterHistorySuspension()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPHarnessStreamingReviewTests.swift",
+      "test": "WovenMatterClientTests.ACPHarnessStreamingReviewTests/updatedAdaptersNegotiateTheImplementedSessionProtocol(kind:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPLineCursorTests.swift",
+      "test": "WovenMatterClientTests.ACPLineCursorTests/idleReadCancellation()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPLineCursorTests.swift",
+      "test": "WovenMatterClientTests.ACPLineCursorTests/lineSizeLimit(oversized:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPNativeHistoryCaptureTests.swift",
+      "test": "WovenMatterClientTests.ACPNativeHistoryCaptureTests/nativeEventsAndToolSnapshotsHaveStableSourceIdentity()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ACPSessionRoutingTests.swift",
+      "test": "WovenMatterClientTests.ACPSessionRoutingTests/missingLoadedSessionSwitchesRoutingToTheNewSession()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ActiveWorkSleepPreventionTests.swift",
+      "test": "WovenMatterClientTests.ActiveWorkSleepPreventionTests/concurrentDispatchesAndShutdownReleaseAssertionsWithoutBlockingDisplaySleep()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/AgentInteractionBrokerTests.swift",
+      "test": "WovenMatterClientTests.AgentInteractionBrokerTests/invalidPermissionCannotConsumeAndFirstValidResponseWins()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/BackendRPCTests.swift",
+      "test": "WovenMatterClientTests.BackendRPCTests/authenticatedConcurrentRequestsAndRestartRemainIsolated()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/BackendRPCTests.swift",
+      "test": "WovenMatterClientTests.BackendRPCTests/remoteErrorsAndOversizedFramesFailClosed()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/BackendRPCTests.swift",
+      "test": "WovenMatterClientTests.BackendRPCTests/retryIdentityBindsMethodAndPayloadWithoutRequestID()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/BuiltInNativeHistoryCaptureTests.swift",
+      "test": "WovenMatterClientTests.BuiltInNativeHistoryCaptureTests/refusesForeignOrInvalidArchiveRecords()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidProtectionTests/externalSettingsPowerTransitionsReleaseAndExpiryPreserveSleepOwnership()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidProtectionTests/failedJournalCannotDisableSleepAndFailedMutationRetainsRecovery()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidProtectionTests/failedRecoveryIsRetriedAndCannotBeMaskedByNewWork()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidProtectionTests/signingRequirementRejectsUntrustedInput()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidProtectionTests/uncertainEnableRestoresBeforeASecondAttempt()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidWorkProtectionTests/approvalAndLateCallbacksCannotReactivateStoppedOwner()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/ClosedLidProtectionTests.swift",
+      "test": "WovenMatterClientTests.ClosedLidWorkProtectionTests/frontendNeverLeasesOrOverwritesOwnerPolicy()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/HarnessOnboardingTests.swift",
+      "test": "WovenMatterClientTests.HarnessOnboardingTests/firstLaunchRespectsExistingInstallsAndDismissal()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/HarnessOnboardingTests.swift",
+      "test": "WovenMatterClientTests.HarnessOnboardingTests/nativeAuthenticationEvidenceMustBeExplicit()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/HarnessOnboardingTests.swift",
+      "test": "WovenMatterClientTests.HarnessOnboardingTests/rawStatusOutputIsNeverExposedInTheUI()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/HarnessOnboardingTests.swift",
+      "test": "WovenMatterClientTests.HarnessOnboardingTests/savedOpenCodeCredentialsDoNotImplyVerifiedAccess()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/LibraryTransportTests.swift",
+      "test": "WovenMatterClientTests.LibraryTransportTests/remoteConfinement()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/LocalACPFormTests.swift",
+      "test": "WovenMatterClientTests.LocalACPFormTests/declinesUnsupportedOrConflictingConstraints(schema:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/LocalACPFormTests.swift",
+      "test": "WovenMatterClientTests.LocalACPFormTests/foreignAndRequestScopedFormsCancelWithoutOpeningUI()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/LocalModelServerStoreTests.swift",
+      "test": "WovenMatterClientTests.LocalModelServerStoreTests/activeServerIdentityCannotBeRetargetedWithAnotherHostsKey()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/OpenCodeWireCaptureTests.swift",
+      "test": "WovenMatterClientTests.OpenCodeWireCaptureTests/stoppedApprovalCannotCrossAnAwaitingHistoryWrite()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/OpenCodeWorkspaceRoutingTests.swift",
+      "test": "WovenMatterClientTests.OpenCodeWorkspaceRoutingTests/separateWorkspaceConnectionsKeepCredentialsAndPathsSeparate()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/OpenCodeWorkspaceRoutingTests.swift",
+      "test": "WovenMatterClientTests.OpenCodeWorkspaceRoutingTests/workspaceCredentialsCannotBeSentToAnArbitraryOriginOrPrefix()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteAttachmentStagingTests.swift",
+      "test": "WovenMatterClientTests.RemoteAttachmentStagingTests/executesAtomicStaging(name:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteAttachmentStagingTests.swift",
+      "test": "WovenMatterClientTests.RemoteAttachmentStagingTests/sanitizesFileNames()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteAttachmentStagingTests.swift",
+      "test": "WovenMatterClientTests.RemoteAttachmentStagingTests/transferCancellation()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteBrowserClientTests.swift",
+      "test": "WovenMatterClientTests.RemoteBrowserClientTests/browserStreamsRejectNonTunnelOriginsBeforeSendingCredentials()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteDatabaseClientTests.swift",
+      "test": "WovenMatterClientTests.RemoteDatabaseClientTests/reportsOlderServiceAndOfflineErrorsWithoutEmptyCatalogSuccess()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteRuntimeMaintenanceClientTests.swift",
+      "test": "WovenMatterClientTests.RemoteRuntimeMaintenanceClientTests/bundledUpgradeArrowUsesOnlyCompatibleTarget()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteRuntimeMaintenanceClientTests.swift",
+      "test": "WovenMatterClientTests.RemoteRuntimeMaintenanceClientTests/currentNativeInstanceReplacesThePreLaunchHarnessSnapshot()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteRuntimeMaintenanceClientTests.swift",
+      "test": "WovenMatterClientTests.RemoteRuntimeMaintenanceClientTests/missingHarnessesAreNeverActivatedByLegacyMigration()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteTaskGatewayClientTests.swift",
+      "test": "WovenMatterClientTests.RemoteTaskGatewayClientTests/gatewayStatusAndDisableUseAuthenticatedWorkspaceOrigin()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteWorkspaceDeploymentTests.swift",
+      "test": "WovenMatterClientTests.RemoteWorkspaceDeploymentTests/fingerprintTracksContentAndPermissionsButNotTimestamps()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteWorkspaceDeploymentTests.swift",
+      "test": "WovenMatterClientTests.RemoteWorkspaceDeploymentTests/reuseDoesNotUploadOrBuildAndUsesImmutableIdentity()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteWorkspaceDeploymentTests.swift",
+      "test": "WovenMatterClientTests.RemoteWorkspaceDeploymentTests/securityRepairsAndNpmOverlayInvalidateCachedImage()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteWorkspaceTailnetTests.swift",
+      "test": "WovenMatterClientTests.RemoteWorkspaceTailnetTests/daemonStateAndPeerIdentityMustRemainUsable()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RemoteWorkspaceTailnetTests.swift",
+      "test": "WovenMatterClientTests.RemoteWorkspaceTailnetTests/ipv6OnlyPeerUsesItsTailnetAddress()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RuntimeMaintenanceTests.swift",
+      "test": "WovenMatterClientTests.RuntimeMaintenanceTests/claudeSDKRequiresItsDeclaredNativePlatformDependency()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RuntimeMaintenanceTests.swift",
+      "test": "WovenMatterClientTests.RuntimeMaintenanceTests/failedVerificationPreservesThePreviousLauncherAndDependencyTree()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RuntimeMaintenanceTests.swift",
+      "test": "WovenMatterClientTests.RuntimeMaintenanceTests/newestSupportedMajorSurvivesLatestTagMoving()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RuntimeMaintenanceTests.swift",
+      "test": "WovenMatterClientTests.RuntimeMaintenanceTests/ordersVersionsWithoutTreatingUnknownAsCurrent()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/RuntimeMaintenanceTests.swift",
+      "test": "WovenMatterClientTests.RuntimeMaintenanceTests/timesOutWithoutLeavingAChildWriter()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/SleepProtectionLevelTests.swift",
+      "test": "WovenMatterClientTests.SleepProtectionLevelTests/frontendDisplaysBothPolicyAndStatusWithoutAcquiringOrSavingActivity()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/SleepProtectionLevelTests.swift",
+      "test": "WovenMatterClientTests.SleepProtectionLevelTests/higherAndNormalPoliciesFollowPowerChangesAndStayStopped()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/WovenMatterToolProtocolTests.swift",
+      "test": "WovenMatterClientTests.WovenMatterToolProtocolTests/actionSpecificOptionsContradictionsAndSchemasAreExplicit()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/WovenMatterToolProtocolTests.swift",
+      "test": "WovenMatterClientTests.WovenMatterToolProtocolTests/agentsCannotOverrideChildPermissionOrTools()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/WovenMatterToolProtocolTests.swift",
+      "test": "WovenMatterClientTests.WovenMatterToolProtocolTests/automationJSONAndInlineImagesKeepAuthorityOnTheCaller()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/WovenMatterToolProtocolTests.swift",
+      "test": "WovenMatterClientTests.WovenMatterToolProtocolTests/contextIsAReadWithoutCallerSelectedMessageOrNote()"
+    },
+    {
+      "file": "app/Tests/WovenMatterClientTests/WovenMatterToolProtocolTests.swift",
+      "test": "WovenMatterClientTests.WovenMatterToolProtocolTests/typedDiscoveryCoversEveryGroupWithoutCLIAliases()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/ACPAssistantStreamWriterTests.swift",
+      "test": "WovenMatterCoreTests.ACPAssistantStreamWriterTests/lateReasoningDeltaDoesNotSplitAnswerPrefix()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/ACPSteeringLifecycleTests.swift",
+      "test": "WovenMatterCoreTests.ACPSteeringLifecycleTests/toolDeliveryAuthorityIsCheckedBeforeNativeSteering(revoked:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/AgentDispatchAdmissionTests.swift",
+      "test": "WovenMatterCoreTests.AgentStopCoordinatorTests/failedStopBlocksEveryInputUntilExplicitRetryCompletes()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/ArchivedExecutionHistoryTests.swift",
+      "test": "WovenMatterCoreTests.ArchivedExecutionHistoryTests/oldUnrootedSessionsStayReadableWhileArchivedRootedAndForeignRowsStayHidden()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/BuiltInDurableLifecycleTests.swift",
+      "test": "WovenMatterCoreTests.BuiltInDurableLifecycleTests/backgroundWorkRetainsOneOwnerUntilIdleOrShutdown(mode:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CalendarReplicaTests.swift",
+      "test": "WovenMatterCoreTests.CalendarReplicaTests/deletionTombstoneSurvivesLostReceiptAndPreventsResurrection()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/ChatPanelLayoutTests.swift",
+      "test": "WovenMatterCoreTests.ChatPanelLayoutTests/layoutProgressionAndControls()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionCommandDispatcherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionCommandDispatcherTests/changedPayloadRejectedBeforeAndAfterFinishAndLostAckRetryDoesNotExecute()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionCommandDispatcherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionCommandDispatcherTests/interruptedAcceptanceIsVisibleAndNeverRedispatched()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionPublisherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionPublisherTests/observerAndCentralManagerCannotRelayEvenWithLegacyJournalGrants()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionPublisherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionPublisherTests/publisherDigestPersistsAndRotationRevokesOriginalScope()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionPublisherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionPublisherTests/publisherIsScopedAndCannotBecomePairedDeviceCredential()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionPublisherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionPublisherTests/retainedOwnerCannotClaimLocalSessionOrConflictWithAnotherActiveRun()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionPublisherTests.swift",
+      "test": "WovenMatterCoreTests.CompanionPublisherTests/retainedOwnerCompletesOnlyItsExactStaleRunningLegacyRun()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionToolBridgeTests.swift",
+      "test": "WovenMatterCoreTests.CompanionToolBridgeTests/acceptedWorkWithoutRecordedOutcomeIsNotReexecuted()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionToolBridgeTests.swift",
+      "test": "WovenMatterCoreTests.CompanionToolBridgeTests/concurrentRetryAndCallerCancellationKeepOneAcceptedExecution()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionToolBridgeTests.swift",
+      "test": "WovenMatterCoreTests.CompanionToolBridgeTests/desktopResponsesAreNotStoredInTransportReceiptsOrReexecuted()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionToolBridgeTests.swift",
+      "test": "WovenMatterCoreTests.CompanionToolBridgeTests/importedMacToolCallerRejectsAnotherDevice()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionToolBridgeTests.swift",
+      "test": "WovenMatterCoreTests.CompanionToolBridgeTests/linuxLibraryMCPRequiresDedicatedGrantAndExactExecutionOwner()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionToolBridgeTests.swift",
+      "test": "WovenMatterCoreTests.CompanionToolBridgeTests/ongoingAutomationRechecksDeviceExecutionAccess()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionTranscriptMigrationTests.swift",
+      "test": "WovenMatterCoreTests.CompanionTranscriptMigrationTests/executionOwnerAgentProvenanceReachesNativeMessagePresentation()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionWorkspaceAccessTests.swift",
+      "test": "WovenMatterCoreTests.CompanionWorkspaceAccessTests/denialSurvivesRestartAndRegistrationWithoutChangingPublicationOwner()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionWorkspaceTests.swift",
+      "test": "WovenMatterCoreTests.CompanionWorkspaceTests/agentFormatBoundary()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/CompanionWorkspaceTests.swift",
+      "test": "WovenMatterCoreTests.CompanionWorkspaceTests/deletion()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/ConversationWorkTimelineTests.swift",
+      "test": "WovenMatterCoreTests.ConversationWorkTimelineTests/chronologicalGrouping()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/DatabasePresentationReadTests.swift",
+      "test": "WovenMatterCoreTests.DatabasePresentationReadTests/presentationReadsLeaveMainActorAndDiscardCancelledResults()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/DefaultAgentSettingsMergeTests.swift",
+      "test": "WovenMatterCoreTests.DefaultAgentSettingsMergeTests/settingsEditDoesNotRestoreRemovedServerOrItsModelChoices()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/DictationHistoryTests.swift",
+      "test": "WovenMatterCoreTests.DictationHistoryTests/historyPagesHaveStableOrderingAndBoundedResults()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/DictationHistoryTests.swift",
+      "test": "WovenMatterCoreTests.DictationHistoryTests/historyPersistsAndReplayIsIdempotentAndPagedByArrival()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/DictationInsertionTests.swift",
+      "test": "WovenMatterCoreTests.DictationInsertionTests/selectionAndUnicodeUseNativeUTF16Offsets()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/DictationInsertionTests.swift",
+      "test": "WovenMatterCoreTests.DictationInsertionTests/unrelatedEditsSurviveWhileOverlappingEditsRequireExplicitInsertion()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/ExecutorTests.swift",
+      "test": "WovenMatterCoreTests.ExecutorTests/appSelectionPreservesToolRevocationDuringScopeSynchronization()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/MessageInputTransportTests.swift",
+      "test": "WovenMatterCoreTests.MessageInputTransportTests/referenceContext()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/OpenCodeIntegrationTests.swift",
+      "test": "WovenMatterCoreTests.OpenCodeIntegrationTests/formReplyRequiresExternalAcknowledgementAndPreservesCustomAnswers()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/OpenCodeIntegrationTests.swift",
+      "test": "WovenMatterCoreTests.OpenCodeIntegrationTests/richProjectionAndRecoveryCursorSurviveDatabaseReopen()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/OpenCodeIntegrationTests.swift",
+      "test": "WovenMatterCoreTests.OpenCodeIntegrationTests/savedTranscriptsWithoutExecutionAuthorityRemainReadable(archived:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/PersistenceBehaviorTests.swift",
+      "test": "WovenMatterCoreTests.PersistenceBehaviorTests/historyIndexesPreservePage()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/RemoteScheduledArchiveTests.swift",
+      "test": "WovenMatterCoreTests.RemoteScheduledArchiveTests/foreignNativeSessionRollsBackAndReceiptCannotMoveAcrossRoutes()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/RuntimeInspectionInventoryTests.swift",
+      "test": "WovenMatterCoreTests.RuntimeInspectionInventoryTests/chatOwnershipKeepsAgentDescendantsWithTheirOwnChat()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/RuntimeInspectionInventoryTests.swift",
+      "test": "WovenMatterCoreTests.RuntimeInspectionInventoryTests/connectionHelpersAreSeparateFromAgentsRegardlessOfExecutableNames()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/RuntimeInspectionInventoryTests.swift",
+      "test": "WovenMatterCoreTests.RuntimeInspectionInventoryTests/unknownAndCyclicParentageRemainsInspectableWithoutGuessingOwnership()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/SessionSelectionPreferencesTests.swift",
+      "test": "WovenMatterCoreTests.SessionSelectionPreferencesTests/existingConversationMigration()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/SessionSelectionPreferencesTests.swift",
+      "test": "WovenMatterCoreTests.SessionSelectionPreferencesTests/frozenPermissionOrigin()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/SessionSelectionPreferencesTests.swift",
+      "test": "WovenMatterCoreTests.SessionSelectionPreferencesTests/fullAccessDefaultCanBeOverridden()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageConnectionSelectionTests.swift",
+      "test": "WovenMatterCoreTests.UsageConnectionSelectionTests/apiKeyLimits()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageConnectionSelectionTests.swift",
+      "test": "WovenMatterCoreTests.UsageConnectionSelectionTests/multipleAccountsHaveDistinctDisplayIdentities()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageImportAtomicityTests.swift",
+      "test": "WovenMatterCoreTests.UsageImportAtomicityTests/allRoutesWithoutAccountSetup()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageImportAtomicityTests.swift",
+      "test": "WovenMatterCoreTests.UsageImportAtomicityTests/analyticsRevisionOwnership(sharedAccounts:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageImportAtomicityTests.swift",
+      "test": "WovenMatterCoreTests.UsageImportAtomicityTests/readerStepFailure()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageImportAtomicityTests.swift",
+      "test": "WovenMatterCoreTests.UsageImportAtomicityTests/sourceSavepoint()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageRefreshOwnershipTests.swift",
+      "test": "WovenMatterCoreTests.UsageRefreshOwnershipTests/deniedAccountEnumeration()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageRefreshOwnershipTests.swift",
+      "test": "WovenMatterCoreTests.UsageRefreshOwnershipTests/limitsIncludeAllAccounts()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageRefreshOwnershipTests.swift",
+      "test": "WovenMatterCoreTests.UsageRefreshOwnershipTests/queuedLimitsOwnership(sharedAccountChange:)"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/UsageRefreshOwnershipTests.swift",
+      "test": "WovenMatterCoreTests.UsageRefreshOwnershipTests/serviceLimitsOwnership()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/automationCancellationSurvivesLateAdmissionAndHostRestart()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/builtInClaudeUsageKeepsSubscriptionAndAPIKeyBillingDistinct()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/creationCommitGrantsManagedReadOnceAndRetryDoesNotReacquireReleasedSession()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/eventIDsAndRunIDsCannotBypassTranscriptGrants()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/fanoutAndRevocationAreEnforcedTransactionally()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/referencesGrantOnlyTheSelectedSessionAndCanBeRevoked()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/sessionStopCancelsAdmittedActionsThatHaveNotReachedTheGUI()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/timerOccurrencesSurviveReopenAndPauseRevokesPendingDelivery()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAssetTabsTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAssetTabsTests/documentsHaveIndependentCapacityAndPreserveAdjacentSelection()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAssetTabsTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceAssetTabsTests/independentCapacityAndStableSelection()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceCalendarTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceCalendarTests/detachedAcceptedRunKeepsItsSessionEvenBeforeSettlement()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceCalendarTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceCalendarTests/replacingCancelledSlotUsesTheNewOccurrenceIdentity()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceDatabaseTextTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceDatabaseTextTests/deliveryRetryPreservesTextAfterNULAcrossConnections()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/aLaterTurnWithoutUsageCannotSilentlyBypassTheTokenBudget()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/incompleteOpenCodeUsageDoesNotBecomeZeroTokens()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/mutationRetriesCannotReplaceANewerGoalOrTargetAnotherSession()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/ownershipTransferPausesAndFencesThePreviousOwner()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/pauseAndRestartCancelUnsentContinuationsButToolSelectionDoesNot()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/planModePausesAutomaticGoalContinuation()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceGoalTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceGoalTests/usageIsIdempotentAndBudgetExhaustionIsNotCompletion()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceHistoryTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceHistoryTests/directAndNestedHistoryRedactEndpointsWhilePreservingOtherContent()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceHistoryTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceHistoryTests/legacyCLIContentIsScrubbedBeforeSearchRebuild()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceHistoryTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceHistoryTests/rapidAutosavesCoalesceButAgentEditsAreImmediateForEveryAssetKind()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceLibraryTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceLibraryTests/forwardOnly()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceLibraryTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceLibraryTests/generatedDocumentDelivery()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceLibraryTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceLibraryTests/links()"
+    },
+    {
+      "file": "app/Tests/WovenMatterCoreTests/WorkspaceNativeChunkArchiveTests.swift",
+      "test": "WovenMatterCoreTests.WorkspaceNativeChunkArchiveTests/interruptedChunkCopyReopensDeduplicatesSearchesAndExportsExactNativeBytes()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/AgentLauncherTests.swift",
+      "test": "CompanionClientTests.AgentLauncherTests/testOfflineDiscoveryRemainsVisibleWithoutRestoringReachability()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/DeviceUsageProjectionTests.swift",
+      "test": "CompanionClientTests.DeviceUsageProjectionTests/testNegativeTokenCountsCannotBecomeUsageTotals()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileCalendarStoreTests.swift",
+      "test": "CompanionClientTests.MobileCalendarStoreTests/testAssignedDeviceMissedTasksCoalesceAndNeverRunTwiceAfterRestart()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileCalendarStoreTests.swift",
+      "test": "CompanionClientTests.MobileCalendarStoreTests/testConcurrentCentralEditPreservesBothVersionsAndOtherEventsStillSync()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileCalendarStoreTests.swift",
+      "test": "CompanionClientTests.MobileCalendarStoreTests/testEditingAndDeletingTaskInvalidateReservedDispatch()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileCalendarStoreTests.swift",
+      "test": "CompanionClientTests.MobileCalendarStoreTests/testRunReceiptRestorationDoesNotRepeatCompletedOneTimeTask()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileDictationStoreTests.swift",
+      "test": "CompanionClientTests.MobileDictationStoreTests/historyPagesHaveStableOrderingAndBoundedResults()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileDictationStoreTests.swift",
+      "test": "CompanionClientTests.MobileDictationStoreTests/invalidSyncPageRollsBackRecordsAndCursor()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileDictationStoreTests.swift",
+      "test": "CompanionClientTests.MobileDictationStoreTests/offlineHistorySurvivesRestartAndLostAcknowledgement()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileStoreTests.swift",
+      "test": "CompanionClientTests.MobileStoreTests/testDelayedEditorSaveCannotAdoptConcurrentRemoteRevision()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileStoreTests.swift",
+      "test": "CompanionClientTests.MobileStoreTests/testFutureDocumentAndUnknownRunsAreNotFlattened()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileStoreTests.swift",
+      "test": "CompanionClientTests.MobileStoreTests/testRichEditPreservesUnchangedTablesUnknownKeysLinksAndIDs()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileSyncEngineTests.swift",
+      "test": "CompanionClientTests.MobileSyncEngineTests/testDictationsSyncAcrossClientsAfterLostAcknowledgement()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileSyncEngineTests.swift",
+      "test": "CompanionClientTests.MobileSyncEngineTests/testLateCreateReceiptRecoveryCannotOverwritePreparedInitialSend()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileSyncEngineTests.swift",
+      "test": "CompanionClientTests.MobileSyncEngineTests/testLinkedDataRequiresMatchingDocumentRevisionAndPreservesUnavailableReason()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileSyncEngineTests.swift",
+      "test": "CompanionClientTests.MobileSyncEngineTests/testRepairedWorkspaceCannotReceiveExistingOutboxOrCommand()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileSyncEngineTests.swift",
+      "test": "CompanionClientTests.MobileSyncEngineTests/testRetryKeepsOriginalNoteRevisionWhenLocalNoteChangesAfterLostAck()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/cancelledCallerCannotCommitAfterActorHop()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/commandReservationBindsAllSessionCreationArguments()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/detachedCalendarRetryReturnsOriginalAfterExcludedOccurrence()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/executorJobIsDurableAndBoundToSessionAndCode()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/libraryKindsAndWorkspaceSelectionsDoNotMixSavedItems()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/localSessionCoordinationRejectsRemoteAndCycles()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/mutationReceiptPreservesEditsAndRechecksRevisionAndPermission()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/MobileToolTests.swift",
+      "test": "CompanionClientTests.MobileToolTests/sessionInboxBindsReplayContentAndPreservesTerminalStateAcrossRestart()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/TranscriptDetailTests.swift",
+      "test": "CompanionClientTests.TranscriptDetailTests/testLegacyToolMigrationPreservesUserTextAndOriginalJournal()"
+    },
+    {
+      "file": "ios/Tests/CompanionClientTests/WorkspaceTextFileTests.swift",
+      "test": "CompanionClientTests.WorkspaceTextFileTests/smallFilesAndSplitUTF8AreExplicitAndLossless()"
+    },
+    {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceTests.swift",
+      "test": "CompanionInferenceTests.InferenceTests/testAdapterRequiresTerminalEventEvenWhenTransportEndsNormally()"
+    },
+    {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceTests.swift",
+      "test": "CompanionInferenceTests.InferenceTests/testCustomTailscaleModelCannotOverrideDeclaredTextOnlyCapability()"
+    },
+    {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceTests.swift",
+      "test": "CompanionInferenceTests.InferenceTests/testEndpointPolicyRejectsCredentialRedirectDestinations()"
+    },
+    {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceTests.swift",
+      "test": "CompanionInferenceTests.InferenceTests/testSelectedConnectionPreservesToolImagesAndRejectsForeignProvider()"
+    },
+    {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceTests.swift",
+      "test": "CompanionInferenceTests.InferenceTests/testTruncatedResponseCannotBecomeSuccessfulOrExposeCompletedTool()"
+    },
+    {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceTests.swift",
+      "test": "CompanionInferenceTests.InferenceTests/testUnsupportedOrMalformedToolImagesFailBeforeAnyProviderRequest()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionDeviceTranscriptTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionDeviceTranscriptTests/testFailedToolPreservesArgumentsResultAndFailure()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionDeviceTranscriptTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionDeviceTranscriptTests/testLegacyTransportRecordsStillDecode()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionDeviceTranscriptTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionDeviceTranscriptTests/testLifecycleStatusesUseCanonicalRunVocabulary()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionDeviceTranscriptTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionDeviceTranscriptTests/testSavedHeyProjectsToolsInsteadOfRawMessages()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionDeviceTranscriptTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionDeviceTranscriptTests/testSubagentSummaryRetainsTaskAndResult()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionProtocolTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionProtocolTests/agentMessageProvenanceRoundTripsAndLegacyMessagesRemainReadable()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionProtocolTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionProtocolTests/nativeInteractionBeforeRunProjection()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/CompanionProtocolTests.swift",
+      "test": "WovenMatterCompanionTests.CompanionProtocolTests/scheduledTaskVisibility()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.DictationTranscriptTests/committedSegmentsSurviveEmptyCompletionAndRepeatedFinals()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.DictationTranscriptTests/revisedRangesReplaceSpeculationWithoutDuplicatingText()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/cancelAndSilenceDoNotCreateHistory()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/completionSavesOnceEvenWhenInsertionIsRetried()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/defaultIsReadyWithoutProviderAndLanguageIsCapturedPerRecording()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/interruptionsRetainOnlyCompletedSegments()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/silenceHasAnExplicitErrorInsteadOfSuccessfulEmptyInsertion()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/speculativeTextIsNotInsertedAndEmptyResultIsNotSuccess()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/DictationTests.swift",
+      "test": "WovenMatterCompanionTests.NativeDictationSessionTests/stalledFinalizationRetainsCompletedTextAndStopsCapture()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WorkspaceGoalLedgerTests.swift",
+      "test": "WovenMatterCompanionTests.WorkspaceGoalLedgerTests/budgetAndMissingUsageStopContinuation()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WorkspaceGoalLedgerTests.swift",
+      "test": "WovenMatterCompanionTests.WorkspaceGoalLedgerTests/elapsedPursuitExcludesPausedIntervalsAndSurvivesPersistence()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WorkspaceGoalLedgerTests.swift",
+      "test": "WovenMatterCompanionTests.WorkspaceGoalLedgerTests/guidanceIsHiddenOnlyInDisplayProjection()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WorkspaceGoalLedgerTests.swift",
+      "test": "WovenMatterCompanionTests.WorkspaceGoalLedgerTests/noCheckpointAndFailedRunCannotSpin()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WorkspaceGoalLedgerTests.swift",
+      "test": "WovenMatterCompanionTests.WorkspaceGoalLedgerTests/ownerGoalContractRoundTripsAndOlderSettingsRemainReadable()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WorkspaceGoalLedgerTests.swift",
+      "test": "WovenMatterCompanionTests.WorkspaceGoalLedgerTests/slashCommandsRequestAgentActionWithoutNativeCommandSyntax()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WovenMCPTests.swift",
+      "test": "WovenMatterCompanionTests.WovenMCPTests/automationPreservesImages()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WovenMCPTests.swift",
+      "test": "WovenMatterCompanionTests.WovenMCPTests/everyCatalogFieldMapsToAnAcceptedInternalOperation()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WovenMCPTests.swift",
+      "test": "WovenMatterCompanionTests.WovenMCPTests/focusedCatalogAndTypedMapping()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WovenMCPTests.swift",
+      "test": "WovenMatterCompanionTests.WovenMCPTests/jsonRPCIdentityAndNotifications()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WovenMCPTests.swift",
+      "test": "WovenMatterCompanionTests.WovenMCPTests/linuxCatalogMatchesCanonicalDefinitions()"
+    },
+    {
+      "file": "shared/Tests/WovenMatterCompanionTests/WovenMCPTests.swift",
+      "test": "WovenMatterCompanionTests.WovenMCPTests/structuredPayloadsAndBooleans()"
+    }
+  ],
+  "standalone_driver_files": [
+    "scripts/test-app-termination.sh",
+    "scripts/test-appearance.sh",
+    "scripts/test-application-usage.sh",
+    "scripts/test-backend-process.sh",
+    "scripts/test-browser-automation.py",
+    "scripts/test-browser-passwords.py",
+    "scripts/test-changes.sh",
+    "scripts/test-ci.sh",
+    "scripts/test-companion-integration.sh",
+    "scripts/test-composer-text-editor.sh",
+    "scripts/test-container.sh",
+    "scripts/test-conversation-layout.sh",
+    "scripts/test-conversation-popover.sh",
+    "scripts/test-delta-updates.py",
+    "scripts/test-desktop-updater.sh",
+    "scripts/test-dev-signing.sh",
+    "scripts/test-embedded-runtime-macos.sh",
+    "scripts/test-ios-embedded-runtime.sh",
+    "scripts/test-ios.sh",
+    "scripts/test-note-drafts.sh",
+    "scripts/test-note-editor.sh",
+    "scripts/test-release.sh",
+    "scripts/test-remote-workspace.sh",
+    "scripts/test-support/AppTerminationTests.swift",
+    "scripts/test-support/ApplicationUsageModelTests.swift",
+    "scripts/test-support/BackendProcessTests.swift",
+    "scripts/test-support/BrowserAutomationTests.mm",
+    "scripts/test-support/BrowserLifecycleTests.mm",
+    "scripts/test-support/BrowserPasswordTests.mm",
+    "scripts/test-support/CompanionServeSupervisorFixture.swift",
+    "scripts/test-support/ConversationMessageLayoutTests.swift",
+    "scripts/test-support/ConversationResponseTests.swift",
+    "scripts/test-support/DashboardAppearanceTests.swift",
+    "scripts/test-support/DashboardConversationPopoverTests.swift",
+    "scripts/test-support/DashboardNoteDraftTests.swift",
+    "scripts/test-support/DashboardNoteEditorTests.swift",
+    "scripts/test-support/DesktopUpdaterTests.swift",
+    "scripts/test-support/EmbeddedRuntimeSmokeMain.swift",
+    "scripts/test-support/test-executor-image.sh",
+    "scripts/test-support/test-executor-runtime.mjs",
+    "scripts/test-support/test_ci_scopes.py",
+    "scripts/test-support/test_release_approval.py",
+    "scripts/test-support/test_release_cache.py",
+    "scripts/test-support/test_release_code.py",
+    "scripts/test-support/test_release_compression.py",
+    "scripts/test-support/test_release_metadata.py",
+    "scripts/test-support/test_release_notarization.py",
+    "scripts/test-support/test_release_parallel.py",
+    "scripts/test-support/test_tagged_release_reuse.py",
+    "scripts/test-support/test_update_refresh.py",
+    "scripts/test-support/test_update_request.py",
+    "scripts/test-support/test_updater_signing.py"
+  ],
+  "coverage": {
+    "lines": {
+      "baseline_executable": 87698,
+      "baseline_covered": 43227,
+      "candidate_covered_in_baseline": 42409,
+      "retained_baseline_coverage": 42367,
+      "lost_covered": 860,
+      "relative_loss_percent": 1.9894973049251625,
+      "loss_percentage_points": 0.9806380989304203,
+      "baseline_percent": 49.29074779356428,
+      "candidate_percent": 48.35800132272116
+    },
+    "regions": {
+      "baseline_executable": 61484,
+      "baseline_covered": 27885,
+      "candidate_covered_in_baseline": 26815,
+      "retained_baseline_coverage": 26778,
+      "lost_covered": 1107,
+      "relative_loss_percent": 3.969876277568585,
+      "loss_percentage_points": 1.800468414546874,
+      "baseline_percent": 45.35326263743413,
+      "candidate_percent": 43.61297248064537
+    },
+    "limits": {
+      "relative_line_loss_percent": 2,
+      "region_loss_percentage_points": 2
+    },
+    "passes": true,
+    "scope": "Production Swift source from desktop, shared, iOS package, and companion integration binaries; fixed baseline executable locations; new hits do not offset lost baseline hits.",
+    "measured_test_definitions": {
+      "baseline": 722,
+      "candidate": 477
+    },
+    "measurement_processes": {
+      "baseline": 719,
+      "candidate": 474
+    },
+    "grouped_suite": "The unchanged four-test PiCodeModePolicyTests class ran in normal XCTest order on both sides; isolated cold WebKit startup exceeded its synthetic two-second watchdog on both sides.",
+    "optional_skips": [
+      "OpenCodeStableCompatibilityTests/stableServiceContract",
+      "WorkspaceAgentToolsServiceTests/packagedHTMLToolsWorkAcrossHarnesses"
+    ],
+    "final_refresh": "After retaining the revocation and approval regressions, reran all tests in the two rebuilt binaries; reused profiles only for nine binaries with identical SHA-256 hashes.",
+    "baseline_fixture_adjustment": {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceOAuthTests.swift",
+      "sha256": "3fbe3d6714fca485d29c178a21883093c81e3468eff9abff2437544861dff93c",
+      "description": "Applied the same explicit credential/account case pairs to baseline and candidate. Independent JWT JSON serialization could otherwise prevent the mismatched-account fixture from being selected. Production sources are unchanged."
+    },
+    "production_change": "The iOS app migration reads its local record value before writing executionRecords, preventing a Swift exclusivity trap when reopening saved conversations. Existing app-hosted defaults and goal-restoration tests cover the fix; this file is outside package coverage."
+  },
+  "toolchain": {
+    "xcode": "27.0 (27A5194q)",
+    "swift": "6.4",
+    "architecture": "arm64"
+  },
+  "coverage_build_commit": "26f5e3952b11af34aa2b6485dad05e8430ab665b",
+  "coverage_source_equivalence": "All production sources measured by package coverage and all package graphs are identical between baseline and candidate. The deterministic OAuth credential fixture correction is applied to both sides. DeviceExecution.swift belongs to the separate iOS app target and is outside this coverage measurement."
+}

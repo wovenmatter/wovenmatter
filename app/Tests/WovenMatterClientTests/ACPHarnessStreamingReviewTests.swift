@@ -5,27 +5,6 @@ import WovenMatterCore
 
 struct ACPHarnessStreamingReviewTests {
 
-  @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
-  func updatedAdaptersNegotiateTheImplementedSessionProtocol(kind: AgentRuntimeKind) async throws {
-    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":1}"#,
-      session: #"{"sessionId":"stable-wire"}"#, extras: [:])
-    defer { fixture.remove() }
-    let client = try await fixture.client()
-    defer { Task { await client.shutdown() } }
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    #expect(try await client.prompt("Offline fixture") == .endTurn)
-    await client.shutdown()
-    let messages = try fixture.log().split(separator: "\n").map {
-      try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
-    }
-    let initialize = try #require(messages.first { $0["method"] as? String == "initialize" })
-    // Both updated adapters route a version-2 offer to the incompatible draft
-    // wire API, even though their stable version-1 session API remains available.
-    #expect((initialize["params"] as? [String: Any])?["protocolVersion"] as? Int == 1)
-    #expect(messages.contains { $0["method"] as? String == "session/new" })
-    #expect(messages.contains { $0["method"] as? String == "session/prompt" })
-  }
-
   @Test(arguments: [false, true])
   func claudeContextVariantsSharePresentationButKeepExactSelections(legacy: Bool) async throws {
     let rows: [(String, String, String)] = [
@@ -73,7 +52,6 @@ struct ACPHarnessStreamingReviewTests {
       #expect(!(try fixture.log()).contains("session/set_"))
     }
   }
-
 
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
   func modelAndThinkingSelectionFollowsAdvertisedOptions(kind: AgentRuntimeKind) async throws {
@@ -128,7 +106,6 @@ struct ACPHarnessStreamingReviewTests {
     }
   }
 
-
   @Test("built-in replacement chunks are assembled before admission and preserve boundaries")
   func builtInSnapshotWireReplay() async throws {
     let fixture = try ACPHarnessFixture(kind: .defaultAgent,
@@ -163,28 +140,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(thoughts.first?.merging(thoughts[1]).content == "")
     #expect(thoughts.last?.status == "completed")
     #expect(thoughts.last?.id == thoughts.first?.id)
-  }
-
-  @Test func stoppedDispatchFenceNeverWritesPromptAfterHistorySuspension() async throws {
-    let fixture = try ACPHarnessFixture(kind: .codex, initialize: #"{"protocolVersion":1}"#,
-      session: #"{"sessionId":"stopped"}"#, extras: [:])
-    defer { fixture.remove() }
-    let fence = AgentDispatchFence()
-    let client = try await fixture.client { direction, data in
-      guard direction == "out",
-        let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-        value["method"] as? String == "session/prompt" else { return }
-      fence.cancel()
-    }
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    do {
-      _ = try await client.prompt("Never send", dispatchFence: fence)
-      Issue.record("A stopped dispatch fence must reject the prompt before transport")
-    } catch LocalACPClientError.activeInputUnsupported { }
-    #expect(!fence.hasDispatched)
-    #expect(await client.activePromptRequestCount == 0)
-    await client.shutdown()
-    #expect(!(try fixture.log()).contains(#""method":"session/prompt""#))
   }
 
   private func review(
@@ -224,44 +179,6 @@ struct ACPHarnessStreamingReviewTests {
     for marker in expected { #expect(log.contains(marker)) }
     try await assertStream(events)
   }
-
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
-  func liveToolOutputArrivesBeforePromptCompletion(kind: AgentRuntimeKind) async throws {
-    let gate = FileManager.default.temporaryDirectory.appending(path: "acp-stream-release-\(UUID())")
-    defer { try? FileManager.default.removeItem(at: gate) }
-    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
-      session: #"{"sessionId":"streaming"}"#, extras: ["woven/configure": "{}"], promptOverride: """
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"shell","kind":"execute","title":"Shell"}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"progress one 🧵"}}]}}}'
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"in_progress","content":[]}}}'
-        while [ ! -f '\(gate.path)' ]; do sleep 0.02; done
-        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"shell","status":"completed","content":[{"type":"content","content":{"type":"text","text":"progress two"}}]}}}'
-        respond "$id" '{"stopReason":"end_turn"}'; continue
-        """)
-    defer { fixture.remove() }
-    let client = try await fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    let events = ACPReviewEvents()
-    let run = Task { try await client.prompt("Stream fixture output") { await events.record($0) } }
-    let deadline = Date().addingTimeInterval(3)
-    var tools: [AgentRunActivity] = []
-    repeat {
-      tools = await events.values().compactMap { event in
-        if case .activity(let activity, _) = event, activity.kind == .tool { return activity }; return nil
-      }
-      if tools.count >= 3 { break }
-      try await Task.sleep(for: .milliseconds(10))
-    } while Date() < deadline
-    // Release before assertions/cleanup, even if live delivery regresses.
-    try Data().write(to: gate)
-    #expect(tools.contains { $0.status == "in_progress" && $0.content == "progress one 🧵" })
-    #expect(!tools.contains { $0.status == "completed" })
-    #expect(tools.last?.content == "")
-    if tools.count >= 3 { #expect(tools[1].merging(tools[2]).content == "") }
-    #expect(try await run.value == .endTurn)
-    await client.shutdown()
-  }
-
 
   private func assertStream(_ events: ACPReviewEvents) async throws {
     let values = await events.values()

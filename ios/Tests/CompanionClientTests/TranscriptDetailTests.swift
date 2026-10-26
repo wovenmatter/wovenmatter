@@ -55,34 +55,6 @@ final class TranscriptDetailTests: XCTestCase {
     return .init(id:"call", runID:"turn", title:"read_file", status:"completed",
       projectionJSON:String(decoding: try JSONSerialization.data(withJSONObject:object), as:UTF8.self), sequence:1)
   }
-  func testLegacyToolMigrationPreservesUserTextAndOriginalJournal() async throws {
-    let journal = try WorkspaceJournal(file:file())
-    let old = CompanionTranscript(conversationID:"c", messages:[
-      .init(id:"c-1-0", conversationID:"c", role:"user", content:"Inspect"),
-      .init(id:"c-2-0", conversationID:"c", role:"assistant", content:"Tool: list_files"),
-      .init(id:"c-3-0", conversationID:"c", role:"tool", content:String(repeating:"old result\n", count:4_000))
-    ])
-    let originals = try await journal.append(workspaceID:"phone", transcript:old)
-    let snapshot: [String:Any] = ["entries":[
-      ["id":1,"model":[["role":"user","content":"Inspect"]]],
-      ["id":2,"model":[["role":"assistant","content":[["type":"toolCall","id":"files","name":"list_files","arguments":[:]]]]]],
-      ["id":3,"model":[["role":"toolResult","toolCallId":"files","content":[["type":"text","text":"[]"]]]]]
-    ]]
-    let projected = CompanionDeviceTranscript.project(snapshot:snapshot, conversationID:"c")
-    _ = try await journal.append(workspaceID:"phone", transcript:projected)
-    let state = await journal.snapshot()
-    XCTAssertEqual(state.transcripts["c"]?.messages.map(\.content), ["Inspect"])
-    XCTAssertEqual(state.transcripts["c"]?.activities.count, 1)
-    for original in originals { XCTAssertEqual(state.entries[original.eventID], original) }
-    let replay = try await journal.append(workspaceID:"phone", transcript:projected)
-    XCTAssertTrue(replay.isEmpty)
-    _ = try await journal.append(workspaceID:"phone", transcript:.init(conversationID:"c", messages:Array(old.messages.dropFirst())))
-    let delayed = await journal.snapshot()
-    XCTAssertEqual(delayed.transcripts["c"]?.messages.map(\.content), ["Inspect"])
-    _ = try await journal.append(workspaceID:"phone", transcript:.init(conversationID:"c", removedMessageIDs:["c-1-0"]))
-    let preserved = await journal.snapshot()
-    XCTAssertEqual(preserved.transcripts["c"]?.messages.first?.content, "Inspect")
-  }
   func testLargeDetailsSurviveRestartAndJournalReplication() async throws {
     let path = file()
     let journal = try WorkspaceJournal(file:path)

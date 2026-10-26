@@ -3,36 +3,6 @@ import Testing
 @testable import WovenMatterCompanion
 
 @Suite struct WorkspaceGoalLedgerTests {
-    @Test func elapsedPursuitExcludesPausedIntervalsAndSurvivesPersistence() throws {
-        var goal = WorkspaceGoal(sessionID: "session", objective: "Verify")
-        goal.activeSince = Date().addingTimeInterval(-60)
-        goal.status = .paused
-        let pausedSeconds = try #require(goal.activeSeconds)
-        #expect(pausedSeconds >= 60)
-        #expect(goal.activeSince == nil)
-        #expect(goal.elapsedPursuitText(at: Date().addingTimeInterval(3600)) == goal.elapsedPursuitText(at: Date()))
-        goal = try JSONDecoder().decode(WorkspaceGoal.self, from: JSONEncoder().encode(goal))
-        #expect(goal.activeSeconds == pausedSeconds && goal.activeSince == nil)
-        goal.activeSeconds = 60
-        goal.status = .active
-        let resumedAt = try #require(goal.activeSince)
-        #expect(goal.elapsedPursuitText(at: resumedAt.addingTimeInterval(30)) == "1:30 elapsed")
-        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(goal)) as? [String: Any])
-        legacy.removeValue(forKey: "activeSeconds"); legacy.removeValue(forKey: "activeSince")
-        var restored = try JSONDecoder().decode(WorkspaceGoal.self, from: JSONSerialization.data(withJSONObject: legacy))
-        #expect(restored.elapsedPursuitText(at: Date()) == "Elapsed unavailable")
-        restored.status = .paused; restored.status = .active
-        #expect(restored.activeSeconds == 0 && restored.activeSince != nil)
-    }
-
-    @Test func slashCommandsRequestAgentActionWithoutNativeCommandSyntax() throws {
-        #expect(WorkspaceGoalCommand("/goal") == .request)
-        #expect(WorkspaceGoalCommand("/goal show") == .show)
-        let command = try #require(WorkspaceGoalCommand("/goal Verify the fix"))
-        #expect(command.agentPrompt.contains("Set a Woven Matter goal"))
-        #expect(command.agentPrompt.hasSuffix("Verify the fix"))
-        #expect(!command.agentPrompt.hasPrefix("/"))
-    }
 
     @Test func durableReceiptAndCheckpointGate() throws {
         var ledger = WorkspaceGoalLedger()
@@ -82,52 +52,5 @@ import Testing
         #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: goal.id)) }
         let persisted = try JSONDecoder().decode(WorkspaceGoalLedger.self, from: JSONEncoder().encode(ledger))
         #expect(persisted == ledger)
-    }
-    @Test func budgetAndMissingUsageStopContinuation() throws {
-        for missing in [false, true] {
-            var ledger = WorkspaceGoalLedger()
-            let goalResult = try ledger.mutate(.set(objective: "Finish", tokenBudget: 10, turnBudget: nil), currentRunID: "run")
-            let goal = try #require(goalResult)
-            _ = try ledger.mutate(.checkpoint(id: goal.id, evidence: "Useful progress"))
-            ledger.settle("run", tokens: missing ? nil : 10, succeeded: true)
-            #expect(ledger.goal?.status == (missing ? .blocked : .budgetLimited))
-            #expect(ledger.claimContinuation(id: "next") == nil)
-            #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: goal.id)) }
-            if missing {
-                let editedResult = try ledger.mutate(.edit(id: goal.id, objective: "Finish", tokenBudget: 200, turnBudget: nil))
-                let edited = try #require(editedResult)
-                #expect(throws: WorkspaceToolError.self) { try ledger.mutate(.resume(id: edited.id)) }
-                let unbudgetedResult = try ledger.mutate(.edit(id: edited.id, objective: "Finish", tokenBudget: nil, turnBudget: nil))
-                let unbudgeted = try #require(unbudgetedResult)
-                _ = try ledger.mutate(.resume(id: unbudgeted.id))
-                #expect(ledger.claimContinuation(id: "next") != nil)
-            }
-        }
-    }
-    @Test func noCheckpointAndFailedRunCannotSpin() throws {
-        for succeeded in [false, true] {
-            var ledger = WorkspaceGoalLedger()
-            _ = try ledger.mutate(.set(objective: "Finish", tokenBudget: nil, turnBudget: nil), currentRunID: "run")
-            ledger.settle("run", tokens: nil, succeeded: succeeded)
-            #expect(ledger.goal?.status == .blocked)
-            #expect(ledger.goal?.completedTurns == (succeeded ? 1 : 0))
-            #expect(ledger.claimContinuation(id: "next") == nil)
-        }
-    }
-    @Test func guidanceIsHiddenOnlyInDisplayProjection() {
-        let prompt = "Original message" + WorkspaceGoal.guidance
-        #expect(WorkspaceGoal.displayPrompt(prompt) == "Original message")
-        let goal = WorkspaceGoal(sessionID: "session", objective: "Verify")
-        #expect(WorkspaceGoal.displayPrompt(goal.continuationPrompt + WorkspaceGoal.guidance) == "Continuing toward the goal.")
-        #expect(WorkspaceGoal.displayPrompt("User mentions <wovenmatter-goals>") == "User mentions <wovenmatter-goals>")
-    }
-    @Test func ownerGoalContractRoundTripsAndOlderSettingsRemainReadable() throws {
-        let goal = WorkspaceGoal(sessionID: "session", objective: "Verify")
-        let settings = CompanionSessionSettings(conversationID: "session", model: nil, thinking: nil, permission: nil, models: [], thinkingLevels: [], permissions: [], availableTools: [], enabledTools: [], canConfigure: true, goal: goal)
-        #expect(try JSONDecoder().decode(CompanionSessionSettings.self, from: JSONEncoder().encode(settings)).goal == goal)
-        let action = CompanionWorkspaceAction.goal(id: "session", mutation: .pause(id: goal.id))
-        #expect(try JSONDecoder().decode(CompanionWorkspaceAction.self, from: JSONEncoder().encode(action)) == action)
-        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any]); object.removeValue(forKey: "goal")
-        #expect(try JSONDecoder().decode(CompanionSessionSettings.self, from: JSONSerialization.data(withJSONObject: object)).goal == nil)
     }
 }

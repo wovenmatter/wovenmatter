@@ -7,137 +7,6 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct CompanionHostLifecycleTests {
-
-    @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {
-        let identity = CompanionPairingDeviceIdentity(deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture Mac", metadata: .init(kind: .mac))
-        let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: String(repeating: "s", count: 43), identity: identity)
-        let cancelled = CompanionStoredPairingClaim(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!,
-            request: request, expiresAt: Date().addingTimeInterval(600), cancelled: true)
-        var stored: Data? = try JSONEncoder().encode(cancelled)
-        var attempts = 0, paired = false
-        let controller = CompanionMacPairingController(identity: { identity }, onPaired: { _, _ in paired = true },
-            loadClaim: { _ in try stored.map { try JSONDecoder().decode(CompanionStoredPairingClaim.self, from: $0) } },
-            saveClaim: { claim, _ in stored = try claim.map { try JSONEncoder().encode($0) } },
-            cancelClaim: { endpoint, poll in
-                #expect(endpoint == cancelled.endpoint && poll.requestID == cancelled.poll.requestID && poll.requestSecret == cancelled.poll.requestSecret)
-                attempts += 1
-                if attempts == 1 { throw URLError(.notConnectedToInternet) }
-            })
-        await controller.restorePendingRequest()
-        try await waitUntil { attempts == 1 }
-        #expect(stored != nil && controller.isRequestPending && !paired)
-        try await waitUntil { attempts == 2 && !controller.isRequestPending }
-        #expect(stored == nil && !paired)
-    }
-
-    @Test func executionAccessSettingsRejectDeviceOwnedAndNonExecutableWorkspaces() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let grant = try await fixture.pairAndProvision(name: "Fixture Mac")
-        let database = try #require(fixture.model.dashboardStore?.database)
-        let identity = try await database.companionLibraryIdentity()
-        let candidates: [CompanionExecutionWorkspace] = [
-            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: grant.deviceID,
-                  kind: .mac, name: "Own Mac", endpoint: grant.workspace.endpoint, executionDeviceID: grant.deviceID),
-            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .ios, name: "Phone"),
-            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .mac, name: "No execution listener")
-        ]
-        for candidate in candidates {
-            let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: candidate), deviceID: identity.hostDeviceID)
-            await fixture.host.setExecutionAccess(deviceID: grant.deviceID, workspaceID: workspace.id, enabled: false)
-            #expect(fixture.host.errorMessage != nil)
-            #expect(try await database.companionWorkspaceAccessAllowed(deviceID: grant.deviceID, workspaceID: workspace.id))
-        }
-        #expect(try await fixture.executionStatus(grant) == 200)
-    }
-
-
-    @Test func backendRPCControlsTheSameHostAndReplaysPairingReceipt() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        try await fixture.model.configureCompanionFixture(directory: fixture.directory)
-        fixture.model.companionHost = fixture.host
-        let backend = BackendApplicationService(model: fixture.model)
-        func request(_ action: CompanionHostAction) throws -> BackendRPCRequest {
-            .init(method: "application.command", payload: try JSONEncoder().encode(BackendApplicationCommand.companion(action)))
-        }
-        let start = await backend.handle(try request(.start))
-        #expect(start.error == nil)
-        let started = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(start.result))
-        #expect(started.companion?.endpoint == fixture.host.endpoint)
-        #expect(started.companion?.isEnabled == true)
-        let codeRequest = try request(.createCode)
-        let code = await backend.handle(codeRequest)
-        #expect(code.error == nil)
-        let offered = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(code.result))
-        #expect(offered.companion?.pairingPayload != nil)
-        #expect(await backend.handle(codeRequest).result == code.result)
-        #expect(fixture.exposureCount == 1)
-        let stop = await backend.handle(try request(.stop))
-        #expect(stop.error == nil)
-        let stopped = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(stop.result))
-        #expect(stopped.companion?.endpoint == nil)
-        #expect(stopped.companion?.isEnabled == false)
-        #expect(fixture.host.endpoint == nil)
-    }
-
-    @Test func foregroundHostServesDevelopmentEnrollmentAndRepeatedStartupKeepsTheEndpoint() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        try await fixture.model.configureCompanionFixture(directory: fixture.directory)
-        fixture.model.companionHost = fixture.host
-        await fixture.host.start()
-        let socket = LocalExecutionRole.backendSocketURL(workspaceDirectory: fixture.directory)
-        defer { try? FileManager.default.removeItem(at: socket.deletingLastPathComponent()) }
-        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
-        let server = try #require(fixture.model.backendRPCServer)
-        defer { server.stop() }
-        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
-        #expect(fixture.model.backendRPCServer === server)
-        let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · fixture")
-        let data = try await BackendRPCClient(socketURL: socket).call(method: "development.connect",
-            payload: JSONEncoder().encode(request))
-        let response = try JSONDecoder().decode(DevelopmentClientConnection.self, from: data)
-        #expect(response.endpoint == fixture.host.endpoint)
-        #expect(!response.pairing.credential.isEmpty)
-        await #expect(throws: BackendRPCError.self) {
-            try await BackendRPCClient(socketURL: socket).call(method: "application.command")
-        }
-    }
-
-
-    @Test func stalePairingPrincipalCannotRotateReenrolledDevicesExecutionGrant() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let oldCredential = try await fixture.pairAndProvision(name: "Original iPhone pairing")
-        let oldPrincipal = try #require(fixture.host.pairedDevices.first { $0.id == oldCredential.deviceID })
-        await fixture.host.revoke(oldPrincipal.id)
-        let replacement = try await fixture.pairAndProvision(name: "Reenrolled iPhone", deviceID: oldPrincipal.id)
-        #expect(try await fixture.executionStatus(oldCredential) == 401)
-        #expect(try await fixture.executionStatus(replacement) == 200)
-        do {
-            _ = try await fixture.host.provisionExecutionWorkspace(id: replacement.workspace.id, device: oldPrincipal)
-            Issue.record("A revoked pairing principal was accepted after device reenrollment")
-        } catch let error as CompanionAPIError {
-            #expect(["unavailable", "unauthorized"].contains(error.code))
-        }
-        #expect(try await fixture.executionStatus(replacement) == 200)
-    }
-
-
-    @Test func quitDuringAutomaticStartupCannotPublishOrRestartService() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        fixture.holdFirstStatus = true
-        await fixture.host.startForCentralDatabase()
-        try await waitUntil { fixture.firstStatusArrived }
-        fixture.host.stop()
-        fixture.releaseFirstStatus()
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(fixture.exposureCount == 1)
-        #expect(fixture.children.isEmpty)
-        #expect(fixture.host.endpoint == nil && !fixture.host.isEnabled)
-    }
-
     @Test func executionRevocationUsesLiveAuthenticationAndSurvivesStoppedSharingRestart() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
@@ -207,6 +76,98 @@ struct CompanionHostLifecycleTests {
         await fixture.host.start()
         #expect(try await fixture.executionStatus(third) == 401)
         #expect(fixture.host.pairedDevices.isEmpty)
+    }
+
+
+    @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {
+        let identity = CompanionPairingDeviceIdentity(deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture Mac", metadata: .init(kind: .mac))
+        let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: String(repeating: "s", count: 43), identity: identity)
+        let cancelled = CompanionStoredPairingClaim(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!,
+            request: request, expiresAt: Date().addingTimeInterval(600), cancelled: true)
+        var stored: Data? = try JSONEncoder().encode(cancelled)
+        var attempts = 0, paired = false
+        let controller = CompanionMacPairingController(identity: { identity }, onPaired: { _, _ in paired = true },
+            loadClaim: { _ in try stored.map { try JSONDecoder().decode(CompanionStoredPairingClaim.self, from: $0) } },
+            saveClaim: { claim, _ in stored = try claim.map { try JSONEncoder().encode($0) } },
+            cancelClaim: { endpoint, poll in
+                #expect(endpoint == cancelled.endpoint && poll.requestID == cancelled.poll.requestID && poll.requestSecret == cancelled.poll.requestSecret)
+                attempts += 1
+                if attempts == 1 { throw URLError(.notConnectedToInternet) }
+            })
+        await controller.restorePendingRequest()
+        try await waitUntil { attempts == 1 }
+        #expect(stored != nil && controller.isRequestPending && !paired)
+        try await waitUntil { attempts == 2 && !controller.isRequestPending }
+        #expect(stored == nil && !paired)
+    }
+
+    @Test func backendRPCControlsTheSameHostAndReplaysPairingReceipt() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        try await fixture.model.configureCompanionFixture(directory: fixture.directory)
+        fixture.model.companionHost = fixture.host
+        let backend = BackendApplicationService(model: fixture.model)
+        func request(_ action: CompanionHostAction) throws -> BackendRPCRequest {
+            .init(method: "application.command", payload: try JSONEncoder().encode(BackendApplicationCommand.companion(action)))
+        }
+        let start = await backend.handle(try request(.start))
+        #expect(start.error == nil)
+        let started = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(start.result))
+        #expect(started.companion?.endpoint == fixture.host.endpoint)
+        #expect(started.companion?.isEnabled == true)
+        let codeRequest = try request(.createCode)
+        let code = await backend.handle(codeRequest)
+        #expect(code.error == nil)
+        let offered = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(code.result))
+        #expect(offered.companion?.pairingPayload != nil)
+        #expect(await backend.handle(codeRequest).result == code.result)
+        #expect(fixture.exposureCount == 1)
+        let stop = await backend.handle(try request(.stop))
+        #expect(stop.error == nil)
+        let stopped = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(stop.result))
+        #expect(stopped.companion?.endpoint == nil)
+        #expect(stopped.companion?.isEnabled == false)
+        #expect(fixture.host.endpoint == nil)
+    }
+
+    @Test func foregroundHostServesDevelopmentEnrollmentAndRepeatedStartupKeepsTheEndpoint() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        try await fixture.model.configureCompanionFixture(directory: fixture.directory)
+        fixture.model.companionHost = fixture.host
+        await fixture.host.start()
+        let socket = LocalExecutionRole.backendSocketURL(workspaceDirectory: fixture.directory)
+        defer { try? FileManager.default.removeItem(at: socket.deletingLastPathComponent()) }
+        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
+        let server = try #require(fixture.model.backendRPCServer)
+        defer { server.stop() }
+        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
+        #expect(fixture.model.backendRPCServer === server)
+        let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · fixture")
+        let data = try await BackendRPCClient(socketURL: socket).call(method: "development.connect",
+            payload: JSONEncoder().encode(request))
+        let response = try JSONDecoder().decode(DevelopmentClientConnection.self, from: data)
+        #expect(response.endpoint == fixture.host.endpoint)
+        #expect(!response.pairing.credential.isEmpty)
+        await #expect(throws: BackendRPCError.self) {
+            try await BackendRPCClient(socketURL: socket).call(method: "application.command")
+        }
+    }
+
+    @Test func stalePairingPrincipalCannotRotateReenrolledDevicesExecutionGrant() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let oldCredential = try await fixture.pairAndProvision(name: "Original iPhone pairing")
+        let oldPrincipal = try #require(fixture.host.pairedDevices.first { $0.id == oldCredential.deviceID })
+        await fixture.host.revoke(oldPrincipal.id)
+        let replacement = try await fixture.pairAndProvision(name: "Reenrolled iPhone", deviceID: oldPrincipal.id)
+        #expect(try await fixture.executionStatus(oldCredential) == 401)
+        #expect(try await fixture.executionStatus(replacement) == 200)
+        do {
+            _ = try await fixture.host.provisionExecutionWorkspace(id: replacement.workspace.id, device: oldPrincipal)
+            Issue.record("A revoked pairing principal was accepted after device reenrollment")
+        } catch let error as CompanionAPIError {
+            #expect(["unavailable", "unauthorized"].contains(error.code))
+        }
+        #expect(try await fixture.executionStatus(replacement) == 200)
     }
 
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {

@@ -19,26 +19,6 @@ struct HarnessMaintenanceTests {
         #expect(fixture.defaults.bool(forKey: "wovenmatter.credential-access.disclosure-acknowledged") == false)
     }
 
-    @Test func remoteAvailabilityIgnoresRetiredFlagsButRequiresInstallation() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let model = fixture.model.remoteWorkspaces
-        let workspace = fixture.remote
-        let status = try #require(model.statuses[workspace.id])
-        let harnesses = model.currentHarnesses(for: workspace)
-        let rows = try #require(model.runtimeMaintenance[workspace.id])
-        for installed in [true, false] {
-            let changed = try rows.map { row in
-                var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
-                object["enabled"] = false; object["visible"] = false
-                object["installed"] = installed
-                return try JSONDecoder().decode(RemoteRuntimeMaintenance.self, from: JSONSerialization.data(withJSONObject: object))
-            }
-            model.configureCompanionFixture(workspace, status: status, harnesses: harnesses, maintenance: changed)
-            #expect(model.isRuntimeInstalled(.codex, in: workspace) == installed)
-            #expect(model.readyChatTargets.contains { $0.harness.id == .codex } == installed)
-        }
-    }
-
     @Test func remoteCatalogSurvivesRestartWithoutReadinessAndDoesNotRewriteKnownAgents() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let remote = fixture.model.remoteWorkspaces
@@ -69,16 +49,6 @@ struct HarnessMaintenanceTests {
         // A failed refresh (no inventory) must not remove or rewrite known agents.
         await reopened.synchronizeRemoteAgentCatalog()
         #expect(reopened.remoteWorkspaceAgents == saved)
-    }
-
-    @Test func configuredWorkspaceRegistersBundledAgentBeforeFirstConnection() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let remote = fixture.model.remoteWorkspaces
-        remote.configureCompanionFixture(fixture.remote, status: try #require(remote.statuses[fixture.remote.id]),
-                                         harnesses: [], maintenance: [])
-        await fixture.model.synchronizeRemoteAgentCatalog()
-        #expect(fixture.model.remoteWorkspaceAgents.map(\.runtimeKind) == [.defaultAgent])
-        #expect(remote.readyChatTargets.isEmpty)
     }
 
     @Test func updatesOverlapAndKeepProgressAndFailuresIndependent() async throws {

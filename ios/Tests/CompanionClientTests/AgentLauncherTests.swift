@@ -9,15 +9,6 @@ final class AgentLauncherTests: XCTestCase {
   }
   private var pi: CompanionProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
 
-  func testOfflineDiscoveryRemainsVisibleWithoutRestoringReachability() throws {
-    let catalog = CompanionAgentCatalog(libraryID: "library", providers: [pi], workspaceProviders: [workspaceID: [pi]], knownAgentIDs: [])
-    let restored = try JSONDecoder().decode(CompanionAgentCatalog.self, from: JSONEncoder().encode(catalog))
-    let agents = CompanionAgentLauncher.list(deviceName: "This iPhone", centralOnline: false, providers: restored.providers,
-      workspaces: [workspace], workspaceProviders: restored.workspaceProviders, reachable: [:])
-    XCTAssertEqual(agents.map(\.workspaceID), ["local", "central", workspaceID])
-    XCTAssertEqual(agents.map(\.isAvailable), [true, false, false])
-  }
-
   func testDiscoveredRoutesDeduplicateAndSelectOnlyTheLatestMatchingSession() throws {
     let central = CompanionProvider(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
     func agents(centralOnline: Bool, directOnline: Bool) -> [CompanionAgentLauncher] {

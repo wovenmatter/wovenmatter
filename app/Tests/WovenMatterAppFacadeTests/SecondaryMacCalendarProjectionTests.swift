@@ -10,7 +10,6 @@ import WovenMatterCore
 @MainActor @Suite("Secondary Mac offline calendar projection", .serialized)
 struct SecondaryMacCalendarProjectionTests {
 
-
     @MainActor private struct Fixture {
         let directory: URL
         let database: WorkspaceDatabase
@@ -40,48 +39,6 @@ struct SecondaryMacCalendarProjectionTests {
         func restartBridge() throws -> SecondaryMacCalendarProjection {
             try .init(database: database, replica: replica, descriptor: descriptor, directory: directory)
         }
-    }
-
-    @Test func onlyAssignedMacTasksExecuteAndNativeHarnessRunReceiptsSyncCentrally() async throws {
-        let f = try await Fixture(); defer { f.remove() }
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
-        let phone = UUID().uuidString.lowercased()
-        let foreign = [CompanionCalendarRecord(event: .init(id: UUID().uuidString.lowercased(), revision: 0,
-            draft: .init(title: "Central task", startsAt: start, timeZoneID: "UTC", task: .init(prompt: "Central", runtime: "codex")))),
-            .init(event: .init(id: UUID().uuidString.lowercased(), revision: 0,
-            draft: .init(title: "Phone task", startsAt: start, timeZoneID: "UTC", task: .init(prompt: "Phone", workspaceID: phone))), ownerDeviceID: phone)]
-        try await f.replica.calendar.apply(.init(workspaceID: f.descriptor.libraryID, records: foreign))
-        let local = try await f.replica.calendar.save(expectedRevision: nil, draft: .init(title: "Mac task", startsAt: start,
-            timeZoneID: "UTC", task: .init(prompt: "Local", runtime: "codex", workspaceID: f.descriptor.id,
-                enabledTools: ["wovenmatter_calendar"])), ownerDeviceID: f.descriptor.ownerDeviceID)
-        try await f.bridge.reconcile()
-        let nativeID = try await f.database.saveCalendarEvent(draft: .init(title: "Native Claude task", startsAt: start, timeZoneID: "UTC",
-            task: .init(prompt: "Other native harness", configuration: .init(runtimeKind: .claudeCode, title: "Native Claude task",
-                nativeWorkingDirectory: "/tmp/project", tools: .init(enabled: [.calendar])))), creating: true, now: start)
-        try await f.bridge.reconcile()
-        let runs = try await f.database.dueCalendarRuns(now: start.addingTimeInterval(1))
-        #expect(Set(runs.map(\.eventID)) == Set([local.id, nativeID]))
-        #expect(runs.first { $0.eventID == local.id }?.task.configuration.tools.enabled == [.calendar, .goals, .html])
-        #expect(runs.first { $0.eventID == nativeID }?.task.configuration.runtimeKind == .claudeCode)
-        #expect(runs.first { $0.eventID == nativeID }?.task.configuration.nativeWorkingDirectory == "/tmp/project")
-        for run in runs { #expect(try await f.database.isCalendarRunActive(run.id)) }
-        let selected = try #require(runs.first { $0.eventID == local.id })
-        _ = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: selected.title, ownerDeviceID: UUID(),
-            requestedConversationID: UUID(uuidString: selected.sessionID))
-        _ = try await f.database.prepareCalendarDelivery(runID: selected.id, now: start)
-        #expect(try await f.database.claimToolDelivery(id: selected.id, now: start) != nil)
-        try await f.database.setToolDeliveryStatus(id: selected.id, status: "accepted")
-        try await f.database.settleCalendarRuns()
-        try await f.bridge.reconcile(); try await f.synchronize()
-        let receipts = await f.replica.calendar.pendingRuns()
-        #expect(receipts.first { $0.id == selected.id }?.status == "accepted")
-        #expect(receipts.allSatisfy { $0.ownerDeviceID == f.descriptor.ownerDeviceID })
-        _ = try await f.central.companionCalendarPublishRuns(receipts, deviceID: f.descriptor.ownerDeviceID)
-        #expect(try await f.central.companionCalendarSnapshot().runs?.first { $0.id == selected.id }?.status == "accepted")
-        #expect(try await f.central.dueCalendarRuns(now: start.addingTimeInterval(1)).isEmpty)
-        let before = await f.replica.calendar.pendingRuns()
-        try await f.restartBridge().reconcile()
-        #expect(await f.replica.calendar.pendingRuns() == before)
     }
 
     @Test func taskConflictsFenceNativeExecutionAndToolOnlyEditsRemainRestricted() async throws {

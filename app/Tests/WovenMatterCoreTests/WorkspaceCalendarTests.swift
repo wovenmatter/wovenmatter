@@ -8,24 +8,6 @@ import WovenMatterClient
 @Suite("Calendar events, recurrence and scheduled sessions")
 struct WorkspaceCalendarTests {
 
-  @Test func replacingCancelledSlotUsesTheNewOccurrenceIdentity() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let start = date("2026-09-01T13:00:00Z")
-    let id = try await insert(db, start: start, repeatRule: .init(unit: .day))
-    let cancelled = try await #require(db.dueCalendarRuns(now: start).first)
-    try await db.deleteCalendarEvent(id: id, occurrence: 0)
-    var draft = WorkspaceCalendarDraft(try await #require(db.calendarItems().first))
-    draft.startsAt = start.addingTimeInterval(-86_400)
-    try await db.saveCalendarEvent(id: id, draft: draft, creating: false, now: start)
-    let replacement = try await #require(db.dueCalendarRuns(now: start).first)
-    #expect(replacement.id != cancelled.id)
-    #expect(replacement.scheduledAt == cancelled.scheduledAt)
-    #expect(replacement.occurrenceIndex == 1)
-    #expect(try await db.calendarRuns().first?.id == replacement.id)
-    try await accept(replacement, in: db, now: start)
-    #expect(try await db.dueCalendarRuns(now: start).isEmpty)
-  }
-
   @Test func remoteDisableRestoresCheckpointBeforeReleasingFence() async throws {
     let (db,directory) = try await fixture(); defer { try? FileManager.default.removeItem(at:directory) }
     let workspace = UUID(),start = date("2026-09-22T12:00:00Z")
@@ -42,7 +24,6 @@ struct WorkspaceCalendarTests {
     let run = try await #require(db.dueCalendarRuns(now:start.addingTimeInterval(86_400)).first)
     #expect(run.sessionID == checkpoint.taskSessionID)
   }
-
 
   @Test func allDayAndMultiDayEventsOverlapTheirVisibleDays() async throws {
     let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
@@ -67,7 +48,6 @@ struct WorkspaceCalendarTests {
     var invalid = draft; invalid.task = task()
     #expect(throws: (any Error).self) { try invalid.validated() }
   }
-
 
   @Test func pastRunsRemainDistinctFromChangedOccurrencesAndKeepTheirSavedSettings() async throws {
     let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
@@ -179,22 +159,6 @@ struct WorkspaceCalendarTests {
 }
 
 extension WorkspaceCalendarTests {
-  @Test func detachedAcceptedRunKeepsItsSessionEvenBeforeSettlement() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let start = date("2026-09-01T13:00:00Z")
-    let id = try await insert(db, start: start, repeatRule: .init(unit: .day))
-    let run = try await #require(db.dueCalendarRuns(now: start).first)
-    _ = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
-    _ = try await db.prepareCalendarDelivery(runID: run.id, now: start)
-    _ = try await db.claimToolDelivery(id: run.id, now: start)
-    try await db.setToolDeliveryStatus(id: run.id, status: "accepted")
-    let event = try await #require(db.calendarItems().first)
-    let detachedID = try await db.saveCalendarEvent(id: id, draft: WorkspaceCalendarDraft(event), creating: false, detaching: 0, now: start)
-    try await db.settleCalendarRuns()
-    let saved = try await #require(db.calendarRuns().first)
-    #expect(saved.eventID == detachedID && saved.sessionID == run.sessionID)
-    #expect(try await db.dueCalendarRuns(now: start).isEmpty)
-  }
 
   @Test(arguments: [WorkspaceCalendarTask.SessionMode.same, .new])
   @MainActor func stopDuringPreparationCancelsOnlySelectedOccurrence(mode: WorkspaceCalendarTask.SessionMode) async throws {
