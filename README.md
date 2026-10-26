@@ -9,8 +9,8 @@ in a simple, easy-to-use interface that keeps all of your work organized in one
 place. Each project folder owns one directory in one execution workspace,
 so its agents collaborate on the files you choose. WovenMatter ships
 with a local agent workspace, which runs locally on your Mac. You can also
-launch remote agent workspaces on other machines on your network or Tailscale
-network, and work with those agents from the same interface.
+launch remote agent workspaces on Linux machines in your Tailnet and work with
+those agents from the same interface.
 
 WovenMatter is essentially a user interface built on top of a SQLite database.
 This database saves all of your conversations, notes, and any other items
@@ -64,9 +64,9 @@ and remote folders.
 ## Work on your Mac and other machines
 
 Start with the local agent workspace on your Mac. If you have another Linux
-machine on your network or Tailscale network, you can create a remote agent
-workspace on it from Woven Matter. A rented Linux host reachable over SSH works
-too; Tailscale is optional.
+machine connected to your Tailnet, you can create a remote agent workspace on
+it from Woven Matter. A rented Linux host is supported after it joins the same
+Tailnet. Tailscale is required for every remote-workspace connection.
 
 Each remote workspace is a container with a persistent home for its files,
 harnesses, and credentials. You can create multiple workspaces, run agents in

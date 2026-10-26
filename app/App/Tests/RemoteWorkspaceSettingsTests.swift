@@ -6,6 +6,21 @@ import WovenMatterCore
 
 @MainActor
 struct RemoteWorkspaceSettingsTests {
+    @Test func remoteToolBridgeUsesTheTailnetTransport() throws {
+        let arguments = try WovenMatterRemoteToolBridge.sshArguments(
+            destination: "woven@worker",
+            command: "docker exec fixture",
+            tailnetOptions: { destination in
+                #expect(destination == "woven@worker")
+                return ["-o", "ProxyCommand=fixture-tailnet-transport"]
+            }
+        )
+        #expect(arguments.starts(with: ["-o", "ProxyCommand=fixture-tailnet-transport", "-T"]))
+        #expect(arguments.contains("BatchMode=yes"))
+        #expect(arguments.contains("ServerAliveInterval=15"))
+        #expect(arguments.suffix(2) == ["woven@worker", "docker exec fixture"])
+    }
+
     @Test func legacyDisabledPreferenceDoesNotGateWorkspaceManagement() throws {
         let suite = "remote-settings-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -20,7 +35,7 @@ struct RemoteWorkspaceSettingsTests {
         // starting SSH, or requiring an unrelated global enable action.
         model.create(name: "", workspaceID: "", hostName: "", userName: "", port: 7337,
                      memoryLimit: "", swapLimit: "")
-        #expect(model.errorMessage == "Enter a name, workspace ID, and SSH hostname.")
+        #expect(model.errorMessage == "Enter a name, workspace ID, and Tailscale machine name.")
         #expect(!model.isCreating)
 
         let projection = RemoteWorkspacesModel(defaults: defaults, backendProjection: true)

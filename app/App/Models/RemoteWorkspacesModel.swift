@@ -632,7 +632,7 @@ final class RemoteWorkspacesModel {
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanUser = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanHost.isEmpty else {
-            errorMessage = "Enter an SSH hostname before checking the host."
+            errorMessage = "Enter a Tailscale machine name before checking the host."
             return
         }
         isCheckingHost = true
@@ -674,7 +674,7 @@ final class RemoteWorkspacesModel {
         let cleanID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty, !cleanID.isEmpty, !cleanHost.isEmpty else {
-            errorMessage = "Enter a name, workspace ID, and SSH hostname."
+            errorMessage = "Enter a name, workspace ID, and Tailscale machine name."
             return
         }
         let configuration = RemoteWorkspaceConfiguration(
