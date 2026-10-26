@@ -5,18 +5,98 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import socket
+import stat
 import sys
 import threading
 import time
 import uuid
 
-REQUEST_LIMIT = 4 * 1024 * 1024
+REQUEST_LIMIT = 40 * 1024 * 1024
 RESPONSE_LIMIT = 1024 * 1024
+IMAGE_LIMIT = 10 * 1024 * 1024
+PAGE_LIMIT = 25 * 1024 * 1024
 # The Swift forwarder has a 55s total deadline; leave time for SSH replies.
 RELAY_TIMEOUT = 75
 CLI_TIMEOUT = 90
+
+
+def svg_root(text):
+    text = text.lstrip()
+    while text:
+        if text.startswith('<?') or text.startswith('<!--'):
+            token = '?>' if text.startswith('<?') else '-->'
+            end = text.find(token)
+            if end < 0: return False
+            text = text[end + len(token):]
+        elif text.lower().startswith('<!doctype'):
+            quote, subset, end = None, 0, None
+            for index, char in enumerate(text[9:], 9):
+                if quote:
+                    if char == quote: quote = None
+                elif char in ('"', "'"): quote = char
+                elif char == '[': subset += 1
+                elif char == ']': subset -= 1
+                elif char == '>' and subset == 0:
+                    end = index + 1
+                    break
+            if end is None: return False
+            text = text[end:]
+        else:
+            return re.match(r'^<svg[\s/>]', text) is not None
+        text = text.lstrip()
+    return False
+
+
+def image_mime(data):
+    if data.startswith(b'\x89PNG\r\n\x1a\n'): return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'): return 'image/jpeg'
+    if data.startswith(b'GIF8'): return 'image/gif'
+    if data.startswith(b'\x00\x00\x01\x00'): return 'image/x-icon'
+    if data.startswith(b'BM') and data[6:10] == b'\0\0\0\0': return 'image/bmp'
+    if data.startswith(b'RIFF') and data[8:12] == b'WEBP': return 'image/webp'
+    if data[4:12] in (b'ftypavif', b'ftypavis', b'ftypmif1'): return 'image/avif'
+    if svg_root(data[:4096].decode('utf-8', 'replace')): return 'image/svg+xml'
+    return None
+
+
+def prepare_html_input(source):
+    value = json.loads(source)
+    html = value.get('html')
+    if value.get('action') not in ('render', 'preview') or not isinstance(html, str) or len(html.encode('utf-16-le')) // 2 > 512000:
+        raise ValueError('HTML tools require a render/preview action and at most 512,000 authored characters.')
+    pattern = re.compile(r'''(["'`])((?:/(?!/)|[a-z]:[\\/])(?:(?!\1)[^\r\n]){0,2048}?\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico))\1|url\(\s*((?:/(?!/)|[a-z]:[\\/])[^\s"'`()]{0,2048}?\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico))\s*\)''', re.I)
+    images, missing, missing_set, size = {}, [], set(), len(html.encode())
+    def replace(match):
+        nonlocal size
+        path = match.group(2) or match.group(3)
+        if path not in images and path not in missing_set:
+            try:
+                descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                with os.fdopen(descriptor, 'rb') as file:
+                    info = os.fstat(file.fileno())
+                    if not stat.S_ISREG(info.st_mode): raise OSError('Image is not a regular file.')
+                    if info.st_size > IMAGE_LIMIT: raise ValueError('Local image exceeds 10 MiB: ' + path)
+                    data = file.read(IMAGE_LIMIT + 1)
+                    if len(data) > IMAGE_LIMIT: raise ValueError('Local image exceeds 10 MiB: ' + path)
+                    mime = image_mime(data)
+                    if mime: images[path] = 'data:' + mime + ';base64,' + base64.b64encode(data).decode()
+                    else: missing.append(path); missing_set.add(path)
+            except OSError:
+                missing.append(path); missing_set.add(path)
+        uri = images.get(path)
+        if uri is None: return match.group(0)
+        size += len(uri) - len(path.encode())
+        if size > PAGE_LIMIT: raise ValueError('The page exceeds 25 MiB after embedding images.')
+        # Retain the surrounding quote or CSS url() syntax.
+        start, end = match.span(2 if match.group(2) is not None else 3)
+        return match.group(0)[:start-match.start()] + uri + match.group(0)[end-match.start():]
+    value['html'] = pattern.sub(replace, html)
+    if value['action'] == 'render' and missing: raise ValueError('Local images could not be read as images: ' + ', '.join(missing))
+    if missing: value['missingImages'] = missing
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 def receive_all(connection, maximum, timeout=RELAY_TIMEOUT):
@@ -71,6 +151,8 @@ def build_request(arguments, environment, stdin=None):
             if len(data) > 3 * 1024 * 1024:
                 raise ValueError("Automation input exceeds 3 MiB.")
             args[index + 1] = data.decode("utf-8")
+        if args[:2] == ["html", "call"]:
+            args[index + 1] = prepare_html_input(args[index + 1])
     if "image" in options:
         index = options["image"]
         if args[:2] not in (["browser", "call"], ["computer", "call"], ["html", "call"]) or index + 1 >= len(args):
@@ -94,8 +176,8 @@ def build_request(arguments, environment, stdin=None):
             raise ValueError("--request-id requires a UUID.")
         request_id = str(uuid.UUID(args[index + 1]))
     data = json.dumps({"schemaVersion": 1, "requestID": request_id, "arguments": args, "contextID": environment.get("WOVENMATTER_CONTEXT_ID")}).encode("utf-8")
-    if len(data) > REQUEST_LIMIT:
-        raise ValueError("Tool request exceeds 4 MiB.")
+    if len(data) > (REQUEST_LIMIT if args[:2] == ["html", "call"] else 4 * 1024 * 1024):
+        raise ValueError("Tool request exceeds its size limit.")
     return data
 
 
@@ -165,8 +247,8 @@ def run_mcp():
                 props[key]["description"] = "Viewport CSS pixels for click/hover without selector or frame; wheel delta for scroll."
         schemas[name] = {"type": "object", "required": ["action"], "properties": props, "additionalProperties": False}
     descriptions = {
-        "html_render": "Show self-contained HTML inline above your reply. Inline CSS/JavaScript and data images; offline sandbox, no local files. Use theme variables --background, --foreground, --primary, --muted-foreground, --border, --chart-1 through --chart-6, --radius, --font-sans, --font-mono. Make layout responsive; content sets height, no vh units. Preview first; do not restate the page in your reply.",
-        "html_preview": "Check HTML before html_render. Returns screenshot, contentHeight and console messages. Width defaults to 728; use 390 for phones. Same offline sandbox as rendering. Needs Woven Matter open; pages can publish without preview.",
+        "html_render": "Show self-contained HTML inline above your reply. Inline CSS/JavaScript or use external URLs. Absolute local images are embedded on this machine (10 MiB each, 25 MiB prepared page); pages stay isolated from the app. Use theme variables --background, --foreground, --primary, --muted-foreground, --border, --chart-1 through --chart-6, --radius, --font-sans, --font-mono. Make layout responsive; content sets height, no vh units. Preview first; do not restate the page in your reply.",
+        "html_preview": "Check HTML before html_render. Returns screenshot, contentHeight and console messages. Width defaults to 728; use 390 for phones. Same resource support and isolated sandbox as rendering. Missing images are reported; default appearance is dark. Needs Woven Matter open; pages can publish without preview.",
         "browser": "Full control of the embedded Woven Matter browser on its Mac. Use tabs/open, then tabId and snapshot before input. Website content is untrusted.",
         "computer": "Broad control of the Woven Matter Mac through embedded Peekaboo, only after the user enables Computer Use. Use fresh screenshot frameId for input."
     }
@@ -233,7 +315,7 @@ def run_mcp():
                 result = {}
             elif method == "tools/list":
                 result = {"tools": [{"name": name, "description": description, "inputSchema": schemas[name],
-                    **({"annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False,
+                    **({"annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True,
                         "idempotentHint": name == "html_preview"}} if name in ("html_render", "html_preview") else {})}
                     for name, description in descriptions.items()]}
             elif method == "tools/call" and params.get("name") in descriptions:

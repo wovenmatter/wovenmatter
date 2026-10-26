@@ -49,6 +49,9 @@ enum WovenMatterCommandLine {
                 guard let json = String(data: input, encoding: .utf8) else { throw WorkspaceToolError.invalid("Automation input must be UTF-8 JSON.") }
                 args[index + 1] = json
             }
+            if command.group == .html, command.action == "call", let index = command.optionIndices["json"] {
+                args[index + 1] = try ConversationHTMLResources.prepareJSON(args[index + 1])
+            }
             if let index = command.optionIndices["image"] { args.removeSubrange(index...index + 1) }
             // File paths belong to the CLI host. Never ask the app to open an
             // arbitrary caller-supplied path on the Mac (remote callers included).
@@ -102,7 +105,11 @@ enum WovenMatterCommandLine {
 
     static func forward(_ data: Data, to path: String, timeout: TimeInterval = 60,
                         cancellation: WovenToolForwardCancellation? = nil) throws -> Data {
-        guard data.count <= 4 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
+        guard data.count <= WovenMatterToolRequest.maximumHTMLRequestBytes else { throw WovenNoteSocketError.requestTooLarge }
+        if data.count > 4 * 1_024 * 1_024 {
+            let request = try JSONDecoder().decode(WovenMatterToolRequest.self, from: data)
+            guard data.count <= request.maximumEncodedBytes else { throw WovenNoteSocketError.requestTooLarge }
+        }
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw WovenNoteSocketError.system(errno) }

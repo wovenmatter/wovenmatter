@@ -336,7 +336,8 @@ final class WorkspaceAgentToolsModel {
         guard !stopped else { throw CancellationError() }
         if let service = services[sessionID] { return service.socketURL.path }
         let path = endpointDirectory.appending(path: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + ".sock")
-        let service = WovenMatterToolService(socketURL: path, maximumConnections: 4) { [weak self] request in
+        let service = WovenMatterToolService(socketURL: path, maximumConnections: 4,
+            maximumRequestBytes: WovenMatterToolRequest.maximumHTMLRequestBytes) { [weak self] request in
             guard let self else { return WovenMatterToolResponse(success: false, error: "Woven Matter closed this endpoint.") }
             return await self.handle(request, callerID: sessionID)
         }
@@ -411,6 +412,9 @@ final class WorkspaceAgentToolsModel {
             var request = request
             request.requestID = requestUUID.uuidString.lowercased()
             let command = try WovenMatterToolCommand(request.arguments)
+            guard try JSONEncoder().encode(request).count <= request.maximumEncodedBytes else {
+                throw WorkspaceToolError.invalid("This tool request exceeds its size limit.")
+            }
             parsedCommand = command
             if let suppliedRequestID = command.options["request-id"] {
                 guard let suppliedUUID = UUID(uuidString: suppliedRequestID),
@@ -474,7 +478,7 @@ final class WorkspaceAgentToolsModel {
                           let action = object["action"]?.stringValue, ["preview", "render"].contains(action) else {
                         throw WorkspaceToolError.invalid("Provide an HTML render or preview action.")
                     }
-                    let allowed: Set<String> = action == "render" ? ["action", "html", "title", "height"] : ["action", "html", "width", "appearance"]
+                    let allowed: Set<String> = action == "render" ? ["action", "html", "title", "height"] : ["action", "html", "width", "appearance", "missingImages"]
                     guard Set(object.keys).isSubset(of: allowed) else { throw WorkspaceToolError.invalid("Unknown HTML parameter.") }
                     let page = try ConversationHTMLPage(html: html, title: object["title"]?.stringValue ?? "HTML preview",
                         height: object["height"]?.intValue ?? 400)

@@ -67,8 +67,9 @@ public enum CompanionDeviceTranscript {
            let rawInput = projection["rawInputJSON"] as? String, let input = object(rawInput),
            let arguments = input["arguments"] as? [String],
            let command = try? WovenMatterToolCommand(["html"] + arguments),
-           let rawPage = command.options["json"], let page = object(rawPage),
-           page["action"] as? String == "render", let html = page["html"] as? String, html.utf8.count <= 512_000 {
+           let rawPage = command.options["json"],
+           let page = ((message["details"] as? [String: Any])?["wovenHTMLPage"] as? [String: Any]) ?? object(rawPage),
+           page["action"] as? String == "render", let html = page["html"] as? String, html.utf8.count <= ConversationHTMLResources.maximumPageBytes {
           projection["kind"] = "activity"; projection["toolName"] = "html_render"
           projection["title"] = title; projection["content"] = nil
           projection["htmlRender"] = reference

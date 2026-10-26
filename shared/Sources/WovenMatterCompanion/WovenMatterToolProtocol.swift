@@ -7,6 +7,10 @@ private func + (lhs: Set<String>, rhs: [String]) -> Set<String> { lhs.union(rhs)
 /// Wire requests carry no caller/session authority. The owning app binds that to
 /// the private endpoint when it is created and checks current settings per call.
 public struct WovenMatterToolRequest: Codable, Sendable {
+  public static let maximumHTMLRequestBytes = 40 * 1_024 * 1_024
+  public var maximumEncodedBytes: Int {
+    (try? WovenMatterToolCommand(arguments).group) == .html ? Self.maximumHTMLRequestBytes : 4 * 1_024 * 1_024
+  }
   public var schemaVersion: Int
   public var requestID: String
   public var arguments: [String]
@@ -364,8 +368,9 @@ public struct WovenMatterToolCommand: Sendable {
       Preview first: {"action":"preview","html":"...","width":728,"appearance":"light"}
       Use inline CSS/JavaScript and theme variables (--background, --foreground,
       --primary, --border, --muted-foreground, --chart-1 through --chart-6).
-      Content sets the height; avoid vh units. Use data URIs for images and inline
-      all scripts/styles. Pages run offline and persist with this conversation.
+      Content sets the height; avoid vh units. Absolute local image paths are embedded
+      on the invoking machine (10 MiB/image, 25 MiB/page). External URLs load under
+      platform transport policy. Pages remain isolated and persist with this chat.
       Visual replies are always available. Preview needs the Woven Matter app open.
       """
     case .notes: """

@@ -15,17 +15,17 @@ public struct ConversationHTMLPage: Codable, Equatable, Sendable {
   public let html: String
   public let title: String
   public let height: Int
-  public static let maximumPageBytes = 512_000
+  public static let maximumPageBytes = ConversationHTMLResources.maximumPageBytes
 
   public init(html: String, title: String, height: Int) throws {
     guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           html.utf8.count <= Self.maximumPageBytes,
           !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           title.count <= 200, title.utf8.count <= 800, (80...2000).contains(height) else {
-      throw WorkspaceToolError.invalid("Provide nonempty self-contained HTML up to 512,000 bytes, a title up to 200 characters, and a height from 80 to 2000 pixels.")
+      throw WorkspaceToolError.invalid("Provide nonempty HTML up to 25 MiB including images, a title up to 200 characters, and a height from 80 to 2000 pixels.")
     }
     // A frame that fits its content cannot itself determine that content's height.
-    let css = try NSRegularExpression(pattern: #"(?is)<style\b[^>]*>(.*?)</style\s*>|\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#)
+    let css = try NSRegularExpression(pattern: #"(?is)<!--[\s\S]*?(?:-->|$)|<style\b[^>]*>(.*?)</style\s*>|\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#)
     let units = try NSRegularExpression(pattern: #"(?i)(?<![\w.+/])(?:\d+(?:\.\d+)?|\.\d+)[sld]?vh(?![\w-])"#)
     let source = html as NSString
     for match in css.matches(in: html, range: NSRange(location: 0, length: source.length)) {
@@ -40,7 +40,7 @@ public struct ConversationHTMLPage: Codable, Equatable, Sendable {
   }
 }
 
-/// Authored content runs offline in an opaque sandboxed child frame. Only the
+/// Authored content runs in an opaque sandboxed child frame. Only the
 /// app-owned outer document has a native handler; it verifies message sources.
 public enum ConversationHTMLDocument {
   public static func render(html: String) -> String {
@@ -68,16 +68,25 @@ public enum ConversationHTMLDocument {
     })();
     </script>
     """#
-    let authored: String
-    if let head = html.range(of: #"<head\b[^>]*>"#, options: [.regularExpression, .caseInsensitive]) {
-      var value = html; value.insert(contentsOf: bootstrap, at: head.upperBound); authored = value
-    } else { authored = bootstrap + html }
+    // Skip comments and script bodies when finding a real head. Preserve a
+    // leading doctype so fragments and complete documents use standards mode.
+    let scan = try! NSRegularExpression(pattern: #"(?is)<!--[\s\S]*?(?:-->|$)|<script\b(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?(?:</script\s*>|$)|<head\b(?:"[^"]*"|'[^']*'|[^'">])*>|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>"#)
+    let source = html as NSString
+    var headEnd: Int?, doctypeEnd: Int?
+    for match in scan.matches(in: html, range: NSRange(location: 0, length: source.length)) {
+      let tag = source.substring(with: match.range).lowercased()
+      if tag.hasPrefix("<head") { headEnd = NSMaxRange(match.range); break }
+      if tag.hasPrefix("<!doctype") { doctypeEnd = NSMaxRange(match.range) }
+    }
+    let insertion = headEnd ?? doctypeEnd ?? 0
+    let authored = (headEnd == nil && doctypeEnd == nil ? "<!doctype html>" : "")
+      + source.substring(to: insertion) + bootstrap + source.substring(from: insertion)
     let encoded = Data(authored.utf8).base64EncodedString()
     return #"""
     <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src about:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src about: http: https:; script-src 'unsafe-inline' 'unsafe-eval' http: https: blob:; style-src 'unsafe-inline' http: https:; img-src data: blob: http: https:; font-src data: http: https:; media-src data: blob: http: https:; connect-src http: https: ws: wss:; object-src 'none'; base-uri 'none'; form-action http: https:">
     <style>html,body{margin:0;height:100%;overflow:hidden;background:transparent}iframe{display:block;width:100%;height:100%;border:0}</style></head>
-    <body><iframe id="page" title="Visual reply" sandbox="allow-scripts" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe><script>
+    <body><iframe id="page" title="Visual reply" sandbox="allow-scripts allow-forms" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe><script>
     const frame=document.getElementById('page');let theme;
     window.wovenSetTheme=t=>{theme=t;frame.contentWindow.postMessage({kind:'theme',...t},'*');};
     addEventListener('message',e=>{if(e.source!==frame.contentWindow||!e.data)return;

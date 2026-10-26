@@ -23,7 +23,7 @@ extension CompanionModel {
   static var deviceCLITools: [[String: Any]] {
     deviceToolGroups.map { group in
       let description = group == .html
-        ? "Preview or render an interactive HTML page in this conversation through the central Mac. Use arguments [\"--help\"] for the contract. Pages use inline CSS/JavaScript and data images, run offline, and support theme variables."
+        ? "Preview or render an interactive HTML page in this conversation through the central Mac. Use arguments [\"--help\"] for the contract. Images at absolute /workspace/... paths are embedded from this conversation's device workspace before transport. Pages support external URLs and theme variables while isolated from the app."
         : group.isAutomation
         ? "Control the paired central Mac's \(group == .browser ? "embedded Woven Matter browser" : "desktop after Computer Use is enabled"). This capability runs on the Mac, requires its execution access, and never controls this iPhone. Arguments omit the group name. Use [\"--help\"] for commands. Input uses a stable request ID; inspect fresh state after interruption."
         : "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations use this chat's approval mode and a stable request ID."
@@ -45,7 +45,8 @@ extension CompanionModel {
   }
   /// Called by both registered native tools and the embedded wovenmatter command.
   /// The caller identity comes from the executing runtime, never model arguments.
-  func performDeviceCLI(arguments: [String], conversationID: String, requestID: String, target: String = "local") async throws -> String {
+  func performDeviceCLI(arguments: [String], conversationID: String, requestID: String, target: String = "local",
+                        onHTMLPrepared: ((String) -> Void)? = nil) async throws -> String {
     var response: WovenMatterToolResponse
     do {
       guard let store else { throw DeviceExecutionError.unavailable("The device library is unavailable.") }
@@ -63,6 +64,13 @@ extension CompanionModel {
         arguments[index] = command.group == .executor ? "--code" : command.action == "apply" ? "--json" : "--html"
         arguments[index + 1] = try String(contentsOf: url, encoding: .utf8)
         command = try WovenMatterToolCommand(arguments)
+      }
+      if command.group == .html, command.action == "call", let index = command.optionIndices["json"] {
+        let prepared = try ConversationHTMLResources.prepareJSON(arguments[index + 1]) { path in
+          try self.deviceHTMLImageURL(conversationID: conversationID, path: path)
+        }
+        arguments[index + 1] = prepared
+        onHTMLPrepared?(prepared)
       }
       let id = Self.deviceCLIRequestID(command.options["request-id"] ?? requestID)
       let request = WovenMatterToolRequest(arguments: arguments, requestID: id)
@@ -131,6 +139,15 @@ extension CompanionModel {
     } catch { response = MobileToolSupport.response(error: error, requestID: Self.deviceCLIRequestID(requestID)) }
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     return String(decoding: try encoder.encode(response.bounded()), as: UTF8.self)
+  }
+
+  /// On-device commands see their private virtual filesystem at /workspace.
+  /// Translate that namespace without granting access to other app files.
+  func deviceHTMLImageURL(conversationID: String, path: String) throws -> URL {
+    guard path.hasPrefix("/workspace/") else {
+      throw WorkspaceToolError.invalid("Device HTML images must use /workspace/... paths inside this conversation's workspace.")
+    }
+    return try deviceWorkspaceURL(conversationID: conversationID, path: String(path.dropFirst("/workspace/".count)))
   }
 }
 

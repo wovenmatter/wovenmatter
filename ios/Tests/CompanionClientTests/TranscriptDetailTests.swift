@@ -4,21 +4,24 @@ import WovenMatterCompanion
 
 final class TranscriptDetailTests: XCTestCase {
   func testHTMLReplyRebuildsFromNativeToolResultAndSurvivesJournalReopen() async throws {
-    let html = "<button onclick='this.textContent=42'>Calculate</button>"
-    let request: [String: Any] = ["action": "render", "html": html, "title": "Calculator", "height": 160]
+    let html = "<button onclick='this.textContent=42'>Calculate</button><img src='data:image/png;base64," + String(repeating: "A", count: 100_000) + "'>"
+    let request: [String: Any] = ["action": "render", "html": "<img src='/device-workspace/image.png'>", "title": "Calculator", "height": 160]
+    var prepared = request; prepared["html"] = html
     let json = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
     let reference: [String: Any] = ["id": UUID().uuidString.lowercased(), "title": "Calculator", "height": 160]
     let response = String(decoding: try JSONSerialization.data(withJSONObject: ["success": true, "result": ["htmlRender": reference]]), as: UTF8.self)
     let snapshot: [String: Any] = ["entries": [
       ["id": 1, "model": [["role": "user", "content": "Calculate"]]],
       ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "render", "name": "wovenmatter_html", "arguments": ["arguments": ["call", "--json", json]]]]]]],
-      ["id": 3, "model": [["role": "toolResult", "toolCallId": "render", "content": [["type": "text", "text": response]]]]]
+      ["id": 3, "model": [["role": "toolResult", "toolCallId": "render", "content": [["type": "text", "text": response]], "details": ["wovenHTMLPage": prepared]]]]
     ]]
     let transcript = CompanionDeviceTranscript.project(snapshot: snapshot, conversationID: "c")
     let projection = try XCTUnwrap(transcript.activities.first?.projectionJSON)
     let value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(projection.utf8)) as? [String: Any])
     XCTAssertEqual(value["kind"] as? String, "activity")
     XCTAssertEqual((value["htmlRender"] as? [String: Any])?["id"] as? String, reference["id"] as? String)
+    let page = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(value["rawOutputJSON"] as? String).utf8)) as? [String: Any])
+    XCTAssertEqual(page["html"] as? String, html)
     let path = file()
     let journal = try WorkspaceJournal(file: path)
     _ = try await journal.append(workspaceID: "phone", transcript: transcript)

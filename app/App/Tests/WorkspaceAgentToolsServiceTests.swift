@@ -23,7 +23,8 @@ struct WorkspaceAgentToolsServiceTests {
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { service.stop() }
         let endpoint = try await service.endpoint(for: caller)
-        let html = "<button onclick='this.textContent=42'>Calculate</button>"
+        let html = "<button onclick='this.textContent=42'>Calculate</button>" + (runtime == .codex
+            ? "<img src='data:image/png;base64," + String(repeating: "A", count: 5 * 1024 * 1024) + "'>" : "")
         let payload: GatewayJSONValue = .object(["action": .string("render"), "html": .string(html), "title": .string("Calculator"), "height": .number(160)])
         let json = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
         let request = WovenMatterToolRequest(arguments: ["html", "call", "--json", json])
@@ -36,6 +37,12 @@ struct WorkspaceAgentToolsServiceTests {
         let timeline = ConversationWorkTimeline(records: history.activities, commentaryIDs: [])
         #expect(timeline.foldedEntries.count == 1)
         #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Calculator" })
+        if runtime == .codex {
+            #expect(data.count > 4 * 1024 * 1024)
+            let activity = try #require(history.activities.first { $0.activity.htmlRender != nil })
+            let detail = try #require(try await database.conversationActivityDetails(conversationID: caller, runID: run.runID, activityID: activity.activity.id))
+            #expect(try JSONDecoder().decode(ConversationHTMLPage.self, from: Data(try #require(detail.rawOutputJSON).utf8)).html == html)
+        }
         let forged = await service.handle(.init(arguments: ["html", "call", "--json", json, "--session", "someone-else"]), callerID: caller)
         #expect(!forged.success)
     }

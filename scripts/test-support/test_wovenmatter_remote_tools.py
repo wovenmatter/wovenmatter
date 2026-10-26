@@ -20,12 +20,71 @@ spec.loader.exec_module(tools)
 
 
 class RemoteToolTests(unittest.TestCase):
+    def test_html_images_are_embedded_on_remote_host_with_t3_budgets(self):
+        with tempfile.TemporaryDirectory() as root:
+            image = Path(root) / "image café.png"
+            image.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * (4 * 1024 * 1024))
+            html = f'<img src="{image}"><style>.x{{background:url({image.parent}/bare.png)}}</style><script>const p=`{image}`;</script><img src="//cdn.invalid/image.png">'
+            (image.parent / 'bare.png').write_bytes(image.read_bytes())
+            request = tools.build_request(['html', 'call', '--json', json.dumps({'action': 'render', 'html': html})], {})
+            prepared = json.loads(json.loads(request)['arguments'][3])['html']
+            image.unlink()
+            self.assertEqual(prepared.count('data:image/png;base64,'), 3)
+            self.assertNotIn(str(image), prepared)
+            self.assertIn('//cdn.invalid/image.png', prepared)
+            self.assertGreater(len(request), 4 * 1024 * 1024)
+            huge = image.parent / 'huge.png'
+            huge.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * tools.IMAGE_LIMIT)
+            with self.assertRaisesRegex(ValueError, '10 MiB'):
+                tools.prepare_html_input(json.dumps({'action': 'preview', 'html': f'<img src="{huge}">'}))
+            with self.assertRaisesRegex(ValueError, '25 MiB'):
+                tools.prepare_html_input(json.dumps({'action': 'render', 'html': f'<img src="{image.parent}/bare.png">' * 5}))
+
+    def test_html_missing_disguised_and_nonregular_images_are_bounded(self):
+        with tempfile.TemporaryDirectory() as root:
+            file = Path(root) / 'private.png'
+            file.write_text('private text is not an image')
+            fifo = Path(root) / 'fifo.png'
+            os.mkfifo(fifo)
+            html = f'<img src="{file}"><img src="{fifo}"><img src="{file}">'
+            preview = json.loads(tools.prepare_html_input(json.dumps({'action': 'preview', 'html': html})))
+            self.assertEqual(preview['missingImages'], [str(file), str(fifo)])
+            self.assertNotIn('private text', preview['html'])
+            with self.assertRaisesRegex(ValueError, 'could not be read'):
+                tools.prepare_html_input(json.dumps({'action': 'render', 'html': html}))
+            self.assertEqual(tools.image_mime(b'<?xml version="1.0"?><!--x--><!DOCTYPE svg [<!ENTITY x ">">]><svg/>'), 'image/svg+xml')
+            self.assertIsNone(tools.image_mime(b'<html><svg/></html>'))
+
+    def test_large_prepared_html_crosses_the_remote_relay(self):
+        with tempfile.TemporaryDirectory() as root, self.relay_fixture() as (relay_dir, relay):
+            image = Path(root) / 'large.png'
+            image.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * (4 * 1024 * 1024))
+            payload = json.dumps({'action': 'render', 'html': f'<img src="{image}">', 'title': 'Page', 'height': 160})
+            child = subprocess.Popen([sys.executable, str(relay_dir / 'wovenmatter'), 'html', 'call', '--json', '-'],
+                env={**os.environ, 'WOVENMATTER_SOCKET': str(relay_dir / 'rpc.sock')},
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                child.stdin.write(payload.encode()); child.stdin.close(); child.stdin = None
+                self.assertTrue(select.select([relay.stdout], [], [], 10)[0])
+                packet = json.loads(relay.stdout.readline())
+                prepared = json.loads(base64.b64decode(packet['payload']))
+                self.assertIn('data:image/png;base64,', prepared['arguments'][3])
+                response = {'success': True, 'result': {'htmlRender': {'title': 'Page'}}, 'silent': False}
+                relay.stdin.write(json.dumps({'id': packet['id'], 'payload': base64.b64encode(json.dumps(response).encode()).decode()}).encode() + b'\n')
+                relay.stdin.flush()
+                stdout, stderr = child.communicate(timeout=10)
+                self.assertEqual(child.returncode, 0, stderr)
+                self.assertEqual(json.loads(stdout), response)
+            finally:
+                if child.poll() is None: child.kill(); child.wait()
+
     def test_html_payload_from_stdin_stays_bound_to_its_remote_input(self):
         html = '<button onclick="this.textContent=42">Calculate</button>'
         payload = json.dumps({"action": "render", "html": html, "title": "Calculator", "height": 160})
         request = json.loads(tools.build_request(["html", "call", "--json", "-"],
             {"WOVENMATTER_CONTEXT_ID": "input-binding"}, stdin=io.BytesIO(payload.encode())))
-        self.assertEqual(request["arguments"], ["html", "call", "--json", payload])
+        self.assertEqual(request["arguments"][:3], ["html", "call", "--json"])
+        self.assertEqual(json.loads(request["arguments"][3]), json.loads(payload))
         self.assertEqual(request["contextID"], "input-binding")
         self.assertNotIn("callerID", request)
 
@@ -76,7 +135,7 @@ class RemoteToolTests(unittest.TestCase):
         self.assertEqual([tool["name"] for tool in packets[1]["result"]["tools"]], ["html_render", "html_preview", "browser", "computer"])
         for tool in packets[1]["result"]["tools"][:2]:
             self.assertTrue(tool["annotations"]["readOnlyHint"])
-            self.assertFalse(tool["annotations"]["openWorldHint"])
+            self.assertTrue(tool["annotations"]["openWorldHint"])
         self.assertEqual(packets[2]["result"]["content"], [image])
         args = forward.call_args.args[0]
         self.assertEqual(args[:3], ["computer", "call", "--json"])

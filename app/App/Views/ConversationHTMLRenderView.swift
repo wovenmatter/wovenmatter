@@ -208,6 +208,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     var onReady: () -> Void = {}
     var onFailure: (any Error) -> Void = { _ in }
     var consoleMessages: [[String: String]] = []
+    private var consoleBytes = 0
 
     func makeWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -239,7 +240,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
         view.stopLoading(); view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(forName: "wovenHTML")
         onHeight = { _ in }; onLink = { _ in }; onReady = {}; onFailure = { _ in }
-        html = nil; themeJSON = nil; consoleMessages.removeAll()
+        html = nil; themeJSON = nil; consoleMessages.removeAll(); consoleBytes = 0
     }
 
     private func updateTheme(_ view: WKWebView) {
@@ -259,13 +260,19 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
             if let raw = body["url"] as? String, let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") { onLink(url) }
         case "console":
             if consoleMessages.count < 100, let text = body["text"] as? String {
-                consoleMessages.append(["level": body["level"] as? String ?? "log", "text": String(text.prefix(2000))])
+                let value = String(text.prefix(2000))
+                guard consoleBytes + value.utf8.count <= 32_768 else { return }
+                consoleBytes += value.utf8.count
+                let level = body["level"] as? String ?? "log"
+                consoleMessages.append(["level": ["log", "info", "warn", "warning", "error"].contains(level) ? level : "log", "text": value])
             }
         default: break
         }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        if navigationAction.targetFrame?.isMainFrame == false,
+           ["http", "https"].contains(navigationAction.request.url?.scheme?.lowercased() ?? "") { return .allow }
         guard let url = navigationAction.request.url, navigationAction.navigationType == .other,
               url.absoluteString == "about:blank" || url.absoluteString == "about:srcdoc" else { return .cancel }
         return .allow

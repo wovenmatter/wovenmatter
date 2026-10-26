@@ -25,11 +25,11 @@ extension WorkspaceDatabaseConnection {
 
   private func authorizeCompanionToolUnlocked(_ value: CompanionToolRequest, deviceID: String) throws {
     let command = try WovenMatterToolCommand(value.request.arguments)
-    let maximumBytes = command.group?.isAutomation == true ? 4 * 1_024 * 1_024 : WovenMatterToolResponse.maximumResponseBytes
+    let maximumBytes = command.group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : command.group?.isAutomation == true ? 4 * 1_024 * 1_024 : WovenMatterToolResponse.maximumResponseBytes
     guard UUID(uuidString: deviceID) != nil, UUID(uuidString: value.conversationID) != nil,
           value.request.schemaVersion == 1, UUID(uuidString: value.request.requestID) != nil,
           try JSONEncoder().encode(value).count <= maximumBytes,
-          command.group?.isAutomation != true || (command.options["json"]?.utf8.count ?? 0) <= 3 * 1_024 * 1_024 else {
+          command.group?.isAutomation != true || (command.options["json"]?.utf8.count ?? 0) <= (command.group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : 3 * 1_024 * 1_024) else {
       throw CompanionAPIError(code: "invalid_request", message: "Tool calls require bounded requests and stable UUID identities.")
     }
     let owners = try companionIDsUnlocked("""

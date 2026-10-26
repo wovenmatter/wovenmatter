@@ -48,6 +48,24 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
+  @MainActor func testHTMLImagesResolveVirtualWorkspacePathsWithoutEscapingTheConversation() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let id = UUID().uuidString.lowercased()
+    let image = try model.deviceWorkspaceURL(conversationID: id, path: "image.png")
+    try Data([137,80,78,71,13,10,26,10]).write(to: image)
+    let prepared = try ConversationHTMLResources.prepare("<img src='/workspace/image.png'>") {
+      try model.deviceHTMLImageURL(conversationID: id, path: $0)
+    }
+    XCTAssertTrue(prepared.html.contains("data:image/png;base64,"))
+    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/private/app-data.png"))
+    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/../other/image.png"))
+    try FileManager.default.createSymbolicLink(at: image.deletingLastPathComponent().appendingPathComponent("outside.png"), withDestinationURL: root.appendingPathComponent("private.png"))
+    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/outside.png"))
+  }
+
   @MainActor func testDeviceGoalsPersistAndRouteWithoutStartingInference() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -334,7 +352,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
     XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command"]))
-    XCTAssertEqual(names.filter { $0.hasPrefix("wovenmatter_") }, ["wovenmatter_goals", "wovenmatter_html"])
+    XCTAssertEqual(Set(names.filter { $0.hasPrefix("wovenmatter_") }), Set(["wovenmatter_goals", "wovenmatter_html"]))
     XCTAssertFalse(names.contains("read_note"))
     let context = try model.deviceToolContext(conversationID: record.id)
     XCTAssertEqual(context.enabled, [.goals, .html])

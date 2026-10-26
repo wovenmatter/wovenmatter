@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import Testing
 import WebKit
 import WovenMatterCore
@@ -7,6 +8,63 @@ import WovenMatterCore
 
 @Suite("Conversation HTML WebKit", .serialized)
 @MainActor struct ConversationHTMLWebKitTests {
+    @Test func externalScriptsStylesImagesAndFetchLoadWithoutAppAccess() async throws {
+        _ = NSApplication.shared
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        for x in 0..<2 { for y in 0..<2 { bitmap.setColor(.red, atX: x, y: y) } }
+        let server = try HTMLResourceFixture(png: try #require(bitmap.representation(using: .png, properties: [:])))
+        let port = try await server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(port)"
+        let local = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".png")
+        try server.png.write(to: local)
+        defer { try? FileManager.default.removeItem(at: local) }
+        let html = """
+        <!doctype html><html><head><link rel="stylesheet" href="\(base)/style.css"><script src="\(base)/script.js"></script></head>
+        <body><div id="styled">External resources</div><img src="\(base)/image.png" onload="console.log('image-loaded')"><img src="\(local.path)" onload="console.log('embedded-image-loaded')">
+        <script>fetch('\(base)/data').then(r=>r.text()).then(v=>console.log(v));
+        addEventListener('load',()=>console.log('style:'+getComputedStyle(document.getElementById('styled')).height));
+        try{parent.document.body;console.log('parent-accessible')}catch(e){console.log('parent-isolated')}
+        </script></body></html>
+        """
+        let prepared = try ConversationHTMLResources.prepare(html)
+        try FileManager.default.removeItem(at: local)
+        let result = try await ConversationHTMLPreview().capture(.object(["action": .string("preview"), "html": .string(prepared.html)]))
+        let content = try #require(result.objectValue?["content"]?.arrayValue)
+        let text = try #require(content.first?.objectValue?["text"]?.stringValue)
+        #expect(text.contains("script-loaded"))
+        #expect(text.contains("image-loaded"))
+        #expect(text.contains("embedded-image-loaded"))
+        #expect(text.contains("fetch-loaded"))
+        #expect(text.contains("style:123px"))
+        #expect(text.contains("parent-isolated"))
+        #expect(!text.contains("parent-accessible"))
+        #expect(server.paths == Set(["/script.js", "/style.css", "/image.png", "/data"]))
+        #expect(!server.receivedCookie)
+    }
+
+    @Test func fragmentsKeepStandardsModeAndImageHeavyPreviewsFitTheResponseBudget() async throws {
+        _ = NSApplication.shared
+        let html = #"""
+        <!-- a fake <head> must not swallow the bootstrap -->
+        <canvas id="noise" width="1600" height="1800"></canvas><script>
+        const fake='<head>';const canvas=document.getElementById('noise'), ctx=canvas.getContext('2d');
+        const pixels=ctx.createImageData(canvas.width,canvas.height);let seed=1;
+        for(let i=0;i<pixels.data.length;i+=4){seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+          pixels.data[i]=seed&255;pixels.data[i+1]=(seed>>>8)&255;pixels.data[i+2]=(seed>>>16)&255;pixels.data[i+3]=255;}
+        ctx.putImageData(pixels,0,0);console.log('mode:'+document.compatMode);
+        for(let i=0;i<20;i++)console.log('\u0000'.repeat(2000));
+        </script>
+        """#
+        let result = try await ConversationHTMLPreview().capture(.object(["action": .string("preview"), "html": .string(html), "width": .number(1600)]))
+        let content = try #require(result.objectValue?["content"]?.arrayValue)
+        let metadata = try #require(content.first?.objectValue?["text"]?.stringValue)
+        #expect(metadata.contains("mode:CSS1Compat"))
+        let values = try #require(JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any])
+        #expect(try #require(values["screenshotWidth"] as? Int) < 1600)
+        #expect(try JSONEncoder().encode(WovenMatterToolResponse(success: true, result: result)).count < WovenMatterToolResponse.maximumResponseBytes)
+    }
     @Test func themeAndZoomPreserveStateAndChildFramesCannotCallNativeHandler() async throws {
         _ = NSApplication.shared
         let coordinator = ConversationHTMLWebCoordinator()
@@ -25,7 +83,8 @@ import WovenMatterCore
         </script></body></html>
         """#
         coordinator.apply(html: html, theme: ConversationHTMLTheme.value(.green), to: view)
-        for _ in 0..<100 where ready == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        let deadline = ContinuousClock.now + .seconds(20)
+        while ready == 0 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(ready == 1)
         coordinator.apply(html: html, theme: ConversationHTMLTheme.value(.cognac), to: view)
         view.pageZoom = 1.5
@@ -55,7 +114,7 @@ import WovenMatterCore
         document.getElementById('counter').click();console.log('count='+document.getElementById('counter').textContent);
         try { parent.document.body;console.error('parent-accessible'); } catch(e) { console.log('parent-isolated'); }
         document.addEventListener('securitypolicyviolation',e=>console.log('policy-blocked:'+e.effectiveDirective));
-        fetch('https://example.invalid/blocked').then(()=>console.error('network-accessible'),()=>console.log('network-blocked'));
+        fetch('file:///private/not-a-web-resource').then(()=>console.error('file-accessible'),()=>console.log('file-blocked'));
         </script></body></html>
         """#
         var heights: [Int] = []
@@ -73,9 +132,9 @@ import WovenMatterCore
             let logs = messages.compactMap { $0["text"] }
             #expect(logs.contains("count=1"))
             #expect(logs.contains("parent-isolated"))
-            #expect(logs.contains("network-blocked"))
+            #expect(logs.contains("file-blocked"))
             #expect(logs.contains("policy-blocked:connect-src"))
-            #expect(!logs.contains("network-accessible"))
+            #expect(!logs.contains("file-accessible"))
             let encoded = try #require(content.last?.objectValue?["data"]?.stringValue)
             let png = try #require(Data(base64Encoded: encoded))
             #expect(png.count > 1000)
@@ -83,4 +142,54 @@ import WovenMatterCore
         }
         #expect(heights[1] > heights[0])
     }
+}
+
+/// A loopback-only CDN fixture. The production companion parser deliberately
+/// rejects browser origins, so resource/CORS testing uses its own small server.
+private final class HTMLResourceFixture: @unchecked Sendable {
+    let listener: NWListener
+    let png: Data
+    private let queue = DispatchQueue(label: "html-resource-fixture")
+    private let lock = NSLock()
+    private var requested: Set<String> = []
+    private var cookie = false
+    var paths: Set<String> { lock.withLock { requested } }
+    var receivedCookie: Bool { lock.withLock { cookie } }
+    init(png: Data) throws {
+        self.png = png
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+    }
+    func start() async throws -> UInt16 {
+        try await withCheckedThrowingContinuation { continuation in
+            listener.stateUpdateHandler = { [self] state in
+                if case .ready = state, let port = listener.port {
+                    listener.stateUpdateHandler = nil; continuation.resume(returning: port.rawValue)
+                } else if case .failed(let error) = state {
+                    listener.stateUpdateHandler = nil; continuation.resume(throwing: error)
+                }
+            }
+            listener.newConnectionHandler = { [self] connection in
+                connection.start(queue: queue)
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [self] data, _, _, _ in
+                    let request = String(decoding: data ?? Data(), as: UTF8.self)
+                    let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? ""
+                    lock.withLock { requested.insert(path); cookie = cookie || request.lowercased().contains("\r\ncookie:") }
+                    let type: String, body: Data
+                    switch path {
+                    case "/script.js": type = "application/javascript"; body = Data("console.log('script-loaded')".utf8)
+                    case "/style.css": type = "text/css"; body = Data("#styled{height:123px}".utf8)
+                    case "/image.png": type = "image/png"; body = png
+                    default: type = "text/plain"; body = Data("fetch-loaded".utf8)
+                    }
+                    var response = Data("HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
+                    response.append(body)
+                    connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+                }
+            }
+            listener.start(queue: queue)
+        }
+    }
+    func stop() { listener.cancel() }
 }

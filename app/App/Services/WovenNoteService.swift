@@ -23,6 +23,7 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
     private let lock = NSLock()
     private let maximumConnections: Int
     private let ioTimeout: TimeInterval
+    private let maximumRequestBytes: Int
     private var socket: Int32 = -1
     private var source: DispatchSourceRead?
     private var connections: [UUID: WovenNoteConnection] = [:]
@@ -31,12 +32,14 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
         socketURL: URL,
         maximumConnections: Int = 16,
         ioTimeout: TimeInterval = 10,
+        maximumRequestBytes: Int = 4 * 1_024 * 1_024,
         handler: @escaping Handler
     ) {
-        precondition(maximumConnections > 0 && ioTimeout.isFinite && ioTimeout > 0)
+        precondition(maximumConnections > 0 && ioTimeout.isFinite && ioTimeout > 0 && maximumRequestBytes > 0)
         self.socketURL = socketURL
         self.maximumConnections = maximumConnections
         self.ioTimeout = ioTimeout
+        self.maximumRequestBytes = maximumRequestBytes
         self.handler = handler
     }
 
@@ -122,6 +125,7 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
             connections[id] = connection
             let handler = handler
             let timeout = ioTimeout
+            let maximumBytes = maximumRequestBytes
             connection.setTask(Task.detached { [weak self] in
                 defer {
                     connection.close()
@@ -129,7 +133,7 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
                 }
                 let response: Response
                 do {
-                    let data = try await socketIO { try readMessage(from: client, timeout: timeout) }
+                    let data = try await socketIO { try readMessage(from: client, timeout: timeout, maximumBytes: maximumBytes) }
                     try Task.checkCancellation()
                     let request = try JSONDecoder().decode(Request.self, from: data)
                     response = await handler(request)

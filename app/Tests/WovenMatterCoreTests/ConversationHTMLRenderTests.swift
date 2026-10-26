@@ -31,15 +31,15 @@ struct ConversationHTMLRenderTests {
     #expect(throws: (any Error).self) { try ConversationHTMLPage(html: "<p>Hi</p>", title: "Page", height: 2001) }
     #expect(throws: (any Error).self) { try ConversationHTMLPage(html: "<style>div{height:100dvh}</style>", title: "Page", height: 200) }
     #expect(throws: (any Error).self) { try ConversationHTMLPage(html: "<div style='min-height:20vh'>Hi</div>", title: "Page", height: 200) }
-    #expect(throws: (any Error).self) { try ConversationHTMLPage(html: String(repeating: "é", count: 256001), title: "Page", height: 200) }
+    #expect(throws: (any Error).self) { try ConversationHTMLPage(html: String(repeating: "a", count: ConversationHTMLResources.maximumPageBytes + 1), title: "Page", height: 200) }
     let hostile = "</script><iframe src='file:///private/secret'></iframe>"
     let wrapper = ConversationHTMLDocument.render(html: hostile)
     #expect(!wrapper.contains(hostile))
-    #expect(wrapper.contains("sandbox=\"allow-scripts\""))
+    #expect(wrapper.contains("sandbox=\"allow-scripts allow-forms\""))
     #expect(!wrapper.contains("allow-same-origin"))
-    #expect(wrapper.contains("connect-src 'none'"))
+    #expect(wrapper.contains("connect-src http: https:"))
     #expect(wrapper.contains("e.source!==frame.contentWindow"))
-    #expect(!wrapper.contains("script-src 'unsafe-inline' https:"))
+    #expect(wrapper.contains("object-src 'none'"))
   }
 
   @Test func persistenceReplayAndFoldedHistory() async throws {

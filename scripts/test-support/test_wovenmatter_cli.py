@@ -13,6 +13,18 @@ CLI = Path(sys.argv.pop(1)).resolve()
 
 
 class BundledCLITests(unittest.TestCase):
+    def test_html_local_image_is_embedded_before_socket_transport(self):
+        with tempfile.TemporaryDirectory(prefix="wmcli-images-", dir="/tmp") as directory:
+            image = Path(directory) / 'large.png'
+            image.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0' * (4 * 1024 * 1024))
+            payload = json.dumps({'action': 'render', 'html': f'<img src="{image}">', 'title': 'Page', 'height': 160})
+            result, request = self.invoke(['html', 'call', '--json', '-'], {'success': True, 'silent': False}, stdin=payload)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            prepared = json.loads(request['arguments'][3])['html']
+            self.assertIn('data:image/png;base64,', prepared)
+            self.assertNotIn(str(image), prepared)
+            self.assertGreater(len(prepared), 4 * 1024 * 1024)
+
     def test_transport_failure_preserves_generated_request_identity(self):
         with tempfile.TemporaryDirectory(prefix="wmcli-", dir="/tmp") as directory:
             result = subprocess.run([str(CLI), "sessions", "send", "destination", "--text", "Retry"],
@@ -63,7 +75,7 @@ class BundledCLITests(unittest.TestCase):
                 return result, captured[0]
 
     def test_help_for_all_groups_requires_no_endpoint(self):
-        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library", "executor", "browser", "computer"]:
+        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library", "executor", "browser", "computer", "html"]:
             result = subprocess.run([str(CLI)] + ([group, "help"] if group else ["help"]),
                 env={**os.environ, "WOVENMATTER_SOCKET": "/nonexistent/wovenmatter-test.sock"},
                 capture_output=True, text=True, timeout=10)

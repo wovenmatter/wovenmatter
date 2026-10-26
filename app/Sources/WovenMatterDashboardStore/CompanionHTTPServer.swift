@@ -43,7 +43,7 @@ public struct CompanionHTTPResponse: Sendable {
 /// No upgrades, chunking, request pipelining, cookies or browser origins are accepted.
 public struct CompanionHTTPParser: Sendable {
   public static let maximumHeaderBytes = 32 * 1_024
-  public static let maximumBodyBytes = 16 * 1_024 * 1_024
+  public static let maximumBodyBytes = 64 * 1_024 * 1_024
   private var buffer = Data()
   public init() {}
   public mutating func append(_ bytes: Data) throws -> CompanionHTTPRequest? {

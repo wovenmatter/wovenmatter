@@ -47,12 +47,17 @@ extension CompanionModel {
     let toolCallID = conversationID + ":" + String(describing: object["taskID"] ?? "root") + ":" + nativeCallID
     if name.hasPrefix("wovenmatter_"), let group = WorkspaceToolGroup(rawValue: String(name.dropFirst("wovenmatter_".count))) {
       guard let argv = arguments["arguments"] as? [String] else { throw DeviceExecutionError.unavailable("Pass CLI arguments as an array of strings.") }
+      var preparedHTML: String?
       let output = try await performDeviceCLI(arguments: [group.rawValue] + argv, conversationID: conversationID,
-        requestID: toolCallID, target: arguments["target"] as? String ?? "local")
+        requestID: toolCallID, target: arguments["target"] as? String ?? "local", onHTMLPrepared: { preparedHTML = $0 })
       if group.isAutomation, let envelope = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
          envelope["success"] as? Bool == true, let result = envelope["result"] as? [String: Any],
          let content = result["content"] as? [[String: Any]] {
         return try Self.toolJSON(["content": content])
+      }
+      if let preparedHTML, let prepared = try? JSONSerialization.jsonObject(with: Data(preparedHTML.utf8)) {
+        // SDK details are journal metadata, not extra model-visible tool text.
+        return try Self.toolJSON(["content": [["type": "text", "text": output]], "details": ["wovenHTMLPage": prepared]])
       }
       return try Self.toolJSON(["content": [["type": "text", "text": output]]])
     }

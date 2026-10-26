@@ -76,7 +76,7 @@ final class WovenMatterRemoteToolBridge: @unchecked Sendable {
                 var pending = Data()
                 while let chunk = try output.read(upToCount: 65_536), !chunk.isEmpty {
                     pending.append(chunk)
-                    guard pending.count <= 8 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
+                    guard pending.count <= 64 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
                     while let newline = pending.firstIndex(of: 10) {
                         let line = Data(pending[..<newline])
                         pending.removeSubrange(...newline)
@@ -167,8 +167,12 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
     }
 
     func submit(id: String, request: Data) throws {
-        guard UUID(uuidString: id) != nil, request.count <= 4 * 1_024 * 1_024 else {
+        guard UUID(uuidString: id) != nil, request.count <= WovenMatterToolRequest.maximumHTMLRequestBytes else {
             throw WorkspaceToolError.invalid("Invalid tool relay packet.")
+        }
+        if request.count > 4 * 1_024 * 1_024 {
+            let value = try JSONDecoder().decode(WovenMatterToolRequest.self, from: request)
+            guard request.count <= value.maximumEncodedBytes else { throw WovenNoteSocketError.requestTooLarge }
         }
         let cancellation = WovenToolForwardCancellation()
         try lock.withLock {

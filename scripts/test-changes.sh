@@ -53,6 +53,7 @@ run_package_tests() {
     DefaultAgentSDKControlTests
     RemoteAttachmentStagingTests
     WorkspaceAgentToolsServiceTests
+    ConversationHTMLWebKitTests
     NativeHarnessArchiveTests
     NativeFramePrivacyTests
     NativeJSONSearchProjectionTests

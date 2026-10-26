@@ -69,7 +69,8 @@ final class WovenAutomationHost {
             guard invocation.admitted else { throw WorkspaceToolError.invalid("This request was already admitted by an earlier host. Inspect the current state; input was not replayed.") }
             guard running.isEmpty else { throw WorkspaceToolError.invalid("Another agent is using the browser or computer. Wait for it to finish, then inspect fresh state.") }
             let json = try command.required("json")
-            guard json.utf8.count <= 3 * 1024 * 1024 else { throw WorkspaceToolError.invalid("Automation input exceeds 3 MiB.") }
+            let limit = group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : 3 * 1024 * 1024
+            guard json.utf8.count <= limit else { throw WorkspaceToolError.invalid("Automation input exceeds its size limit.") }
             let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(json.utf8))
             let task = Task { @MainActor [self] () -> WovenMatterToolResponse in
                 do {
