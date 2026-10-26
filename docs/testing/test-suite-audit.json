@@ -1,11 +1,11 @@
 {
-  "base_commit": "75f6903a7aed988dd61d6084d23f51642e678435",
+  "base_commit": "26f5e3952b11af34aa2b6485dad05e8430ab665b",
   "counting_unit": "Named Swift test declarations (parameter sets counted once, as in Swift Testing summaries), registered Node tests, and Python unittest methods. Standalone/driver files are listed separately; they are retained and are not added to the named-test total.",
   "baseline": {
     "swift_by_component": {
-      "app": 534,
+      "app": 521,
       "integration": 29,
-      "ios": 190,
+      "ios": 188,
       "scripts": 16,
       "shared": 45
     },
@@ -13,13 +13,13 @@
     "node_remote": 170,
     "node_native_mcp": 10,
     "python_unittest": 30,
-    "total": 1237
+    "total": 1222
   },
   "candidate": {
     "swift_by_component": {
-      "app": 344,
+      "app": 338,
       "integration": 29,
-      "ios": 157,
+      "ios": 155,
       "scripts": 16,
       "shared": 16
     },
@@ -27,10 +27,10 @@
     "node_remote": 170,
     "node_native_mcp": 10,
     "python_unittest": 30,
-    "total": 985
+    "total": 977
   },
-  "net_removed": 252,
-  "reduction_percent": 20.371867421180276,
+  "net_removed": 245,
+  "reduction_percent": 20.04909983633388,
   "consolidated": {
     "WovenMatterClientTests.AgentInteractionBrokerTests/invalidPermissionCannotConsumeAndFirstValidResponseWins()": "Permission assertions retained in responsesMustValidateBeforeResolvingOnce(), together with question validation."
   },
@@ -69,10 +69,6 @@
     },
     {
       "file": "app/App/Tests/RemoteWorkspaceSettingsTests.swift",
-      "test": "WovenMatterAgentToolsTests.RemoteWorkspaceSettingsTests/legacyDisabledPreferenceDoesNotGateWorkspaceManagement()"
-    },
-    {
-      "file": "app/App/Tests/RemoteWorkspaceSettingsTests.swift",
       "test": "WovenMatterAgentToolsTests.RemoteWorkspaceSettingsTests/remoteAccountLabelsRequireVerifiedAuthentication()"
     },
     {
@@ -101,10 +97,6 @@
     },
     {
       "file": "app/Tests/WovenMatterAppFacadeTests/BackgroundServerTests.swift",
-      "test": "WovenMatterAppFacadeTests.BackgroundServerTests/legacyOffPreferenceCannotMakeTheProductionUIAnExecutionOwner()"
-    },
-    {
-      "file": "app/Tests/WovenMatterAppFacadeTests/BackgroundServerTests.swift",
       "test": "WovenMatterAppFacadeTests.BackgroundServerTests/missingLeaseDoesNotCreateAnOwnerOrAFile()"
     },
     {
@@ -130,10 +122,6 @@
     {
       "file": "app/Tests/WovenMatterAppFacadeTests/CompanionHostLifecycleTests.swift",
       "test": "WovenMatterAppFacadeTests.CompanionHostLifecycleTests/executionAccessSettingsRejectDeviceOwnedAndNonExecutableWorkspaces()"
-    },
-    {
-      "file": "app/Tests/WovenMatterAppFacadeTests/CompanionHostLifecycleTests.swift",
-      "test": "WovenMatterAppFacadeTests.CompanionHostLifecycleTests/executionRevocationUsesLiveAuthenticationAndSurvivesStoppedSharingRestart()"
     },
     {
       "file": "app/Tests/WovenMatterAppFacadeTests/CompanionHostLifecycleTests.swift",
@@ -248,10 +236,6 @@
       "test": "WovenMatterClientTests.ACPLineCursorTests/lineSizeLimit(oversized:)"
     },
     {
-      "file": "app/Tests/WovenMatterClientTests/ACPLineCursorTests.swift",
-      "test": "WovenMatterClientTests.ACPLineCursorTests/spooledNativeFrameCancellation()"
-    },
-    {
       "file": "app/Tests/WovenMatterClientTests/ACPNativeHistoryCaptureTests.swift",
       "test": "WovenMatterClientTests.ACPNativeHistoryCaptureTests/nativeEventsAndToolSnapshotsHaveStableSourceIdentity()"
     },
@@ -354,10 +338,6 @@
     {
       "file": "app/Tests/WovenMatterClientTests/OpenCodeWorkspaceRoutingTests.swift",
       "test": "WovenMatterClientTests.OpenCodeWorkspaceRoutingTests/workspaceCredentialsCannotBeSentToAnArbitraryOriginOrPrefix()"
-    },
-    {
-      "file": "app/Tests/WovenMatterClientTests/ReleaseUpdateTests.swift",
-      "test": "WovenMatterClientTests.ReleaseUpdateTests/rejectsUnsupportedSystem()"
     },
     {
       "file": "app/Tests/WovenMatterClientTests/RemoteAttachmentStagingTests.swift",
@@ -596,10 +576,6 @@
       "test": "WovenMatterCoreTests.MessageInputTransportTests/referenceContext()"
     },
     {
-      "file": "app/Tests/WovenMatterCoreTests/OpenCodeApprovalHandlingTests.swift",
-      "test": "WovenMatterCoreTests.OpenCodeApprovalHandlingTests/nativeManualResponsesValidateCurrentRequestAndResolveOnlyOnce()"
-    },
-    {
       "file": "app/Tests/WovenMatterCoreTests/OpenCodeIntegrationTests.swift",
       "test": "WovenMatterCoreTests.OpenCodeIntegrationTests/formReplyRequiresExternalAcknowledgementAndPreservesCustomAnswers()"
     },
@@ -702,10 +678,6 @@
     {
       "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
       "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/fanoutAndRevocationAreEnforcedTransactionally()"
-    },
-    {
-      "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
-      "test": "WovenMatterCoreTests.WorkspaceAgentToolTests/linkedSQLiteRejectsPragmasBeforeOpeningAnyDatabase()"
     },
     {
       "file": "app/Tests/WovenMatterCoreTests/WorkspaceAgentToolTests.swift",
@@ -1100,26 +1072,26 @@
   ],
   "coverage": {
     "lines": {
-      "baseline_executable": 89563,
-      "baseline_covered": 43979,
-      "candidate_covered_in_baseline": 43128,
-      "retained_baseline_coverage": 43120,
-      "lost_covered": 859,
-      "relative_loss_percent": 1.953204938720753,
-      "loss_percentage_points": 0.9591014146466733,
-      "baseline_percent": 49.10398267141565,
-      "candidate_percent": 48.1538135167424
+      "baseline_executable": 87698,
+      "baseline_covered": 43227,
+      "candidate_covered_in_baseline": 42409,
+      "retained_baseline_coverage": 42367,
+      "lost_covered": 860,
+      "relative_loss_percent": 1.9894973049251625,
+      "loss_percentage_points": 0.9806380989304203,
+      "baseline_percent": 49.29074779356428,
+      "candidate_percent": 48.35800132272116
     },
     "regions": {
-      "baseline_executable": 62586,
-      "baseline_covered": 28323,
-      "candidate_covered_in_baseline": 27205,
-      "retained_baseline_coverage": 27198,
-      "lost_covered": 1125,
-      "relative_loss_percent": 3.9720368605020653,
-      "loss_percentage_points": 1.7975266033937303,
-      "baseline_percent": 45.25452976704055,
-      "candidate_percent": 43.46818777362349
+      "baseline_executable": 61484,
+      "baseline_covered": 27885,
+      "candidate_covered_in_baseline": 26815,
+      "retained_baseline_coverage": 26778,
+      "lost_covered": 1107,
+      "relative_loss_percent": 3.969876277568585,
+      "loss_percentage_points": 1.800468414546874,
+      "baseline_percent": 45.35326263743413,
+      "candidate_percent": 43.61297248064537
     },
     "limits": {
       "relative_line_loss_percent": 2,
@@ -1128,26 +1100,30 @@
     "passes": true,
     "scope": "Production Swift source from desktop, shared, iOS package, and companion integration binaries; fixed baseline executable locations; new hits do not offset lost baseline hits.",
     "measured_test_definitions": {
-      "baseline": 736,
-      "candidate": 484
+      "baseline": 722,
+      "candidate": 477
     },
     "measurement_processes": {
-      "baseline": 733,
-      "candidate": 481
+      "baseline": 719,
+      "candidate": 474
     },
     "grouped_suite": "The unchanged four-test PiCodeModePolicyTests class ran in normal XCTest order on both sides; isolated cold WebKit startup exceeded its synthetic two-second watchdog on both sides.",
     "optional_skips": [
       "OpenCodeStableCompatibilityTests/stableServiceContract",
       "WorkspaceAgentToolsServiceTests/packagedHTMLToolsWorkAcrossHarnesses"
     ],
-    "production_change": "Three existing HTTPSCompanionTransport.executeMCP data method calls are qualified with self to compile on Swift 6.2; source line numbers are unchanged.",
-    "final_refresh": "Reran all tests in the four rebuilt test binaries; reused profiles only for seven binaries with identical SHA-256 hashes."
+    "final_refresh": "After retaining the revocation and approval regressions, reran all tests in the two rebuilt binaries; reused profiles only for nine binaries with identical SHA-256 hashes.",
+    "baseline_fixture_adjustment": {
+      "file": "ios/Tests/CompanionInferenceTests/InferenceOAuthTests.swift",
+      "sha256": "3fbe3d6714fca485d29c178a21883093c81e3468eff9abff2437544861dff93c",
+      "description": "Applied the same explicit credential/account case pairs to baseline and candidate. Independent JWT JSON serialization could otherwise prevent the mismatched-account fixture from being selected. Production sources are unchanged."
+    }
   },
   "toolchain": {
     "xcode": "27.0 (27A5194q)",
     "swift": "6.4",
     "architecture": "arm64"
   },
-  "coverage_build_commit": "07e7bdaa6cbca9eb9bf4994d3a1fde1bfc28b43f",
-  "coverage_source_equivalence": "The app, shared, ios, integration, default-agent, and remote trees are unchanged between the coverage build commit and inventory base."
+  "coverage_build_commit": "26f5e3952b11af34aa2b6485dad05e8430ab665b",
+  "coverage_source_equivalence": "All production sources and package graphs are identical between baseline and candidate. The deterministic OAuth credential fixture correction is applied to both sides."
 }
