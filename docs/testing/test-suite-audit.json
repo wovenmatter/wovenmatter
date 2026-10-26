@@ -1,38 +1,36 @@
 {
-  "base_commit": "d70cd366599d35399d37784a418f932cdfc34e76",
-  "counting_unit": "Named Swift test declarations (parameter sets counted once), registered Node tests, Python unittest methods, plus retained standalone/driver files. Drivers are included conservatively even when they launch already counted cases.",
+  "base_commit": "07e7bdaa6cbca9eb9bf4994d3a1fde1bfc28b43f",
+  "counting_unit": "Named Swift test declarations (parameter sets counted once, as in Swift Testing summaries), registered Node tests, and Python unittest methods. Standalone/driver files are listed separately; they are retained and are not added to the named-test total.",
   "baseline": {
     "swift_by_component": {
-      "app": 520,
+      "app": 534,
       "integration": 29,
-      "ios": 188,
+      "ios": 190,
       "scripts": 16,
-      "shared": 44
+      "shared": 45
     },
-    "node_default_agent": 209,
-    "node_remote": 169,
+    "node_default_agent": 213,
+    "node_remote": 170,
     "node_native_mcp": 10,
     "python_unittest": 24,
-    "standalone_driver_files": 51,
-    "total": 1260
+    "total": 1231
   },
   "candidate": {
     "swift_by_component": {
-      "app": 330,
+      "app": 344,
       "integration": 29,
-      "ios": 155,
+      "ios": 157,
       "scripts": 16,
-      "shared": 15
+      "shared": 16
     },
-    "node_default_agent": 209,
-    "node_remote": 169,
+    "node_default_agent": 213,
+    "node_remote": 170,
     "node_native_mcp": 10,
     "python_unittest": 24,
-    "standalone_driver_files": 51,
-    "total": 1008
+    "total": 979
   },
   "net_removed": 252,
-  "reduction_percent": 20.0,
+  "reduction_percent": 20.471161657189278,
   "consolidated": {
     "WovenMatterClientTests.AgentInteractionBrokerTests/invalidPermissionCannotConsumeAndFirstValidResponseWins()": "Permission assertions retained in responsesMustValidateBeforeResolvingOnce(), together with question validation."
   },
@@ -1098,5 +1096,53 @@
     "scripts/test-support/test_update_refresh.py",
     "scripts/test-support/test_update_request.py",
     "scripts/test-support/test_updater_signing.py"
-  ]
+  ],
+  "coverage": {
+    "lines": {
+      "baseline_executable": 89563,
+      "baseline_covered": 43979,
+      "candidate_covered_in_baseline": 43126,
+      "retained_baseline_coverage": 43116,
+      "lost_covered": 863,
+      "relative_loss_percent": 1.9623001887264375,
+      "loss_percentage_points": 0.9635675446333866,
+      "baseline_percent": 49.10398267141565,
+      "candidate_percent": 48.15158045174905
+    },
+    "regions": {
+      "baseline_executable": 62586,
+      "baseline_covered": 28323,
+      "candidate_covered_in_baseline": 27200,
+      "retained_baseline_coverage": 27193,
+      "lost_covered": 1130,
+      "relative_loss_percent": 3.9896903576598524,
+      "loss_percentage_points": 1.8055156105199246,
+      "baseline_percent": 45.25452976704055,
+      "candidate_percent": 43.4601987664973
+    },
+    "limits": {
+      "relative_line_loss_percent": 2,
+      "region_loss_percentage_points": 2
+    },
+    "passes": true,
+    "scope": "Production Swift source from desktop, shared, iOS package, and companion integration binaries; fixed baseline executable locations; new hits do not offset lost baseline hits.",
+    "measured_test_definitions": {
+      "baseline": 736,
+      "candidate": 484
+    },
+    "measurement_processes": {
+      "baseline": 733,
+      "candidate": 481
+    },
+    "grouped_suite": "The unchanged four-test PiCodeModePolicyTests class ran in normal XCTest order on both sides; isolated cold WebKit startup exceeded its synthetic two-second watchdog on both sides.",
+    "optional_skips": [
+      "OpenCodeStableCompatibilityTests/stableServiceContract",
+      "WorkspaceAgentToolsServiceTests/packagedHTMLToolsWorkAcrossHarnesses"
+    ]
+  },
+  "toolchain": {
+    "xcode": "27.0 (27A5194q)",
+    "swift": "6.4",
+    "architecture": "arm64"
+  }
 }
