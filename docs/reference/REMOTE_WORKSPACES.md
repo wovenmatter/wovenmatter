@@ -11,22 +11,44 @@ SSH account to the root-equivalent `docker` group, or use Docker's convenience
 installer. Existing compatible Docker Engines on other Linux distributions
 remain supported. When direct Docker access is unavailable, Woven Matter can
 use an existing root login or passwordless sudo policy rather than changing
-group membership. OpenSSH continues to resolve hosts, users, agents, and keys;
-the app does not maintain a separate SSH credential store.
+group membership. OpenSSH continues to select users, agents, and keys; the app
+does not maintain a separate SSH credential store. Docker Engine 28+ is required:
+older Docker releases can expose localhost-published ports to adjacent hosts.
+Keep the host OS, Docker Engine, OpenSSH, and Tailscale on current stable security
+updates through the host's package manager.
 
 ## Isolation and connection
 
 The control API is token-authenticated. Docker publishes it only on
-`127.0.0.1` of the Linux host, and the app reaches it through an SSH tunnel.
-Each container runs as a non-root user with a read-only root filesystem,
-dropped capabilities, bounded temporary filesystems, and a dedicated persistent
+`127.0.0.1` of the Linux host, and the app reaches it through an SSH tunnel over
+Tailscale. All SSH paths (provisioning, lifecycle, tunnels, attachments, shared
+files, and stdio harnesses) select an unambiguous online peer from the local
+Tailscale daemon and invoke `tailscale nc` with that peer's Tailscale address.
+There is no DNS/LAN or public SSH fallback. Command-line SSH options override
+proxy jumps and hostname routing, disable multiplexed connection reuse, agent
+forwarding, and local commands, and require an already trusted SSH host key.
+HTTPS client sharing remains private Tailscale Serve with Funnel refused before
+and after route configuration. The native administration client accepts only its
+local loopback tunnel and refuses HTTP redirects.
+
+Each workspace uses a dedicated NAT bridge with inter-container communication
+disabled; it never joins Docker's shared default bridge. Lifecycle operations
+verify container/network ownership, and starting or sharing a workspace requires
+its loopback publication and private network. Existing workspace containers must
+be explicitly updated to apply these settings. Each container runs as a non-root user with a read-only root filesystem,
+dropped capabilities, a 512-process limit, core dumps disabled, private default
+file permissions, bounded temporary filesystems with `noexec,nosuid,nodev`, and a dedicated persistent
 Docker named volume mounted at `/home`. The container user's home is `/home`,
 and the Woven Matter workspace is `/home/.woven-matter`; installed harnesses,
 configuration, credentials, and caches also persist under `/home`. Its base image
 follows the official Node slim image for the app's bundled Node stable major, and its
 local log driver rotates bounded files. Container updates use a rollback
 container and preserve the prior running state if the replacement does not
-become healthy.
+become healthy. API credentials are passed through an atomically created private
+temporary environment file and removed after Docker reads it; they do not appear
+in Docker or sudo command arguments. The service bounds HTTP headers, request
+upload time, body sizes, connection counts, and keep-alive request counts. Browser
+origins are refused, and unexpected server errors do not expose internal details.
 
 The unused base-image `node` account and its private `/home/node` directory are
 removed at image construction, before a fresh home volume is seeded. This keeps
@@ -161,3 +183,13 @@ the same workspace storage.
 Older workspace services that do not expose this endpoint must be updated
 through the existing workspace update control before managing SDKs. Opening
 SDK settings does not update or start a workspace automatically.
+
+## Security review
+
+See [the October 2026 remote workspace audit](REMOTE_WORKSPACE_SECURITY_AUDIT.md)
+for the reviewed trust boundaries, dependency evidence, fixes, and validation
+limits. Tailscale policy must grant only intended users/devices access to workspace
+SSH and private HTTPS ports. A Tailnet membership alone does not establish least
+privilege. Root, Docker administrators, and the workspace's SSH account remain
+trusted operators; agents inside one workspace share its credentials and files.
+Do not use a single workspace as an isolation boundary between untrusted users.

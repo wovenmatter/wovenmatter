@@ -134,9 +134,9 @@ struct RuntimeBoundaryTests {
     let launch = try RemoteHarnessLaunchResolver.resolve(
       configuration: configuration,
       runtimeKind: .codex,
-      processWorkingDirectory: URL(filePath: "/private/tmp")
+      processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] }
     )
-    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"))
+    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] })
     #expect(builtIn.launch.arguments.last?.contains("default-agent/src/main.mjs") == true)
     #expect(builtIn.launch.arguments.last?.contains("'--remote'") == true)
     #expect(builtIn.launch.arguments.last?.contains("runtime-operation.lock") == false)
@@ -149,7 +149,7 @@ struct RuntimeBoundaryTests {
       let directory = URL(fileURLWithPath: "/home/projects/a quoted ' directory")
       let inherited = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
         processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
-        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
+        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory, tailnetSSHOptions: { _ in [] })
       #expect(inherited.workspace.rootURL == directory)
       #expect(inherited.workspace.databasesURL.path == "/home/.local/share/wovenmatter/databases")
       #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")

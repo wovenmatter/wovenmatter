@@ -5,7 +5,7 @@ import Testing
 struct RemoteWorkspaceDeploymentTests {
     private func fixture() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        for file in ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json", "remote/src/service.mjs", "harnesses/catalog.json", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src/agent.mjs"] {
+        for file in ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json", "remote/src/service.mjs", "remote/security/backports.json", "remote/security/patches/repair.patch", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses/catalog.json", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src/agent.mjs"] {
             let url = root.appending(path: file)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(file.utf8).write(to: url)
@@ -27,6 +27,15 @@ struct RemoteWorkspaceDeploymentTests {
         let beforeLock = try RemoteWorkspaceDeployment(root: root).fingerprint
         try Data("changed dependencies".utf8).write(to: root.appending(path: "default-agent/package-lock.json"))
         #expect(try RemoteWorkspaceDeployment(root: root).fingerprint != beforeLock)
+    }
+
+    @Test func securityRepairsAndNpmOverlayInvalidateCachedImage() throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        for path in ["remote/security/backports.json", "remote/security/patches/repair.patch", "remote/npm-runtime/package-lock.json"] {
+            let before = try RemoteWorkspaceDeployment(root: root).fingerprint
+            try Data("updated security input".utf8).write(to: root.appending(path: path))
+            #expect(try RemoteWorkspaceDeployment(root: root).fingerprint != before)
+        }
     }
 
     @Test func reuseDoesNotUploadOrBuildAndUsesImmutableIdentity() async throws {

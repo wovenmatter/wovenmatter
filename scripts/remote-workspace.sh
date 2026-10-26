@@ -85,6 +85,7 @@ validate_optional_bytes() {
 
 container_name() { printf 'wovenmatter-%s' "$1"; }
 volume_name() { printf 'wovenmatter-%s-home' "$1"; }
+network_name() { printf 'wovenmatter-%s' "$1"; }
 
 release_lock() {
   if [ -n "$active_lock" ]; then
@@ -96,8 +97,11 @@ release_lock() {
 acquire_lock() {
   local id="$1" lock_root lock_path attempt
   lock_root="${XDG_RUNTIME_DIR:-/tmp}/wovenmatter-remote-workspace-$(id -u)"
-  (umask 077 && mkdir -p "$lock_root")
-  chmod 700 "$lock_root" >/dev/null 2>&1 || true
+  if (umask 077 && mkdir "$lock_root") 2>/dev/null; then :
+  elif [ ! -d "$lock_root" ] || [ -L "$lock_root" ] || [ ! -O "$lock_root" ]; then
+    fail "unsafe_lock_directory" "The workspace lifecycle lock directory must be owned by this account and must not be a symlink." 78
+  fi
+  chmod 700 "$lock_root"
   lock_path="${lock_root}/${id}.lock"
   for ((attempt = 0; attempt < 100; attempt += 1)); do
     if mkdir "$lock_path" >/dev/null 2>&1; then
@@ -140,7 +144,7 @@ docker_info_value() {
 }
 
 docker_engine_supported() {
-  local platform components api major minor
+  local platform components api major minor version engine_major
   docker_engine_problem=''
   if ! local_docker_endpoint; then
     docker_engine_problem='Docker is targeting a remote endpoint. Select a local Docker Engine socket on this SSH host, then inspect again. Remote Docker contexts are not supported for workspace storage and ports.'
@@ -161,6 +165,13 @@ docker_engine_supported() {
     return 1
   fi
   api="$(docker_exec version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
+  # Docker <28 can expose localhost-published ports to adjacent LAN hosts.
+  version="$(docker_exec version --format '{{.Server.Version}}' 2>/dev/null || true)"
+  engine_major="${version%%.*}"
+  if ! [[ "$engine_major" =~ ^[0-9]+$ ]] || [ "$engine_major" -lt 28 ]; then
+    docker_engine_problem="Workspaces require Docker Engine 28 or newer to keep published ports private. Update Docker Engine on this host, then inspect again."
+    return 1
+  fi
   if ! [[ "$api" =~ ^[0-9]+\.[0-9]+$ ]]; then
     docker_engine_problem='Docker answered, but its Engine API version could not be read. Check docker version using this SSH account, then inspect again.'
     return 1
@@ -474,13 +485,13 @@ build_container_args() {
   fi
   container_args=(
     "$operation" --name "$name" --restart unless-stopped
-    --read-only --cap-drop ALL --security-opt no-new-privileges:true
-    --ulimit core=0
-    --tmpfs /tmp:rw,noexec,nosuid,size=256m
-    --tmpfs /run:rw,noexec,nosuid,size=16m
+    --read-only --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true
+    --ulimit core=0 --pids-limit 512
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m
+    --tmpfs /run:rw,noexec,nosuid,nodev,size=16m
     --publish "127.0.0.1:${port}:7337"
     --log-driver local --log-opt max-size=20m --log-opt max-file=5
-    --env "WOVENMATTER_API_TOKEN=${token}"
+    --network "$(network_name "$id")"
     --env HOME=/home
     --env WOVENMATTER_WORKSPACE=/home/.woven-matter
     --label "com.wovenmatter.workspace=${id}"
@@ -495,6 +506,59 @@ build_container_args() {
   }; then container_args+=(--memory-swap "$memory_and_swap"); fi
   container_args+=("$image")
 }
+
+# A workspace never joins the shared default bridge. Disable communication
+# between endpoints, retain outbound NAT, and refuse networks with other options.
+validate_workspace_network() {
+  local id="$1" network owner options
+  network="$(network_name "$id")"
+  if docker_exec network inspect "$network" >/dev/null 2>&1; then
+    owner="$(docker_exec network inspect --format '{{index .Labels "com.wovenmatter.workspace"}}' "$network")"
+    options="$(docker_exec network inspect --format '{{.Driver}}|{{index .Options "com.docker.network.bridge.enable_icc"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}|{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}|{{index .Options "com.docker.network.bridge.trusted_host_interfaces"}}' "$network")"
+    [ "$owner" = "$id" ] && [ "$options" = 'bridge|false|nat|127.0.0.1|' ] || fail \
+      "workspace_network_conflict" "The workspace network does not have the required private bridge configuration." 78
+  else
+    docker_exec network create --driver bridge \
+      --label "com.wovenmatter.workspace=${id}" \
+      --opt com.docker.network.bridge.enable_icc=false \
+      --opt com.docker.network.bridge.gateway_mode_ipv4=nat \
+      --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 \
+      --opt com.docker.network.bridge.trusted_host_interfaces= \
+      "$network" >/dev/null
+  fi
+}
+
+require_workspace_owner() {
+  local name="$1" id="$2" owner
+  owner="$(inspect_value "$name" '{{index .Config.Labels "com.wovenmatter.workspace"}}')"
+  [ "$owner" = "$id" ] || fail "workspace_container_conflict" \
+    "A container with this name is not owned by this workspace. It was left unchanged." 78
+}
+
+require_workspace_binding() {
+  local name="$1" published network
+  published="$(inspect_value "$name" '{{range $port, $bindings := .HostConfig.PortBindings}}{{$port}}={{range $bindings}}{{.HostIp}}:{{.HostPort}}{{end}}{{println}}{{end}}')"
+  [[ "$published" =~ ^7337/tcp=127\.0\.0\.1:[0-9]+$ ]] || fail \
+    "workspace_binding_changed" "Update this workspace to restore its loopback-only control port before starting or sharing it." 78
+  network="$(inspect_value "$name" '{{.HostConfig.NetworkMode}}')"
+  [ "$network" = "$(network_name "$2")" ] || fail \
+    "workspace_network_changed" "Update this workspace to install its private network before starting or sharing it." 78
+  validate_workspace_network "$2"
+}
+
+# Keep API credentials out of process arguments, including sudo's arguments.
+# Docker reads the secret from this private environment file. Its directory is
+# created atomically, and cleanup runs even when a container operation fails.
+run_container() (
+  umask 077
+  secret_directory="$(mktemp -d)"
+  trap 'rm -rf -- "$secret_directory"' EXIT
+  printf 'WOVENMATTER_API_TOKEN=%s\n' "$1" > "$secret_directory/environment"
+  shift
+  local last
+  last=$((${#container_args[@]} - 1))
+  docker_exec "${container_args[@]:0:$last}" --env-file "$secret_directory/environment" "${container_args[$last]}"
+)
 
 validate_workspace_volume() {
   local volume="$1" id="$2" owner driver
@@ -530,7 +594,7 @@ create_workspace() {
   fi
   validate_id "$id"
   validate_port "$port"
-  [ -n "$token" ] || fail "missing_api_token" "The workspace API token is empty."
+  [[ "$token" =~ ^[A-Za-z0-9+/=_-]{32,256}$ ]] || fail "invalid_api_token" "Use a 32-256 character random API credential."
   validate_optional_bytes "$memory" "Memory limit"
   validate_optional_bytes "$memory_and_swap" "Memory-and-swap limit"
   require_docker
@@ -544,10 +608,11 @@ create_workspace() {
   docker_exec container inspect "$name" >/dev/null 2>&1 && fail \
     "workspace_exists" "A workspace container with this ID already exists." 73
   validate_workspace_volume "$volume" "$id"
+  validate_workspace_network "$id"
   build_container_args run "$name" "$id" "$port" "$token" \
     "$memory" "$memory_and_swap" "$volume" "$image_name"
   container_args=(run --detach "${container_args[@]:1}")
-  if ! output="$(docker_exec "${container_args[@]}" 2>&1)"; then
+  if ! output="$(run_container "$token" 2>&1)"; then
     fail "workspace_create_failed" \
       "${output} The persistent workspace volume was preserved." 70
   fi
@@ -671,6 +736,7 @@ status_workspace() {
   if ! inspect_error="$(docker_exec container inspect "$name" 2>&1)"; then
     fail "workspace_not_found" "$inspect_error" 66
   fi
+  require_workspace_owner "$name" "$id"
   container_id="$(inspect_value "$name" '{{.Id}}')"
   state="$(inspect_value "$name" '{{.State.Status}}')"
   running="$(inspect_value "$name" '{{.State.Running}}')"
@@ -742,7 +808,10 @@ lifecycle() {
   local action="$1" id="$2" name output
   validate_id "$id"
   require_docker
+  acquire_lock "$id"
   name="$(container_name "$id")"
+  require_workspace_owner "$name" "$id"
+  if [ "$action" != stop ]; then require_workspace_binding "$name" "$id"; fi
   if ! output="$(docker_exec "$action" "$name" 2>&1)"; then
     fail "workspace_lifecycle_failed" "$output" 70
   fi
@@ -787,6 +856,8 @@ update_workspace() {
     "workspace_image_missing" "The requested workspace image is not available."
   docker_exec container inspect "$name" >/dev/null 2>&1 || fail \
     "workspace_not_found" "The workspace container does not exist." 66
+  require_workspace_owner "$name" "$id"
+  validate_workspace_network "$id"
   detect_workspace_storage "$name" "$id"
   if [ "$workspace_storage_kind" != named-volume ] \
     || [ "$workspace_storage_source" != "$volume" ] \
@@ -799,8 +870,8 @@ update_workspace() {
   memory="$(inspect_value "$name" '{{.HostConfig.Memory}}')"
   memory_and_swap="$(inspect_value "$name" '{{.HostConfig.MemorySwap}}')"
   old_running="$(inspect_value "$name" '{{.State.Running}}')"
-  [ -n "$token" ] || fail "missing_api_token" \
-    "The existing workspace container has no API token."
+  [[ "$token" =~ ^[A-Za-z0-9+/=_-]{32,256}$ ]] || fail "invalid_api_token" \
+    "The workspace requires a 32-256 character random API credential."
   if [ "$#" -ge 3 ]; then memory="$requested_memory"; fi
   if [ "$#" -ge 4 ]; then memory_and_swap="$requested_memory_and_swap"; fi
   if [ "$#" -ge 5 ]; then port="$requested_port"; fi
@@ -818,7 +889,7 @@ update_workspace() {
   fi
   build_container_args create "$name" "$id" "$port" "$token" \
     "$memory" "$memory_and_swap" "$volume" "$image"
-  if output="$(docker_exec "${container_args[@]}" 2>&1)" \
+  if output="$(run_container "$token" 2>&1)" \
     && docker_exec start "$name" >/dev/null 2>&1; then new_started=true; fi
   if [ "$new_started" != true ] || ! wait_for_healthy "$name"; then
     restore_update "$name" "$backup" "$old_running"
@@ -842,6 +913,7 @@ delete_workspace() {
   volume="$(volume_name "$id")"
   if docker_exec container inspect "$name" >/dev/null 2>&1; then
     container_existed=true
+    require_workspace_owner "$name" "$id"
     detect_workspace_storage "$name" "$id"
     if [ "$remove_data" = '--data' ] && {
       [ "$workspace_storage_kind" != named-volume ] \
@@ -862,6 +934,10 @@ delete_workspace() {
     docker_exec volume rm "$volume" >/dev/null
     persistent_data_removed=true
   fi
+  if docker_exec network inspect "$(network_name "$id")" >/dev/null 2>&1; then
+    validate_workspace_network "$id"
+    docker_exec network rm "$(network_name "$id")" >/dev/null
+  fi
   printf '{"deleted":true,"id":'
   json_string "$id"
   printf ',"containerExisted":%s,"persistentDataRemoved":%s}\n' \
@@ -881,6 +957,8 @@ expose_workspace() {
   require_docker
   acquire_lock tailscale-serve
   name="$(container_name "$id")"
+  require_workspace_owner "$name" "$id"
+  require_workspace_binding "$name" "$id"
   published="$(inspect_value "$name" '{{range (index .HostConfig.PortBindings "7337/tcp")}}{{.HostIp}}:{{.HostPort}}{{end}}')" || fail "workspace_missing" "The workspace container is unavailable." 69
   [ "$published" = "127.0.0.1:${port}" ] || fail "workspace_binding_changed" "The workspace must be bound to the expected loopback port before sharing." 78
   status="$(tailscale status --json)" || fail "tailscale_unavailable" "Connect Tailscale on this workspace host first." 69

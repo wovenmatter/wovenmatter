@@ -59,6 +59,7 @@ if [ "${1:-}" = version ]; then
   case "${3:-}" in
     *Platform.Name*) printf '%s\n' "${WOVENMATTER_FAKE_PLATFORM-Docker Engine - Community}" ;;
     *Components*) printf '%s\n' "${WOVENMATTER_FAKE_COMPONENTS-Engine}" ;;
+    *Server.Version*) printf '%s\n' "${WOVENMATTER_FAKE_VERSION-29.7.2}" ;;
     *APIVersion*) printf '%s\n' "${WOVENMATTER_FAKE_API-1.55}" ;;
     *) printf '29.7.2\n' ;;
   esac
@@ -153,6 +154,17 @@ for components in '' 'Some Engine' 'Podman Engine'; do
     /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
   )"
   jq -e '.ready == false and .canPrepare == false and (.blockingIssues | length) == 1' \
+    <<< "$inspection" >/dev/null
+done
+
+# Supported branding/API alone cannot bypass the Docker localhost isolation floor.
+for version in '27.5.1' '' 'unknown'; do
+  inspection="$(
+    PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+    WOVENMATTER_FAKE_VERSION="$version" \
+    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  )"
+  jq -e '.ready == false and (.blockingIssues[0] | contains("Docker Engine 28"))' \
     <<< "$inspection" >/dev/null
 done
 

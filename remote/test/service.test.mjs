@@ -170,11 +170,11 @@ test('native sign-in reports a real handoff and verifies provider state', async 
     workspace,
     home,
     catalog: testCatalog,
-    token: 'sign-in-token',
+    token: 'sign-in-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   })
   context.after(() => stopService(service.child))
   const headers = {
-    authorization: 'Bearer sign-in-token',
+    authorization: 'Bearer sign-in-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'content-type': 'application/json',
   }
   const started = await fetch(`${service.url}/v1/harnesses/codex/sign-in`, {
@@ -259,11 +259,11 @@ test('harness readiness requires a real bounded transport handshake', async (con
     workspace,
     home,
     catalog: testCatalog,
-    token: 'transport-token',
+    token: 'transport-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   })
   context.after(() => stopService(service.child))
   const response = await fetch(`${service.url}/v1/harnesses`, {
-    headers: { authorization: 'Bearer transport-token' },
+    headers: { authorization: 'Bearer transport-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
   })
   assert.equal(response.status, 200)
   const statuses = (await response.json()).harnesses.filter(h => h.id !== 'default_agent')
@@ -285,9 +285,9 @@ test('database routes require authentication and keep managed data outside proje
   const root = await temporaryFixture(context, 'wovenmatter-database-api-')
   const home = resolve(root, 'home')
   await mkdir(home)
-  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token' })
+  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' })
   context.after(() => stopService(service.child))
-  const request = (path, method = 'GET', body, token = 'database-token') => fetch(service.url + path, {
+  const request = (path, method = 'GET', body, token = 'database-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url + path, {
     method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -331,9 +331,9 @@ test('database routes require authentication and keep managed data outside proje
 test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
   const home = resolve(root, 'home'); await mkdir(home);
-  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token' });
+  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
   context.after(() => stopService(service.child));
-  const request = (path, body, token = 'credential-test-token') => fetch(service.url + path, {
+  const request = (path, body, token = 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url + path, {
     method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -356,9 +356,9 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
 test('task gateway routes are authenticated, default enabled, and persist explicit disable', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-task-gateway-api-')
   const home = resolve(root, 'home'); await mkdir(home)
-  const service = await startService({workspace:root,home,catalog:catalogPath,token:'task-test-token'})
+  const service = await startService({workspace:root,home,catalog:catalogPath,token:'scheduled-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
   context.after(() => stopService(service.child))
-  const request = (path, method='GET', body, token='task-test-token') => fetch(service.url+path, {
+  const request = (path, method='GET', body, token='scheduled-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url+path, {
     method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
     body:body===undefined?undefined:JSON.stringify(body),
   })
@@ -540,11 +540,11 @@ test('direct client grants expose only execution routes and enforce revocation',
   const fixture=await temporaryFixture(context,'wovenmatter-direct-client-')
   const catalog=resolve(fixture,'catalog.json')
   await writeFile(catalog,JSON.stringify({schemaVersion:4,harnesses:[]}))
-  const service=await startService({workspace:fixture,home:fixture,catalog,token:'fixture-admin-token'})
+  const service=await startService({workspace:fixture,home:fixture,catalog,token:'fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
   context.after(() => stopService(service.child))
   const id=()=>globalThis.crypto.randomUUID()
   const body={libraryID:id(),workspaceID:id(),ownerDeviceID:id(),deviceID:id(),scopes:['execution']}
-  const enrolled=await fetch(service.url+'/v1/execution/devices',{method:'POST',headers:{authorization:'Bearer fixture-admin-token','content-type':'application/json'},body:JSON.stringify(body)})
+  const enrolled=await fetch(service.url+'/v1/execution/devices',{method:'POST',headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','content-type':'application/json'},body:JSON.stringify(body)})
   assert.equal(enrolled.status,201)
   const grant=await enrolled.json(),headers={authorization:'Bearer '+grant.token,'content-type':'application/json'}
   const descriptor=await fetch(service.url+'/v1/execution',{headers})
@@ -557,13 +557,13 @@ test('direct client grants expose only execution routes and enforce revocation',
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
   }
-  const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token'}})
+  const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
   assert.deepEqual(await tabs.json(), {running:false,tabs:[]})
   assert.equal(tabs.headers.get('cache-control'), 'no-store')
   assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
   const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
   assert.equal(foreign.status,400)
-  const revoked=await fetch(service.url+'/v1/execution/devices/'+body.deviceID,{method:'DELETE',headers:{authorization:'Bearer fixture-admin-token'}})
+  const revoked=await fetch(service.url+'/v1/execution/devices/'+body.deviceID,{method:'DELETE',headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
   assert.equal(revoked.status,200)
   assert.equal((await fetch(service.url+'/v1/execution',{headers})).status,401)
 })
@@ -651,9 +651,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
     authentication: { statusCommands: ['true'], discoveries: [], methods: [] }, capabilities: ['conversations'],
   }] }))
-  const service = await startService({ workspace: root, home: root, catalog, token: 'synthetic-admin' })
+  const service = await startService({ workspace: root, home: root, catalog, token: 'synthetic-admin-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' })
   context.after(() => stopService(service.child))
-  const admin = { authorization: 'Bearer synthetic-admin', 'content-type': 'application/json' }
+  const admin = { authorization: 'Bearer synthetic-admin-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'content-type': 'application/json' }
   const id = () => globalThis.crypto.randomUUID()
   const device = { libraryID: id(), workspaceID: id(), ownerDeviceID: id(), deviceID: id(), scopes: ['execution'] }
   const request = (path, method, body, headers = admin) => fetch(service.url + path, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) })
@@ -691,15 +691,19 @@ test('service authentication exposes the reviewed harness catalog', async (conte
     workspace: fixture,
     home: fixture,
     catalog: catalogPath,
-    token: 'service-token',
+    token: 'service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   })
   context.after(() => stopService(service.child))
 
   assert.equal((await fetch(`${service.url}/v1/health`)).status, 401)
-  for (const wrong of ['Bearer service-toke', 'Bearer service-token-longer', 'Bearer Service-Token', 'Basic service-token']) {
+  for (const wrong of ['Bearer service-toke', 'Bearer service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-longer', 'Bearer Service-Token', 'Basic service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']) {
     assert.equal((await fetch(`${service.url}/v1/health`, { headers: { authorization: wrong } })).status, 401)
   }
-  const headers = { authorization: 'Bearer service-token' }
+  const headers = { authorization: 'Bearer service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+  assert.equal((await fetch(`${service.url}/v1/health`, { headers: { ...headers, origin: 'https://untrusted.example' } })).status, 403)
+  const malformed = await fetch(`${service.url}/v1/task-gateway`, { method: 'PATCH', headers, body: '{invalid' })
+  assert.equal(malformed.status, 400)
+  assert.equal((await malformed.json()).error, 'invalid_json')
   const health = await fetch(`${service.url}/v1/health`, { headers })
   assert.equal((await health.json()).status, 'ready')
   const response = await fetch(`${service.url}/v1/harnesses`, { headers })
@@ -855,11 +859,11 @@ test('installation uses latest adapter and fails unless actual components verify
     workspace,
     home,
     catalog: testCatalog,
-    token: 'install-token',
+    token: 'install-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   })
   context.after(() => stopService(service.child))
   const headers = {
-    authorization: 'Bearer install-token',
+    authorization: 'Bearer install-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'content-type': 'application/json',
   }
   const response = await fetch(`${service.url}/v1/harnesses/opencode/install`, {

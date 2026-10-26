@@ -9,7 +9,7 @@ struct RemoteWorkspaceDeployment {
     init(root: URL) throws {
         let manager = FileManager.default
         let inputs = ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json",
-                      "remote/src", "harnesses", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src"]
+                      "remote/src", "remote/security", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src"]
         var files: [String] = []
         for input in inputs {
             let url = root.appending(path: input)

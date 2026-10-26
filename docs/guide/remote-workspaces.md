@@ -6,15 +6,18 @@ harnesses, and credentials. You can create several workspaces on one host.
 
 ## What you need
 
-- A reachable amd64 or arm64 Linux host.
-- Working OpenSSH configuration and authentication from your Mac.
-- Docker Engine, or a supported Ubuntu/Debian host that the app can prepare
+- An online amd64 or arm64 Linux host in your Tailnet.
+- Connected Tailscale on both machines, plus working OpenSSH authentication and trusted host keys.
+- Docker Engine 28 or newer, or a supported Ubuntu/Debian host that the app can prepare
   with root access or existing passwordless sudo.
 - Enough host disk space for workspace files, harnesses, and caches.
 
-Tailscale is optional. If available, the app can list reachable Tailnet machines;
-you can also enter a hostname. The app uses your SSH configuration and agent
-rather than maintaining a separate SSH key store.
+Tailscale is required for every remote connection. Select an online Tailnet
+machine or enter its Tailscale name, MagicDNS name, or Tailscale IP. SSH uses the
+local Tailscale daemon for the transport and your existing SSH configuration
+and agent for authentication. Arbitrary SSH aliases, LAN addresses, and public
+hosts are unsupported. Existing configurations must name an online Tailnet peer;
+there is no fallback connection mode.
 
 ## Create a workspace
 
@@ -139,6 +142,7 @@ container, agent service, and provider access remain available.
 Updates preserve the persistent home. When deleting a workspace, read the data
 removal choice carefully: deleting that volume removes its files and credentials.
 
-Connections use an authenticated service over an SSH tunnel to a host-loopback
-port. For isolation, rollback, storage measurement, and host preparation details,
+Connections use an authenticated service over an SSH tunnel carried exclusively
+by Tailscale to a host-loopback port. Run **Update container** for existing
+workspaces to apply the private network and image hardening before starting them. For isolation, rollback, storage measurement, and host preparation details,
 see the [technical reference](../reference/REMOTE_WORKSPACES.md).

@@ -44,7 +44,72 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
-  container update always rebuilds. See [image reuse](reference/REMOTE_WORKSPACES.md#image-reuse-and-build-progress).
+  container update always rebuilds. See [image reuse](reference/REMOTE_WORKSPACES.md#image-reuse-and-build-progress). The workspace
+  image also raises npm to its tested current stable minimum (`>=12.2.1`), since
+  Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
+  floor; locked installs and the container smoke test validate CLI compatibility.
+  Unused bundled Yarn is removed from the workspace image.
+- **Remote workspace tools** rebuild curl/libcurl 8.23.0 from authenticated
+  Debian unstable source against the stable runtime ABI. This replaces the
+  older stable and stable-backports builds, including the newly disclosed
+  HTTP/2 upload use-after-free affecting curl through 8.22.0.
+  The image builds Python 3.15.2 from the checksum recorded by the current
+  official Python image recipe. The exact source selection is intentional: the
+  public registry tag still carried 3.15.1 during the October 26, 2026 review,
+  while 3.15.2 is an expedited security release. Maintenance compares this
+  record with the current official recipe and returns to its published image
+  once the registry contains the required security floor. Tested minimums are
+  pip 26.2.2 and setuptools 84.2.1, instead of Debian's older interpreter and
+  vulnerable bundled venv wheel. The SQLite, TLS, and isolated execution paths
+  are exercised on native amd64 and arm64 hosts in the container tests. Local
+  checks without Docker validate the recipe but cannot replace those builds.
+  Archive::Tar 3.14 replaces Debian's affected module in both remote images
+  after its upstream test suite passes. The standalone Executor image applies
+  the same curl and base-package refresh before installing its exact resolved
+  V2 package.
+  They use GitHub CLI's official signed stable APT
+  repository (tested minimum 2.103.2), with the published keyring SHA-256 checked
+  before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
+  reviews both the floor and signing-key record against upstream.
+  OpenSSH clients are built from the current 10.6p1 source in a separate image
+  stage: the Dockerfile records the exact release/SHA-256 and verifies its
+  detached signature against the upstream release-key fingerprint. This
+  security exception replaces Debian's client, which retains CVE-2026-60002
+  even in current backports. Maintenance must refresh the source record with
+  every new upstream stable release; image construction runs OpenSSH's unit
+  tests, and container validation checks the installed clients. Build tools
+  and the SSH server are not included in the final image.
+  Debian stable source packages without timely fixes are rebuilt against the
+  stable ABI from authenticated APT source indexes. `remote/security/backports.json`
+  records exact source versions, reviewed patch origins, and patch SHA-256 values.
+  The current fixed Debian sources are used for tiff 4.7.2 and acl 2.4.0.
+  Util-linux retains Debian stable 2.41.5 with the missing 2.41.6 security fixes
+  and the later stable-branch symlink-guard correction. Stable libxml2, ncurses, libsndfile, libX11, libXrender,
+  and libXtst retain their stable SONAMEs with reviewed Ubuntu or upstream
+  security patches. Package builds run their normal Debian checks and symbol
+  validation; the libxml2 critical fix also has an AddressSanitizer negative
+  control that reproduces CVE-2026-6653 before patching and passes after it.
+  Build provenance is retained in the image. Maintenance must remove each local
+  rebuild when Debian stable ships an equal or newer fix, refresh exact sources
+  and patch checksums together, and validate both amd64 and arm64 images.
+  npm 12.2.1 still bundles affected undici 6.29.0. The workspace image replaces
+  that vendored module with the current, independently locked security selection
+  in `remote/npm-runtime` (tested undici 8.12.3 and ip-address 10.7.5), addressing CVE-2026-111997,
+  GHSA-xjj6-f33q-929c and the
+  related denial-of-service advisories. npm ignores overrides for its bundled
+  dependencies, so this replacement is explicit in the image definition.
+  Maintenance reviews npm's vendored selections on every refresh and removes
+  the replacement once npm ships a secure version. Image construction tests
+  actual npm registry installation and `npm ci`; container validation checks
+  that npm resolves the intended module. Audit both lockfiles separately.
+  The Executor image consumes the same npm runtime lock, plus
+  `remote/executor-runtime/package-lock.json` for sharp 0.35.5 and its native
+  libvips packages. This exact overlay is required because the newest supported
+  Executor V2 package embeds affected sharp 0.35.4. The image verifies the
+  replacement loads, then runs the unchanged provider-free V2 behavior suite.
+  Executor also selects only the ncurses, acl, and util-linux source repairs it
+  needs; do not install the workspace browser-library repairs into that smaller
+  image without a runtime dependency.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact

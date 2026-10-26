@@ -95,10 +95,14 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
 
 const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
 
-const server = createServer(async (request, response) => {
+const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
+  requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
   try {
+    // This control service is called by native clients, never browser pages.
+    if (request.headers.origin) return json(response, 403, { error: 'browser_origin_forbidden' })
+    if (!request.url?.startsWith('/') || request.url.startsWith('//')) return json(response, 400, { error: 'invalid_request_target' })
     const administrator = authorized(request)
-    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+    const url = new URL(request.url, 'http://localhost')
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
     const device = clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
@@ -346,10 +350,14 @@ const server = createServer(async (request, response) => {
 
     return json(response, 404, { error: 'not_found' })
   } catch (error) {
-    const status = error.statusCode ?? 500
-    return json(response, status, { error: error.message ?? 'internal_error' })
+    const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599 ? error.statusCode : 500
+    if (response.headersSent) { response.destroy(); return }
+    return json(response, status, { error: status === 500 ? 'internal_error' : error.message ?? 'invalid_request' })
   }
 })
+
+server.maxConnections = 256
+server.maxRequestsPerSocket = 1_000
 
 if (runningAsService) {
   taskGateway.start()
@@ -1072,7 +1080,9 @@ function json(response, statusCode, value) {
 
 function requiredEnvironment(name) {
   const value = process.env[name]
-  if (!value) throw new Error(`${name} is required`)
+  if (!value || value.length < 32 || value.length > 256 || /[^A-Za-z0-9+\/=_-]/.test(value)) {
+    throw new Error(`${name} must be a 32-256 character random credential`)
+  }
   return value
 }
 
