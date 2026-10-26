@@ -1188,6 +1188,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
+        do { try validateOrigin() }
+        catch { return AsyncThrowingStream { $0.finish(throwing: error) } }
         var components = URLComponents(url: baseURL.appending(path: "v1/browser/stream"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "tabID", value: tabID)]
         var request = URLRequest(url: components.url!)
@@ -1377,16 +1379,20 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return value.statuses
     }
 
+    private func validateOrigin() throws {
+        guard baseURL.scheme == "http", baseURL.host == "127.0.0.1",
+              baseURL.user == nil, baseURL.password == nil, baseURL.query == nil, baseURL.fragment == nil else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace API must use its local Tailscale SSH tunnel.")
+        }
+    }
+
     private func request<Value: Decodable>(
         path: String,
         method: String,
         body: Data?,
         queryItems: [URLQueryItem]? = nil
     ) async throws -> Value {
-        guard baseURL.scheme == "http", baseURL.host == "127.0.0.1",
-              baseURL.user == nil, baseURL.password == nil, baseURL.query == nil, baseURL.fragment == nil else {
-            throw RemoteWorkspaceClientError.invalidResponse("The workspace API must use its local Tailscale SSH tunnel.")
-        }
+        try validateOrigin()
         let endpoint = baseURL.appending(path: path)
         guard var components = URLComponents(
             url: endpoint,

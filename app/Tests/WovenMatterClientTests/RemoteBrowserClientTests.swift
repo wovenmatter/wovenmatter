@@ -16,6 +16,21 @@ struct RemoteBrowserClientTests {
             try await old.browserTabs()
         }
     }
+    @Test func browserStreamsRejectNonTunnelOriginsBeforeSendingCredentials() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BrowserFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        for address in ["https://outside.invalid", "http://localhost:42007", "https://127.0.0.1:42007",
+                        "http://user@127.0.0.1:42007", "http://127.0.0.1:42007?query=value", "http://127.0.0.1:42007#fragment"] {
+            let client = RemoteWorkspaceServiceClient(baseURL: URL(string: address)!, token: "fixture", session: session)
+            var frames = client.browserFrames(tabID: "tab").makeAsyncIterator()
+            await #expect(throws: RemoteWorkspaceClientError.invalidResponse("The workspace API must use its local Tailscale SSH tunnel.")) {
+                try await frames.next()
+            }
+        }
+    }
+
     @Test func fragmentedStreamKeepsOnlyTheLatestImageAndRejectsOversizedFrames() async throws {
         let pair = AsyncThrowingStream<RemoteBrowserFrame, any Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let decoder = RemoteBrowserStreamDecoder(pair.continuation)
