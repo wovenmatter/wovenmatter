@@ -96,8 +96,9 @@ when an intentional design change is accepted.
   and workspace synchronization.
   OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
   Each subscription group shows one account with Reconnect/Remove, without
-  Add account, preferred/backup labels, or ordering controls. API keys retain their
-  account lists. Mobile permits one subscription connection per provider per device,
+  Add account, priority labels, or ordering controls. Show the subscription identity
+  without primary/backup wording. API-key lists show Primary followed by numbered
+  backups. Mobile permits one subscription connection per provider per device,
   with reconnect through the saved connection.
   OpenRouter, OpenCode, Exa, Brave, and Firecrawl show API-key controls directly when expanded.
   Keep their content at the same indentation as the content

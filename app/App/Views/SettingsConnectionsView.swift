@@ -170,7 +170,6 @@ struct SettingsConnectionsView: View {
                 SettingsNote("Claude signs in on each machine. Only profile names are shared; Claude tokens are not synced.")
             }
             if subscription {
-                SettingsNote("One subscription account per workspace.")
                 ForEach(accounts) { account in
                     HStack {
                         Text(account.label).font(.system(size: 12.5, weight: .medium))
@@ -204,7 +203,7 @@ struct SettingsConnectionsView: View {
                         HStack {
                             Text(account.label)
                             Spacer()
-                            Text(account.isSelected ? "Preferred" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
+                            Text(account.isSelected ? "Primary" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
                             Text("Credential saved").font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -216,7 +215,7 @@ struct SettingsConnectionsView: View {
                 }
             }
             if remote != nil && ["openai-codex", "xai"].contains(id) {
-                Text("An independent workspace sign-in replaces the shared account. It has no backup account.")
+                Text("An independent workspace sign-in replaces the shared account.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Use shared sign-in") { Task { await agent.signOut(id, remote: remote) } }
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)

@@ -49,7 +49,7 @@ need a workspace software update before they can expose SDK management.
 
 ChatGPT, Claude, and Grok each support one subscription account per workspace.
 API keys still support up to four accounts per connection type. Existing subscription
-account lists retain the preferred account and discard backup entries. Reconnect
+account lists keep the selected account and remove additional entries. Reconnect
 the current subscription or remove it before changing accounts.
 
 Fallback applies when a connection loses authentication or exhausts its available
