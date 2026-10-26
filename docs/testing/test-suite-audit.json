@@ -1117,7 +1117,8 @@
       "file": "ios/Tests/CompanionInferenceTests/InferenceOAuthTests.swift",
       "sha256": "3fbe3d6714fca485d29c178a21883093c81e3468eff9abff2437544861dff93c",
       "description": "Applied the same explicit credential/account case pairs to baseline and candidate. Independent JWT JSON serialization could otherwise prevent the mismatched-account fixture from being selected. Production sources are unchanged."
-    }
+    },
+    "production_change": "The iOS app migration reads its local record value before writing executionRecords, preventing a Swift exclusivity trap when reopening saved conversations. Existing app-hosted defaults and goal-restoration tests cover the fix; this file is outside package coverage."
   },
   "toolchain": {
     "xcode": "27.0 (27A5194q)",
@@ -1125,5 +1126,5 @@
     "architecture": "arm64"
   },
   "coverage_build_commit": "26f5e3952b11af34aa2b6485dad05e8430ab665b",
-  "coverage_source_equivalence": "All production sources and package graphs are identical between baseline and candidate. The deterministic OAuth credential fixture correction is applied to both sides."
+  "coverage_source_equivalence": "All production sources measured by package coverage and all package graphs are identical between baseline and candidate. The deterministic OAuth credential fixture correction is applied to both sides. DeviceExecution.swift belongs to the separate iOS app target and is outside this coverage measurement."
 }

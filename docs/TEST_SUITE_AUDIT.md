@@ -1,6 +1,6 @@
 # Test-suite audit — 2026-10-26
 
-Inventory and production-source baseline: `26f5e3952b11af34aa2b6485dad05e8430ab665b` (main after the dead-code cleanup). Production sources and dependency graphs are identical on both sides of the comparison.
+Inventory and production-source baseline: `26f5e3952b11af34aa2b6485dad05e8430ab665b` (main after the dead-code cleanup). The production sources measured by package coverage and all dependency graphs are identical on both sides. The separate iOS app target has one crash fix described below.
 
 The audit removes 245 named test definitions, from 1,222 to 977 (**20.05%**).
 Previously covered production Swift lines lose **1.9895%** of their coverage, equivalent to **0.9806 percentage points** with the executable-source denominator held fixed.
@@ -37,7 +37,7 @@ The primary gate is less than 2% relative loss of previously covered **lines**. 
 
 Both sides used Xcode 27.0 (27A5194q), Swift 6.4, arm64, `swiftbuild`, committed dependency graphs, and `--enable-code-coverage`. Fresh runs enumerated 722 baseline and 477 retained package/integration test definitions: 720 and 475 passed, respectively, with the same two existing environment-gated cases skipped on each side. After retaining the execution-revocation and approval-response regressions, all tests in their two rebuilt binaries were rerun; profiles were reused only for nine binaries verified byte-identical by SHA-256.
 
-The baseline exposed an existing fixture bug in `InferenceOAuthTests`: comparing independently serialized JWTs could fail to select the mismatched account, depending on JSON key order. Both baseline and candidate use the same explicit credential/account case pairs, preserving every assertion. The fixture file and hash are recorded in the JSON report. No production-source change is part of this PR.
+The baseline exposed an existing fixture bug in `InferenceOAuthTests`: comparing independently serialized JWTs could fail to select the mismatched account, depending on JSON key order. Both baseline and candidate use the same explicit credential/account case pairs, preserving every assertion. The fixture file and hash are recorded in the JSON report. The only production change is in the separate iOS app target: reopening saved conversations could trap on an overlapping dictionary read/write while migrating tool selections. The migration now reads the loop’s local record value before writing the dictionary. The existing defaults and goal-restoration tests caught this on iPhone. This file is outside package coverage; the measured sources and coverage results are unchanged.
 
 Each test ran in a separate process except the unchanged four-test `PiCodeModePolicyTests` class, which ran in normal XCTest order on both sides. That preserves its WebKit warm-up: isolating its approval-wait test exposed a cold-start timeout in the synthetic two-second watchdog on both sides, while complete classes and normal package runs passed unchanged. No timeout or assertion was weakened.
 
