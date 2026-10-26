@@ -1,13 +1,14 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
+import WovenMatterDashboardStore
 
 enum BackendOpenCodeCommand: Codable, Sendable {
     case browserURL
     case restore, resolve, download, stop, restart, suspend
     case connect(Bool)
     case serverPreferences(Bool, Bool)
-    case create(URL, UUID?, String?, String?, Bool)
+    case create(URL, UUID?, String?, String?, Bool, SessionCreationRoot)
     case importable(String?), importSession(OpenCodeValue)
     case sessionCall(String, String, String, OpenCodeValue?)
     case moveDraft(String, URL)
@@ -49,8 +50,8 @@ struct BackendOpenCodeService {
         case .suspend: await model.suspendConnection()
         case .connect(let start): try await model.connectLocal(allowStart: start)
         case .serverPreferences(let start, let stop): model.startServerOnLaunch = start; model.stopServerOnQuit = stop
-        case .create(let workspace, let id, let title, let native, let allowMissingCalendarFolder):
-            result.createdID = try await model.create(workspace: workspace, requestedConversationID: id, title: title, nativeWorkspaceID: native, allowMissingCalendarFolder: allowMissingCalendarFolder)
+        case .create(let workspace, let id, let title, let native, let allowMissingCalendarFolder, let executionRoot):
+            result.createdID = try await model.create(workspace: workspace, requestedConversationID: id, title: title, nativeWorkspaceID: native, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
         case .importable(let cursor):
             let page = try await model.importableSessions(cursor: cursor)
             result.sessions = page.sessions; result.next = page.next

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import AppKit
 import Foundation
 import SQLite3
@@ -56,8 +57,7 @@ struct CompanionFacadeTests {
     func folderDeletedDuringCreateAwaitLeavesNoSessionAndRetryIsStable(route: String) async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
-        let folder = try await fixture.database.createFolder(name: "Will be deleted")
-        try await fixture.database.bindFolderExecutionRoot(id: folder, location: .init(
+        let folder = try await fixture.database.createFolder(name: "Will be deleted", location: .init(
             workspaceID: try await fixture.model.executionWorkspaceIdentity(workspaceID: route == "remote" ? fixture.remote.id : nil),
             rootPath: fixture.directory.path, managed: false))
         let id = UUID().uuidString.lowercased()

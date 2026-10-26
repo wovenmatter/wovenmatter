@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -12,7 +13,7 @@ import WovenMatterCore
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let workspaceID = UUID()
-        let conversation = try await database.createRemoteACPSession(runtimeKind: .codex,
+        let conversation = try await database.createFixtureRemoteACPSession(runtimeKind: .codex,
             remoteWorkspaceID: workspaceID, remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: UUID())
         let run = try await database.beginLocalACPRun(conversationID: conversation, content: "first")
         // The allocated identity becomes durable before the first native claim.

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -11,7 +12,7 @@ struct CompanionWorkspaceTests {
   func deletion() async throws {
     let fixture = try CompanionFixture(); defer { fixture.remove() }
     let db = try await WorkspaceDatabase(url: fixture.url)
-    let folderID = try await db.createFolder(name: "Folder")
+    let folderID = try await db.createFixtureFolder(name: "Folder")
     let noteID = try await db.createNote(folderID: folderID, content: document("Writing"))
     let before = try await db.companionSnapshot()
     _ = try await db.deleteFolder(id: folderID)
@@ -52,7 +53,7 @@ struct CompanionWorkspaceTests {
   func mobileHistoryAndAgentRestore() async throws {
     let fixture = try CompanionFixture(); defer { fixture.remove() }
     let db = try await WorkspaceDatabase(url: fixture.url)
-    let caller = try await db.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+    let caller = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
     try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
     let noteID = UUID().uuidString.lowercased()
     let mobileCreate = CompanionMutation(deviceID: device, kind: .createNote, resourceID: noteID,

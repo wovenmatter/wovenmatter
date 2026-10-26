@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -10,8 +11,8 @@ struct WorkspaceCoordinationEventTests {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    let a = try await db.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let b = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
+    let a = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+    let b = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
     return (db, dir, a, b)
   }
 

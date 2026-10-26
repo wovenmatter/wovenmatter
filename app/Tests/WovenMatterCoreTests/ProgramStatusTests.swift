@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -13,7 +14,7 @@ struct ProgramStatusTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let session = try await database.createLocalACPSession(runtimeKind: kind, title: "Worker", ownerDeviceID: UUID())
+    let session = try await database.createFixtureLocalACPSession(runtimeKind: kind, title: "Worker", ownerDeviceID: UUID())
     let identity = ProgramStatusRunIdentity()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
       LocalACPSessionDriver(initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false) },
@@ -56,8 +57,8 @@ struct ProgramStatusTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let owner = UUID()
-    let caller = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Caller", ownerDeviceID: owner)
-    let target = access == "self" ? caller : try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Target", ownerDeviceID: owner)
+    let caller = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Caller", ownerDeviceID: owner)
+    let target = access == "self" ? caller : try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Target", ownerDeviceID: owner)
     try await database.setSessionTools(.init(enabled: access == "history" ? [.sessions, .history] : [.sessions]), sessionID: caller)
     if access == "attachment" { try await database.attachConversationReference(sourceID: caller, targetID: target) }
     if access == "managed" { try await database.recordSessionOrigin(sourceID: caller, targetID: target, purpose: "Fixture") }

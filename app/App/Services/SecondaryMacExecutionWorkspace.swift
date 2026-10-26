@@ -47,7 +47,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         let store = try await DashboardStore(supportDirectory: directory)
         let model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
                                      ownsExecutionOverride: true, workspaceAssets: assets)
-        try await model.configureClientExecutionWorkspace(directory: directory)
+        guard let ownerDeviceID = UUID(uuidString: state.deviceID) else { throw MobileStore.Failure.incompatibleStore }
+        try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.isClient ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
             capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])
@@ -248,7 +249,10 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         // Folder identities must be queued before notes that refer to them.
         for folder in execution.folders {
             if replicaState.folders[folder.id] == nil, projection.folders?[folder.id] == nil {
-                _ = try await replica.createFolder(name: folder.name, id: folder.id)
+                guard let binding = folder.execution else {
+                    throw CompanionAPIError(code: "execution_owner", message: "This folder has no captured execution workspace.")
+                }
+                _ = try await replica.createFolder(name: folder.name, id: folder.id, execution: binding)
             } else if let baseline = projection.folders?[folder.id], folder.name != baseline.name,
                       replicaState.folders[folder.id]?.name == baseline.name {
                 try await replica.renameFolder(id: folder.id, name: folder.name)
@@ -290,7 +294,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             let existing = execution.folders.first { $0.id == folder.id }
             if existing?.name != folder.name {
                 let mutation = CompanionMutation(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createFolder : .renameFolder,
-                    resourceID: folder.id, expectedRevision: existing?.revision, title: folder.name)
+                    resourceID: folder.id, expectedRevision: existing?.revision, title: folder.name, folderExecution: folder.execution)
                 try await applyProjection(mutation)
             }
         }

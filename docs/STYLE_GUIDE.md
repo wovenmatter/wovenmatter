@@ -124,7 +124,8 @@ when an intentional design change is accepted.
   section. Each Folders section starts with New folder, scoped to that workspace.
   Remote workspace names align with the local workspace heading; both use the same
   child indentation. All Workspaces sits above the workspaces, Trash below them,
-  and Recents remains global. Folder hover cards match chat previews and show the
+  and Recents remains global. Never add an Unassigned workspace section: folderless
+  chats appear in All Workspaces and still have an execution owner. Folder hover cards match chat previews and show the
   workspace, chat/note counts, root directory, and additional reference directories.
 - **Sidebar headers:** in Single and Adaptive layouts, mirror the header button
   order when the sidebar moves to the right, and point the workspace back arrow

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -11,7 +12,7 @@ struct GatewayAtomicProjectionTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Atomic", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Hello")
     let raw = #"{"event":"agent","payload":{"runId":"run","seq":1}}"#

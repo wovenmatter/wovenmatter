@@ -180,7 +180,7 @@ public actor MobileStore {
       for key in next.folders.keys.sorted() {
         next.folders[key]?.revision = 0
         next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .createFolder,
-          resourceID: key, title: next.folders[key]!.name)))
+          resourceID: key, title: next.folders[key]!.name, folderExecution: next.folders[key]!.execution)))
       }
       next.notes = next.notes.filter { $0.value.contentIncluded }
       for key in next.notes.keys.sorted() {
@@ -233,15 +233,27 @@ public actor MobileStore {
     }
     return result
   }
-  @discardableResult public func createFolder(name: String, id: String = UUID().uuidString.lowercased()) throws -> CompanionFolder {
+  @discardableResult public func createFolder(name: String, id: String = UUID().uuidString.lowercased(), execution: CompanionFolderExecution? = nil) throws -> CompanionFolder {
     if let existing = state.folders[id] {
       guard existing.name == name else { throw Failure.conflictingNote }; return existing
     }
     guard state.pendingFolderDeletions?[id] == nil else { throw Failure.conflictingNote }
-    let folder = CompanionFolder(id: id, name: name, revision: 0, updatedAt: Self.now)
+    guard UUID(uuidString: id) != nil else { throw Failure.conflictingNote }
+    let binding: CompanionFolderExecution
+    if let execution {
+      guard !execution.workspaceID.isEmpty, !execution.workspaceID.contains("\0"),
+            execution.rootPath.hasPrefix("/"), !execution.rootPath.contains("\0") else { throw Failure.conflictingNote }
+      binding = execution
+    } else {
+      let directory = file.deletingLastPathComponent().appendingPathComponent("ExecutionProjects", isDirectory: true)
+        .appendingPathComponent(id, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      binding = .init(workspaceID: "device:" + state.deviceID, rootPath: directory.path)
+    }
+    let folder = CompanionFolder(id: id, name: name, revision: 0, updatedAt: Self.now, execution: binding)
     try transaction { next in
       next.folders[folder.id] = folder
-      next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .createFolder, resourceID: folder.id, title: name)))
+      next.outbox.append(.init(mutation: .init(deviceID: next.deviceID, kind: .createFolder, resourceID: folder.id, title: name, folderExecution: binding)))
     }
     return folder
   }

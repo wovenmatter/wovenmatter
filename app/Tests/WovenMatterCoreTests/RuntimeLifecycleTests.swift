@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Darwin
 import Foundation
 import Testing
@@ -11,7 +12,7 @@ struct RuntimeLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
     let gate = RuntimeGate()
     let state = FakeRuntimeProcess()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in

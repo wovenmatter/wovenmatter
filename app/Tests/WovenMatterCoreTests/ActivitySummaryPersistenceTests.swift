@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -12,7 +13,7 @@ struct ActivitySummaryPersistenceTests {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Reconcile", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
     for id in ["keep", "obsolete"] {
@@ -58,7 +59,7 @@ struct ActivitySummaryPersistenceTests {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .opencode,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .opencode,
       title: "Snapshot", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "native"))
     let first: OpenCodeValue = ["id": "first", "type": "text", "text": "Checking\n"]
     let last: OpenCodeValue = ["id": "last", "type": "text", "text": "Answer\n"]
@@ -98,7 +99,7 @@ struct ActivitySummaryPersistenceTests {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
     let database = try await WorkspaceDatabase(url: fixture.databaseURL)
-    let conversation = try await database.createLocalACPSession(runtimeKind: .codex,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Parity", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
     let commentary = String(repeating: "Checking café 🧵.\n", count: 80)

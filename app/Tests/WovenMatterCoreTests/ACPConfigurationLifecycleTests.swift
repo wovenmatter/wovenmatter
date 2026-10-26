@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -11,8 +12,8 @@ struct ACPConfigurationLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let firstID = try await database.createLocalACPSession(runtimeKind: .codex, title: "Transfer", ownerDeviceID: UUID())
-    let secondID = try await database.createLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
+    let firstID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Transfer", ownerDeviceID: UUID())
+    let secondID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
     let first = SelectorDriverState(expectedExistingSessionID: nil)
     let second = SelectorDriverState(expectedExistingSessionID: nil)
     let drivers = SelectorDriverSequence([first, second])

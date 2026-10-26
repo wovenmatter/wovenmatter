@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import AppKit
 import Foundation
 import SQLite3
@@ -173,7 +174,7 @@ struct DesktopJourneyTests {
         try #require(ProcessInfo.processInfo.environment["CODEX_HOME"] == nil,
             "Run tests with CODEX_HOME unset so fixtures cannot read inherited credentials.")
         let f = try await FacadeFixture(); defer { f.remove() }
-        let id = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Passive", ownerDeviceID: UUID())
+        let id = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Passive", ownerDeviceID: UUID())
         let run = try await f.database.beginLocalACPRun(conversationID: id, content: "Retained private body")
         let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
         let native = "{\"token\":\"retained-protocol-token\",\"toolEndpoint\":\"\(capability)\"}"

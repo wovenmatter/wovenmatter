@@ -121,7 +121,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func companionFolderUnlocked(id: String) throws -> CompanionFolder? {
-    let statement = try prepareUnlocked("SELECT id, name, updated_at FROM folders WHERE id = ? AND user_id = ?")
+    let statement = try prepareUnlocked("SELECT id, name, updated_at, (SELECT workspace_id FROM folder_execution_roots WHERE folder_id=folders.id), (SELECT root_path FROM folder_execution_roots WHERE folder_id=folders.id) FROM folders WHERE id = ? AND user_id = ?")
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement); try bind(localMutationOperatorIDUnlocked(), at: 2, to: statement)
     let code = sqlite3_step(statement)
@@ -129,7 +129,10 @@ extension WorkspaceDatabaseConnection {
     guard code == SQLITE_ROW else { throw stepError() }
     return try CompanionFolder(id: text(statement, column: 0), name: text(statement, column: 1),
                                revision: companionVersionUnlocked(kind: "folder", id: id)?.revision ?? 1,
-                               updatedAt: text(statement, column: 2))
+                               updatedAt: text(statement, column: 2),
+                               execution: optionalText(statement, column: 3).flatMap { owner in
+                                 optionalText(statement, column: 4).map { .init(workspaceID: owner, rootPath: $0) }
+                               })
   }
 
   func companionNoteUnlocked(id: String) throws -> CompanionNote? {

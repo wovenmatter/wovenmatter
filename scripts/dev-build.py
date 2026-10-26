@@ -78,8 +78,8 @@ def copy_assets(source, target):
         raise ValueError(f"Unsupported snapshot asset: {source}")
 
 
-def disconnect_snapshot(file):
-    """Retain content/history; discard copied authority and executable bindings."""
+def disconnect_snapshot(file, *, device_id, execution_root, published_root):
+    """Keep ownership/history; disable copied execution and isolate test projects."""
     with sqlite3.connect(file) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         # Preserve triggers verbatim, but avoid firing application-specific SQLite
@@ -88,12 +88,29 @@ def disconnect_snapshot(file):
         quote = lambda name: '"' + name.replace('"', '""') + '"'
         for name, _ in triggers:
             db.execute("DROP TRIGGER " + quote(name))
+        source_device = (db.execute("SELECT device_id FROM desktop_local_identity WHERE singleton=1").fetchone()
+                         if "desktop_local_identity" in tables else None)
+        # Ownership is durable metadata. Availability is a separate history state;
+        # copied conversations never acquire authority to resume against production.
+        if "dashboard_conversations" in tables:
+            columns = {r[1] for r in db.execute("PRAGMA table_info(dashboard_conversations)")}
+            if {"desktop_owned", "is_archived"} <= columns:
+                db.execute("CREATE TABLE IF NOT EXISTS retained_execution_history(conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE)")
+                db.execute("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM dashboard_conversations WHERE desktop_owned=1 AND is_archived=0")
+                db.execute("UPDATE dashboard_conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history)")
+        if source_device and "folder_execution_roots" in tables:
+            # Each source-local project keeps its folder identity and relationship,
+            # with a new owner and blank directory inside this disposable instance.
+            owner = "device:" + device_id
+            for (folder_id,) in db.execute("SELECT folder_id FROM folder_execution_roots WHERE workspace_id=?", ("device:" + source_device[0],)).fetchall():
+                directory = execution_root / str(uuid.UUID(folder_id))
+                directory.mkdir(parents=True)
+                db.execute("UPDATE folder_execution_roots SET workspace_id=?,root_path=?,managed=1,reference_paths='[]' WHERE folder_id=?",
+                           (owner, str(published_root / str(uuid.UUID(folder_id))), folder_id))
         transient = {"desktop_local_identity", "desktop_local_acp_sessions", "desktop_local_acp_durable_runs",
                      "desktop_opencode_sessions", "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
                      "desktop_openclaw_gateway_sessions", "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs",
-                     "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts",
-                     "folder_execution_roots", "session_execution_roots", "session_scratch_directories",
-                     "execution_workspace_defaults"}
+                     "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts"}
         retained_content = {"companion_versions", "companion_changes", "companion_execution_workspaces",
                             "companion_execution_conversations", "companion_execution_runs", "companion_native_history",
                             "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks"}
@@ -177,7 +194,12 @@ def snapshot(source, destination):
                 row["url"] = (destination / "ManagedDatabases" / (identifier + ".sqlite")).as_uri()
                 row["owner"] = "snapshot-history"
             catalog.write_text(json.dumps(rows))
-        disconnect_snapshot(temporary / "workspace.sqlite")
+        device_id = str(uuid.uuid4())
+        execution_root = temporary / "ExecutionHome" / ".woven-matter"
+        disconnect_snapshot(temporary / "workspace.sqlite", device_id=device_id, execution_root=execution_root,
+                            published_root=destination / "ExecutionHome" / ".woven-matter")
+        (temporary / "dashboard-device-id").write_text(device_id)
+        (temporary / "dashboard-device-id").chmod(0o600)
         (temporary / "development-snapshot.json").write_text(json.dumps({"version": 1, "id": str(uuid.uuid4()), "source": str(source), "createdAt": time.time()}))
         os.rename(temporary, destination)
     finally:

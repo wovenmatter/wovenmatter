@@ -47,6 +47,9 @@ extension WorkspaceDatabaseConnection {
         UNIQUE(workspace_id, root_path)
       );
       CREATE TABLE IF NOT EXISTS execution_workspace_defaults (workspace_id TEXT PRIMARY KEY, default_path TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS retained_execution_history (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS session_execution_roots (
         conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
         root_path TEXT NOT NULL, folder_locked INTEGER NOT NULL DEFAULT 0
@@ -372,8 +375,10 @@ extension WorkspaceDatabaseConnection {
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
       try createCompanionSchemaUnlocked()
-      // Prior sessions stay in history but have no supported execution root.
-      try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE desktop_owned=1 AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations WHERE id=dashboard_conversations.id)")
+      // Legacy transcripts have explicit read-only status; absence of ownership
+      // is never used to make newly created sessions executable.
+      try executeUnlocked("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM dashboard_conversations WHERE desktop_owned=1 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations WHERE id=dashboard_conversations.id)")
+      try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history)")
     }
   }
 
@@ -435,6 +440,7 @@ extension WorkspaceDatabaseConnection {
       "folders",
       "folder_execution_roots",
       "session_execution_roots",
+      "retained_execution_history",
       "surface_profiles",
       "dashboard_agents",
       "dashboard_conversations",

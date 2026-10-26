@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 @testable import WovenMatterAppFacade
 import Foundation
 import Testing
@@ -40,7 +41,7 @@ struct LibraryModelTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let chat = try await database.createLocalACPSession(runtimeKind: .codex, title: "Reports", ownerDeviceID: UUID())
+        let chat = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Reports", ownerDeviceID: UUID())
         let source = root.appending(path: "budget.csv")
         let bytes = Data("Category,Amount\nTravel,120".utf8)
         try bytes.write(to: source)
@@ -72,7 +73,7 @@ struct LibraryModelTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let chat = try await database.createLocalACPSession(runtimeKind: .codex, title: "Library", ownerDeviceID: UUID())
+        let chat = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Library", ownerDeviceID: UUID())
         func add(_ text: String) async throws {
             let run = try await database.beginLocalACPRun(conversationID: chat, content: text)
             try await database.completeLocalACPRun(runID: run.runID)

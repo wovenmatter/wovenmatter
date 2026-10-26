@@ -339,8 +339,14 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot? = nil) async throws -> String {
-        if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder)).createdID ?? "" }
+    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot) async throws -> String {
+        if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder, executionRoot)).createdID ?? "" }
+        let owner: String
+        if let configuration = remoteConfiguration { owner = "remote:" + configuration.id.uuidString.lowercased() }
+        else { owner = try await store.executionWorkspaceID() }
+        guard executionRoot.location.workspaceID == owner else {
+            throw OpenCodeError.message("Create this chat in its owning execution workspace.")
+        }
         guard isEnabled else { throw OpenCodeError.message("Install and connect OpenCode in this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
@@ -365,8 +371,7 @@ final class OpenCodeModel {
                     ?? sessionPreferences.usesProductPermissionDefault(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
             defaults.set(try JSONEncoder().encode(captured), forKey: selectionKey)
         }
-        if let executionRoot,
-           URL(fileURLWithPath: captured.nativeDirectory).standardizedFileURL.path != URL(fileURLWithPath: executionRoot.location.rootPath).standardizedFileURL.path {
+        if URL(fileURLWithPath: captured.nativeDirectory).standardizedFileURL.path != URL(fileURLWithPath: executionRoot.location.rootPath).standardizedFileURL.path {
             throw OpenCodeError.message("Retry this chat in its original folder. Its execution directory is already fixed.")
         }
         defaults.set(id, forKey: pendingKey)
@@ -409,11 +414,18 @@ final class OpenCodeModel {
         busy = true
         defer { busy = false }
         let snapshot = try await coordinator.completeImportSnapshot(connectionID: connectionID, sessionID: id)
-        _ = try await open(snapshot.info, importedSnapshot: snapshot)
+        guard let directory = snapshot.info["location"]["directory"].string,
+              directory.hasPrefix("/"), !directory.contains("\0") else {
+            throw OpenCodeError.message("This transcript has no execution directory to retain.")
+        }
+        let location = WorkspaceFolderLocation(workspaceID: try await store.executionWorkspaceID(),
+            rootPath: directory, managed: false)
+        _ = try await open(snapshot.info, importedSnapshot: snapshot,
+            executionRoot: .init(folderID: nil, location: location, defaultPath: directory))
     }
 
     private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil,
-                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot? = nil) async throws -> String {
+                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
