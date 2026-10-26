@@ -291,10 +291,12 @@ def run_mcp():
 
     try:
         while True:
-            line = sys.stdin.readline(REQUEST_LIMIT + 1)
+            # MCP carries authored input; only the CLI-to-app relay carries the
+            # larger prepared page after local image embedding.
+            line = sys.stdin.readline(4 * 1024 * 1024 + 1)
             if not line:
                 return
-            if len(line.encode()) > REQUEST_LIMIT:
+            if len(line.encode()) > 4 * 1024 * 1024:
                 raise ValueError("MCP request exceeds 4 MiB.")
             request = json.loads(line)
             method, identity = request.get("method"), request.get("id")
