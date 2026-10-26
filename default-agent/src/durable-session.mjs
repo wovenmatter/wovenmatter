@@ -238,7 +238,10 @@ export async function openDurableSession(engine, id, requested) {
     const loader = new DefaultResourceLoader({ cwd, agentDir: engine.directory, settingsManager, noExtensions: true, noThemes: true });
     await loader.reload();
     let codemode;
-    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key), checklistTool,
+    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => {
+      const provider = engine.config.searchProvider;
+      return { provider, key: (await engine.credentials.read(provider))?.key };
+    }), checklistTool,
       ...automationTools(() => (toolScopes.getStore() ?? record).cli.environment(process.env))];
     record.ordinaryTools.push('browser', 'computer');
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });

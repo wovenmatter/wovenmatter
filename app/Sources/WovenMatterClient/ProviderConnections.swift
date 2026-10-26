@@ -10,6 +10,10 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
     case openRouter = "openrouter"
     case openCodeGo = "opencode-go"
     case exa
+    case brave
+    case firecrawl
+    public static let searchProviders: [Self] = [.exa, .brave, .firecrawl]
+    public var isSearchProvider: Bool { Self.searchProviders.contains(self) }
     public var id: String { rawValue }
     public var name: String {
         switch self {
@@ -22,6 +26,8 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
         case .openRouter: "OpenRouter"
         case .openCodeGo: "OpenCode Go"
         case .exa: "Exa search"
+        case .brave: "Brave Search"
+        case .firecrawl: "Firecrawl"
         }
     }
     public var isSubscription: Bool { self == .chatGPT || self == .grok || self == .claudeSubscription }
@@ -256,7 +262,7 @@ public actor ProviderConnectionStore {
     }
     nonisolated public static func readStored(_ scope: String) throws -> [String: [ProviderConnectionAccounts.Account]] {
         var values: [String: [ProviderConnectionAccounts.Account]] = [:]
-        for provider in ["openai-codex", "openai", "claude-subscription", "anthropic", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
+        for provider in ProviderConnectionID.allCases.map(\.rawValue) + ["cursor"] {
             values[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: scope)
         }
         return values
