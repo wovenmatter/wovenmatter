@@ -7,7 +7,7 @@ import WovenMatterCore
 @MainActor
 struct RemoteWorkspaceSettingsTests {
     @Test func remoteToolBridgeUsesTheTailnetTransport() throws {
-        let arguments = try WovenMatterRemoteToolBridge.sshArguments(
+        let arguments = try WovenMCPRemoteBridge.sshArguments(
             destination: "woven@worker",
             command: "docker exec fixture",
             tailnetOptions: { destination in
