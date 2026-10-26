@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { validateConnection } from './binding.mjs';
+import { prepareHTMLTool } from './html-resources.mjs';
 
 const maximumBody = 4 * 1024 * 1024;
 const equal = (left, right) => {
@@ -27,10 +28,20 @@ export async function createMCPProxy({ getConnection, contextFor = () => undefin
         const message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (message.method === 'tools/call' && message.params && typeof message.params === 'object' && !Array.isArray(message.params)) {
           const params = message.params;
+          let prepared;
+          try { prepared = await prepareHTMLTool(params.name, params.arguments ?? {}); }
+          catch (error) {
+            response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id ?? null,
+              result: { isError: true, content: [{ type: 'text', text: error.message }] } }));
+            return;
+          }
+          params.arguments = prepared.arguments;
           // Only the hook/plugin's exact UUID association may supply capture.
           // Ignore any model-authored or stale context metadata.
           const capture = params.name === 'woven_context' ? await contextFor(params.arguments?.requestID) : undefined;
           params._meta = { ...params._meta };
+          if (prepared.missingImages) params._meta.wovenHTMLMissingImages = prepared.missingImages;
           delete params._meta.wovenContextID;
           if (capture) params._meta.wovenContextID = capture;
           message.params = params;

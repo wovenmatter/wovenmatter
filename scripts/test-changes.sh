@@ -53,6 +53,7 @@ run_package_tests() {
     RemoteAttachmentStagingTests
     RemoteBrowserViewerTests
     WorkspaceAgentToolsServiceTests
+    ConversationHTMLWebKitTests
     NativeHarnessArchiveTests
     NativeFramePrivacyTests
     NativeJSONSearchProjectionTests
@@ -106,6 +107,10 @@ run_app_build() {
     build
   scripts/validate-native-app.sh \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
+  env WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
+    CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
+    swift test --force-resolved-versions --package-path app --scratch-path "$swift_scratch" \
+      --skip-build --filter packagedHTMLToolsWorkAcrossHarnesses
   # The fixture substitutes CEF entry points; it does not launch Chromium.
   local browser_build="${derived_data}/Build/Intermediates.noindex/WovenMatter.build/Debug/WovenMatter.build/DerivedSources/cef-${host_arch}"
   make -C "$browser_build" WovenBrowserLifecycleTests >/dev/null

@@ -24,10 +24,21 @@ public enum WovenMCPCatalog {
     try request(name: name, arguments: .object(arguments), contextID: contextID)
   }
 
-  public static func request(name: String, arguments: GatewayJSONValue, contextID: String? = nil) throws -> WovenMatterToolRequest {
+  public static func request(name: String, arguments: GatewayJSONValue, contextID: String? = nil,
+                             metadata: GatewayJSONValue? = nil) throws -> WovenMatterToolRequest {
     guard let entry = entries.first(where: { $0.definition.name == name }) else { throw invalid("Unknown Woven tool: \(name).") }
     guard let values = arguments.objectValue else { throw invalid("Tool arguments must be an object.") }
-    try validate(arguments, schema: entry.definition.inputSchema, path: "arguments")
+    var validationSchema = entry.definition.inputSchema
+    if entry.command.first == "html", entry.automation,
+       var schema = validationSchema.objectValue, var properties = schema["properties"]?.objectValue,
+       var html = properties["html"]?.objectValue {
+      // Native clients validate the authored schema before inlining images.
+      // The owner validates the larger prepared page without reading its paths.
+      html["maxLength"] = .number(Double(ConversationHTMLResources.maximumPageBytes))
+      properties["html"] = .object(html); schema["properties"] = .object(properties)
+      validationSchema = .object(schema)
+    }
+    try validate(arguments, schema: validationSchema, path: "arguments")
     let requestID: String
     if let supplied = values["requestID"]?.stringValue {
       guard let uuid = UUID(uuidString: supplied) else { throw invalid("requestID must be a UUID.") }
@@ -36,6 +47,15 @@ public enum WovenMCPCatalog {
     var command = entry.command
     if entry.automation {
       var input = values; input.removeValue(forKey: "requestID")
+      if entry.command.first == "html" {
+        input["action"] = .string(name == "woven_html_render" ? "render" : "preview")
+        if name == "woven_html_preview", let missing = metadata?.objectValue?["wovenHTMLMissingImages"] {
+          guard let paths = missing.arrayValue, paths.allSatisfy({ ($0.stringValue?.utf8.count ?? Int.max) <= 8192 }) else {
+            throw invalid("Invalid missing-image diagnostics.")
+          }
+          input["missingImages"] = missing
+        }
+      }
       command += ["--json", try encoded(.object(input))]
     } else {
       for field in entry.fields where field.name != "requestID" {
@@ -133,7 +153,7 @@ public enum WovenMCPCatalog {
 
   private static let entries: [Entry] = {
     var result: [Entry] = []
-    func add(_ path: String, _ fields: [Field] = [], required: String = "", mutation: Bool = false, description: String? = nil, name: String? = nil, automation: Bool = false) {
+    func add(_ path: String, _ fields: [Field] = [], required: String = "", mutation: Bool = false, description: String? = nil, name: String? = nil, automation: Bool = false, idempotent: Bool? = nil) {
       let command = path.split(separator: " ").map(String.init)
       let toolName = name ?? "woven_" + command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
       let fields = fields + [requestID]
@@ -143,11 +163,20 @@ public enum WovenMCPCatalog {
         "required": .array(required.sorted().map(GatewayJSONValue.string))])
       let detail = description ?? "\(path.replacingOccurrences(of: "-", with: " ").capitalized) using the authenticated caller's current Woven permissions."
       let text = detail + (mutation ? " Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect." : "")
+      var annotations: [String: GatewayJSONValue] = ["readOnlyHint": .bool(!mutation), "openWorldHint": .bool(true)]
+      if let idempotent { annotations["idempotentHint"] = .bool(idempotent); annotations["destructiveHint"] = .bool(false) }
       result.append(.init(definition: .init(name: toolName, description: text, inputSchema: schema,
-        annotations: .object(["readOnlyHint": .bool(!mutation), "openWorldHint": .bool(true)])),
+        annotations: .object(annotations)),
         command: command, fields: fields, required: required, mutation: mutation, automation: automation))
     }
     add("context", description: "Read the asset ID captured for the consumed user message. Switching the visible asset does not change this capture. Requires Notes access. Scheduled, agent-originated and outside-agent messages have no implicit UI asset capture.")
+    let html = Field(name: "html", option: "html", schema: .object(["type": .string("string"), "minLength": .number(1), "maxLength": .number(512000)]))
+    let title = Field(name: "title", option: "title", schema: .object(["type": .string("string"), "minLength": .number(1), "maxLength": .number(200)]))
+    add("html call", [html, title, field("height", type: "integer", minimum: 80, maximum: 2000)], required: "html title height",
+        description: "Publish interactive HTML above your final reply in this conversation. Use woven_html_preview first. Inline CSS/JavaScript or external HTTPS resources; absolute local image paths in HTML/CSS/JavaScript are embedded on the invoking machine (10 MiB each, 25 MiB prepared page). Use theme variables --background, --foreground, --primary, --muted, --muted-foreground, --border, --card, --chart-1 through --chart-6, --radius, --font-sans, --font-mono. Make the layout responsive; content sets height, never use vh units. Pages stay isolated from the app/session. Do not restate the page in your written reply.", name: "woven_html_render", automation: true, idempotent: false)
+    add("html call", [html, field("width", type: "integer", minimum: 240, maximum: 1600), field("appearance", choices: ["light", "dark"])], required: "html",
+        description: "Preview HTML before publishing. Returns PNG, contentHeight, console messages and missing-image diagnostics. Width defaults to 728; use 390 for phones. Appearance defaults to dark. Native harness clients embed local images before transport; external resources follow CORS and platform transport policy. Requires the Woven Matter app open; publishing does not.", name: "woven_html_preview", automation: true, idempotent: true)
+    add("html cancel", [id], required: "id", description: "Cancel this caller's HTML preview by operation UUID, or all.", idempotent: true)
     add("databases list")
     add("databases create", fields("title"), required: "title", mutation: true)
     for action in ["query", "execute"] { add("databases " + action, fields("database-id query"), required: "databaseID query", mutation: action == "execute", description: "\(action == "query" ? "Read" : "Modify") the execution workspace's managed SQLite database. Database writes are not replayable after an uncertain outcome; query current data before another write.") }

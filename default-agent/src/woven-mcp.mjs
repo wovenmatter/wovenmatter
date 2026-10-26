@@ -2,6 +2,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { randomUUID } from 'node:crypto';
 import { Type } from 'typebox';
 import { validateMCPConnection } from './mcp-context.mjs';
+import { prepareHTMLTool } from '../../harnesses/mcp/html-resources.mjs';
 
 // App connection material is supplied by the native execution owner, never by
 // model arguments, workspace configuration, shell environment or saved history.
@@ -57,15 +58,17 @@ export class WovenMCPClient {
     signal?.throwIfAborted();
     // Explicit request identity is distinct from MCP's transport request id.
     // The backend returns it in structured results for deliberate retry.
-    const params = { name, arguments: { ...input, requestID },
-      ...(bound.captureID ? { _meta: { wovenContextID: bound.captureID } } : {}) };
+    const prepared = await prepareHTMLTool(name, input);
+    const params = { name, arguments: { ...prepared.arguments, requestID },
+      _meta: { ...(bound.captureID ? { wovenContextID: bound.captureID } : {}),
+        ...(prepared.missingImages ? { wovenHTMLMissingImages: prepared.missingImages } : {}) } };
     try {
       return await client.callTool(params, { signal, timeout: 24 * 60 * 60 * 1000, maxTotalTimeout: 24 * 60 * 60 * 1000 });
     } catch (error) {
-      if (signal?.aborted && ['woven_browser', 'woven_computer'].includes(name)) {
+      if (signal?.aborted && ['woven_browser', 'woven_computer', 'woven_html_preview'].includes(name)) {
         // Cancellation is scoped to the already accepted operation and uses
         // the exact input authority captured before the original network call.
-        await client.callTool({ name: `${name}_cancel`, arguments: { id: requestID },
+        await client.callTool({ name: name === 'woven_html_preview' ? 'woven_html_cancel' : `${name}_cancel`, arguments: { id: requestID },
           ...(bound.captureID ? { _meta: { wovenContextID: bound.captureID } } : {}) },
         { signal: AbortSignal.timeout(3000), timeout: 3000 }).catch(() => {});
       }
@@ -85,7 +88,7 @@ export function wovenMCPTools(definitions, client, connection) {
     name: definition.name, label: definition.title ?? definition.name,
     description: definition.description ?? '', parameters: Type.Unsafe(definition.inputSchema),
     // Only server-declared reads can replay after interrupted native execution.
-    replay: definition.annotations?.readOnlyHint === true ? 'safe' : 'unsafe',
+    replay: definition.annotations?.readOnlyHint === true && definition.annotations?.idempotentHint !== false ? 'safe' : 'unsafe',
     execute: async (_id, input, signal) => {
       const bound = connection();
       const result = await client.callTool(bound, definition.name, input, signal);

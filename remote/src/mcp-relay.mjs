@@ -4,6 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 
 const digest = value => createHash('sha256').update(value).digest()
 const MAX_BYTES = 4 * 1024 * 1024
+const HTML_MAX_BYTES = 40 * 1024 * 1024
 
 // This is an HTTP transport for an already-authorized Woven session. SSH only
 // carries framed MCP requests; it never supplies model-visible shell commands.
@@ -33,10 +34,13 @@ export async function runMCPRelay({input = process.stdin, output = process.stdou
     try {
       for await (const chunk of request) {
         bytes += chunk.length
-        if (bytes > MAX_BYTES) { response.writeHead(413); response.end(); return }
+        if (bytes > HTML_MAX_BYTES) { response.writeHead(413); response.end(); return }
         chunks.push(chunk)
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      if (bytes > MAX_BYTES && !(body.method === 'tools/call' && ['woven_html_preview', 'woven_html_render'].includes(body.params?.name))) {
+        response.writeHead(413); response.end(); return
+      }
       const timer = setTimeout(() => {
         calls.delete(id); send({type: 'cancel', id}); response.writeHead(504); response.end()
       }, timeoutMilliseconds)

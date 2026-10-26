@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs'
 const fail = (statusCode, message) => Object.assign(new Error(message), {statusCode})
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const hash = value => createHash('sha256').update(value).digest('hex')
-const groups = new Set(['notes','history','sessions','goals','timers','usage','calendar','library','executor','browser','computer'])
+const groups = new Set(['notes','history','sessions','goals','timers','usage','calendar','library','executor','browser','computer','html'])
+export const maximumMCPRequestBytes = message => message?.method === 'tools/call' && ['woven_html_preview','woven_html_render'].includes(message.params?.name) ? 40*1024*1024 : 4*1024*1024
 const groupFor = name => name === 'woven_context' || name.startsWith('woven_databases_') ? 'notes' : name.split('_')[1]
 const errorReply = (id, code, message) => ({jsonrpc:'2.0',id:id??null,error:{code,message}})
 const result = value => value.result?.content ? {content:value.result.content,structuredContent:{success:value.success,requestID:value.requestID},isError:value.success===false}
@@ -93,7 +94,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   function provisionClient(body) {
     if(!uuid(body.conversationID)||typeof body.label!=='string'||!body.label.trim()||body.label.length>256)throw fail(400,'Choose an existing conversation and client label.')
     policy(body.conversationID)
-    const enabledGroups=body.enabledGroups??['notes','history','sessions','goals','usage','calendar','library']
+    const enabledGroups=body.enabledGroups??['notes','history','sessions','goals','usage','calendar','library','html']
     if(!Array.isArray(enabledGroups)||enabledGroups.some(group=>!groups.has(group)))throw fail(400,'Invalid MCP client capabilities.')
     const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups)],createdAt:new Date(now()).toISOString()}
     db.prepare('INSERT INTO mcp_external_clients VALUES(?,?,?)').run(scope.id,hash(bearerToken),JSON.stringify(scope))
@@ -103,7 +104,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   function clients(){return db.prepare('SELECT body FROM mcp_external_clients ORDER BY id').all().map(row=>JSON.parse(row.body))}
   function revokeClient(id){db.prepare('DELETE FROM mcp_external_clients WHERE id=?').run(id);return {revoked:true}}
   function activeGroups(scope) {
-    const current=new Set(taskPolicies.get(scope.conversationID)??policy(scope.conversationID))
+    const current=new Set([...(taskPolicies.get(scope.conversationID)??policy(scope.conversationID)),'html'])
     return scope.enabledGroups?new Set(scope.enabledGroups.filter(group=>current.has(group))):current
   }
   function inventory(scope) {
@@ -118,7 +119,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const current=activeGroups(scope),hasLibrary=!!libraryGrant()
     return inventory(scope).filter(tool=>{
       const group=groupFor(tool.name)
-      const cleanup=['woven_browser_cancel','woven_computer_cancel'].includes(tool.name)
+      const cleanup=['woven_browser_cancel','woven_computer_cancel','woven_html_cancel'].includes(tool.name)
       const scopedHistory=!scope.taskProof&&group==='history'&&scopedHistoryAccess(scope)
       const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'||group==='browser'&&local.has(tool.name)
       const transport=scope.taskProof?(localTask||hasLibrary):(local.has(tool.name)||hasLibrary)
@@ -190,7 +191,11 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       if(message.method!=='tools/call')return errorReply(id,-32601,'Method not found.')
       const name=message.params?.name,input=message.params?.arguments??{},tool=definition.get(name)
       if(!tool||!available(scope).some(item=>item.name===name))return errorReply(id,-32602,'This Woven tool is unavailable or disabled for this caller.')
-      try {validateInput(tool.inputSchema,input);if(input.requestID!==undefined&&!uuid(input.requestID))throw fail(400,'requestID must be a UUID.')} catch(error) {return errorReply(id,-32602,error.message)}
+      // Authored HTML is bounded on the invoking host before local images are
+      // embedded. Only its prepared representation may use the larger budget.
+      const schema=groupFor(name)==='html'&&tool.inputSchema.properties.html
+        ? {...tool.inputSchema,properties:{...tool.inputSchema.properties,html:{...tool.inputSchema.properties.html,maxLength:25*1024*1024}}} : tool.inputSchema
+      try {validateInput(schema,input);if(input.requestID!==undefined&&!uuid(input.requestID))throw fail(400,'requestID must be a UUID.')} catch(error) {return errorReply(id,-32602,error.message)}
       operationRequestID=input.requestID?.toLowerCase()??randomUUID()
       requestKey=scope.id+':'+JSON.stringify(id)
       if(inFlight.size>=32||[...inFlight.keys()].filter(key=>key.startsWith(scope.id+':')).length>=8)return errorReply(id,-32000,'The Woven MCP service is busy. Retry with the same requestID after an active call finishes.')

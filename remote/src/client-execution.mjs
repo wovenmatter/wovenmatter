@@ -565,7 +565,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   }
   const publisher = createClientExecutionPublisher({db,identity:descriptor,secret:publisherKey,events,
     flush:()=>{for(const id of dirty.keys())flush(id)},fetchImpl:publisherFetch,intervalMilliseconds:publisherIntervalMilliseconds})
-  const allToolGroups=['notes','history','sessions','goals','timers','usage','calendar','library','browser','computer','executor']
+  const allToolGroups=['notes','history','sessions','goals','timers','usage','calendar','library','browser','computer','executor','html']
   const toolLabels={notes:'Notes',history:'Conversation history',sessions:'Session management',timers:'Timers',usage:'Usage data',calendar:'Calendar',library:'Library',browser:'Browser Use',computer:'Computer Use',executor:'Executor'}
   const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
     'woven_sessions_list','woven_sessions_status','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
@@ -649,7 +649,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (request?.session) {
         const record = getRecord(request.session.id)
         const settings = await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
-        return {session:{_0:{...settings,availableTools:allToolGroups.filter(id=>id!=='goals').map(id=>({id,label:toolLabels[id]})),enabledTools:record.enabledTools??mcp.settings().enabledByDefault,conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
+        return {session:{_0:{...settings,availableTools:allToolGroups.filter(id=>!['goals','html'].includes(id)).map(id=>({id,label:toolLabels[id]})),enabledTools:record.enabledTools??mcp.settings().enabledByDefault,conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
       }
       if (request?.exportConversation) {
         const {id,format}=request.exportConversation, record=getRecord(id)

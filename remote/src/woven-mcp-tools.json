@@ -22,6 +22,112 @@
   },
   {
     "annotations" : {
+      "destructiveHint" : false,
+      "idempotentHint" : false,
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Publish interactive HTML above your final reply in this conversation. Use woven_html_preview first. Inline CSS/JavaScript or external HTTPS resources; absolute local image paths in HTML/CSS/JavaScript are embedded on the invoking machine (10 MiB each, 25 MiB prepared page). Use theme variables --background, --foreground, --primary, --muted, --muted-foreground, --border, --card, --chart-1 through --chart-6, --radius, --font-sans, --font-mono. Make the layout responsive; content sets height, never use vh units. Pages stay isolated from the app/session. Do not restate the page in your written reply.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "height" : {
+          "maximum" : 2000,
+          "minimum" : 80,
+          "type" : "integer"
+        },
+        "html" : {
+          "maxLength" : 512000,
+          "minLength" : 1,
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "title" : {
+          "maxLength" : 200,
+          "minLength" : 1,
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "height",
+        "html",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_html_render"
+  },
+  {
+    "annotations" : {
+      "destructiveHint" : false,
+      "idempotentHint" : true,
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Preview HTML before publishing. Returns PNG, contentHeight, console messages and missing-image diagnostics. Width defaults to 728; use 390 for phones. Appearance defaults to dark. Native harness clients embed local images before transport; external resources follow CORS and platform transport policy. Requires the Woven Matter app open; publishing does not.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "appearance" : {
+          "enum" : [
+            "light",
+            "dark"
+          ],
+          "type" : "string"
+        },
+        "html" : {
+          "maxLength" : 512000,
+          "minLength" : 1,
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "width" : {
+          "maximum" : 1600,
+          "minimum" : 240,
+          "type" : "integer"
+        }
+      },
+      "required" : [
+        "html"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_html_preview"
+  },
+  {
+    "annotations" : {
+      "destructiveHint" : false,
+      "idempotentHint" : true,
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Cancel this caller's HTML preview by operation UUID, or all.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_html_cancel"
+  },
+  {
+    "annotations" : {
       "openWorldHint" : true,
       "readOnlyHint" : true
     },

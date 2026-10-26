@@ -184,10 +184,10 @@ struct ACPSessionPermissionTests {
     }
 
 
-    @Test(arguments: [false, true]) func codexReceivesSessionBoundWovenHTTPMCP(loading: Bool) async throws {
-        let fixture = try PermissionFixture(kind: .codex, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild], [false, true]) func nativeHarnessReceivesSessionBoundWovenHTTPMCP(kind: AgentRuntimeKind, loading: Bool) async throws {
+        let fixture = try PermissionFixture(kind: kind, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex, executableURL: fixture.executable, arguments: [])
+        var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: kind, executableURL: fixture.executable, arguments: kind == .grokBuild ? ["agent", "stdio"] : [])
         launch.mcpConnection = .init(endpointURL: "http://127.0.0.1:43129/mcp", bearerToken: "fixture-session-bearer", captureID: "input")
         let client = try LocalACPClient.start(launch: launch, workingDirectory: fixture.root)
         do {

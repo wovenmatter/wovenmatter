@@ -181,12 +181,16 @@ struct ConversationWorkTranscript: View {
                                         isTail: entry.id == tailID
                                     )
                                 case .activity(let activity):
+                                    if activity.htmlRender != nil {
+                                        ConversationHTMLRenderView(activity: activity, runID: run.id)
+                                    } else {
                                     ConversationActivityRow(
                                         activity: activity,
                                         runID: run.id,
                                         runStatus: run.status,
                                         showsProgress: activity.workTimelineShowsProgress
                                     )
+                                    }
                                 }
                             }
                         }

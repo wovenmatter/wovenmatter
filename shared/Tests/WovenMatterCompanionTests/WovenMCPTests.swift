@@ -106,6 +106,27 @@ struct WovenMCPTests {
     #expect(input.objectValue?["requestID"] == nil)
   }
 
+  @Test func htmlContractMapsPreparedPagesWithoutMakingPublicationReplayable() throws {
+    let render = try #require(WovenMCPCatalog.tools.first { $0.name == "woven_html_render" })
+    let preview = try #require(WovenMCPCatalog.tools.first { $0.name == "woven_html_preview" })
+    #expect(render.inputSchema.objectValue?["properties"]?.objectValue?["html"]?.objectValue?["maxLength"] == .number(512_000))
+    #expect(render.annotations.objectValue?["idempotentHint"] == .bool(false))
+    #expect(preview.annotations.objectValue?["idempotentHint"] == .bool(true))
+    let html = "<img src='data:image/png;base64," + String(repeating: "A", count: 600_000) + "'>"
+    let request = try WovenMCPCatalog.request(name: render.name, arguments: ["html": .string(html), "title": .string("Chart"), "height": .number(160)])
+    let command = try WovenMatterToolCommand(request.arguments)
+    let page = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+    #expect(command.group == .html)
+    #expect(page.objectValue?["action"] == .string("render"))
+    #expect(page.objectValue?["html"] == .string(html))
+    let message: GatewayJSONValue = .object(["method": .string("tools/call"), "params": .object(["name": .string(render.name)])])
+    #expect(WovenMCPServer.maximumRequestBytes(for: message) == 40 * 1024 * 1024)
+    #expect(WovenMCPServer.maximumRequestBytes(for: .object(["method": .string("tools/list")])) == 4 * 1024 * 1024)
+    #expect(throws: WorkspaceToolError.self) {
+      try WovenMCPCatalog.request(name: render.name, arguments: ["html": .string("<p>Chart</p>"), "title": .string("Chart"), "height": .number(160), "conversationID": .string("forged")])
+    }
+  }
+
   @Test func jsonRPCIdentityAndNotifications() async throws {
     let response = await WovenMCPServer.handle(.object(["jsonrpc": .string("2.0"), "id": .number(7), "method": .string("tools/call"),
       "params": .object(["name": .string("woven_goals_get"), "arguments": .object([:])])])) { request in

@@ -100,7 +100,7 @@ final class WovenMCPRemoteBridge: @unchecked Sendable {
                 var pending = Data()
                 while let chunk = try output.read(upToCount: 65_536), !chunk.isEmpty {
                     pending.append(chunk)
-                    guard pending.count <= 8 * 1_024 * 1_024 else { throw WorkspaceToolError.invalid("The MCP relay frame is too large.") }
+                    guard pending.count <= 64 * 1_024 * 1_024 else { throw WorkspaceToolError.invalid("The MCP relay frame is too large.") }
                     while let newline = pending.firstIndex(of: 10) {
                         let line = Data(pending[..<newline]); pending.removeSubrange(...newline)
                         let packet = try JSONDecoder().decode(GatewayJSONValue.self, from: line)

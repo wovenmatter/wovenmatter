@@ -25,8 +25,8 @@ private extension CompanionWorkspaceAPI {
         guard request.method == "POST" else {
             throw CompanionAPIError(code: "method_not_allowed", message: "Woven MCP uses HTTP POST for JSON-RPC requests.")
         }
-        guard request.body.count <= 4 * 1_024 * 1_024 else {
-            throw CompanionAPIError(code: "too_large", message: "The MCP request exceeds 4 MiB.")
+        guard request.body.count <= WovenMatterToolRequest.maximumHTMLRequestBytes else {
+            throw CompanionAPIError(code: "too_large", message: "The MCP request exceeds its size limit.")
         }
         guard request.headers["origin"] == nil else {
             throw CompanionAPIError(code: "invalid_origin", message: "Browser-origin MCP requests are unavailable on this device route.")
@@ -46,6 +46,9 @@ private extension CompanionWorkspaceAPI {
         let message: GatewayJSONValue
         do { message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body) }
         catch { throw MCPMalformedJSON() }
+        guard request.body.count <= WovenMCPServer.maximumRequestBytes(for: message) else {
+            throw CompanionAPIError(code: "too_large", message: "The MCP request exceeds its size limit.")
+        }
         let capture = request.headers["x-woven-context-id"]
             ?? message.objectValue?["params"]?.objectValue?["_meta"]?.objectValue?["wovenContextID"]?.stringValue
         guard (capture?.utf8.count ?? 0) <= 128 else {

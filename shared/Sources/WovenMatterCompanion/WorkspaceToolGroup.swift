@@ -1,11 +1,11 @@
 import Foundation
 
 public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sendable {
-  case notes, history, sessions, goals, timers, usage, calendar, library, executor, browser, computer
-  /// Goals are always available; only optional tools appear in selection controls.
-  public static var configurableCases: [Self] { allCases.filter { $0 != .goals } }
+  case notes, history, sessions, goals, timers, usage, calendar, library, executor, browser, computer, html
+  /// Goals and visual replies are always available; only optional tools have switches.
+  public static var configurableCases: [Self] { allCases.filter { $0 != .goals && $0 != .html } }
   public var id: String { rawValue }
-  public var isAutomation: Bool { self == .browser || self == .computer }
+  public var isAutomation: Bool { self == .browser || self == .computer || self == .html }
   public var title: String {
     switch self {
     case .notes: "Notes"
@@ -19,6 +19,7 @@ public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sen
     case .executor: "Executor"
     case .browser: "Browser Use"
     case .computer: "Computer Use"
+    case .html: "Visual replies"
     }
   }
 }
