@@ -8,7 +8,24 @@ struct SettingsBackgroundServerView: View {
     @State private var workspaceID: UUID?
     @State private var confirmationAction: String?
     @State private var error: String?
-    @State private var busy = false
+    @State private var actionInProgress: String?
+    @State private var availability = ServerAvailability.checking
+
+    private enum ServerAvailability {
+        case checking, running, stopped, unavailable
+        var label: String {
+            switch self {
+            case .checking: "Checking server…"
+            case .running: "Running"
+            case .stopped: "Stopped"
+            case .unavailable: "Server unavailable"
+            }
+        }
+    }
+
+    private var leaseURL: URL {
+        get throws { try ApplicationModel.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName) }
+    }
 
     var body: some View {
         SettingsPage(title: "Background Server", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
@@ -20,13 +37,25 @@ struct SettingsBackgroundServerView: View {
                     }
                 }
                 if workspaceID == nil {
-                    HStack {
-                        Button("Start") { perform("start") }
-                        Button("Stop", role: .destructive) { perform("stop") }
-                        Button("Restart") { perform("restart") }
+                    HStack(spacing: 12) {
+                        if let actionInProgress {
+                            ProgressView().controlSize(.small)
+                            Text(actionInProgress == "start" ? "Starting server…" : actionInProgress == "restart" ? "Restarting server…" : "Stopping server…")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text(availability.label).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if availability == .stopped {
+                                Button("Start") { perform("start") }
+                            } else if availability == .running {
+                                Button("Stop", role: .destructive) { perform("stop") }
+                                Button("Restart") { perform("restart") }
+                            }
+                        }
                     }
+                    .frame(minHeight: 32)
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(busy || !model.isBackendFrontend)
+                    .disabled(!model.isBackendFrontend)
                     if DevelopmentLaunch.mode != nil {
                         Text("This development profile uses its own server and data.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -34,7 +63,7 @@ struct SettingsBackgroundServerView: View {
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
-            RuntimeInspectionView(model: model, workspaceID: workspaceID)
+            RuntimeInspectionView(model: model, workspaceID: workspaceID, onConnectionChange: observeConnection)
                 .id(workspaceID)
         }
         .alert("Stop current work?", isPresented: Binding(get: { confirmationAction != nil }, set: { if !$0 { confirmationAction = nil } })) {
@@ -49,21 +78,37 @@ struct SettingsBackgroundServerView: View {
         }
     }
 
+    private func observeConnection(_ connected: Bool) {
+        guard workspaceID == nil, actionInProgress == nil else { return }
+        if connected { availability = .running; return }
+        // A failed RPC alone cannot prove that an execution owner stopped.
+        do { availability = try WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: leaseURL) ? .unavailable : .stopped }
+        catch { availability = .unavailable }
+    }
+
     private func perform(_ action: String, confirmed: Bool = false) {
-        guard !busy else { return }
-        busy = true; error = nil
+        guard actionInProgress == nil else { return }
+        actionInProgress = action; error = nil
         Task {
-            defer { busy = false }
+            defer { actionInProgress = nil }
             do {
-                if action == "start" { try await model.startBackgroundServer(); return }
+                if action == "start" {
+                    try await model.startBackgroundServer()
+                    availability = .running
+                    return
+                }
                 let result = try await model.stopBackgroundServer(confirmed: confirmed)
                 if result.confirmationRequired { confirmationAction = action; return }
+                try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(leaseURL: leaseURL)
+                availability = .stopped
                 if action == "restart" {
-                    try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(
-                        leaseURL: ApplicationModel.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName))
                     try await model.startBackgroundServer()
+                    availability = .running
                 }
-            } catch { self.error = error.localizedDescription }
+            } catch {
+                self.error = error.localizedDescription
+                availability = .unavailable
+            }
         }
     }
 }
@@ -72,28 +117,10 @@ struct RuntimeInspectionView: View {
     @Bindable var model: ApplicationModel
     var workspaceID: UUID?
     var conversationID: String?
+    var onConnectionChange: ((Bool) -> Void)?
     @State private var snapshot: RuntimeInspection?
     @State private var connected = false
     @State private var error: String?
-
-    private func depth(_ item: RuntimeInspection.Item, in items: [RuntimeInspection.Item]) -> Int {
-        var parent = item.parentID, visited: Set<String> = [item.id], depth = 0
-        while let id = parent, let next = items.first(where: { $0.id == id }), visited.insert(id).inserted, depth < 6 {
-            depth += 1; parent = next.parentID
-        }
-        return depth
-    }
-    private func ordered(_ items: [RuntimeInspection.Item]) -> [RuntimeInspection.Item] {
-        var result: [RuntimeInspection.Item] = [], seen: Set<String> = []
-        func append(_ item: RuntimeInspection.Item) {
-            guard seen.insert(item.id).inserted else { return }
-            result.append(item)
-            for child in items.filter({ $0.parentID == item.id }).sorted(by: { $0.title < $1.title }) { append(child) }
-        }
-        for item in items where item.parentID == nil || !items.contains(where: { $0.id == item.parentID }) { append(item) }
-        for item in items { append(item) }
-        return result
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -105,28 +132,7 @@ struct RuntimeInspectionView: View {
             if let snapshot {
                 Text("\(connected ? "Observed" : "Last observed") \(snapshot.observedAt.formatted(date: .abbreviated, time: .standard))")
                     .font(.caption).foregroundStyle(.secondary)
-                ForEach(ordered(snapshot.items)) { item in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(item.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
-                            Spacer()
-                            Text(connected ? item.state.capitalized : "Last: \(item.state)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        HStack(spacing: 12) {
-                            Text(item.kind.capitalized)
-                            if let pid = item.processID { Text("PID \(pid)").monospacedDigit() }
-                            if let memory = item.residentBytes { Text(ByteCountFormatter.string(fromByteCount: memory, countStyle: .memory)) }
-                            if let cpu = item.cpuPercent { Text(String(format: "%.1f%% CPU", cpu)).monospacedDigit() }
-                        }.font(.caption).foregroundStyle(.secondary)
-                        if let detail = item.detail, !detail.isEmpty {
-                            Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
-                        }
-                    }
-                    .padding(.leading, CGFloat(depth(item, in: snapshot.items)) * 12)
-                    .padding(.vertical, 6)
-                    Divider()
-                }
+                RuntimeInspectionTree(items: snapshot.items, connected: connected)
                 if snapshot.items.isEmpty { Text("No managed activity in this scope.").font(.caption).foregroundStyle(.secondary) }
             } else {
                 Text(error ?? "Waiting for the execution owner…").font(.caption).foregroundStyle(.secondary)
@@ -139,9 +145,11 @@ struct RuntimeInspectionView: View {
                     let value = try await model.runtimeInspection(.init(workspaceID: workspaceID, conversationID: conversationID))
                     guard !Task.isCancelled else { return }
                     snapshot = value; connected = true; error = nil
+                    onConnectionChange?(true)
                 } catch {
                     guard !Task.isCancelled else { return }
                     connected = false; self.error = error.localizedDescription
+                    onConnectionChange?(false)
                 }
                 do { try await Task.sleep(for: .seconds(3)) } catch { return }
             }

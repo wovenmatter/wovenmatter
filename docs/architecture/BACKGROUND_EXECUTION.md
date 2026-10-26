@@ -218,6 +218,12 @@ confirmation and waits for the old owner to release its lease before starting.
 Closing the app leaves the production server running. Start reconnects a stopped
 server. A missing server never promotes the UI into an execution owner.
 
+Controls follow observed ownership: a responsive server offers Stop/Restart;
+Start appears only after its local execution lease is confirmed unowned. An
+unresponsive lease owner is unavailable, not stopped. Owner groups use one shared
+surface and connected compact branches, rather than full-width dividers between
+indented peer-looking rows.
+
 Inspect chat activity opens a conversation-scoped tab alongside notes and browser
 tabs. Inspection is passive and does not start Pi workers or replay agent input.
 Disconnected inspectors retain their last observation with its timestamp and mark

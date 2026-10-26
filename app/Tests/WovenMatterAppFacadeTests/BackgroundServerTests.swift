@@ -6,6 +6,36 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct BackgroundServerTests {
+    @Test func missingLeaseDoesNotCreateAnOwnerOrAFile() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        #expect(try !WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: file))
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func unresponsiveOwnerStaysPresentUntilItsProcessReleasesTheLease() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let owner = Process(), input = Pipe(), output = Pipe()
+        owner.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        owner.arguments = ["-c", """
+        import fcntl, sys
+        with open(sys.argv[1], 'w+') as file:
+            fcntl.lockf(file, fcntl.LOCK_EX)
+            print('ready', flush=True)
+            sys.stdin.read(1)
+        """, file.path]
+        owner.standardInput = input; owner.standardOutput = output
+        try owner.run()
+        defer { if owner.isRunning { owner.terminate(); owner.waitUntilExit() } }
+        #expect(String(decoding: output.fileHandleForReading.availableData, as: UTF8.self).contains("ready"))
+        // No RPC endpoint exists, but another process still owns execution.
+        #expect(try WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: file))
+        try input.fileHandleForWriting.write(contentsOf: Data([1]))
+        owner.waitUntilExit()
+        #expect(try !WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: file))
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
     @Test func legacyOffPreferenceCannotMakeTheProductionUIAnExecutionOwner() {
         #expect(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false) == .frontend)
         #expect(!LocalExecutionRole.frontend.ownsExecution)

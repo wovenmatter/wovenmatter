@@ -420,6 +420,22 @@ enum WovenMatterBackendProcess {
         }
     }
 
+    /// Observe the lease without creating a file, claiming it, or launching work.
+    static func executionOwnerIsPresent(leaseURL: URL) throws -> Bool {
+        let descriptor = Darwin.open(leaseURL.path, O_RDWR | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return false }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, metadata.st_uid == getuid(),
+              (metadata.st_mode & S_IFMT) == S_IFREG else { throw POSIXError(.EPERM) }
+        if Darwin.lockf(descriptor, F_TEST, 0) == 0 { return false }
+        guard errno == EACCES || errno == EAGAIN else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        return true
+    }
+
     static func waitForExecutionOwnerToExit(leaseURL: URL) async throws {
         let descriptor = Darwin.open(leaseURL.path, O_RDWR | O_NOFOLLOW)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }

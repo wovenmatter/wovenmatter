@@ -160,6 +160,7 @@
 		D2446456FA6CA90EADAABF29 /* RemoteHarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */; };
 		FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000002 /* SettingsBackgroundServerView.swift */; };
 		FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */; };
+		FBC100000000000000000005 /* RuntimeInspectionTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000006 /* RuntimeInspectionTree.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -314,6 +315,7 @@
 		A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHarnessSetupView.swift; sourceTree = "<group>"; };
 		FBC100000000000000000002 /* SettingsBackgroundServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/SettingsBackgroundServerView.swift"; sourceTree = SOURCE_ROOT; };
 		FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+RuntimeInspection.swift"; sourceTree = SOURCE_ROOT; };
+		FBC100000000000000000006 /* RuntimeInspectionTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RuntimeInspectionTree.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -493,6 +495,7 @@
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
 				FBC100000000000000000002 /* SettingsBackgroundServerView.swift */,
+				FBC100000000000000000006 /* RuntimeInspectionTree.swift */,
 				013E364D3F71552BF924C602 /* SettingsDictationView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
 				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
@@ -802,6 +805,7 @@
 				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
 				FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */,
 				FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */,
+				FBC100000000000000000005 /* RuntimeInspectionTree.swift in Sources */,
 				A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */,
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
