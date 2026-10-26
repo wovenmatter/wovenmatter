@@ -474,11 +474,10 @@ struct DashboardSidebarNavigationPage: View {
                     }
                 }
             }
-            // Keep folders from disconnected/deleted configurations and legacy
-            // unassigned folders reachable without claiming they belong to this Mac.
+            // A disconnected workspace retains its captured folder ownership.
             ForEach(unavailableFolderOwnerIDs, id: \.self) { ownerID in
                 let key = "unavailable-workspace:" + ownerID
-                let title = ownerID.isEmpty ? "Unassigned workspace" : "Unavailable workspace"
+                let title = "Unavailable workspace"
                 agentDisclosureHeading(title: title, key: key)
                 if agentSectionExpanded(key) {
                     workspaceContents(
@@ -495,7 +494,7 @@ struct DashboardSidebarNavigationPage: View {
     private var unavailableFolderOwnerIDs: [String] {
         let known = Set(remoteWorkspaceLinks.map { "remote:" + $0.id.uuidString.lowercased() }
             + [localExecutionWorkspaceID].compactMap { $0 })
-        return Set(folders.map { $0.executionWorkspaceID ?? "" }).subtracting(known).sorted()
+        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty }).subtracting(known).sorted()
     }
 
     @ViewBuilder
@@ -707,7 +706,7 @@ struct DashboardSidebarNavigationPage: View {
 
     private func canCreateChat(workspaceID: String?) -> Bool {
         let owner = folders.first { $0.id == selectedFolderID }?.executionWorkspaceID
-        return owner == nil || owner == workspaceID
+        return selectedFolderID == nil || (owner != nil && owner == workspaceID)
     }
 
     private func newChatButton(label: String, action: @escaping () -> Void) -> some View {

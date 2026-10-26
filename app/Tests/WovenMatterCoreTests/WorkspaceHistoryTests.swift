@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -89,7 +90,7 @@ struct WorkspaceHistoryTests {
   @Test func nativePayloadsSurviveReopenAndSearchWithStablePagination() async throws {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
-    let conversation = try await db.createLocalACPSession(
+    let conversation = try await db.createFixtureLocalACPSession(
       runtimeKind: .claudeCode, title: "Pi", ownerDeviceID: UUID())
     let run = try await db.beginLocalACPRun(conversationID: conversation, content: "research")
     let raw =

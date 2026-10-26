@@ -527,13 +527,13 @@ final class ApplicationModel {
 
     /// Starts only the optional execution workspace belonging to a library client.
     /// Its database stores runtime state and a replica projection, never library authority.
-    func configureClientExecutionWorkspace(directory: URL) async throws {
+    func configureClientExecutionWorkspace(directory: URL, executionWorkspaceDeviceID: UUID? = nil) async throws {
         guard !isLibraryClient, !isBackendFrontend, let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
         clientExecutionDirectory = directory
-        try await dashboardStore.prepareLocalWorkspace()
+        try await dashboardStore.prepareLocalWorkspace(executionWorkspaceDeviceID: executionWorkspaceDeviceID)
         await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
             await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
         }
@@ -3312,8 +3312,12 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind
     ) async throws -> RemoteHarnessLaunchContext {
-        let savedDirectory = try await dashboardStore?.database.sessionExecutionRoot(id: conversation.id)?.rootPath
-        let inheritedRoot = savedDirectory.map { URL(fileURLWithPath: $0) }
+        guard !conversation.isArchived,
+              let savedRoot = try await dashboardStore?.database.availableSessionExecutionRoot(id: conversation.id),
+              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+            throw WorkspaceToolError.invalid("This chat has no available execution workspace. Start a new chat.")
+        }
+        let inheritedRoot = URL(fileURLWithPath: savedRoot.rootPath)
         if let remoteWorkspaceID = conversation.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(
                 id: remoteWorkspaceID
@@ -3336,18 +3340,12 @@ final class ApplicationModel {
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw ApplicationModelError.localACPRuntimeUnavailable
         }
-        if let inheritedRoot {
-            var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
-                executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
-                processWorkingDirectoryURL: inheritedRoot)
-            scopedLaunch.historyRecorder = launch.historyRecorder
-            return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
-                databasesURL: workspace.databasesURL))
-        }
-        return RemoteHarnessLaunchContext(
-            launch: launch,
-            workspace: workspace
-        )
+        var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
+            executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
+            processWorkingDirectoryURL: inheritedRoot)
+        scopedLaunch.historyRecorder = launch.historyRecorder
+        return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
+            databasesURL: workspace.databasesURL))
     }
 
     func runtimeMaintenanceBusy(_ kind: AgentRuntimeKind) -> Bool {
@@ -5235,7 +5233,7 @@ extension ApplicationModel {
     func executionWorkspaceIdentity(workspaceID: UUID?) async throws -> String {
         if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return "device:" + (try await store.dashboardDeviceID()).uuidString.lowercased()
+        return try await store.executionWorkspaceID()
     }
 
     func folderWorkingDirectory(folderID: String?, workspaceID: UUID?, explicit: URL? = nil,
@@ -5257,24 +5255,6 @@ extension ApplicationModel {
             guard let snapshot = try await dashboardStore?.database.workspaceOverview(),
                   let folder = snapshot.folders.first(where: { $0.id == folderID }) else {
                 throw WorkspaceToolError.invalid("This folder is no longer available.")
-            }
-            if folder.executionWorkspaceID == nil {
-                guard clientExecutionDirectory == nil else {
-                    throw WorkspaceToolError.invalid("This shared folder has no execution root on this instance. Create a folder here or use All Workspaces.")
-                }
-                guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-                let path: String
-                if let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) {
-                    path = try await remoteWorkspaces.createProject(name: folder.name, in: configuration, reuseExisting: true).path
-                } else if workspaceID == nil, let workspace = localACPWorkspaceLaunchConfiguration {
-                    path = try LocalACPWorkspaceProvisioner.createProject(named: folder.name, in: workspace.rootURL, reuseExisting: true).path
-                } else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
-                // Existing directories remain user-owned, including after a retry.
-                try await database.bindFolderExecutionRoot(id: folderID,
-                    location: .init(workspaceID: owner, rootPath: path, managed: false))
-                await refreshWorkspace()
-                return URL(fileURLWithPath: path)
             }
             guard folder.executionWorkspaceID == owner, let path = folder.rootPath else {
                 throw WorkspaceToolError.invalid("Select a folder owned by this agent's workspace, or All Workspaces.")

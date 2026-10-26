@@ -55,11 +55,12 @@ let package = Package(
         .linkedFramework("Security")
       ]
     ),
+    .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(
       name: "WovenMatterCoreTests",
       dependencies: [
         "WovenMatterCore",
-        "WovenMatterDashboardStore"
+        "WovenMatterDashboardStore", "WorkspaceFixtures"
       ]
     ),
     .testTarget(
@@ -87,12 +88,12 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterAgentToolsTests",
-      dependencies: ["WovenMatterAppFacade", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
+      dependencies: ["WovenMatterAppFacade", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WorkspaceFixtures"],
       path: "App/Tests"
     ),
     .testTarget(
       name: "WovenMatterAppFacadeTests",
-      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", .product(name: "CompanionClient", package: "ios")]
+      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", "WorkspaceFixtures", .product(name: "CompanionClient", package: "ios")]
     )
   ]
 )

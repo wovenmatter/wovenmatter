@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -14,8 +15,8 @@ struct WorkspaceConversationActionsTests {
     init() async throws {
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-      chat = try await db.createLocalACPSession(runtimeKind: .codex, title: "New Codex chat", ownerDeviceID: UUID())
-      try await db.saveSessionExecutionRoot(id: chat, folderID: nil, location: location, defaultPath: root.path)
+      chat = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "New Codex chat", ownerDeviceID: UUID(),
+        fixtureLocation: .init(workspaceID: "device:test", rootPath: root.path, managed: false))
     }
     var location: WorkspaceFolderLocation { .init(workspaceID: "device:test", rootPath: root.path, managed: false) }
     func close() { try? FileManager.default.removeItem(at: root) }
@@ -127,7 +128,7 @@ struct WorkspaceConversationActionsTests {
     let text = String(decoding: data, as: UTF8.self)
     #expect(text.contains("Tool output") && text.contains("end of history") && text.contains("retained"))
     #expect(json?["schemaVersion"]?.intValue == 1)
-    let other = try await f.db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other chat", ownerDeviceID: UUID())
+    let other = try await f.db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other chat", ownerDeviceID: UUID())
     let unrelated = try await f.db.beginLocalACPRun(conversationID: other, content: "Other private content")
     try await f.db.completeLocalACPRun(runID: unrelated.runID)
     #expect(!String(decoding: try await f.db.conversationExport(id: f.chat, format: .fullRun), as: UTF8.self).contains("Other private content"))

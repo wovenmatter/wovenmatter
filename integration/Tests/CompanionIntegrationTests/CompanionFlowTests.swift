@@ -328,7 +328,8 @@ struct CompanionFlowTests {
   func freshNoteAndCommandReceipt() async throws {
     let fixture = try await FlowFixture(); defer { fixture.remove() }
     let note = try await fixture.mobile.createNote(folderID: nil, title: "Plan", content: richDocument("Use this idea"))
-    let conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Fixture session", ownerDeviceID: UUID())
+    let conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Fixture session", ownerDeviceID: UUID(),
+      executionRoot: .init(folderID: nil, location: .init(workspaceID: "device:fixture", rootPath: "/fixture", managed: false), defaultPath: "/fixture"))
     let engine = MobileSyncEngine(store: fixture.mobile, transport: fixture.transport)
     let command = CompanionCommand(deviceID: fixture.credential.deviceID, kind: .send, conversationID: conversationID, text: "Work from my note", noteID: note.id)
     await fixture.transport.dropNextCommandAcknowledgement()
@@ -350,7 +351,8 @@ struct CompanionFlowTests {
   @Test("disconnect and host stop reject new writes while an accepted Mac-owned run completes")
   func stoppedHostKeepsAcceptedWork() async throws {
     let fixture = try await FlowFixture(); defer { fixture.remove() }
-    let conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Long fake run", ownerDeviceID: UUID())
+    let conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Long fake run", ownerDeviceID: UUID(),
+      executionRoot: .init(folderID: nil, location: .init(workspaceID: "device:fixture", rootPath: "/fixture", managed: false), defaultPath: "/fixture"))
     fixture.commands.holdCommands = true
     let engine = MobileSyncEngine(store: fixture.mobile, transport: fixture.transport)
     let command = CompanionCommand(deviceID: fixture.credential.deviceID, kind: .send, conversationID: conversationID, text: "Continue on Mac")
@@ -565,8 +567,12 @@ private final class FakeCommands: CompanionCommandServing {
       case .createSession:
         guard command.providerID == "local:codex" else { throw MobileConnectionError.invalidResponse }
         let requestedID = try #require(UUID(uuidString: conversationID))
-        let location = WorkspaceFolderLocation(workspaceID: "device:fixture", rootPath: "/fixture", managed: false)
-        if let folderID = command.folderID { try await database.bindFolderExecutionRoot(id: folderID, location: location) }
+        let location: WorkspaceFolderLocation
+        if let folderID = command.folderID,
+           let folder = try await database.workspaceOverview().folders.first(where: { $0.id == folderID }),
+           let owner = folder.executionWorkspaceID, let root = folder.rootPath {
+          location = .init(workspaceID: owner, rootPath: root, managed: false)
+        } else { location = .init(workspaceID: "device:fixture", rootPath: "/fixture", managed: false) }
         _ = try await database.createLocalACPSession(runtimeKind: .codex,
             title: command.text ?? "Fixture mobile conversation", ownerDeviceID: UUID(),
             requestedConversationID: requestedID, executionRoot: .init(folderID: command.folderID, location: location, defaultPath: "/fixture"))

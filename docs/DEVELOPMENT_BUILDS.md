@@ -86,10 +86,16 @@ The first snapshot launch takes an online SQLite backup from
 `--source DIRECTORY` for another local library/export directory. The source is
 opened read-only. Required library files, message attachments, and managed data
 are copied into the new profile; SQLite assets use online backup too. Project
-repositories and external working directories are not cloned or reused.
+repositories and external working directories are not cloned or reused. Source-local
+folders retain their identities and content relationships, with new blank project
+directories and a new owner inside the snapshot's isolated execution home. Production
+reference-directory bindings are not made executable in the copy. Other workspace
+ownership is retained without copying its connection grants.
 
 The copy preserves content and history while removing connection grants, host
-identity, native session bindings, and pending execution. Copied local agent records
+identity, native session bindings, and pending execution. Captured chat workspace
+ownership and roots remain as history metadata; an explicit retained-history state
+makes copied chats read-only independently of their ownership. Copied local agent records
 remain available to history but are retired from the active catalog; startup creates
 one local agent for each harness under the snapshot's new device identity. Existing task definitions
 remain visible but have a detached owner; create a new schedule in the snapshot
@@ -99,8 +105,10 @@ a fresh identity and no production connections or copied grants. Its separate
 Device Connections endpoint can be paired explicitly to test host/API changes;
 it never synchronizes back to production.
 
-Subsequent launches reopen the same snapshot and preserve its edits. To test a
-new migration against fresh production data, choose a new `--instance` name.
+Snapshots are disposable development environments. They never merge changes back
+into the source library, and all their data may be discarded when the instance is
+removed. Subsequent launches reuse the same instance; use a new `--instance` for a
+fresh snapshot. Existing snapshots are not repaired or migrated by the launcher.
 The launcher refuses to overwrite an existing snapshot. It publishes a newly
 created snapshot only after backup, isolation, asset-copy, and integrity checks
 succeed. Symlinked assets and overlapping source/destination paths are rejected.

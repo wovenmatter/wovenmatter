@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -51,8 +52,7 @@ struct WorkspaceExecutionRootTests {
       .init(workspaceID: owner, rootPath: root.appending(path: name).path, managed: false)
     }
     func draft() async throws -> String {
-      let id = try await db.createLocalACPSession(runtimeKind: .codex, title: "Draft", ownerDeviceID: UUID())
-      try await db.saveSessionExecutionRoot(id: id, folderID: nil, location: location("Ungrouped"), defaultPath: location("Ungrouped").rootPath)
+      let id = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Draft", ownerDeviceID: UUID(), fixtureLocation: location("Ungrouped"))
       return id
     }
   }

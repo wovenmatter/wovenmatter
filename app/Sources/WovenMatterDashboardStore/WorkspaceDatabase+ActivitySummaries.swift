@@ -207,7 +207,7 @@ extension WorkspaceDatabaseConnection {
         WHERE r.id=? AND c.id=? AND (c.user_id=? OR c.desktop_owned=1)
           AND c.deleted_at IS NULL
           AND (c.is_archived=0 OR (c.desktop_owned=1
-            AND NOT EXISTS (SELECT 1 FROM session_execution_roots WHERE conversation_id=c.id)))
+            AND EXISTS (SELECT 1 FROM retained_execution_history WHERE conversation_id=c.id)))
           AND c.governing_plane='wovenmatter_macos'
         """)
       defer { sqlite3_finalize(access) }

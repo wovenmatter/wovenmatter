@@ -37,11 +37,13 @@ the Mac or `/home/.woven-matter/scratch` in its remote workspace. Woven creates
 the directory when the chat launches, with a date, the first words of its initial
 message, and a short chat ID. The directory starts blank. Retries, resumes and
 title changes keep the same directory; deleting the chat keeps its working files.
-Scratch is reserved for these chat directories. Older sidebar folders become
-fixed to the selected execution workspace on first use, with a directory named
-for the folder. Existing files are preserved and these legacy roots are never
-marked for managed physical deletion. An unsent draft can still choose
-a project folder before its first message. Sessions
+Scratch is reserved for these chat directories. Chats and project folders must
+have an execution workspace and directory when they are created. A disconnected
+workspace keeps that ownership; choosing another agent never assigns or changes
+it. Folderless chats remain in All Workspaces with their own execution workspace.
+Client-created folders carry their execution owner and root through synchronization.
+Older clients that omit this binding must update before creating folders.
+An unsent draft can still choose a project folder before its first message. Sessions
 from the former workspace layout remain readable as archived history and cannot
 be resumed; start a new chat for further work. Their existing files remain in
 place.

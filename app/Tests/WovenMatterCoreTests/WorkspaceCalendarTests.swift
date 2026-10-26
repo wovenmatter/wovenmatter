@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -96,7 +97,7 @@ struct WorkspaceCalendarTests {
   @Test func remoteReceiptSurvivesDeletedFolderAndReplayAfterReopen() async throws {
     let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let workspace = UUID(), owner = UUID(), start = date("2026-09-22T12:00:00Z")
-    let folder = try await db.createFolder(name: "Remote results")
+    let folder = try await db.createFixtureFolder(name: "Remote results")
     var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
     remoteTask.configuration.folderID = folder
     let eventID = try await db.saveCalendarEvent(draft: .init(title: "Remote", startsAt: start, task: remoteTask), creating: true, now: start)
@@ -109,7 +110,7 @@ struct WorkspaceCalendarTests {
     try await db.deleteFolder(id: folder)
     // The fallback belongs to completed-result import, not new execution.
     await #expect(throws: WorkspaceNoteMutationError.folderNotFound) {
-      try await db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: workspace,
+      try await db.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: workspace,
         remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: owner,
         requestedConversationID: UUID(uuidString: run.sessionID))
     }
@@ -166,7 +167,7 @@ struct WorkspaceCalendarTests {
   }
   private func accept(_ run: WorkspaceCalendarRun, in db: WorkspaceDatabase, now: Date) async throws {
     if (try? await db.localACPSession(conversationID: run.sessionID)) == nil {
-      _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Temporary title", ownerDeviceID: UUID(),
+      _ = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Temporary title", ownerDeviceID: UUID(),
         requestedConversationID: UUID(uuidString: run.sessionID))
     }
     _ = try await db.prepareCalendarDelivery(runID: run.id, now: now)
@@ -183,7 +184,7 @@ extension WorkspaceCalendarTests {
     let start = date("2026-09-01T13:00:00Z")
     let id = try await insert(db, start: start, repeatRule: .init(unit: .day))
     let run = try await #require(db.dueCalendarRuns(now: start).first)
-    _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
+    _ = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
     _ = try await db.prepareCalendarDelivery(runID: run.id, now: start)
     _ = try await db.claimToolDelivery(id: run.id, now: start)
     try await db.setToolDeliveryStatus(id: run.id, status: "accepted")
@@ -205,7 +206,7 @@ extension WorkspaceCalendarTests {
     let runs = try await db.dueCalendarRuns(now: now)
     let selected = try #require(runs.first { $0.eventID == selectedID })
     let other = try #require(runs.first { $0.eventID == otherID })
-    _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Selected", ownerDeviceID: UUID(),
+    _ = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Selected", ownerDeviceID: UUID(),
       requestedConversationID: UUID(uuidString: selected.sessionID))
     let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
     let (resume, resumeSignal) = AsyncStream<Void>.makeStream()
@@ -237,7 +238,7 @@ extension WorkspaceCalendarTests {
             // Real native preparation can resume without checking Stop itself;
             // the runner must still fence the following database/dispatch work.
           } else {
-            _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Other", ownerDeviceID: UUID(),
+            _ = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Other", ownerDeviceID: UUID(),
               requestedConversationID: UUID(uuidString: run.sessionID))
           }
         }, dispatch: { delivery, fence in
@@ -275,7 +276,7 @@ extension WorkspaceCalendarTests {
     try await CalendarTaskRunner.tick(database: reopened, now: start.addingTimeInterval(86_400),
       isRunning: { _ in false }, hasCapacity: { true }, prepare: { run in
         if mode == .new {
-          _ = try await reopened.createLocalACPSession(runtimeKind: .codex, title: "Next", ownerDeviceID: UUID(),
+          _ = try await reopened.createFixtureLocalACPSession(runtimeKind: .codex, title: "Next", ownerDeviceID: UUID(),
             requestedConversationID: UUID(uuidString: run.sessionID))
         }
       }, dispatch: { delivery in

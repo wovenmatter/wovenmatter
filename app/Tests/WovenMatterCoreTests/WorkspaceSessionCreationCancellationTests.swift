@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -12,7 +13,7 @@ struct WorkspaceSessionCreationCancellationTests {
     let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
     let owner = UUID()
     try await database.bindDeviceOwnership(ownerDeviceID: owner)
-    let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: owner)
+    let source = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: owner)
     try await database.saveToolSettings(.init(maximumManagedSessions: 1))
     let requestID = UUID().uuidString.lowercased()
     let arguments = ["sessions", "create", "--title", "Reserved"]

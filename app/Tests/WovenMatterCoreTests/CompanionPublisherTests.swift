@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -22,7 +23,7 @@ struct CompanionPublisherTests {
 
   @Test func retainedOwnerCompletesOnlyItsExactStaleRunningLegacyRun() async throws {
     let f = try await Fixture(); defer { f.remove() }
-    let conversationID = try await f.database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Legacy", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
+    let conversationID = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Legacy", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
     let run = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "Work")
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: run.runID, sessionID: "exact-native")
     #expect(try await f.database.companionRetainedAssociation(workspaceID: f.workspace.id, runID: run.runID, nativeSessionID: "wrong-native") == nil)
@@ -52,7 +53,7 @@ struct CompanionPublisherTests {
 
   @Test func retainedPreflightSettlesMultipleStaleRunsButNeverTransfersAnActualActiveRun() async throws {
     let f = try await Fixture(); defer { f.remove() }
-    let conversationID = try await f.database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Offline history", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
+    let conversationID = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Offline history", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
     let firstRun = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "First")
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: firstRun.runID, sessionID: "native")
     let secondRun = UUID().uuidString.lowercased()
@@ -117,7 +118,7 @@ struct CompanionPublisherTests {
   }
   @Test func retainedOwnerCannotClaimLocalSessionOrConflictWithAnotherActiveRun() async throws {
     let f = try await Fixture(); defer { f.remove() }
-    let conversationID = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Local", ownerDeviceID: UUID())
+    let conversationID = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Local", ownerDeviceID: UUID())
     let run = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "Local work")
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: run.runID, sessionID: "native")
     let event = CompanionJournalEntry(workspaceID: f.workspace.id, originSequence: 1, conversationID: conversationID, runID: run.runID, kind: .conversation,
