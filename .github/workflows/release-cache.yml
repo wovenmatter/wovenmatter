@@ -1,14 +1,6 @@
 name: Prepare release dependencies
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'app/**'
-      - 'shared/**'
-      - 'ios/**'
-      - 'default-agent/**'
-      - 'scripts/**'
-      - '.github/workflows/release*.yml'
+  # Optional release acceleration, never background work on every merge.
   workflow_dispatch:
 permissions:
   contents: read

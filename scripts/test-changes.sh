@@ -151,6 +151,23 @@ run_macos() {
   run_companion --simulator
 }
 
+# CI already ran portable fixtures and JavaScript tests once on Linux.
+run_native() {
+  npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
+  python3 scripts/test-support/test_release_metadata.py
+  python3 scripts/test-support/test_updater_signing.py
+  scripts/test-desktop-updater.sh
+  scripts/test-app-termination.sh
+  scripts/test-composer-text-editor.sh
+  scripts/test-conversation-layout.sh
+  scripts/test-appearance.sh
+  scripts/test-note-editor.sh
+  scripts/test-note-drafts.sh
+  scripts/test-embedded-runtime-macos.sh
+  run_package_tests
+  run_app_build
+}
+
 run_remote() {
   run_static_checks
   run_default_agent_tests
@@ -159,6 +176,8 @@ run_remote() {
 
 mode="${1:-changed}"
 case "$mode" in
+  --ci) scripts/test-ci.sh; exit ;;
+  --native) run_native; exit ;;
   --all) run_all; exit ;;
   --desktop) run_desktop; exit ;;
   --macos) run_macos; exit ;;
@@ -167,7 +186,7 @@ case "$mode" in
   --remote) run_remote; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--all|--desktop|--macos|--companion|--companion-desktop|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--ci|--native|--all|--desktop|--macos|--companion|--companion-desktop|--remote]' >&2
     exit 64
     ;;
 esac
