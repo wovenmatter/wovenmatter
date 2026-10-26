@@ -115,7 +115,7 @@ test('real ModelRuntime uses ambient Claude auth while native profiles retain ac
   ];
   const { engine, claude, root } = await fixture(t, {
     credentials: { 'claude-subscription': first },
-    credentialAccounts: { 'claude-subscription': accounts },
+    credentialAccounts: { 'claude-subscription': [accounts[0]] },
   });
   // Use the real native profile context without starting a native process.
   const profiles = new ClaudeRuntime(root);
@@ -144,7 +144,7 @@ test('real ModelRuntime uses ambient Claude auth while native profiles retain ac
   assert.equal((await engine.prompt(record, 'First account', () => {})).stopReason, 'end_turn');
   assert.equal(record.session.messages.at(-1).content[0].text, 'Fixture reply');
   await engine.apply({ credentials: { 'claude-subscription': second },
-    credentialAccounts: { 'claude-subscription': [accounts[1], accounts[0]] } });
+    credentialAccounts: { 'claude-subscription': [accounts[1]] } });
   assert.equal((await engine.prompt(record, 'Second account', () => {})).stopReason, 'end_turn');
   assert.deepEqual(seenProfiles, [join(root, 'claude-accounts', 'profile-first'), join(root, 'claude-accounts', 'profile-second')]);
   assert.equal(claude.checks, checks);

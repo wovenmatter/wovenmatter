@@ -94,9 +94,9 @@ export function sharedAccounts(input = {}) {
     if (entries.length) result[provider] = entries;
   }
   // Native profile names are identifiers, never native token material.
-  for (const provider of ['claude-subscription', 'cursor']) {
-    if (!Array.isArray(input[provider])) continue;
-    result[provider] = input[provider].slice(0, provider === 'claude-subscription' ? 1 : 4).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(a.credential.accountId))
+  const profiles = input['claude-subscription'];
+  if (Array.isArray(profiles)) {
+    result['claude-subscription'] = profiles.slice(0, 1).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(a.credential.accountId))
       .map(a => ({ id: a.id, label: a.label, credential: { type: 'native', accountId: a.credential.accountId } }));
   }
   return result;

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { providers } from './config.mjs';
 
-export const singleSubscriptionAccount = provider => ['openai-codex', 'claude-subscription', 'xai'].includes(provider);
+const singleSubscriptionAccount = provider => ['openai-codex', 'claude-subscription', 'xai'].includes(provider);
 
 // Local sessions use access-only credentials supplied over private IPC. Only
 // control operations own local refresh tokens; their results go back to Keychain.

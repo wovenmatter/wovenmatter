@@ -100,7 +100,7 @@ when an intentional design change is accepted.
   account lists. Mobile permits one subscription connection per provider per device,
   with reconnect through the saved connection.
   OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
-  Keep their content and Cursor's controls at the same indentation as the content
+  Keep their content at the same indentation as the content
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights. Pi Durable’s color and

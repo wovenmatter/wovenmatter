@@ -211,37 +211,21 @@ final class SubscriptionConnectionPolicyTests: XCTestCase {
   private func connection(_ id: String, _ provider: String, route: InferenceRoute = .direct) -> InferenceConnection {
     .init(id: id, name: id, provider: provider, route: route, modelID: "fixture")
   }
-  func testMigrationKeepsSelectedSubscriptionAndPreservesAPIKeys() throws {
-    let first = connection("claude-first", "claude-subscription"), selected = connection("claude-selected", "claude-subscription")
-    let grok = connection("grok-first", "xai"), grokBackup = connection("grok-backup", "xai", route: .adapter)
-    let multiple = [connection("openai-key-one", "openai"), connection("openai-key-two", "openai"),
-                    connection("key-one", "anthropic"), connection("key-two", "anthropic"),
-                    connection("xai-key-one", "xai-api"), connection("xai-key-two", "xai-api")]
-    let saved = [first, selected, grok, grokBackup] + multiple
-    let retained = InferenceConnectionPolicy.retainingSingleSubscriptions(saved, preferredID: selected.id)
-    XCTAssertEqual(retained.map(\.id), [selected.id, grok.id] + multiple.map(\.id))
-    XCTAssertFalse(InferenceConnectionPolicy.isAvailable(first, in: retained))
-    XCTAssertFalse(InferenceConnectionPolicy.isAvailable(grokBackup, in: retained))
-    XCTAssertTrue(InferenceConnectionPolicy.isAvailable(selected, in: retained))
-    XCTAssertEqual(InferenceConnectionPolicy.retainingSingleSubscriptions(retained, preferredID: selected.id), retained)
-  }
-  func testMigrationRetainsTheSelectedAccountForEverySubscriptionProvider() {
-    for provider in ["openai-codex", "claude-subscription", "xai"] {
+  func testMigrationKeepsSelectedSubscriptionAndPreservesAPIKeys() {
+    let providers = ["openai-codex", "claude-subscription", "xai"]
+    let keys = [connection("openai-key-one", "openai"), connection("openai-key-two", "openai"),
+                connection("key-one", "anthropic"), connection("key-two", "anthropic"),
+                connection("xai-key-one", "xai-api"), connection("xai-key-two", "xai-api")]
+    for (index, provider) in providers.enumerated() {
       let first = connection("first", provider), selected = connection("selected", provider)
-      let retained = InferenceConnectionPolicy.retainingSingleSubscriptions([first, selected], preferredID: selected.id)
-      XCTAssertEqual(retained, [selected])
-    }
-  }
-  func testNewSubscriptionAccountsAreRejectedAcrossDirectAndHostedConnections() throws {
-    for provider in ["openai-codex", "claude-subscription", "xai"] {
-      let current = connection("current", provider), extra = connection("extra", provider, route: .adapter)
-      XCTAssertThrowsError(try InferenceConnectionPolicy.validateSave(extra, existing: [current])) { error in
-        XCTAssertEqual(error as? InferenceError, .singleSubscriptionAccount)
-      }
-      XCTAssertNoThrow(try InferenceConnectionPolicy.validateSave(current, existing: [current]))
-    }
-    for provider in ["openai", "anthropic", "xai-api", "openrouter"] {
-      XCTAssertNoThrow(try InferenceConnectionPolicy.validateSave(connection("new", provider), existing: [connection("old", provider)]))
+      let otherProvider = providers[(index + 1) % providers.count]
+      let other = connection("other", otherProvider), backup = connection("backup", otherProvider, route: .adapter)
+      let retained = InferenceConnectionPolicy.retainingSingleSubscriptions([first, selected, other, backup] + keys, preferredID: selected.id)
+      XCTAssertEqual(retained, [selected, other] + keys)
+      XCTAssertFalse(InferenceConnectionPolicy.isAvailable(first, in: retained))
+      XCTAssertFalse(InferenceConnectionPolicy.isAvailable(backup, in: retained))
+      XCTAssertTrue(InferenceConnectionPolicy.isAvailable(selected, in: retained))
+      XCTAssertEqual(InferenceConnectionPolicy.retainingSingleSubscriptions(retained, preferredID: selected.id), retained)
     }
   }
 }

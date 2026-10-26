@@ -321,9 +321,8 @@ extension CompanionModel {
          !InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) { draftDeviceSettings.connection = nil }
       try persistExecutionConfiguration()
       let previous = saved.connections + saved.conversations.values.compactMap(\.connection) + [saved.chatSettings?.connection].compactMap { $0 }
-      for connection in previous where !InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) {
-        try await executionCredentialStore.remove(connectionID: connection.id)
-      }
+      let retiredIDs = Set(previous.filter { !InferenceConnectionPolicy.isAvailable($0, in: inferenceConnections) }.map(\.id))
+      for id in retiredIDs { try await executionCredentialStore.remove(connectionID: id) }
     }
     restoreAgentCatalog()
     try await store?.restoreExecutionProjection()
@@ -345,23 +344,26 @@ extension CompanionModel {
       var connections = inferenceConnections.filter { $0.id != connection.id }
       connections.append(saved)
       var records = executionRecords
+      var chatSettings = draftDeviceSettings
       if let previous = inferenceConnections.first(where: { $0.id == connection.id }) {
+        if previous.id != saved.id, InferenceConnectionPolicy.isSingleSubscription(previous.provider),
+           chatSettings.connection?.id == previous.id { chatSettings.connection = nil }
         for id in records.keys where records[id]?.connectionID == previous.id && records[id]?.connection == nil {
           records[id]?.connection = previous
         }
       }
       let workspaceID = credential == nil && selectedConversationID == nil ? "local" : executionWorkspaceID
       let preferences = DeviceExecutionPreferences(connections: connections, selectedConnectionID: saved.id,
-        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults, chatSettings: draftDeviceSettings)
+        workspaceID: workspaceID, conversations: records, agentDefaults: deviceAgentDefaults, chatSettings: chatSettings)
       try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
       try JSONEncoder().encode(preferences).write(to: executionDirectory.appendingPathComponent("preferences.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       executionRecords = records
+      draftDeviceSettings = chatSettings
     }
     let previous = inferenceConnections.first { $0.id == connection.id }
     inferenceConnections.removeAll { $0.id == connection.id }; inferenceConnections.append(saved)
     inferenceConnectionID = saved.id
     if let previous, previous.id != saved.id, InferenceConnectionPolicy.isSingleSubscription(previous.provider) {
-      if draftDeviceSettings.connection?.id == previous.id { draftDeviceSettings.connection = nil }
       try await executionCredentialStore.remove(connectionID: previous.id)
     }
     if credential == nil && selectedConversationID == nil { executionWorkspaceID = "local"; providerID = "" }

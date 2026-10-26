@@ -113,7 +113,7 @@ public enum DefaultAgentSupport {
         config.customServers = servers
         var payload = DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
         var accounts: [String: [DefaultAgentCredentialAccount]] = [:]
-        for id in ["openai", "openai-codex", "anthropic", "claude-subscription", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
+        for id in ProviderConnectionID.allCases.map(\.rawValue) {
             var entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope, keychain: keychain)
             if entries.isEmpty && keyScope != "global" { entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, keychain: keychain) }
             if !entries.isEmpty {

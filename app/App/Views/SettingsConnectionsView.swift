@@ -142,13 +142,13 @@ struct SettingsConnectionsView: View {
     private func connectionContent(_ id: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             let stored = agent.accounts[id] ?? []
-            let multiple = ProviderConnectionID(rawValue: id)?.allowsMultipleAccounts != false
+            let subscription = ProviderConnectionID(rawValue: id)?.isSubscription == true
             let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
             if agent.scope != "global" {
                 if accounts.isEmpty, let shared = agent.sharedAccounts[id], !shared.isEmpty {
                     SettingsNote(id == "claude-subscription"
                         ? "Shared profile names · Claude sign-in is required on this machine."
-                        : !multiple ? "Using the shared Pi Durable account"
+                        : subscription ? "Using the shared Pi Durable account"
                         : remote == nil ? "Using shared Pi Durable accounts" : "Shared fallback accounts")
                     ForEach(shared) { account in
                         Text(account.label).font(.system(size: 12.5, weight: .medium))
@@ -163,7 +163,7 @@ struct SettingsConnectionsView: View {
             if id == "claude-subscription" {
                 SettingsNote("Claude signs in on each machine. Only profile names are shared; Claude tokens are not synced.")
             }
-            if !multiple {
+            if subscription {
                 SettingsNote("One subscription account per workspace.")
                 ForEach(accounts) { account in
                     HStack {

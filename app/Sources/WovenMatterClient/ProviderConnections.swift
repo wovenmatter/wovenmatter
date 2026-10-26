@@ -24,7 +24,6 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
         case .exa: "Exa search"
         }
     }
-    public var allowsMultipleAccounts: Bool { !isSubscription }
     public var isSubscription: Bool { self == .chatGPT || self == .grok || self == .claudeSubscription }
 }
 
@@ -63,7 +62,7 @@ extension ProviderAccountCoordinator {
 public enum ProviderConnectionAccounts {
     public static let limit = 4
     public static func limit(for provider: String) -> Int {
-        ProviderConnectionID(rawValue: provider)?.allowsMultipleAccounts == false ? 1 : limit
+        ProviderConnectionID(rawValue: provider)?.isSubscription == true ? 1 : limit
     }
     public struct Account: Identifiable, Codable, Equatable, Sendable {
         public let id: String
@@ -79,13 +78,12 @@ public enum ProviderConnectionAccounts {
         var entries: [Entry] = []
         var pendingPreviousEntries: [Entry]?
     }
-    private static func isOAuth(_ provider: String) -> Bool { ["openai-codex", "xai", "claude-subscription", "cursor"].contains(provider) }
     private static func canonical(_ provider: String, scope: String, keychain: KeychainAccess) throws -> DefaultAgentCredential? {
-        if isOAuth(provider) { return try DefaultAgentSupport.oauth(provider, scope: scope, keychain: keychain) }
+        if ProviderConnectionID(rawValue: provider)?.isSubscription == true { return try DefaultAgentSupport.oauth(provider, scope: scope, keychain: keychain) }
         return try DefaultAgentSupport.key(provider, scope: scope, keychain: keychain).map { .init(type: "api_key", key: $0) }
     }
     private static func writeCanonical(_ value: DefaultAgentCredential?, provider: String, scope: String, keychain: KeychainAccess) throws {
-        if isOAuth(provider) {
+        if ProviderConnectionID(rawValue: provider)?.isSubscription == true {
             if let value { try DefaultAgentSupport.saveOAuth(value, provider: provider, scope: scope, notify: false, keychain: keychain) }
             else { try DefaultAgentSupport.saveKey("", provider: "oauth." + provider, scope: scope, notify: false, keychain: keychain) }
         } else { try DefaultAgentSupport.saveKey(value?.key ?? "", provider: provider, scope: scope, notify: false, keychain: keychain) }
@@ -272,7 +270,7 @@ public actor ProviderConnectionStore {
     }
     nonisolated public static func readStored(_ scope: String) throws -> [String: [ProviderConnectionAccounts.Account]] {
         var values: [String: [ProviderConnectionAccounts.Account]] = [:]
-        for provider in ["openai-codex", "openai", "claude-subscription", "anthropic", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
+        for provider in ProviderConnectionID.allCases.map(\.rawValue) {
             values[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: scope)
         }
         return values

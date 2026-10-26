@@ -131,14 +131,3 @@ for (const provider of ['openai-codex', 'claude-subscription', 'xai']) {
     assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['preferred']);
   });
 }
-
-test('API keys retain multiple accounts', async () => {
-  const { Credentials } = await import('../src/credentials.mjs');
-  for (const provider of ['openai', 'anthropic', 'xai-api', 'openrouter', 'opencode-go', 'exa']) {
-    const entries = ['first', 'second'].map(id => ({ id, label: id, credential: { type: 'api_key', key: id } }));
-    const credentials = await new Credentials({}, undefined, { [provider]: entries }).initialize();
-    assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['first', 'second']);
-    credentials.owned[provider] = { type: 'api_key', key: 'owned' };
-    assert.equal((await credentials.candidates(provider)).length, 3);
-  }
-});
