@@ -56,7 +56,12 @@ for package in packages:
     Path('/build').chmod(0o755)
     work.chmod(0o755)
     profile = ['--build-profiles=nopython'] if name == 'libxml2' else []
-    run('apt-get', 'build-dep', '-y', '--no-install-recommends', *profile,
+    # curl 8.23 needs the newer HTTP/3 development libraries carried by
+    # trixie-backports.  Its source is selected explicitly from the signed sid
+    # index, while this target makes APT prefer the compatible backported binary
+    # build dependencies instead of declaring the graph unsatisfiable.
+    target = ['--target-release', 'trixie-backports'] if name == 'curl' else []
+    run('apt-get', 'build-dep', '-y', '--no-install-recommends', *target, *profile,
         name + '=' + version)
     # apt verifies source hashes against the signed Debian Sources index.
     shutil.chown(work, user='_apt')
