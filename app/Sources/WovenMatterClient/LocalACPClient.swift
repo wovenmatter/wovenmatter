@@ -543,7 +543,7 @@ private final class LocalACPProcessRegistry: @unchecked Sendable {
             processes[ObjectIdentifier(process)] = process
             observations[ObjectIdentifier(process)] = .init(id: UUID().uuidString,
                 conversationID: conversationID,
-                kind: "process", title: kind.displayName, state: "running",
+                kind: "runtime", title: kind.displayName, state: "running",
                 processID: process.processIdentifier, startedAt: Date())
         }
     }

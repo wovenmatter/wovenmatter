@@ -1,6 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
+import WovenMatterDashboardStore
 
 extension ApplicationModel {
     func runtimeInspection(_ query: RuntimeInspectionRequest = .init()) async throws -> RuntimeInspection {
@@ -31,6 +32,9 @@ extension ApplicationModel {
                   state: backendStopping ? "stopping" : "running", processID: ProcessInfo.processInfo.processIdentifier)
         ]
         let processes = LocalACPClient.inspectionItems()
+        if query.conversationID == nil {
+            items += CompanionTailscaleServe.inspectionItems().map { var item = $0; item.parentID = root; return item }
+        }
         items += processes.filter { query.conversationID == nil || $0.conversationID == query.conversationID }
             .map { var item = $0; item.parentID = item.conversationID.map { "chat:" + $0 } ?? root; return item }
         let ids = query.conversationID.map { Set([$0]) }

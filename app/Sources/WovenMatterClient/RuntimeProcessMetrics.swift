@@ -47,8 +47,9 @@ public enum RuntimeProcessMetrics {
             var added = false
             for sample in samples where owners[sample.pid] == nil {
                 guard let parent = owners[sample.parent] else { continue }
+                let kind = ["connectionSupervisor", "connectionProcess"].contains(parent.kind) ? "connectionProcess" : "process"
                 let item = RuntimeInspection.Item(id: "process:\(sample.pid)", parentID: parent.id,
-                    conversationID: parent.conversationID, kind: "process", title: sample.name,
+                    conversationID: parent.conversationID, kind: kind, title: sample.name,
                     state: "running", processID: sample.pid, cpuPercent: sample.cpu, residentBytes: sample.bytes)
                 owners[sample.pid] = item; result.append(item); added = true
                 if result.count >= 1_000 { break }

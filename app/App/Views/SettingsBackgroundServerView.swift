@@ -132,7 +132,7 @@ struct RuntimeInspectionView: View {
             if let snapshot {
                 Text("\(connected ? "Observed" : "Last observed") \(snapshot.observedAt.formatted(date: .abbreviated, time: .standard))")
                     .font(.caption).foregroundStyle(.secondary)
-                RuntimeInspectionTree(items: snapshot.items, connected: connected)
+                RuntimeInspectionInventoryView(items: snapshot.items, connected: connected)
                 if snapshot.items.isEmpty { Text("No managed activity in this scope.").font(.caption).foregroundStyle(.secondary) }
             } else {
                 Text(error ?? "Waiting for the execution owner…").font(.caption).foregroundStyle(.secondary)

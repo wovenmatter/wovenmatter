@@ -54,3 +54,47 @@ public struct BackgroundServerStopResult: Codable, Sendable {
     self.confirmationRequired = confirmationRequired; self.activeWorkCount = activeWorkCount
   }
 }
+
+/// Product-level inventory. OS parentage remains available in each item's
+/// metadata without forcing users to navigate a process tree.
+public struct RuntimeInspectionInventory: Sendable {
+  public struct Agent: Identifiable, Sendable {
+    public let id: String
+    public let summary: RuntimeInspection.Item
+    public let details: [RuntimeInspection.Item]
+  }
+  public let servers: [RuntimeInspection.Item]
+  public let agents: [Agent]
+  public let connections: [RuntimeInspection.Item]
+  public let otherProcesses: [RuntimeInspection.Item]
+
+  public init(items: [RuntimeInspection.Item]) {
+    var indexed: [String: RuntimeInspection.Item] = [:]
+    for item in items { indexed[item.id] = item }
+    let ordered = indexed.values.sorted { $0.id < $1.id }
+    servers = ordered.filter { $0.kind == "service" }
+    connections = ordered.filter { ["connectionSupervisor", "connectionProcess"].contains($0.kind) }
+    var grouped: [String: [RuntimeInspection.Item]] = [:], other: [RuntimeInspection.Item] = []
+    func agentKey(_ item: RuntimeInspection.Item) -> String? {
+      var candidate: RuntimeInspection.Item? = item, seen = Set<String>(), runtime: String?
+      while let current = candidate, seen.insert(current.id).inserted {
+        if let chat = current.conversationID { return "chat:" + chat }
+        if let native = current.nativeSessionID { return "native:" + native }
+        if current.kind == "conversation" { return current.id }
+        if current.kind == "runtime", runtime == nil { runtime = current.id }
+        candidate = current.parentID.flatMap { indexed[$0] }
+      }
+      return runtime
+    }
+    for item in ordered where item.kind != "service" && !["connectionSupervisor", "connectionProcess"].contains(item.kind) {
+      if let key = agentKey(item) { grouped[key, default: []].append(item) }
+      else { other.append(item) }
+    }
+    agents = grouped.map { key, members in
+      let summary = members.first { $0.kind == "conversation" }
+        ?? members.first { $0.kind == "runtime" } ?? members[0]
+      return Agent(id: key, summary: summary, details: members.filter { $0.id != summary.id })
+    }.sorted { $0.summary.title == $1.summary.title ? $0.id < $1.id : $0.summary.title < $1.summary.title }
+    otherProcesses = other
+  }
+}

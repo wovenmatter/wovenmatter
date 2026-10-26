@@ -220,9 +220,12 @@ server. A missing server never promotes the UI into an execution owner.
 
 Controls follow observed ownership: a responsive server offers Stop/Restart;
 Start appears only after its local execution lease is confirmed unowned. An
-unresponsive lease owner is unavailable, not stopped. Owner groups use one shared
-surface and connected compact branches, rather than full-width dividers between
-indented peer-looking rows.
+unresponsive lease owner is unavailable, not stopped. The inventory has flat
+Server, Agent activity, and Device connection sections. Agent processes and
+subagents stay associated with their chat; shared workers remain separate.
+Connection supervision is registered by its launcher and shown only in optional
+process details, alongside the Tailscale transport. Details retain parent labels
+without reproducing the operating system's nested process tree.
 
 Inspect chat activity opens a conversation-scoped tab alongside notes and browser
 tabs. Inspection is passive and does not start Pi workers or replay agent input.
